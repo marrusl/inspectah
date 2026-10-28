@@ -73,3 +73,144 @@ test.describe("Repo surfaces on Packages page", () => {
     await expect(statsBar).toBeVisible();
   });
 });
+
+// Position 29 (§ 3.2, § 6.3): the repo Switch reads the effective counts,
+// never `enabled`/history, and activation posts the direction those counts
+// derive. The `repo-disagree` sequence fixtures start each case already in
+// the state where history and members disagree -- reachable through
+// ordinary per-package decisions (§ 6.3's phase 0 RepoBar rule) -- and walk
+// the Switch through include-all/exclude-all, undo, and redo.
+test.describe("Repo disagreement (position 29)", () => {
+  test.beforeEach(async ({ page }) => {
+    await applyMockApi(page, "single-host");
+    // /api/groups has no fixture in the single-host preset; mock it directly
+    // so the sidebar has a "Packages" nav item to click (an empty array
+    // renders no sections at all, per Sidebar.tsx's `groups.map(...)`).
+    await page.route("**/api/groups", (routeObj) => {
+      if (routeObj.request().method() !== "GET") {
+        routeObj.continue();
+        return;
+      }
+      routeObj.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            slug: "packages-group",
+            label: "Packages",
+            sections: [{ id: "packages", label: "Packages", is_triage: true }],
+            has_actionable_sections: true,
+          },
+        ]),
+      });
+    });
+  });
+
+  test.afterEach(async ({ page }) => {
+    await clearMocks(page);
+  });
+
+  test("enabled history, members excluded, then included; undo and redo", async ({
+    page,
+  }) => {
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "sequences/repo-disagree/00-enabled-all-excluded.json",
+        "sequences/repo-disagree/01-after-include-all.json",
+        "sequences/repo-disagree/02-after-undo.json",
+        "sequences/repo-disagree/03-after-redo.json",
+      ],
+      { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
+    );
+
+    const opPayloads: unknown[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/api/op")) {
+        opPayloads.push(req.postDataJSON());
+      }
+    });
+
+    await page.goto("/");
+    await page
+      .locator(".inspectah-layout__sidebar")
+      .getByText("Packages")
+      .click();
+
+    const vendorSwitch = page.locator("#repo-toggle-vendor");
+    await expect(vendorSwitch).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+
+    await vendorSwitch.click({ force: true });
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    expect(opPayloads.at(-1)).toMatchObject({
+      target: {
+        item_id: { kind: "Repo", key: { path: "vendor" } },
+        include: true,
+      },
+    });
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+
+    await page.getByRole("button", { name: "Redo" }).click();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+  });
+
+  test("mirror direction: excluded history, members included, then excluded", async ({
+    page,
+  }) => {
+    await mockSequence(
+      page,
+      "/api/view",
+      [
+        "sequences/repo-disagree/10-disabled-all-included.json",
+        "sequences/repo-disagree/11-after-exclude-all.json",
+        "sequences/repo-disagree/12-after-undo.json",
+        "sequences/repo-disagree/13-after-redo.json",
+      ],
+      { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
+    );
+
+    const opPayloads: unknown[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/api/op")) {
+        opPayloads.push(req.postDataJSON());
+      }
+    });
+
+    await page.goto("/");
+    await page
+      .locator(".inspectah-layout__sidebar")
+      .getByText("Packages")
+      .click();
+
+    const vendorSwitch = page.locator("#repo-toggle-vendor");
+    await expect(vendorSwitch).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+
+    await vendorSwitch.click({ force: true });
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    expect(opPayloads.at(-1)).toMatchObject({
+      target: {
+        item_id: { kind: "Repo", key: { path: "vendor" } },
+        include: false,
+      },
+    });
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+
+    await page.getByRole("button", { name: "Redo" }).click();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+  });
+});

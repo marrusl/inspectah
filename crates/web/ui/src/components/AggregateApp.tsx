@@ -349,7 +349,7 @@ export function AggregateApp({
 
   // Repo toggle for unified RepoBar
   const handleAggregateRepoToggle = useCallback(
-    (sectionId: string) => {
+    (sectionId: string, include: boolean) => {
       if (!view) return;
       const repo = view.repo_groups.find((r) => r.section_id === sectionId);
       if (!repo) return;
@@ -357,7 +357,7 @@ export function AggregateApp({
         op: "SetInclude",
         target: {
           item_id: { kind: "Repo", key: { path: sectionId } },
-          include: !repo.enabled,
+          include,
         },
       });
     },

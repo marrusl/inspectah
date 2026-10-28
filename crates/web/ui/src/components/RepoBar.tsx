@@ -4,7 +4,7 @@ import type { RepoGroupInfo } from "../api/types";
 
 export interface RepoBarProps {
   repos: RepoGroupInfo[];
-  onToggle: (sectionId: string) => void;
+  onToggle: (sectionId: string, include: boolean) => void;
   conflictCount?: number;
   dismissedCount?: number;
   onRestoreDismissed?: () => void;
@@ -38,6 +38,21 @@ function noControlStateText(repo: RepoGroupInfo): string {
       // verified or incomplete, effective_member_count === 0
       return "nothing to decide: all members are locked";
   }
+}
+
+/** § 6.3 badge-cell count text for a toggleable repo's Switch label:
+ *  "<N> of <M> packages included" (or "<M> packages excluded" when N is 0),
+ *  followed by ", <K> not listed" when effective_unlisted is non-zero. */
+function repoCountText(repo: RepoGroupInfo): string {
+  const { effective_included: included, effective_member_count: total } =
+    repo;
+  const base =
+    included === 0
+      ? `${total} packages excluded`
+      : `${included} of ${total} packages included`;
+  return repo.effective_unlisted > 0
+    ? `${base}, ${repo.effective_unlisted} not listed`
+    : base;
 }
 
 export function RepoBar({
@@ -114,30 +129,35 @@ export function RepoBar({
         </div>
       ))}
 
-      {toggleableRepos.map((repo) => (
-        <div key={repo.section_id} className="inspectah-repo-bar__row">
-          <div className="inspectah-repo-bar__name">
-            <span style={{ color: tierColors[repo.tier] ?? tierColors.distro }}>
-              {repo.section_id}
-            </span>
-            <span className="inspectah-repo-bar__count">
-              {repo.package_count}
-            </span>
+      {toggleableRepos.map((repo) => {
+        const isChecked =
+          repo.effective_included === repo.effective_member_count;
+        const countText = repoCountText(repo);
+        return (
+          <div key={repo.section_id} className="inspectah-repo-bar__row">
+            <div className="inspectah-repo-bar__name">
+              <span
+                style={{ color: tierColors[repo.tier] ?? tierColors.distro }}
+              >
+                {repo.section_id}
+              </span>
+            </div>
+            {repo.provenance === "incomplete" && (
+              <span className="inspectah-repo-bar__incomplete">
+                repo definition incomplete
+              </span>
+            )}
+            <Switch
+              id={`repo-toggle-${repo.section_id}`}
+              label={countText}
+              aria-label={countText}
+              isChecked={isChecked}
+              onChange={() => onToggle(repo.section_id, !isChecked)}
+              isReversed
+            />
           </div>
-          {repo.provenance === "incomplete" && (
-            <span className="inspectah-repo-bar__incomplete">
-              repo definition incomplete
-            </span>
-          )}
-          <Switch
-            id={`repo-toggle-${repo.section_id}`}
-            aria-label={`${repo.section_id} (${repo.package_count})`}
-            isChecked={repo.enabled}
-            onChange={() => onToggle(repo.section_id)}
-            isReversed
-          />
-        </div>
-      ))}
+        );
+      })}
 
       {(visibleConflicts > 0 || (dismissedCount ?? 0) > 0) && (
         <div className="inspectah-repo-bar__controls">

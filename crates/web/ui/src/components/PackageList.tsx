@@ -39,7 +39,7 @@ export interface PackageListProps {
   /** Current section search text. Groups with matching members auto-expand. */
   searchQuery?: string;
   onToggle: (packageName: string) => void;
-  onRepoToggle: (sectionId: string) => void;
+  onRepoToggle: (sectionId: string, include: boolean) => void;
   /** Called when a group's include toggle changes. */
   onGroupToggle?: (groupName: string, include: boolean) => void;
   /** Called when a group is ungrouped (dissolved into individual packages). */

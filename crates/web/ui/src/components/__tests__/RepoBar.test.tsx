@@ -94,13 +94,97 @@ describe("RepoBar", () => {
     expect(alwaysLabels).toHaveLength(2);
   });
 
-  it("calls onToggle with section_id when toggle is clicked", () => {
+  // The two states where `enabled` and the effective counts disagree,
+  // verbatim from Task 7's build_repo_groups assertions (§ 3.2, position 29).
+  const stateA: Partial<RepoGroupInfo> = {
+    section_id: "vendor",
+    enabled: true,
+    effective_member_count: 2,
+    effective_included: 0,
+    effective_unlisted: 0,
+  };
+  const stateB: Partial<RepoGroupInfo> = {
+    section_id: "vendor",
+    enabled: false,
+    effective_member_count: 2,
+    effective_included: 2,
+    effective_unlisted: 0,
+  };
+
+  it("reads the counts, not the history, and posts the derived direction", () => {
     const onToggle = vi.fn();
-    render(<RepoBar repos={mockRepos} onToggle={onToggle} />);
-    const epelLabel = screen.getByLabelText(/epel \(8\)/i);
-    fireEvent.click(epelLabel);
-    expect(onToggle).toHaveBeenCalledWith("epel");
+    const { rerender } = render(
+      <RepoBar repos={[repo(stateA)]} onToggle={onToggle} />,
+    );
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(screen.getByText("2 packages excluded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(onToggle).toHaveBeenCalledWith("vendor", true);
+
+    rerender(<RepoBar repos={[repo(stateB)]} onToggle={onToggle} />);
+    expect(screen.getByRole("switch")).toBeChecked();
+    expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch"));
+    expect(onToggle).toHaveBeenLastCalledWith("vendor", false);
   });
+
+  it("renders the not-listed clause and never the visible count", () => {
+    render(
+      <RepoBar
+        repos={[
+          repo({
+            ...stateA,
+            effective_included: 1,
+            effective_unlisted: 1,
+            package_count: 1,
+          }),
+        ]}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("1 of 2 packages included, 1 not listed"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    // package_count (1) never drives the row on its own -- the only "1"
+    // on screen is inside the composed count text asserted above.
+    expect(screen.queryByText("1")).not.toBeInTheDocument();
+  });
+
+  it.each([stateA, stateB])(
+    "ignores a contradicting enabled bit",
+    (state) => {
+      const onToggle = vi.fn();
+      // PatternFly's Switch stamps a unique generated OUIA id per mount, so
+      // markup is compared with that attribute stripped out.
+      const stripOuiaId = (html: string) =>
+        html.replace(/data-ouia-component-id="[^"]*"/, "");
+
+      const { container, unmount } = render(
+        <RepoBar repos={[repo(state)]} onToggle={onToggle} />,
+      );
+      const before = stripOuiaId(container.innerHTML);
+      const switchBefore = screen.getByRole("switch") as HTMLInputElement;
+      const wasChecked = switchBefore.checked;
+      fireEvent.click(switchBefore);
+      expect(onToggle).toHaveBeenCalledWith(state.section_id, !wasChecked);
+      unmount();
+
+      const { container: afterContainer } = render(
+        <RepoBar
+          repos={[repo({ ...state, enabled: !state.enabled })]}
+          onToggle={onToggle}
+        />,
+      );
+      // Same rendered markup regardless of the contradicting `enabled` bit.
+      expect(stripOuiaId(afterContainer.innerHTML)).toBe(before);
+      fireEvent.click(screen.getByRole("switch"));
+      expect(onToggle).toHaveBeenLastCalledWith(
+        state.section_id,
+        !wasChecked,
+      );
+    },
+  );
 
   it("shows conflict count badge with aria-live when provided", () => {
     render(
