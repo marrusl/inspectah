@@ -1635,8 +1635,8 @@ describe("PackageList", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
-      effective_member_count: 5,
-      effective_included: 5,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1765,9 +1765,9 @@ describe("PackageList", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
-      effective_member_count: 3,
-      effective_included: 3,
-      render_state: "renderable",
+      effective_member_count: 0,
+      effective_included: 0,
+      render_state: "inert",
       degradation_reason: null,
       members: [
         {

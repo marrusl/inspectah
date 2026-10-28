@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useId } from "react";
 import { Button } from "@patternfly/react-core";
 import {
   AngleRightIcon,
@@ -37,6 +37,7 @@ export function GroupRow({
   const [localExpanded, setLocalExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+  const inertStateTextId = useId();
 
   // Group is visually expanded if user expanded it OR search forced it open
   const expanded = localExpanded || forceExpanded;
@@ -100,8 +101,6 @@ export function GroupRow({
   ]
     .filter(Boolean)
     .join(" ");
-
-  const inertStateTextId = `group-inert-state-${group.name}`;
 
   return (
     <div

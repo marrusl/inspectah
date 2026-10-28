@@ -393,8 +393,8 @@ describe("MainContent ungroup toast", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
-      effective_member_count: 8,
-      effective_included: 8,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -493,9 +493,9 @@ describe("MainContent ungroup toast", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
-      effective_member_count: 4,
-      effective_included: 4,
-      render_state: "renderable",
+      effective_member_count: 0,
+      effective_included: 0,
+      render_state: "inert",
       degradation_reason: null,
       members: [
         {
@@ -572,9 +572,9 @@ describe("MainContent ungroup focus and error handling", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
-      effective_member_count: 2,
-      effective_included: 2,
-      render_state: "renderable",
+      effective_member_count: 0,
+      effective_included: 0,
+      render_state: "inert",
       degradation_reason: null,
       members,
     };

@@ -650,19 +650,36 @@ describe("GroupRow", () => {
   });
 
   it("inert group row is described by its state text via aria-describedby", () => {
-    render(
-      <GroupRow group={inertGroup} onToggle={vi.fn()} onUngroup={vi.fn()} />,
-    );
-    // Discriminates against pre-task code: with no `isInert` branch, the
-    // row has no `aria-describedby` and no element carries the referenced
-    // id, so a screen reader announces the row with no explanation at all.
-    const row = screen.getByRole("group", { name: /legacy-fonts/ });
-    const describedBy = row.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    const stateText = document.getElementById(describedBy!);
-    expect(stateText).toHaveTextContent(
-      "nothing to decide: all members are locked or from base",
-    );
+    // Parameterized over a spaced name: aria-describedby is a space-
+    // separated id-reference list, so an id built from a raw group name
+    // (e.g. a template string) silently breaks for any multi-word group —
+    // "legacy-fonts" alone can't catch that class of bug.
+    for (const name of ["legacy-fonts", "Legacy Fonts"]) {
+      const { unmount } = render(
+        <GroupRow
+          group={{ ...inertGroup, name }}
+          onToggle={vi.fn()}
+          onUngroup={vi.fn()}
+        />,
+      );
+      // Discriminates against pre-task code two ways: against no `isInert`
+      // branch at all, `aria-describedby` is unset. Against an id built
+      // from a raw (unescaped) group name, `aria-describedby` is a
+      // space-separated id-reference list, so a spaced name splits into
+      // multiple tokens that resolve to nothing -- reproduced here by
+      // splitting on whitespace the way assistive tech would, rather than
+      // looking up the raw (possibly multi-token) attribute value directly.
+      const row = screen.getByRole("group", { name: new RegExp(name) });
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const ids = describedBy!.trim().split(/\s+/);
+      expect(ids).toHaveLength(1);
+      const stateText = document.getElementById(ids[0]);
+      expect(stateText).toHaveTextContent(
+        "nothing to decide: all members are locked or from base",
+      );
+      unmount();
+    }
   });
 
   it("non-inert groups do not show the inert state text", () => {
