@@ -25,6 +25,21 @@
 //! [`selinux_round_2_echo_diagnostic_executes_the_operands`] is the paired positive:
 //! the same harness, the same operands, the round 2 `echo` diagnostic the spec
 //! rejected, and the marker file present.
+//!
+//! **What this harness is not evidence of.** [`Harness::with_store`] models
+//! three behaviours of the real `semanage` that decide whether a rule is safe:
+//! that `-a -e` on a subject already in the store rewrites it and exits 0,
+//! that `-a` and `-m` refuse a file context under an equivalence subject, and
+//! what the store looks like after each. Every one of those is a
+//! **transcription of a measurement**, carried with its base image, package
+//! version and date at the rule that implements it. A green suite therefore
+//! proves the renderer is consistent with that model, not with `semanage`. If
+//! the model is wrong, the renderer and the test are wrong together and
+//! silently, which is exactly how a committed test came to assert that rule 2
+//! should add an equivalence it could not read first. These stubs are good
+//! regression tests and are not evidence for the original decision: merge gate
+//! B1's run against the real base is. If B1 contradicts a rule here, the rule
+//! changes with the renderer.
 
 mod selinux_support;
 
@@ -70,6 +85,11 @@ struct Outcome {
     argv: Vec<String>,
     /// Whether `c6_exec` ran.
     executed: bool,
+    /// The stub's listing file after the run. Under
+    /// [`Harness::with_store`] this is target state a command can destroy,
+    /// and asserting it unchanged is the only check that sees the
+    /// destruction rather than the text that would have caused it.
+    store: String,
 }
 
 impl Harness {
@@ -77,6 +97,36 @@ impl Harness {
     /// is the status it returns for that call and `add_exit` the status it
     /// returns for any `fcontext -a`.
     fn new(listing: &str, listing_exit: i32, add_exit: i32) -> Self {
+        let template = format!(
+            "#!/bin/sh\n\
+             for a in \"$@\"; do\n\
+             \x20 printf '%s\\n' \"$a\" >> '@LOG@'\n\
+             done\n\
+             if [ \"$1\" = fcontext ] && [ \"$2\" = -l ] && [ \"$3\" = -C ]; then\n\
+             \x20 cat '@LISTING@'\n\
+             \x20 exit {listing_exit}\n\
+             fi\n\
+             if [ \"$2\" = -a ]; then\n\
+             \x20 exit {add_exit}\n\
+             fi\n\
+             exit 0\n",
+        );
+        Self::build(listing, &template)
+    }
+
+    /// The store-modelling stub ([`STORE_STUB`]): the listing file is target
+    /// state the command under test can destroy, and `Outcome::store` is what
+    /// it looks like afterwards.
+    fn with_store(listing: &str, listing_exit: i32) -> Self {
+        Self::build(
+            listing,
+            &STORE_STUB.replace("@LISTING_EXIT@", &listing_exit.to_string()),
+        )
+    }
+
+    /// The temp dir, the listing file, the argv log and the `c6_exec` marker
+    /// script, with `@LOG@` and `@LISTING@` filled in the stub.
+    fn build(listing: &str, semanage: &str) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).expect("stub dir");
@@ -89,22 +139,9 @@ impl Harness {
 
         write_script(
             &bin.join("semanage"),
-            &format!(
-                "#!/bin/sh\n\
-                 for a in \"$@\"; do\n\
-                 \x20 printf '%s\\n' \"$a\" >> '{log}'\n\
-                 done\n\
-                 if [ \"$1\" = fcontext ] && [ \"$2\" = -l ] && [ \"$3\" = -C ]; then\n\
-                 \x20 cat '{listing}'\n\
-                 \x20 exit {listing_exit}\n\
-                 fi\n\
-                 if [ \"$2\" = -a ]; then\n\
-                 \x20 exit {add_exit}\n\
-                 fi\n\
-                 exit 0\n",
-                log = argv_log.display(),
-                listing = listing_path.display(),
-            ),
+            &semanage
+                .replace("@LOG@", &argv_log.display().to_string())
+                .replace("@LISTING@", &listing_path.display().to_string()),
         );
         // The marker path is a literal in the script, not a lookup. A case
         // whose environment lost a variable would otherwise write the marker
@@ -143,9 +180,84 @@ impl Harness {
             stderr: String::from_utf8(out.stderr).expect("utf-8 stderr"),
             argv,
             executed: self.dir.path().join(EXEC_MARKER).exists(),
+            store: fs::read_to_string(self.dir.path().join("listing")).unwrap_or_default(),
         }
     }
 }
+
+/// A `semanage` stub whose listing file is the **store**: `-a -e` writes to
+/// it, and `-a`/`-m` refuse a file context that sits under one of its
+/// subjects. Both are transcriptions of measurements; see the module doc for
+/// what that makes this evidence of.
+const STORE_STUB: &str = r#"#!/bin/sh
+for a in "$@"; do
+  printf '%s\n' "$a" >> '@LOG@'
+done
+if [ "$1" = fcontext ] && [ "$2" = -l ] && [ "$3" = -C ]; then
+  # A listing that fails produces no usable table, which is the whole
+  # condition the capture exists for; a stub that printed the store and then
+  # exited nonzero would leave `$eqs` populated and test nothing. It is
+  # silent on stderr too, so a case's stderr assertion reads only the
+  # renderer's own diagnostic.
+  if [ @LISTING_EXIT@ -ne 0 ]; then
+    exit @LISTING_EXIT@
+  fi
+  cat '@LISTING@'
+  exit 0
+fi
+# Measured on registry.redhat.io/rhel9/rhel-bootc:9.8, libsemanage-3.6-5.el9_6,
+# 2026-10-28: `semanage fcontext -a -e <labeled_like> <subject>` does NOT
+# refuse a subject the store already holds. It prints "Equivalence class for
+# <subject> already exists, modifying instead", rewrites the mapping, and
+# exits 0. The spec assumed the opposite, which is why rule 2 now reads the
+# store before it branches.
+if [ "$1" = fcontext ] && [ "$2" = -a ] && [ "$3" = -e ]; then
+  rewritten=''
+  found=0
+  while IFS= read -r line; do
+    case "$line" in
+      "$5 = "*)
+        rewritten="$rewritten$5 = $4
+"
+        found=1
+        ;;
+      *)
+        rewritten="$rewritten$line
+"
+        ;;
+    esac
+  done < '@LISTING@'
+  if [ "$found" = 1 ]; then
+    printf '%s' "$rewritten" > '@LISTING@'
+    echo "Equivalence class for $5 already exists, modifying instead"
+    exit 0
+  fi
+  printf '%s%s = %s\n' "$rewritten" "$5" "$4" > '@LISTING@'
+  exit 0
+fi
+# Measured on the same image and date: with `/var/srv = /srv` in the store,
+# `semanage fcontext -a -t <type> "/var/srv/data(/.*)?"` exits 1 with
+# "ValueError: File spec ... conflicts with equivalency rule", and the `-m`
+# does the same. That pair is why the renderer refuses such a rule instead of
+# emitting it.
+if [ "$1" = fcontext ] && { [ "$2" = -a ] || [ "$2" = -m ]; }; then
+  spec=''
+  for a in "$@"; do
+    spec="$a"
+  done
+  while IFS= read -r line; do
+    sub=${line%% = *}
+    tgt=${line#* = }
+    case "$spec" in
+      "$sub"/*)
+        echo "ValueError: File spec $spec conflicts with equivalency rule '$sub $tgt';" >&2
+        exit 1
+        ;;
+    esac
+  done < '@LISTING@'
+fi
+exit 0
+"#;
 
 fn write_script(path: &Path, body: &str) {
     fs::write(path, body).expect("write stub");
@@ -664,5 +776,112 @@ fn selinux_unlabel_passes_the_none_type_as_one_argv_entry() {
             &["fcontext", "-a", "-t", "<<none>>", SPEC],
         ]
         .concat(),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 2: the two destructive paths, measured by state rather than text
+// ---------------------------------------------------------------------------
+
+/// R1's regression test, and the only one in this file that asserts target
+/// **state** rather than the command that would have changed it.
+///
+/// The spec exempted rule 2 from rule 1's listing capture because `add_equal`
+/// was said to refuse a duplicate subject. It does not. With the capture, a
+/// failed listing stops the build and the store is untouched. Without it,
+/// `$eq` is empty, the `-a -e` runs, and the stub (transcribing the measured
+/// behaviour) rewrites `/var/srv = /opt/srv` to `/var/srv = /srv` and exits 0,
+/// so the operator's equivalence is gone and the build succeeds. The old
+/// committed test asserted that `-a -e` ran, which is the defect.
+#[test]
+fn selinux_equivalence_leaves_the_target_store_alone_when_the_listing_fails() {
+    const SUBJECT: &str = "/var/srv";
+    const STORE: &str = "/var/srv = /opt/srv\n";
+    let cmd = equivalence_command(SUBJECT, "/srv");
+    let got = Harness::with_store(STORE, 1).run(&cmd);
+
+    assert_eq!(
+        got.store, STORE,
+        "the target's equivalence was replaced: a failed listing must stop the \
+         build before the add, not add blind"
+    );
+    assert_outcome(
+        "equivalence/listing failure, writable store",
+        &got,
+        1,
+        "",
+        &equivalence_listing_failure_diagnostic(SUBJECT),
+        LISTING_CALL,
+    );
+}
+
+/// The paired positive for R1: the same stub, a listing that reads, and a
+/// subject the store does not hold. The add runs and the store gains the row,
+/// which is what makes the assertion above an absence the harness can see.
+#[test]
+fn selinux_equivalence_writes_the_target_store_when_the_listing_reads() {
+    let cmd = equivalence_command("/var/srv", "/srv");
+    let got = Harness::with_store("", 0).run(&cmd);
+    assert_eq!(
+        got.store, "/var/srv = /srv\n",
+        "the add did not reach the store"
+    );
+    assert_eq!(got.status, 0);
+    assert!(!got.executed, "an operand executed");
+}
+
+/// R3's paired positive. The renderer's job is to **not** emit this command,
+/// so it cannot be reached through the renderer; § 8.9's negative case has
+/// the same problem and solves it the same way, by building the body from
+/// the transcribed template and running that.
+///
+/// With `/var/srv = /srv` in the store, semanage refuses a file context under
+/// the subject on both the `-a` and the `-m`. Rule 1 has no `|| true` after
+/// the `-m`, so the build ends here. That is what the renderer declines to
+/// ship.
+#[test]
+fn selinux_a_rule_under_an_equivalence_subject_would_end_the_build() {
+    const SPEC: &str = "/var/srv/data(/.*)?";
+    let body = sel::rule1_rendered(SPEC, "", "-t httpd_sys_content_t");
+    let cmd = sel::command_of(&body);
+    let got = Harness::with_store("/var/srv = /srv\n", 0).run(&cmd);
+
+    assert_ne!(
+        got.status, 0,
+        "the command the renderer refuses to emit must end the build"
+    );
+    assert!(
+        got.stderr.contains("conflicts with equivalency rule"),
+        "the refusal did not come from the equivalence: {:?}",
+        got.stderr
+    );
+    assert_eq!(
+        got.argv,
+        argv(
+            &[
+                LISTING_CALL,
+                &["fcontext", "-d", SPEC],
+                &["fcontext", "-a", "-t", HTTPD_TYPE, SPEC],
+                &["fcontext", "-m", "-t", HTTPD_TYPE, SPEC],
+            ]
+            .concat()
+        ),
+        "both the add and the modify must be refused, or the -m fallback would rescue it"
+    );
+    assert!(!got.executed, "an operand executed");
+
+    // Paired negative, same stub and store: a spec that is not under the
+    // subject runs the triple and exits 0, so the refusal above is the
+    // equivalence's doing and not the stub refusing everything.
+    let sibling = sel::command_of(&sel::rule1_rendered(
+        "/var/srvbackup/data(/.*)?",
+        "",
+        "-t httpd_sys_content_t",
+    ));
+    let ok = Harness::with_store("/var/srv = /srv\n", 0).run(&sibling);
+    assert_eq!(
+        ok.status, 0,
+        "a sibling path must not be refused: {:?}",
+        ok.stderr
     );
 }

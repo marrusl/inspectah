@@ -148,6 +148,12 @@ pub fn selinux_block(output: &str) -> Vec<String> {
     // opens with its own banner. If anything else follows the blank line the
     // block is longer than this function thinks and every "no line contains"
     // assertion below it would be reading a truncated block.
+    //
+    // When nothing follows the blank line there is nothing to check and
+    // nothing can have been dropped: the loop above consumed every line up to
+    // it. The guard is therefore complete even though it looks conditional,
+    // which is worth saying because the SELinux block is not the last section
+    // today and a reader cannot tell from here what happens if it becomes one.
     if idx + 1 < lines.len() {
         let next = lines[idx + 1];
         assert!(

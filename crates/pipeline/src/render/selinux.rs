@@ -98,6 +98,26 @@ const FIXME_CAUSE_PREFIX: &str = "#   the collected rule could not be rendered: 
 /// The caveat a sorted source puts before the rules (§ 3.1 rule 3).
 const SEMANAGE_LIST_NOTE: &str = "# NOTE: rule order comes from a sorted listing, not insertion order; if two expressions overlap, reorder so the intended winner is last.";
 
+/// One row of the equivalence list, with where it came from and whether the
+/// Containerfile emits it.
+///
+/// `emitted` is part of the contract rather than something each consumer
+/// re-derives: the Containerfile's emission depends on operand validation,
+/// on conflicts, and (since the collision rule) on whether any rule needing
+/// a synthesized row survives, none of which a consumer can see. § 3.1 says
+/// this helper exists so the three consumers report the same thing, and a
+/// row reported as synthesized that the build never adds breaks exactly that
+/// (Mark, 2026-10-28).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Equivalence {
+    pub rule: FcontextRule,
+    pub origin: EquivalenceOrigin,
+    /// Whether the Containerfile renders this row as a `semanage` command.
+    /// False for a conflict, for operands that fail validation, and for a
+    /// synthesized row whose every triggering rule was refused.
+    pub emitted: bool,
+}
+
 /// Where an emitted equivalence came from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EquivalenceOrigin {
@@ -134,12 +154,12 @@ pub struct FcontextRendering {
 /// collected row. Two rows claiming one subject with different targets, or a
 /// collected row mapping the other direction, become one
 /// [`EquivalenceOrigin::Conflict`] entry listing both.
-pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<(FcontextRule, EquivalenceOrigin)> {
+pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<Equivalence> {
     let Some(sel) = snap.selinux.as_ref() else {
         return Vec::new();
     };
 
-    let mut entries: Vec<(FcontextRule, EquivalenceOrigin)> = Vec::new();
+    let mut entries: Vec<Equivalence> = Vec::new();
 
     for rule in sel.fcontext_rules.iter().filter(|r| is_included(r)) {
         let Some((subject, _)) = equivalence_pair(rule) else {
@@ -147,12 +167,20 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<(FcontextRule, Equ
         };
         match entries
             .iter()
-            .position(|(r, _)| subject_of(r) == Some(subject))
+            .position(|e| subject_of(&e.rule) == Some(subject))
         {
             Some(idx) => absorb(&mut entries[idx], rule),
-            None => entries.push((rule.clone(), EquivalenceOrigin::Collected)),
+            None => entries.push(Equivalence {
+                rule: rule.clone(),
+                origin: EquivalenceOrigin::Collected,
+                emitted: true,
+            }),
         }
     }
+    // The synthesis loop asks `collision` which rules survive, and that reads
+    // `emitted`, so the collected rows settle first. They can: a collected
+    // row's emission depends on nothing but itself.
+    settle_emission(&mut entries);
 
     for (link, target) in VAR_SYMLINKED_TOPLEVELS {
         let synthesized = FcontextRule::Equivalence {
@@ -171,37 +199,57 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<(FcontextRule, Equ
         // never see it.
         if let Some(idx) = entries
             .iter()
-            .position(|(r, _)| equivalence_pair(r) == Some((link, target)))
+            .position(|e| equivalence_pair(&e.rule) == Some((link, target)))
         {
             absorb(&mut entries[idx], &synthesized);
             continue;
         }
 
-        if !sel
+        let triggers: Vec<&FcontextRule> = sel
             .fcontext_rules
             .iter()
-            .any(|r| triggers_synthesis(r, link))
-        {
+            .filter(|r| triggers_synthesis(r, link))
+            .collect();
+        if triggers.is_empty() {
             continue;
         }
+        // A triggering rule the collision rule refuses emits no command, so
+        // it needs no equivalence. When every trigger is refused the row is
+        // still reported, because the operator should know what the build
+        // would have added, but it is reported as not emitted. The row can
+        // only collide with specs under `target`, which never trigger it, so
+        // this does not depend on itself.
+        let needed = triggers.iter().any(|r| collision(&entries, r).is_none());
+
         match entries
             .iter()
-            .position(|(r, _)| subject_of(r) == Some(target))
+            .position(|e| subject_of(&e.rule) == Some(target))
         {
             Some(idx) => absorb(&mut entries[idx], &synthesized),
-            None => entries.push((
-                synthesized,
-                EquivalenceOrigin::Synthesized {
-                    reason: format!(
-                        "{link} is a symlink to {target} on bootc derivation bases \
-                         and the policy carries no {target} alias"
-                    ),
+            None => entries.push(Equivalence {
+                rule: synthesized,
+                origin: EquivalenceOrigin::Synthesized {
+                    reason: symlink_fact(link, target),
                 },
-            )),
+                emitted: needed,
+            }),
         }
     }
 
+    settle_emission(&mut entries);
     entries
+}
+
+/// Clear `emitted` on every entry the block will not render as a command. It
+/// only clears, so the synthesis loop's "no surviving trigger" answer
+/// survives the second call.
+fn settle_emission(entries: &mut [Equivalence]) {
+    for entry in entries {
+        if matches!(entry.origin, EquivalenceOrigin::Conflict { .. }) || !is_renderable(&entry.rule)
+        {
+            entry.emitted = false;
+        }
+    }
 }
 
 /// Render the collected fcontext rules for the Containerfile's SELinux
@@ -278,8 +326,9 @@ pub fn render_fcontext_rules(snap: &InspectionSnapshot) -> FcontextRendering {
 }
 
 /// The two variants rule 1 replays, carrying only the fields the replay
-/// needs. Converting once here is what keeps `Equivalence` and `Unparsed`
-/// out of [`rule1_args`], whose `None` context means "render `<<none>>`".
+/// needs. Converting once here is what keeps `FcontextRule::Equivalence` and
+/// `FcontextRule::Unparsed` out of [`rule1_args`], whose `None` context means
+/// "render `<<none>>`".
 struct ReplayRule<'a> {
     spec: &'a str,
     file_type: FcontextFileType,
@@ -314,10 +363,7 @@ impl<'a> ReplayRule<'a> {
 
 /// Why a `Label`/`Unlabel` cannot be rendered as a command, if it cannot:
 /// its own operands, or a collision with an equivalence this block adds.
-fn collision(
-    equivalences: &[(FcontextRule, EquivalenceOrigin)],
-    rule: &FcontextRule,
-) -> Option<String> {
+fn collision(equivalences: &[Equivalence], rule: &FcontextRule) -> Option<String> {
     if !is_renderable(rule) {
         return Some(unrenderable_cause(rule));
     }
@@ -331,27 +377,20 @@ fn collision(
     // operator's spec: the rewritten form is only equivalent while the
     // equivalence is in place, which is a target-side fact the renderer
     // cannot know, so the FIXME hands the operator the rewrite as advice.
-    let (subject, labeled_like) = equivalences
-        .iter()
-        .filter(|entry| emits_command(entry))
-        .find_map(|(row, _)| {
-            let (subject, labeled_like) = equivalence_pair(row)?;
-            begins_with_toplevel(spec, subject).then_some((subject, labeled_like))
-        })?;
+    let (subject, labeled_like) =
+        equivalences
+            .iter()
+            .filter(|entry| entry.emitted)
+            .find_map(|entry| {
+                let (subject, labeled_like) = equivalence_pair(&entry.rule)?;
+                begins_with_toplevel(spec, subject).then_some((subject, labeled_like))
+            })?;
     let rewritten = format!("{labeled_like}{}", &spec[subject.len()..]);
     Some(collision_cause(spec, subject, &rewritten))
 }
 
-/// Whether an equivalence entry reaches the block as a `semanage` command.
-fn emits_command(entry: &(FcontextRule, EquivalenceOrigin)) -> bool {
-    !matches!(entry.1, EquivalenceOrigin::Conflict { .. }) && is_renderable(&entry.0)
-}
-
 /// Whether a rule renders as the rule 1 replay triple.
-fn renders_as_replay(
-    rule: &FcontextRule,
-    equivalences: &[(FcontextRule, EquivalenceOrigin)],
-) -> bool {
+fn renders_as_replay(rule: &FcontextRule, equivalences: &[Equivalence]) -> bool {
     is_label(rule) && collision(equivalences, rule).is_none()
 }
 
@@ -511,11 +550,17 @@ fn replay_paragraph() -> Vec<String> {
     ]
 }
 
+/// Why a synthesized equivalence exists. One sentence, one place: the
+/// Containerfile's comment and [`EquivalenceOrigin::Synthesized`]'s `reason`
+/// both read it, so the audit report and the build cannot come to say
+/// different things about the same row.
+fn symlink_fact(link: &str, target: &str) -> String {
+    format!("{link} is a symlink to {target} on this base and the policy has no {target} alias")
+}
+
 fn symlink_paragraph(link: &str, target: &str) -> Vec<String> {
     vec![
-        format!(
-            "# {link} is a symlink to {target} on this base and the policy has no {target} alias;"
-        ),
+        format!("# {};", symlink_fact(link, target)),
         format!("# this makes every {link} rule, stock and custom, apply to the real path. The"),
         "# equivalence is added when absent and left alone when identical; a different".into(),
         "# target mapping stops the build with an instruction.".into(),
@@ -763,38 +808,35 @@ fn subject_of(rule: &FcontextRule) -> Option<&str> {
 }
 
 /// Every row an entry speaks for: one, or both halves of a conflict.
-fn rows_of<'a>(rule: &'a FcontextRule, origin: &'a EquivalenceOrigin) -> &'a [FcontextRule] {
-    match origin {
+fn rows_of(entry: &Equivalence) -> &[FcontextRule] {
+    match &entry.origin {
         EquivalenceOrigin::Conflict { rows } => rows,
-        _ => std::slice::from_ref(rule),
+        _ => std::slice::from_ref(&entry.rule),
     }
 }
 
 /// The entry that speaks for a row matching `pred`, conflict halves
 /// included: a rule reaches its entry through whichever row named it.
-fn entry_of(
-    entries: &[(FcontextRule, EquivalenceOrigin)],
-    pred: impl Fn(&FcontextRule) -> bool,
-) -> Option<usize> {
+fn entry_of(entries: &[Equivalence], pred: impl Fn(&FcontextRule) -> bool) -> Option<usize> {
     entries
         .iter()
-        .position(|(rule, origin)| rows_of(rule, origin).iter().any(&pred))
+        .position(|entry| rows_of(entry).iter().any(&pred))
 }
 
 /// Fold another row claiming the same subject into an entry: a duplicate
 /// changes nothing, a different target makes the entry a conflict.
-fn absorb(entry: &mut (FcontextRule, EquivalenceOrigin), incoming: &FcontextRule) {
-    if let EquivalenceOrigin::Conflict { rows } = &mut entry.1 {
+fn absorb(entry: &mut Equivalence, incoming: &FcontextRule) {
+    if let EquivalenceOrigin::Conflict { rows } = &mut entry.origin {
         if !rows.contains(incoming) {
             rows.push(incoming.clone());
         }
         return;
     }
-    if &entry.0 == incoming || equivalence_pair(&entry.0) == equivalence_pair(incoming) {
+    if &entry.rule == incoming || equivalence_pair(&entry.rule) == equivalence_pair(incoming) {
         return;
     }
-    entry.1 = EquivalenceOrigin::Conflict {
-        rows: vec![entry.0.clone(), incoming.clone()],
+    entry.origin = EquivalenceOrigin::Conflict {
+        rows: vec![entry.rule.clone(), incoming.clone()],
     };
 }
 
@@ -827,17 +869,13 @@ fn begins_with_toplevel(spec: &str, toplevel: &str) -> bool {
 }
 
 /// Emit one equivalence entry, once.
-fn emit_equivalence(
-    entry: &(FcontextRule, EquivalenceOrigin),
-    emitted: &mut bool,
-    rendering: &mut FcontextRendering,
-) {
+fn emit_equivalence(entry: &Equivalence, emitted: &mut bool, rendering: &mut FcontextRendering) {
     if *emitted {
         return;
     }
     *emitted = true;
 
-    let (rule, origin) = entry;
+    let Equivalence { rule, origin, .. } = entry;
     if let EquivalenceOrigin::Conflict { rows } = origin {
         rendering.rules.extend(fixme_lines(&conflict_cause(rows)));
         return;

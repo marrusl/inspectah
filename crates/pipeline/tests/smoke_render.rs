@@ -1673,6 +1673,20 @@ fn selinux_reversed_equivalence_is_a_conflict_with_or_without_a_srv_rule() {
             block.contains(sel::UNRENDERABLE_FIXME_INSTRUCTION),
             "{case}: no FIXME:\n{block}"
         );
+        // The FIXME has to be the conflict's, not an operand rejection or any
+        // other unrenderable cause, and it has to name both directions.
+        let cause = block
+            .lines()
+            .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+            .unwrap_or_else(|| panic!("{case}: no cause line:\n{block}"));
+        assert!(
+            cause.contains("these equivalences conflict"),
+            "{case}: the FIXME is not the conflict's: {cause}"
+        );
+        assert!(
+            cause.contains("\"/srv\"") && cause.contains("\"/var/srv\""),
+            "{case}: the cause names neither direction: {cause}"
+        );
     }
 }
 
@@ -1765,21 +1779,259 @@ fn selinux_restorecon_appears_only_in_its_three_known_sentences() {
             ),
         ),
     ];
-    let mut seen = 0usize;
+    let mut seen: Vec<String> = Vec::new();
     for (case, snap) in fixtures {
         for line in render_block_text(&snap).lines() {
             if !line.contains("restorecon") {
                 continue;
             }
-            seen += 1;
             assert!(
                 KNOWN.contains(&line),
                 "{case}: unexpected restorecon carrier {line:?}"
             );
+            if !seen.iter().any(|s| s == line) {
+                seen.push(line.to_string());
+            }
         }
     }
+    // The distinct set, not the count: the two count-paragraph lines render
+    // together in four of the five fixtures and satisfy a count on their own,
+    // leaving the FIXME's carrier unvisited.
+    for known in KNOWN {
+        assert!(
+            seen.iter().any(|s| s == known),
+            "no fixture reached the carrier {known:?}, so it is unchecked"
+        );
+    }
+}
+
+// --- Fix round 2: the cause line's own text, and the collision's boundaries -
+
+/// The § 5.6 ruling says the cause line must identify the rule and name every
+/// failing operand with its reason. `assert_rejected` compares a substring
+/// that ends at the first Debug-quoted operand, so none of that is visible to
+/// it: reverting the cause to the first operand alone passes all of those
+/// assertions. These are whole-line, and the text is transcribed here rather
+/// than built from the renderer's own constants, which would make them a
+/// can't-fail form.
+#[test]
+fn selinux_unrenderable_cause_line_names_every_fault_and_the_rule() {
+    const SPEC: &str = "/opt/tokens(/.*)?";
+    const BAD_TYPE: &str = "t`c6_exec`";
+    const BAD_SPEC: &str = "/tmp/a'b";
+    const SPACED: &str = "/tmp/b c";
+
+    let cases: Vec<(&str, FcontextRule, &str)> = vec![
+        (
+            "a type that is not a bare token",
+            sel::label_with(
+                SPEC,
+                FcontextFileType::All,
+                context_of(BAD_TYPE, "system_u", Some("s0")),
+            ),
+            "#   the collected rule could not be rendered: \"t`c6_exec`\" (type: it is not a bare token); the rule labels \"/opt/tokens(/.*)?\" as type \"t`c6_exec`\"",
+        ),
+        (
+            "a spec carrying an apostrophe, with a good type",
+            sel::label(BAD_SPEC, FcontextFileType::All, HTTPD_TYPE),
+            "#   the collected rule could not be rendered: \"/tmp/a'b\" (spec: it carries an apostrophe or a control character); the rule labels \"/tmp/a'b\" as type \"httpd_sys_content_t\"",
+        ),
+        (
+            "both the spec and the type",
+            sel::label_with(
+                BAD_SPEC,
+                FcontextFileType::All,
+                context_of(BAD_TYPE, "system_u", Some("s0")),
+            ),
+            "#   the collected rule could not be rendered: \"/tmp/a'b\" (spec: it carries an apostrophe or a control character), \"t`c6_exec`\" (type: it is not a bare token); the rule labels \"/tmp/a'b\" as type \"t`c6_exec`\"",
+        ),
+        (
+            "an unlabel, whose identity reads differently",
+            sel::unlabel(SPACED, FcontextFileType::All),
+            "#   the collected rule could not be rendered: \"/tmp/b c\" (spec: it carries whitespace); the rule unlabels \"/tmp/b c\"",
+        ),
+        (
+            "an equivalence operand that is a regex",
+            sel::equivalence("/var/other", "/tmp/$(id)"),
+            "#   the collected rule could not be rendered: \"/tmp/$(id)\" (labeled_like: it carries a regex character, and -e takes a literal path); the rule maps \"/var/other\" to \"/tmp/$(id)\"",
+        ),
+    ];
+
+    for (case, rule, expected) in cases {
+        let block = render_block_text(&sel::snapshot_rules(vec![rule]));
+        let cause = block
+            .lines()
+            .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+            .unwrap_or_else(|| panic!("{case}: no cause line in:\n{block}"));
+        assert_eq!(cause, expected, "{case}");
+    }
+}
+
+/// An equivalence the block does not emit must not refuse anything. The
+/// collision rule reads the helper's emission state, so a conflict, an
+/// excluded row, or an unrenderable row leaves rules under its subject alone.
+#[test]
+fn selinux_an_unemitted_equivalence_refuses_nothing() {
+    const UNDER: &str = "/var/srv/data(/.*)?";
+    let under_renders = |case: &str, rules: Vec<FcontextRule>| {
+        let snap = sel::snapshot_rules(rules);
+        let block = render_block_text(&snap);
+        assert!(
+            !block.contains("-a -e"),
+            "{case}: the fixture must emit no equivalence, or it proves nothing:\n{block}"
+        );
+        assert!(
+            block.contains(&sel::rule1_rendered(UNDER, "", HTTPD_ARGS)),
+            "{case}: the rule under the subject must still render:\n{block}"
+        );
+    };
+
+    // A conflict: the collected row and the synthesis disagree, so nothing is
+    // added and nothing should be refused.
+    under_renders(
+        "conflict",
+        vec![
+            sel::equivalence("/var/srv", "/mnt/data"),
+            sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            sel::label(UNDER, FcontextFileType::All, HTTPD_TYPE),
+        ],
+    );
+
+    // An equivalence the user removed in the refine UI. Without the
+    // disposition filter in the helper, this rule loses to a FIXME citing an
+    // equivalence that is not in the build.
+    under_renders(
+        "excluded",
+        vec![
+            FcontextRule::Equivalence {
+                subject: "/var/srv".into(),
+                labeled_like: "/srv".into(),
+                disposition: FindingKind::excluded(),
+                aggregate: None,
+            },
+            sel::label(UNDER, FcontextFileType::All, HTTPD_TYPE),
+        ],
+    );
+}
+
+/// The collision rule uses the § 3.1 boundary, not a string prefix. This is
+/// its own call site with its own hazard: `/var/srvbackup` is a different
+/// directory, and a FIXME telling the operator to label `/srvbackup/data`
+/// would be wrong.
+#[test]
+fn selinux_collision_stops_at_the_top_level_boundary() {
+    const SIBLING: &str = "/var/srvbackup/data(/.*)?";
+    let snap = sel::snapshot_rules(vec![
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label(SIBLING, FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let block = render_block_text(&snap);
     assert!(
-        seen >= KNOWN.len(),
-        "the fixtures reached {seen} carriers, so the check is thin"
+        block.contains("-a -e"),
+        "the equivalence must be emitted, or there is no collision rule to bound:\n{block}"
+    );
+    assert!(
+        block.contains(&sel::rule1_rendered(SIBLING, "", HTTPD_ARGS)),
+        "a sibling of the equivalence subject must render:\n{block}"
+    );
+    assert!(
+        !block.contains(sel::UNRENDERABLE_FIXME_INSTRUCTION),
+        "a sibling of the equivalence subject must not be refused:\n{block}"
+    );
+}
+
+/// The replay paragraph and the sorted-source caveat describe rule 1
+/// commands, so a block whose every label is refused carries neither.
+#[test]
+fn selinux_a_block_of_refused_labels_carries_no_replay_prose() {
+    let snap = sel::snapshot(
+        vec![
+            sel::equivalence("/var/srv", "/srv"),
+            sel::label("/var/srv/data(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        ],
+        FcontextSource::SemanageList,
+        Vec::new(),
+    );
+    let block = render_block_text(&snap);
+    assert!(
+        block.contains("-a -e"),
+        "the equivalence must render, or this is the empty-block case:\n{block}"
+    );
+    assert!(
+        !block.contains("RUN spec="),
+        "the label must be refused, or the assertions below prove nothing:\n{block}"
+    );
+    assert!(
+        !block.contains("# Each rule removes its own key"),
+        "no rule 1 command renders, so the replay paragraph must be absent:\n{block}"
+    );
+    assert!(
+        !block.contains("# NOTE:"),
+        "no rule 1 command renders, so the order caveat must be absent:\n{block}"
+    );
+}
+
+/// Every fixture that asserts the count has one rule, so `let noun = "rule"`
+/// would pass.
+#[test]
+fn selinux_header_count_is_plural_for_two_rules() {
+    let block = render_block_text(&sel::snapshot_rules(vec![
+        sel::label("/opt/a(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label("/opt/b(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]));
+    assert!(
+        block.contains("# SELinux file contexts (2 custom rules)."),
+        "two rules must read plural:\n{block}"
+    );
+}
+
+/// § 3.1 gives `selinux_equivalences` one job beyond deduplication: the
+/// Containerfile, the audit report and the HTML report read it so that a
+/// synthesis and a conflict are reported the same way everywhere. After the
+/// collision rule the helper can hold a synthesized row the block never
+/// emits, so emission is part of what it reports rather than something each
+/// consumer re-derives (Mark, 2026-10-28).
+#[test]
+fn selinux_equivalences_marks_a_synthesis_the_block_never_emits() {
+    use inspectah_pipeline::render::selinux::{EquivalenceOrigin, selinux_equivalences};
+
+    let synthesized_of = |entries: &[inspectah_pipeline::render::selinux::Equivalence]| {
+        entries
+            .iter()
+            .find(|e| matches!(e.origin, EquivalenceOrigin::Synthesized { .. }))
+            .cloned()
+            .unwrap_or_else(|| panic!("the synthesis is not reported at all"))
+    };
+
+    // The collected row claims /srv, so the /srv/www label collides with it
+    // and is refused. Nothing then needs the /var/srv equivalence, and the
+    // block emits none.
+    let refused = sel::snapshot_rules(vec![
+        sel::equivalence("/srv", "/x"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let entry = synthesized_of(&selinux_equivalences(&refused));
+    assert!(
+        !entry.emitted,
+        "the helper reports a synthesis the Containerfile never adds"
+    );
+    let block = render_block_text(&refused);
+    assert!(
+        !block.contains("-a -e '/srv' '/var/srv'"),
+        "the Containerfile must agree with the helper:\n{block}"
+    );
+
+    // Paired positive: the same label with nothing to collide with. The
+    // helper reports the same row, emitted, and the block adds it.
+    let emitted = sel::snapshot_rules(vec![sel::label(
+        "/srv/www(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]);
+    let entry = synthesized_of(&selinux_equivalences(&emitted));
+    assert!(entry.emitted, "an unobstructed synthesis is emitted");
+    assert!(
+        render_block_text(&emitted).contains("-a -e '/srv' '/var/srv'"),
+        "the Containerfile must agree with the helper"
     );
 }
