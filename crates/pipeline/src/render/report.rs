@@ -2391,6 +2391,7 @@ mod tests {
                     level: Some("s0".into()),
                 },
                 disposition: inspectah_core::types::FindingKind::included(),
+                aggregate: None,
             }],
             fips_mode: false,
             ..Default::default()

@@ -67,6 +67,7 @@ pub enum FcontextRule {
         context: SelinuxContext,
         #[serde(default)]
         disposition: FindingKind,
+        aggregate: Option<AggregatePrevalence>,
     },
     /// `<<None>>` in the context column: do not relabel.
     Unlabel {
@@ -74,6 +75,7 @@ pub enum FcontextRule {
         file_type: FcontextFileType,
         #[serde(default)]
         disposition: FindingKind,
+        aggregate: Option<AggregatePrevalence>,
     },
     /// `subject = labeled_like` in the equivalence section; renders as
     /// `semanage fcontext -a -e <labeled_like> <subject>`.
@@ -82,6 +84,7 @@ pub enum FcontextRule {
         labeled_like: String,
         #[serde(default)]
         disposition: FindingKind,
+        aggregate: Option<AggregatePrevalence>,
     },
     /// A line the parser could not place. Display-only; the renderer prints
     /// it inside the FIXME so the operator can transcribe it.
@@ -177,6 +180,7 @@ mod tests {
                     level: Some("s0".to_string()),
                 },
                 disposition: FindingKind::included(),
+                aggregate: None,
             }],
             fcontext_source: FcontextSource::PolicyStore,
             audit_rules: vec![CarryForwardFile {

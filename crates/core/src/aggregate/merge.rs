@@ -754,49 +754,103 @@ fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
 /// silently change which overlapping local expression the target policy
 /// resolves to by recency (see `collect_fcontext_rules`).
 ///
-/// A key's surviving rule keeps the first host's spec/context (hosts that
-/// disagree on content for one key do not overwrite it); its disposition is
-/// included only when every host carrying that key included it, the same
-/// convention `narrow_non_universal` applies to `merge_items` output.
-fn merge_fcontext_rules(sections: &[Option<SelinuxSection>]) -> Vec<FcontextRule> {
-    let mut order: Vec<(u8, String, String)> = Vec::new();
-    let mut representative: HashMap<(u8, String, String), FcontextRule> = HashMap::new();
-    let mut included_on_all: HashMap<(u8, String, String), bool> = HashMap::new();
+/// A key's disposition is narrowed the way `narrow_non_universal` narrows
+/// `merge_items` output -- included only when every host in the run carries
+/// the key (`count == total`), not merely when every host that happens to
+/// carry it agreed to include it. That narrowing is uniform across every
+/// variant of a key: it answers "is this policy entry universal," not "is
+/// this exact content universal."
+///
+/// Hosts can disagree on a key's content (a `Label` on one host, an
+/// `Unlabel` on another; the same spec labeled two different types). Round 1
+/// kept only the first-seen content and discarded the rest, which made a
+/// disagreement invisible. Each distinct content for a key now survives as
+/// its own rule, carrying only the hosts that actually hold it in its
+/// `aggregate` field -- the record Task 11 needs to name both sides of a
+/// disagreement by host, rather than silently picking one.
+fn merge_fcontext_rules(
+    sections: &[Option<SelinuxSection>],
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Vec<FcontextRule> {
+    // Group raw (host_idx, rule) pairs by semantic key, in first-seen key
+    // order.
+    let mut key_order: Vec<(u8, String, String)> = Vec::new();
+    let mut by_key: HashMap<(u8, String, String), Vec<(usize, FcontextRule)>> = HashMap::new();
 
-    for section in sections.iter().flatten() {
+    for (host_idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
         for rule in &section.fcontext_rules {
             let key = fcontext_rule_key(rule);
-            if !representative.contains_key(&key) {
-                representative.insert(key.clone(), rule.clone());
-                order.push(key.clone());
+            if !by_key.contains_key(&key) {
+                key_order.push(key.clone());
             }
-            let included = match rule {
-                FcontextRule::Label { disposition, .. }
-                | FcontextRule::Unlabel { disposition, .. }
-                | FcontextRule::Equivalence { disposition, .. } => disposition.is_included(),
-                FcontextRule::Unparsed { .. } => true,
-            };
-            let entry = included_on_all.entry(key).or_insert(true);
-            *entry = *entry && included;
+            by_key
+                .entry(key)
+                .or_default()
+                .push((host_idx, rule.clone()));
         }
     }
 
-    order
-        .into_iter()
-        .map(|key| {
-            let mut rule = representative.remove(&key).expect("key was just recorded");
-            let include = included_on_all[&key];
+    let mut result = Vec::new();
+    for key in key_order {
+        let entries = by_key
+            .remove(&key)
+            .expect("key was just recorded in key_order");
+
+        // Universality is evaluated per key, over every host carrying it
+        // under any content.
+        let mut key_host_idxs: Vec<usize> = entries.iter().map(|(idx, _)| *idx).collect();
+        key_host_idxs.sort_unstable();
+        key_host_idxs.dedup();
+        let include = key_host_idxs.len() == total_hosts;
+
+        // Sub-group by exact content so a genuine disagreement survives as
+        // more than one rule, in first-seen order within the key.
+        let mut variants: Vec<(FcontextRule, Vec<usize>)> = Vec::new();
+        for (host_idx, rule) in entries {
+            match variants.iter_mut().find(|(r, _)| *r == rule) {
+                Some((_, idxs)) => idxs.push(host_idx),
+                None => variants.push((rule, vec![host_idx])),
+            }
+        }
+
+        for (mut rule, idxs) in variants {
+            let mut hosts: Vec<String> = idxs.iter().map(|&i| hostnames[i].clone()).collect();
+            hosts.sort();
+            hosts.dedup();
+            let prevalence = AggregatePrevalence {
+                count: hosts.len() as i32,
+                total: total_hosts as i32,
+                hosts,
+                ..Default::default()
+            };
             match &mut rule {
-                FcontextRule::Label { disposition, .. }
-                | FcontextRule::Unlabel { disposition, .. }
-                | FcontextRule::Equivalence { disposition, .. } => {
+                FcontextRule::Label {
+                    disposition,
+                    aggregate,
+                    ..
+                }
+                | FcontextRule::Unlabel {
+                    disposition,
+                    aggregate,
+                    ..
+                }
+                | FcontextRule::Equivalence {
+                    disposition,
+                    aggregate,
+                    ..
+                } => {
                     *disposition = disposition.with_include(include);
+                    *aggregate = Some(prevalence);
                 }
                 FcontextRule::Unparsed { .. } => {}
             }
-            rule
-        })
-        .collect()
+            result.push(rule);
+        }
+    }
+
+    result
 }
 
 /// Deduplicate JSON values by serialized equality.
@@ -1676,7 +1730,7 @@ pub fn merge_selinux_sections(
     );
 
     let custom_modules = dedup_strings(collect_string_lists(&sections, |s| &s.custom_modules));
-    let fcontext_rules = merge_fcontext_rules(&sections);
+    let fcontext_rules = merge_fcontext_rules(&sections, total_hosts, hostnames);
     let fcontext_source = if sections
         .iter()
         .flatten()

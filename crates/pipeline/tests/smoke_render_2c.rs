@@ -144,6 +144,7 @@ fn snapshot_with_selinux() -> InspectionSnapshot {
                 level: Some("s0".into()),
             },
             disposition: FindingKind::included(),
+            aggregate: None,
         }],
         fips_mode: true,
         port_labels: vec![SelinuxPortLabel {

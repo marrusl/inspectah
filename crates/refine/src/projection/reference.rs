@@ -2765,16 +2765,19 @@ mod tests {
                             level: Some("s0".into()),
                         },
                         disposition: FindingKind::included(),
+                        aggregate: None,
                     },
                     FcontextRule::Unlabel {
                         spec: "/opt/private".into(),
                         file_type: FcontextFileType::RegularFile,
                         disposition: FindingKind::included(),
+                        aggregate: None,
                     },
                     FcontextRule::Equivalence {
                         subject: "/home1".into(),
                         labeled_like: "/home".into(),
                         disposition: FindingKind::included(),
+                        aggregate: None,
                     },
                     FcontextRule::Unparsed {
                         raw: "garbage line".into(),

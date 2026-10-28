@@ -412,6 +412,7 @@ fn label(
             level: level.map(str::to_string),
         },
         disposition: FindingKind::included(),
+        aggregate: None,
     }
 }
 
@@ -437,6 +438,7 @@ fn fcontext_parser_table() {
                 spec: "/srv/private(/.*)?".into(),
                 file_type: FcontextFileType::RegularFile,
                 disposition: FindingKind::included(),
+                aggregate: None,
             },
         ),
         // a user_u:object_r:foo_t:s0-s0:c0 context with the level kept intact
@@ -458,6 +460,7 @@ fn fcontext_parser_table() {
                 subject: "/home1".into(),
                 labeled_like: "/home".into(),
                 disposition: FindingKind::included(),
+                aggregate: None,
             },
         ),
         // a stray line -> Unparsed
@@ -512,6 +515,7 @@ fn policy_store_forms_and_order() {
             subject: "/home1".into(),
             labeled_like: "/home".into(),
             disposition: FindingKind::included(),
+            aggregate: None,
         }),
     );
 
@@ -766,6 +770,7 @@ fn policy_store_forms_and_order() {
             subject: "/home1".into(),
             labeled_like: "/home".into(),
             disposition: FindingKind::included(),
+            aggregate: None,
         }],
         "subs_dist must never be read, only subs"
     );

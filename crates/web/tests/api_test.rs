@@ -767,6 +767,7 @@ fn rich_snapshot() -> InspectionSnapshot {
                 level: Some("s0".into()),
             },
             disposition: FindingKind::included(),
+            aggregate: None,
         }],
         ..Default::default()
     });

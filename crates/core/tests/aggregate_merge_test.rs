@@ -1478,6 +1478,7 @@ fn fcontext_label(spec: &str) -> FcontextRule {
             level: Some("s0".into()),
         },
         disposition: FindingKind::included(),
+        aggregate: None,
     }
 }
 
@@ -1534,11 +1535,25 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // String lists deduped
     assert_eq!(result.custom_modules, vec!["mymodule", "othermodule"]);
-    // Fcontext rules deduped by semantic key (same spec + file_type)
-    assert_eq!(
-        result.fcontext_rules,
-        vec![fcontext_label("/opt/app(/.*)?")]
-    );
+    // Fcontext rules deduped by semantic key (same spec + file_type); both
+    // hosts agree on content, so one rule survives, included (count ==
+    // total), naming both hosts.
+    assert_eq!(result.fcontext_rules.len(), 1);
+    match &result.fcontext_rules[0] {
+        FcontextRule::Label {
+            spec,
+            disposition,
+            aggregate,
+            ..
+        } => {
+            assert_eq!(spec, "/opt/app(/.*)?");
+            assert!(disposition.is_included());
+            let agg = aggregate.as_ref().unwrap();
+            assert_eq!(agg.count, 2);
+            assert_eq!(agg.hosts, vec!["h1".to_string(), "h2".to_string()]);
+        }
+        other => panic!("expected Label, got {other:?}"),
+    }
     assert_eq!(result.fcontext_source, FcontextSource::PolicyStore);
 
     // JSON deduped
@@ -1553,7 +1568,8 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
 #[test]
 fn test_merge_selinux_fcontext_order_and_disposition() {
-    // h1: an h1-only rule, then a rule shared with h2 (included, context Y1).
+    // h1: an h1-only rule, then a rule sharing a key with h2 but
+    // disagreeing on content (context "y1_t" vs h2's "y2_t" below).
     let h1_shared = FcontextRule::Label {
         spec: "/opt/shared".into(),
         file_type: FcontextFileType::All,
@@ -1564,14 +1580,14 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
             level: Some("s0".into()),
         },
         disposition: FindingKind::included(),
+        aggregate: None,
     };
     let s1 = SelinuxSection {
         fcontext_rules: vec![fcontext_label("/opt/a"), h1_shared],
         ..Default::default()
     };
 
-    // h2: the shared rule again, excluded and with a different context
-    // (disagreement), then an h2-only rule.
+    // h2: the same key, different content, then an h2-only rule.
     let h2_shared = FcontextRule::Label {
         spec: "/opt/shared".into(),
         file_type: FcontextFileType::All,
@@ -1582,6 +1598,7 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
             level: Some("s0".into()),
         },
         disposition: FindingKind::excluded(),
+        aggregate: None,
     };
     let s2 = SelinuxSection {
         fcontext_rules: vec![h2_shared, fcontext_label("/opt/c")],
@@ -1592,34 +1609,82 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
     let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
     // Order: hostname order, then each host's collected order -- not
-    // sorted by spec and not grouped by host.
-    let specs: Vec<&str> = result
+    // sorted by spec and not grouped by host. A disagreement on "shared"
+    // now survives as two rows (round 2 ruling), not one with the loser
+    // discarded (round 1), so there are 4 rows, not 3.
+    let specs_and_types: Vec<(&str, &str)> = result
         .fcontext_rules
         .iter()
         .map(|r| match r {
-            FcontextRule::Label { spec, .. } => spec.as_str(),
+            FcontextRule::Label { spec, context, .. } => (spec.as_str(), context.type_.as_str()),
             other => panic!("expected Label, got {:?}", other),
         })
         .collect();
-    assert_eq!(specs, vec!["/opt/a", "/opt/shared", "/opt/c"]);
+    assert_eq!(
+        specs_and_types,
+        vec![
+            ("/opt/a", "httpd_sys_content_t"),
+            ("/opt/shared", "y1_t"),
+            ("/opt/shared", "y2_t"),
+            ("/opt/c", "httpd_sys_content_t"),
+        ],
+        "a disagreement must survive as both variants, in hostname-then-collected order"
+    );
 
-    // Disagreement on content: the merged rule keeps h1's (first-seen)
-    // context ("y1_t"), not h2's ("y2_t").
-    match &result.fcontext_rules[1] {
-        FcontextRule::Label { context, .. } => assert_eq!(context.type_, "y1_t"),
-        other => panic!("expected Label, got {:?}", other),
-    }
-
-    // Disposition: h1-only and h2-only rules are included (the only host
-    // carrying each included it); the shared rule is excluded because h2,
-    // one of the two hosts carrying it, excluded it.
     let included = |rule: &FcontextRule| match rule {
         FcontextRule::Label { disposition, .. } => disposition.is_included(),
         other => panic!("expected Label, got {:?}", other),
     };
-    assert!(included(&result.fcontext_rules[0]));
-    assert!(!included(&result.fcontext_rules[1]));
-    assert!(included(&result.fcontext_rules[2]));
+
+    // "/opt/a" and "/opt/c" each sit on only 1 of 2 hosts -- round 2's
+    // narrowing (count == total across the whole run) excludes these,
+    // where round 1's per-host-disposition rule included them (the only
+    // host carrying each had included it). This is the behaviour this
+    // round changed; assert it directly rather than letting it ride on an
+    // existing assertion.
+    assert!(
+        !included(&result.fcontext_rules[0]),
+        "/opt/a is on 1 of 2 hosts, must now be excluded"
+    );
+    assert!(
+        !included(&result.fcontext_rules[3]),
+        "/opt/c is on 1 of 2 hosts, must now be excluded"
+    );
+
+    // "/opt/shared" the *key* is universal (both hosts carry a rule at
+    // this spec/file_type, they just disagree on its content), so
+    // narrowing -- which answers "is this policy entry universal," not
+    // "is this exact content universal" -- includes both variants.
+    assert!(
+        included(&result.fcontext_rules[1]),
+        "shared key is universal even though its content disagrees"
+    );
+    assert!(
+        included(&result.fcontext_rules[2]),
+        "shared key is universal even though its content disagrees"
+    );
+
+    // Each variant's own aggregate names only the host that actually
+    // holds it -- this is the record Task 11 needs to name both sides of
+    // the disagreement by host.
+    match &result.fcontext_rules[1] {
+        FcontextRule::Label { aggregate, .. } => {
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
+            assert_eq!(agg.hosts, vec!["h1".to_string()]);
+        }
+        other => panic!("expected Label, got {:?}", other),
+    }
+    match &result.fcontext_rules[2] {
+        FcontextRule::Label { aggregate, .. } => {
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
+            assert_eq!(agg.hosts, vec!["h2".to_string()]);
+        }
+        other => panic!("expected Label, got {:?}", other),
+    }
 }
 
 #[test]
@@ -1627,7 +1692,8 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
     // h1 labels a spec; h2 unlabels the *same* spec/file_type. These are
     // the same local-database entry (round 1 review, item 3) -- a replay
     // that ran both in sequence would have the second silently overwrite
-    // the first, so the merge must treat them as one key, not two rules.
+    // the first, so the merge must treat them as one key, not two rows
+    // that happen to share a spec.
     let s1 = SelinuxSection {
         fcontext_rules: vec![fcontext_label("/opt/x")],
         ..Default::default()
@@ -1637,20 +1703,49 @@ fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
             spec: "/opt/x".into(),
             file_type: FcontextFileType::All,
             disposition: FindingKind::included(),
+            aggregate: None,
         }],
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
-    // One key, not two -- would be 2 if Label/Unlabel used different
-    // discriminants.
-    assert_eq!(result.fcontext_rules.len(), 1);
-    // First host in hostname order wins the representative, same as any
-    // other content disagreement on a shared key.
+    // One key -- but round 2's ruling preserves a disagreement as more
+    // than one row rather than discarding the loser (round 1 kept only
+    // h1's Label and silently dropped h2's Unlabel entirely). So this is
+    // 2 rows, both for the "/opt/x" key, not 1.
+    assert_eq!(result.fcontext_rules.len(), 2);
+
     match &result.fcontext_rules[0] {
-        FcontextRule::Label { spec, .. } => assert_eq!(spec, "/opt/x"),
-        other => panic!("expected h1's Label to survive, got {other:?}"),
+        FcontextRule::Label {
+            spec,
+            disposition,
+            aggregate,
+            ..
+        } => {
+            assert_eq!(spec, "/opt/x");
+            // The key itself is universal (both hosts carry a rule at
+            // this spec/file_type, they just disagree on Label vs
+            // Unlabel), so narrowing includes it.
+            assert!(disposition.is_included());
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            assert_eq!(agg.hosts, vec!["h1".to_string()]);
+        }
+        other => panic!("expected h1's Label first, got {other:?}"),
+    }
+    match &result.fcontext_rules[1] {
+        FcontextRule::Unlabel {
+            spec,
+            disposition,
+            aggregate,
+            ..
+        } => {
+            assert_eq!(spec, "/opt/x");
+            assert!(disposition.is_included());
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            assert_eq!(agg.hosts, vec!["h2".to_string()]);
+        }
+        other => panic!("expected h2's Unlabel second, got {other:?}"),
     }
 }
 

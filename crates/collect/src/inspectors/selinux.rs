@@ -437,6 +437,7 @@ pub fn parse_file_contexts_local_line(line: &str) -> Option<FcontextRule> {
             spec: spec.to_string(),
             file_type,
             disposition: FindingKind::included(),
+            aggregate: None,
         });
     }
 
@@ -446,6 +447,7 @@ pub fn parse_file_contexts_local_line(line: &str) -> Option<FcontextRule> {
             file_type,
             context,
             disposition: FindingKind::included(),
+            aggregate: None,
         }),
         None => Some(FcontextRule::Unparsed {
             raw: trimmed.to_string(),
@@ -477,6 +479,7 @@ pub fn parse_file_contexts_subs_line(line: &str) -> Option<FcontextRule> {
         subject,
         labeled_like,
         disposition: FindingKind::included(),
+        aggregate: None,
     })
 }
 
@@ -515,6 +518,7 @@ pub fn parse_semanage_line(line: &str) -> Option<FcontextRule> {
                 spec: spec.to_string(),
                 file_type,
                 disposition: FindingKind::included(),
+                aggregate: None,
             });
         }
         if let Some(context) = parse_selinux_context(context_col) {
@@ -523,6 +527,7 @@ pub fn parse_semanage_line(line: &str) -> Option<FcontextRule> {
                 file_type,
                 context,
                 disposition: FindingKind::included(),
+                aggregate: None,
             });
         }
     }
@@ -532,6 +537,7 @@ pub fn parse_semanage_line(line: &str) -> Option<FcontextRule> {
             subject: caps[1].to_string(),
             labeled_like: caps[2].to_string(),
             disposition: FindingKind::included(),
+            aggregate: None,
         });
     }
 
