@@ -101,6 +101,8 @@ export function GroupRow({
     .filter(Boolean)
     .join(" ");
 
+  const inertStateTextId = `group-inert-state-${group.name}`;
+
   return (
     <div
       ref={rowRef}
@@ -108,6 +110,7 @@ export function GroupRow({
       className={rowClassName}
       role="group"
       aria-label={`${group.name}, ${pkgLabel}`}
+      aria-describedby={isInert ? inertStateTextId : undefined}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
       {...(groupNameMatches ? { "data-search-match": "true" } : {})}
@@ -145,7 +148,10 @@ export function GroupRow({
         )}
 
         {isInert && (
-          <span className="inspectah-group-row__subtitle">
+          <span
+            id={inertStateTextId}
+            className="inspectah-group-row__subtitle"
+          >
             nothing to decide: all members are locked or from base
           </span>
         )}

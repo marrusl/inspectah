@@ -9,8 +9,8 @@ const mockGroup: GroupInfo = {
   added_count: 8,
   locked_count: 2,
   optional_spillover_count: 0,
-  effective_member_count: 0,
-  effective_included: 0,
+  effective_member_count: 6,
+  effective_included: 6,
   render_state: "renderable",
   degradation_reason: null,
   members: [
@@ -51,8 +51,8 @@ const smallGroup: GroupInfo = {
   added_count: 0,
   locked_count: 0,
   optional_spillover_count: 0,
-  effective_member_count: 0,
-  effective_included: 0,
+  effective_member_count: 3,
+  effective_included: 3,
   render_state: "renderable",
   degradation_reason: null,
   members: [
@@ -94,7 +94,7 @@ const excludedWithSpillover: GroupInfo = {
   added_count: 0,
   locked_count: 0,
   optional_spillover_count: 3,
-  effective_member_count: 0,
+  effective_member_count: 5,
   effective_included: 0,
   render_state: "excluded",
   degradation_reason: null,
@@ -107,8 +107,8 @@ const excludedWithSpillover: GroupInfo = {
 const inertGroup: GroupInfo = {
   name: "legacy-fonts",
   member_count: 2,
-  added_count: 0,
-  locked_count: 2,
+  added_count: 1,
+  locked_count: 1,
   optional_spillover_count: 0,
   effective_member_count: 0,
   effective_included: 0,
@@ -649,14 +649,33 @@ describe("GroupRow", () => {
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
-  it("non-inert groups do not show the inert state text", () => {
+  it("inert group row is described by its state text via aria-describedby", () => {
     render(
-      <GroupRow group={mockGroup} onToggle={vi.fn()} onUngroup={vi.fn()} />,
+      <GroupRow group={inertGroup} onToggle={vi.fn()} onUngroup={vi.fn()} />,
     );
-    expect(
-      screen.queryByText(
-        "nothing to decide: all members are locked or from base",
-      ),
-    ).not.toBeInTheDocument();
+    // Discriminates against pre-task code: with no `isInert` branch, the
+    // row has no `aria-describedby` and no element carries the referenced
+    // id, so a screen reader announces the row with no explanation at all.
+    const row = screen.getByRole("group", { name: /legacy-fonts/ });
+    const describedBy = row.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const stateText = document.getElementById(describedBy!);
+    expect(stateText).toHaveTextContent(
+      "nothing to decide: all members are locked or from base",
+    );
+  });
+
+  it("non-inert groups do not show the inert state text", () => {
+    for (const group of [mockGroup, excludedWithSpillover, degradedGroup]) {
+      const { unmount } = render(
+        <GroupRow group={group} onToggle={vi.fn()} onUngroup={vi.fn()} />,
+      );
+      expect(
+        screen.queryByText(
+          "nothing to decide: all members are locked or from base",
+        ),
+      ).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });
