@@ -4,16 +4,22 @@ import { Button } from "@patternfly/react-core";
 export interface ExcludedPackage {
   name: string;
   repo: string;
+  include: boolean;
 }
 
 export interface ExcludedZoneProps {
   packages: ExcludedPackage[];
   hasEverToggled: boolean;
+  onToggle: (name: string) => void;
 }
 
 const COLLAPSE_THRESHOLD = 50;
 
-export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
+export function ExcludedZone({
+  packages,
+  hasEverToggled,
+  onToggle,
+}: ExcludedZoneProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (!hasEverToggled) {
@@ -88,16 +94,31 @@ export function ExcludedZone({ packages, hasEverToggled }: ExcludedZoneProps) {
         }}
       >
         {packages.map((pkg) => (
-          <span
+          <label
             key={`${pkg.repo}/${pkg.name}`}
             style={{
-              textDecoration: "line-through",
-              color: "var(--pf-t--global--text--color--subtle)",
-              fontSize: "var(--pf-t--global--font--size--body--sm)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--pf-t--global--spacer--xs)",
             }}
           >
-            {pkg.name}
-          </span>
+            <input
+              type="checkbox"
+              role="checkbox"
+              checked={pkg.include}
+              aria-label={pkg.name}
+              onChange={() => onToggle(pkg.name)}
+            />
+            <span
+              style={{
+                textDecoration: pkg.include ? "none" : "line-through",
+                color: "var(--pf-t--global--text--color--subtle)",
+                fontSize: "var(--pf-t--global--font--size--body--sm)",
+              }}
+            >
+              {pkg.name}
+            </span>
+          </label>
         ))}
       </div>
     </div>

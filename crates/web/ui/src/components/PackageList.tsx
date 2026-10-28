@@ -159,10 +159,14 @@ export function PackageList({
   // Split packages: included vs excluded
   const { includedPackages, excludedPackages } = useMemo(() => {
     const included: PackageListPackage[] = [];
-    const excluded: { name: string; repo: string }[] = [];
+    const excluded: { name: string; repo: string; include: boolean }[] = [];
     for (const pkg of packages) {
       if (disabledRepos.has(pkg.source_repo)) {
-        excluded.push({ name: pkg.name, repo: pkg.source_repo });
+        excluded.push({
+          name: pkg.name,
+          repo: pkg.source_repo,
+          include: pkg.include,
+        });
       } else {
         included.push(pkg);
       }
@@ -551,6 +555,7 @@ export function PackageList({
       <ExcludedZone
         packages={excludedPackages}
         hasEverToggled={hasEverToggled}
+        onToggle={onToggle}
       />
     </div>
   );

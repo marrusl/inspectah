@@ -255,6 +255,26 @@ describe("PackageList", () => {
     expect(within(excluded).getByText("jq")).toBeInTheDocument();
   });
 
+  it("re-includes an excluded repo's member by clicking its ExcludedZone checkbox", () => {
+    const onToggle = vi.fn();
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const pkgs = [makePkg("nginx", "epel", false)];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={[distroRepo, officialRepo, disabledEpel]}
+        onToggle={onToggle}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const excluded = screen.getByTestId("excluded-zone");
+    const checkbox = within(excluded).getByRole("checkbox", { name: "nginx" });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(onToggle).toHaveBeenCalledWith("nginx");
+  });
+
   // --- Repo text styling ---
 
   it("renders distro repo text in muted color", () => {

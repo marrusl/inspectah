@@ -309,23 +309,35 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
     expect(fake.opsLog()).toHaveLength(3);
   });
 
-  // PackageList's `disabledRepos` split (`PackageList.tsx:148-154`, not in
-  // this task's Files list) hides a repo's member rows into the read-only
-  // ExcludedZone whenever `enabled` is false, regardless of each member's
-  // own include flag -- the same behavior MainContent.repo.test.tsx found
-  // in the single-host mount. So state (b) -- excluded history with every
-  // member individually included -- is reached the way the spec describes
-  // it (server history from ordinary per-package decisions), not through a
-  // live "exclude, then re-include" click sequence in this mount.
+  // PackageList's `disabledRepos` split (`PackageList.tsx`) routes a
+  // disabled repo's members into ExcludedZone, which now (task 9c) wires
+  // per-row checkboxes through the same `onToggle` the normal zone uses,
+  // so each member stays individually clickable while the repo stays
+  // history-excluded -- reached here through a live sequence rather than
+  // the fixture surgery the prior revision needed.
   it("state (b): excluded history with both members individually included, then excludes all", async () => {
-    const fake = makeFakeApi(
-      makeView(makeVendorRepo({ enabled: false, effective_included: 2 })),
-    );
+    const fake = makeFakeApi(makeView(makeVendorRepo()));
     wireFake(fake);
 
     renderAggregateApp();
     await waitForContent();
 
+    // Exclude the repo via the Switch, then re-include each member
+    // individually through its row in ExcludedZone.
+    fireEvent.click(screen.getByRole("switch"));
+    await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
+    expect(fake.repo("vendor")).toMatchObject({
+      enabled: false,
+      effective_included: 0,
+    });
+
+    await toggleMemberRow("a.x86_64", true);
+    await toggleMemberRow("b.x86_64", true);
+    expect(fake.repo("vendor")).toMatchObject({
+      enabled: false,
+      effective_member_count: 2,
+      effective_included: 2,
+    });
     expect(screen.getByRole("switch")).toBeChecked();
     expect(screen.getByText("2 of 2 packages included")).toBeInTheDocument();
 
@@ -339,7 +351,7 @@ describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
         },
       }),
     );
-    expect(fake.opsLog()).toHaveLength(1);
+    expect(fake.opsLog()).toHaveLength(4); // repo exclude, two member includes, repo exclude
     await waitFor(() => expect(screen.getByRole("switch")).not.toBeChecked());
     expect(screen.getByText("2 packages excluded")).toBeInTheDocument();
     expect(fake.repo("vendor")).toMatchObject({
