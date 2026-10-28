@@ -207,16 +207,15 @@ function Harness({
   );
 }
 
-async function toggleMemberRow(nameArch: string, expectChecked: boolean) {
+async function excludeMemberRow(nameArch: string) {
   fireEvent.click(screen.getByRole("checkbox", { name: nameArch }));
   await waitFor(() => {
     expect(screen.getByRole("checkbox", { name: nameArch })).toHaveProperty(
       "checked",
-      expectChecked,
+      false,
     );
   });
 }
-const excludeMemberRow = (nameArch: string) => toggleMemberRow(nameArch, false);
 
 /**
  * Scoped to ExcludedZone, not the whole document: a disabled repo's members

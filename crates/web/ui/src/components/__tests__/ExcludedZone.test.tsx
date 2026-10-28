@@ -35,7 +35,9 @@ describe("ExcludedZone", () => {
     expect(screen.getByText("nginx")).toHaveStyle({
       textDecoration: "line-through",
     });
-    expect(screen.getByText(/from excluded repos · 2 packages/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/from excluded repos · 2 packages/i),
+    ).toBeInTheDocument();
   });
 
   it("renders a checkbox per package reflecting its own include state", () => {
@@ -46,7 +48,9 @@ describe("ExcludedZone", () => {
     render(
       <ExcludedZone packages={pkgs} hasEverToggled={true} onToggle={vi.fn()} />,
     );
-    expect(screen.getByRole("checkbox", { name: "nginx" })).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "nginx" }),
+    ).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: "jq" })).toBeChecked();
   });
 
@@ -98,7 +102,9 @@ describe("ExcludedZone", () => {
         onUploadClick={onUploadClick}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Upload RPM for nginx" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Upload RPM for nginx" }),
+    );
     expect(onUploadClick).toHaveBeenCalledWith("nginx");
   });
 

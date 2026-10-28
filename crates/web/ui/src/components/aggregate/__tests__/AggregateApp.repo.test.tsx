@@ -244,12 +244,12 @@ function pressCtrlShiftZ() {
   fireEvent.keyDown(document, { key: "z", ctrlKey: true, shiftKey: true });
 }
 
-async function toggleMemberRow(nameArch: string, expectChecked: boolean) {
+async function excludeMemberRow(nameArch: string) {
   fireEvent.click(screen.getByRole("checkbox", { name: nameArch }));
   await waitFor(() => {
     expect(screen.getByRole("checkbox", { name: nameArch })).toHaveProperty(
       "checked",
-      expectChecked,
+      false,
     );
   });
 }
@@ -270,7 +270,6 @@ async function includeExcludedZoneMember(nameArch: string) {
     );
   });
 }
-const excludeMemberRow = (nameArch: string) => toggleMemberRow(nameArch, false);
 
 describe("RepoBar's Switch in AggregateApp reads members, not history", () => {
   function wireFake(fake: ReturnType<typeof makeFakeApi>) {

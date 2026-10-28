@@ -254,8 +254,12 @@ describe("PackageList", () => {
     expect(within(excluded).getByText("nginx")).toBeInTheDocument();
     expect(within(excluded).getByText("jq")).toBeInTheDocument();
     // Pin both polarities of the include pass-through at component level.
-    expect(within(excluded).getByRole("checkbox", { name: "nginx" })).not.toBeChecked();
-    expect(within(excluded).getByRole("checkbox", { name: "jq" })).toBeChecked();
+    expect(
+      within(excluded).getByRole("checkbox", { name: "nginx" }),
+    ).not.toBeChecked();
+    expect(
+      within(excluded).getByRole("checkbox", { name: "jq" }),
+    ).toBeChecked();
   });
 
   it("re-includes an excluded repo's member by clicking its ExcludedZone checkbox", () => {
@@ -276,6 +280,28 @@ describe("PackageList", () => {
     expect(checkbox).not.toBeChecked();
     fireEvent.click(checkbox);
     expect(onToggle).toHaveBeenCalledWith("nginx");
+  });
+
+  it("passes the upload gate through to ExcludedZone", () => {
+    const onUploadClick = vi.fn();
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    render(
+      <PackageList
+        mode="single"
+        packages={[makePkg("nginx", "epel", false)]}
+        repoGroups={[distroRepo, officialRepo, disabledEpel]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        rpmRowStates={{ nginx: "needs_upload" }}
+        onUploadClick={onUploadClick}
+      />,
+    );
+    const excluded = screen.getByTestId("excluded-zone");
+    expect(within(excluded).queryByRole("checkbox")).not.toBeInTheDocument();
+    const uploadBtn = within(excluded).getByLabelText("Upload RPM for nginx");
+    expect(uploadBtn).toBeInTheDocument();
+    fireEvent.click(uploadBtn);
+    expect(onUploadClick).toHaveBeenCalledWith("nginx");
   });
 
   // --- Repo text styling ---

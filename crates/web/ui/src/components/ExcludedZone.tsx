@@ -104,8 +104,15 @@ export function ExcludedZone({
       >
         {packages.map((pkg) => {
           const isBlocked = rpmRowStates?.[pkg.name] === "needs_upload";
+          // A <label> implicitly associates with a labelable descendant.
+          // That's the point for the checkbox branch (clicking the name
+          // toggles it), but `button` is also labelable, so wrapping the
+          // blocked branch's Upload button in the same <label> would make
+          // clicking the package name activate the file picker. Use a plain
+          // <span> container there instead.
+          const Container = isBlocked ? "span" : "label";
           return (
-            <label
+            <Container
               key={`${pkg.repo}/${pkg.name}`}
               style={{
                 display: "inline-flex",
@@ -141,7 +148,7 @@ export function ExcludedZone({
               >
                 {pkg.name}
               </span>
-            </label>
+            </Container>
           );
         })}
       </div>
