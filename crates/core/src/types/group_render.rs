@@ -15,6 +15,9 @@ pub enum GroupRenderState {
     Ungrouped,
     /// Group cannot be rendered atomically -- individual member rendering required.
     Degraded { reason: DegradationReason },
+    /// No effective member exists (all locked, all base-image, or none
+    /// present) -- nothing to render and nothing to decide (§ 3.7).
+    Inert,
 }
 
 /// Why a group cannot be rendered as a single `dnf group install` command.
@@ -39,7 +42,8 @@ pub struct RenderContext {
 }
 
 impl RenderContext {
-    /// Returns true if the named group is in the Renderable state.
+    /// Returns true if the named group is in the Renderable state. `Inert`
+    /// (no effective member) is not renderable, same as every other variant.
     pub fn is_renderable(&self, group_name: &str) -> bool {
         matches!(
             self.group_states.get(group_name),

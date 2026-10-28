@@ -18,6 +18,7 @@ use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_pipeline::render::advisory::config_advisories;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_refine::group_state;
 use inspectah_refine::projection::{
     GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
     RefVersionChanges, ReferenceProjection,
@@ -238,6 +239,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 GroupRenderState::Renderable => ("renderable".to_string(), None),
                 GroupRenderState::Excluded => ("excluded".to_string(), None),
                 GroupRenderState::Ungrouped => ("ungrouped".to_string(), None),
+                GroupRenderState::Inert => ("inert".to_string(), None),
                 GroupRenderState::Degraded { reason } => {
                     let reason_str = match reason {
                         DegradationReason::MemberExcluded => "member_excluded",
@@ -262,6 +264,31 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .filter(|m| projected_pkgs.iter().any(|p| p.name == **m && p.locked))
                 .count();
 
+            // The effective set this group's op acts on: present, actionable,
+            // not locked (§ 3.7) — the same definition the no-op refusal and
+            // group render-state evaluation use.
+            let effective = group_state::effective_members(projected_pkgs, &group.members);
+            let effective_member_count = effective.len();
+            let effective_included = effective
+                .iter()
+                .filter(|p| p.disposition.is_included())
+                .count();
+
+            // A member is in the base image if it's recorded as baseline-
+            // suppressed or base-image-only, not merely absent from
+            // `packages_added` (position 5).
+            let baseline_suppressed_names: std::collections::HashSet<&str> = projected
+                .rpm
+                .as_ref()
+                .and_then(|r| r.baseline_suppressed.as_ref())
+                .map(|v| v.iter().filter_map(|id| id.split('.').next()).collect())
+                .unwrap_or_default();
+            let base_image_only_names: std::collections::HashSet<&str> = projected
+                .rpm
+                .as_ref()
+                .map(|r| r.base_image_only.iter().map(|p| p.name.as_str()).collect())
+                .unwrap_or_default();
+
             // Build member list with overlap detection
             let mut members: Vec<GroupMemberInfo> = group
                 .members
@@ -270,7 +297,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                     let locked = projected_pkgs
                         .iter()
                         .any(|p| p.name == *member_name && p.locked);
-                    let in_base_image = !projected_pkgs.iter().any(|p| p.name == *member_name);
+                    let in_base_image = baseline_suppressed_names.contains(member_name.as_str())
+                        || base_image_only_names.contains(member_name.as_str());
                     let overlap_groups: Vec<String> = installed_groups
                         .iter()
                         .filter(|other| other.name != group.name)
@@ -299,6 +327,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             GroupInfo {
                 name: group.name.clone(),
                 member_count: members.len(),
+                effective_member_count,
+                effective_included,
                 added_count,
                 locked_count,
                 optional_spillover_count: group.optional_installed.len(),
@@ -1748,6 +1778,11 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            // apr/apr-util are declared group members that ship with the base
+            // image rather than being added by this host: `in_base_image` is
+            // computed from this membership, not from absence in
+            // `packages_added` (§ 3.7 position 5).
+            baseline_suppressed: Some(vec!["apr.x86_64".into(), "apr-util.x86_64".into()]),
             installed_groups: Some(vec![InstalledGroup {
                 name: "Web Server".into(),
                 members: vec![
@@ -1800,6 +1835,89 @@ mod tests {
         assert_eq!(
             members[3]["in_base_image"], true,
             "apr-util should be in_base_image"
+        );
+    }
+
+    /// Builds the § 3.7 host example: "Container Management" declares three
+    /// members. `buildah` and `containernetworking-plugins` are present and
+    /// non-leaf (empty baseline + empty `leaf_packages` normalizes both to
+    /// excluded at construction); `podman` is declared but baseline-suppressed
+    /// and absent from `packages_added`.
+    fn group_info_for_host_fixture(name: &str) -> GroupInfo {
+        use inspectah_core::baseline::BaselineData;
+        use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "buildah".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "containernetworking-plugins".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+            ],
+            leaf_packages: Some(vec![]),
+            baseline_suppressed: Some(vec!["podman.x86_64".into()]),
+            installed_groups: Some(vec![InstalledGroup {
+                name: name.to_string(),
+                members: vec![
+                    "buildah".into(),
+                    "containernetworking-plugins".into(),
+                    "podman".into(),
+                ],
+                optional_installed: vec![],
+            }]),
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        response
+            .package_groups
+            .into_iter()
+            .find(|g| g.name == name)
+            .expect("group present in view")
+    }
+
+    /// `effective_member_count`/`effective_included` exclude `podman` (absent
+    /// from `packages_added`); `member_count` still counts all three declared
+    /// members, and `podman` reports `in_base_image` via baseline-suppressed
+    /// membership rather than absence (§ 3.7).
+    #[test]
+    fn group_info_reports_declared_and_effective_counts() {
+        let gi = group_info_for_host_fixture("Container Management");
+        assert_eq!(
+            (
+                gi.member_count,
+                gi.effective_member_count,
+                gi.effective_included
+            ),
+            (3, 2, 0)
+        );
+        assert!(
+            gi.members
+                .iter()
+                .find(|m| m.name == "podman")
+                .unwrap()
+                .in_base_image
         );
     }
 

@@ -13,6 +13,8 @@ expression: json
     {
       "added_count": 2,
       "degradation_reason": "member_excluded",
+      "effective_included": 0,
+      "effective_member_count": 2,
       "locked_count": 0,
       "member_count": 4,
       "members": [

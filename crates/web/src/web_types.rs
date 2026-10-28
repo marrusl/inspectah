@@ -231,6 +231,10 @@ pub struct TunedDecisionDto {
 pub struct GroupInfo {
     pub name: String,
     pub member_count: usize,
+    /// In `packages_added`, actionable, and not locked (§ 3.7).
+    pub effective_member_count: usize,
+    /// Of the effective members, those currently included.
+    pub effective_included: usize,
     pub added_count: usize,
     pub locked_count: usize,
     pub optional_spillover_count: usize,

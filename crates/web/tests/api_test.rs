@@ -287,6 +287,67 @@ async fn api_op_accepts_ungroup_directive() {
     assert_eq!(json["generation"], 1);
 }
 
+/// § 8.12: `SetInclude(Group, false)` on a group whose sole effective member
+/// is already excluded is refused with 422, not silently accepted with 200
+/// and no recorded change (item 1.9).
+#[tokio::test]
+async fn set_include_group_already_excluded_returns_422_and_records_nothing() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "podman".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            disposition: FindingKind::excluded(),
+            locked: false,
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+
+    let (_, ops_before) = get_json(&app, "/api/ops").await;
+
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Group", "key": {"name": "Container Management"}},
+                "include": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json["error"]
+        .as_str()
+        .expect("error body carries a message");
+    assert!(
+        message.starts_with("nothing to change"),
+        "the refusal must start with 'nothing to change': {message}"
+    );
+
+    let (_, ops_after) = get_json(&app, "/api/ops").await;
+    assert_eq!(
+        ops_before, ops_after,
+        "a refused op must not appear in the timeline"
+    );
+}
+
 #[tokio::test]
 async fn api_op_rejects_unknown_timeline_kind() {
     let app = app(test_state());

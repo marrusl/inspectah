@@ -288,6 +288,11 @@ async fn grouped_view_contract() {
                 ..Default::default()
             },
         ],
+        // apr/apr-util are declared group members that ship with the base
+        // image rather than being added by this host: `in_base_image` is
+        // computed from this membership, not from absence in
+        // `packages_added` (§ 3.7 position 5).
+        baseline_suppressed: Some(vec!["apr.x86_64".into(), "apr-util.x86_64".into()]),
         installed_groups: Some(vec![InstalledGroup {
             name: "Web Server".into(),
             members: vec![

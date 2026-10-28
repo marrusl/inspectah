@@ -14,7 +14,7 @@ use inspectah_pipeline::render::containerfile::{
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
-use crate::group_state::{GroupEvalContext, derive_group_state};
+use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
     normalize_package_defaults,
@@ -784,6 +784,19 @@ impl RefineSession {
             && is_item_locked(&self.original, item_id)
         {
             return Ok(()); // silent no-op — op never recorded
+        }
+
+        // Groups are refused, not silently no-opped, when the op would
+        // change nothing: a 200 that records nothing reads as "the button
+        // does nothing" to the client (item 1.9). This runs before the
+        // generic idempotency shortcut below, which still silently no-ops
+        // single items (§ 3.7).
+        if let RefinementOp::SetInclude {
+            item_id: ItemId::Group { name },
+            include,
+        } = &op
+        {
+            self.check_group_noop(name, *include)?;
         }
 
         // Check idempotency
@@ -1819,27 +1832,9 @@ impl RefineSession {
                         excluded.contains(&id)
                     }
                 }
-                ItemId::Group { name } => {
-                    // Noop if ALL non-locked members already have the
-                    // requested include state.
-                    let member_names: Vec<String> = self
-                        .installed_groups()
-                        .iter()
-                        .find(|g| g.name == *name)
-                        .map(|g| g.members.clone())
-                        .unwrap_or_default();
-                    projected
-                        .rpm
-                        .as_ref()
-                        .map(|r| {
-                            r.packages_added
-                                .iter()
-                                .filter(|e| member_names.contains(&e.name))
-                                .filter(|e| !(*include && e.locked))
-                                .all(|e| e.disposition.is_included() == *include)
-                        })
-                        .unwrap_or(true)
-                }
+                // ItemId::Group is handled by `check_group_noop`, called from
+                // `apply` before this idempotency shortcut: a group no-op is
+                // refused (NoopTarget), never silently swallowed here (§ 3.7).
                 // Other item kinds: never noop for now
                 _ => false,
             },
@@ -1886,6 +1881,64 @@ impl RefineSession {
                 .map(|item| item.packages.iter().all(|p| p.pinned == *pinned))
                 .unwrap_or(false),
         }
+    }
+
+    /// Refuses a group `SetInclude` that would change nothing (§ 3.7). The
+    /// effective set is `packages_added` members that are actionable and not
+    /// locked — the same definition `GroupInfo`'s effective counts and group
+    /// render-state evaluation use (`group_state::effective_members`). An
+    /// empty effective set and a set already at the requested state are both
+    /// refused rather than silently accepted: `is_op_noop`'s old behavior of
+    /// treating a missing rpm section (no members at all) as a no-op success
+    /// is folded into this refusal too, via the empty-set branch below.
+    fn check_group_noop(&self, name: &str, include: bool) -> Result<(), RefineError> {
+        let Some(group) = self
+            .installed_groups()
+            .iter()
+            .find(|g| g.name == name)
+            .cloned()
+        else {
+            // Unknown group — validate_target already rejects this op.
+            return Ok(());
+        };
+
+        let projected = self.project_snapshot();
+        let packages_added: &[PackageEntry] = projected
+            .rpm
+            .as_ref()
+            .map(|r| r.packages_added.as_slice())
+            .unwrap_or(&[]);
+
+        let effective = group_state::effective_members(packages_added, &group.members);
+
+        if effective.is_empty() {
+            let present_count = packages_added
+                .iter()
+                .filter(|p| group.members.contains(&p.name))
+                .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
+                .count();
+            let reason = if present_count > 0 {
+                format!("all {present_count} members are locked")
+            } else {
+                "no package is attributed to it".to_string()
+            };
+            return Err(RefineError::NoopTarget(format!(
+                "nothing to decide in '{name}': {reason}"
+            )));
+        }
+
+        if effective
+            .iter()
+            .all(|p| p.disposition.is_included() == include)
+        {
+            let state = if include { "included" } else { "excluded" };
+            return Err(RefineError::NoopTarget(format!(
+                "all {} effective members of '{name}' are already {state}",
+                effective.len()
+            )));
+        }
+
+        Ok(())
     }
 
     /// Check whether a view directive is already active in the timeline
@@ -2660,12 +2713,29 @@ impl RefineSession {
             }
         }
 
-        // Build RenderContext from the *filtered* package set (baseline-
-        // suppressed + leaf-filtered) so group state reflects the actual
-        // render surface. A group member that was filtered out must not
-        // make the group look Renderable.
-        let effective_packages: Vec<PackageEntry> =
-            packages.iter().map(|p| p.entry.clone()).collect();
+        // Build RenderContext from the group's effective members: present in
+        // `packages_added`, actionable, and not locked (§ 3.7) — evaluated
+        // BEFORE any display filter (baseline-suppressed, leaf), so a member
+        // hidden from the view by those filters still counts toward group
+        // state. This is the same definition `check_group_noop` and
+        // `GroupInfo`'s effective counts use (`group_state::effective_members`
+        // applies it per group; `derive_group_state` below does its own
+        // per-group name match over this shared, already actionable-and-
+        // unlocked pool). Without this, a group whose only members are
+        // filtered out of the view reads as Renderable instead of Inert
+        // (item 1.9).
+        let effective_packages: Vec<PackageEntry> = projected
+            .rpm
+            .as_ref()
+            .map(|r| {
+                r.packages_added
+                    .iter()
+                    .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
+                    .filter(|p| !p.locked)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut group_states = HashMap::new();
 
         for group in self.installed_groups() {
@@ -5849,16 +5919,20 @@ mod tests {
     fn set_include_group_noop_when_all_members_already_match() {
         let snap = test_snapshot_with_groups();
         let mut session = RefineSession::new(snap);
-        // All members start included — setting include=true should be noop
-        session
-            .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Group {
-                    name: "Container Management".into(),
-                },
-                include: true,
-            })
-            .unwrap();
-        assert_eq!(session.timeline_len(), 0, "noop should not add to timeline");
+        // All members start included — setting include=true changes nothing,
+        // so it's refused (§ 3.7) rather than silently accepted.
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Group {
+                name: "Container Management".into(),
+            },
+            include: true,
+        });
+        assert!(matches!(result, Err(RefineError::NoopTarget(_))));
+        assert_eq!(
+            session.timeline_len(),
+            0,
+            "refused op must not add to timeline"
+        );
     }
 
     #[test]
@@ -6171,33 +6245,28 @@ mod tests {
 
     // ── Truth-boundary proof tests ──────────────────────────────────
     //
-    // These verify that group state derivation uses the *filtered* render
-    // surface (baseline-suppressed + leaf-filtered), not the raw projected
-    // snapshot. Before the fix, effective_packages came from
-    // projected.rpm.packages_added, which could include packages the view
-    // never shows.
+    // § 3.7 (Task 6): group state derivation uses the effective set built
+    // from the raw `packages_added` (present, actionable, not locked),
+    // evaluated BEFORE the leaf/baseline-suppressed display filter. A member
+    // absent from `packages_added` entirely is in the base and is not
+    // evaluated; a member that's merely hidden from the individual view by
+    // the leaf filter is still present and still counts. The leaf filter
+    // governs the individual install list, not group evaluation.
 
     #[test]
     fn baseline_suppressed_member_excluded_from_group_eval() {
         // Setup: group "Web Server" has members httpd and mod_ssl.
-        // httpd is baseline-suppressed (present in target image).
-        // mod_ssl has include=false (user excluded it).
+        // httpd is baseline-suppressed (present in target image) but, unlike
+        // the leaf-filter case below, also absent from `packages_added`
+        // entirely — the baseline rule exempts it from evaluation.
+        // mod_ssl is present and include=false (user excluded it).
         //
-        // OLD behavior (bug): effective_packages includes httpd (from raw
-        //   projection). httpd has include=true, mod_ssl has include=false.
-        //   derive_group_state sees one included + one excluded non-locked
-        //   member => Degraded(MemberExcluded). This is WRONG because httpd
-        //   isn't on the render surface at all.
-        //
-        // NEW behavior (fix): effective_packages comes from filtered packages.
-        //   httpd is baseline-suppressed and absent. Only mod_ssl remains,
-        //   with include=false => Degraded(MemberExcluded). The group state
-        //   now matches what the view actually shows.
-        //
-        // The key assertion: the group state reflects the filtered surface.
-        // We verify by checking that only 1 package appears in the view
-        // (mod_ssl) and the group IS Degraded — but for the right reason
-        // (the visible member is excluded, not a phantom baseline member).
+        // The effective set is {mod_ssl}: httpd never entered it, so this
+        // case can't by itself distinguish the two designs — mod_ssl's
+        // exclusion degrades the group either way. It still documents the
+        // baseline exemption: only 1 package appears in the view (mod_ssl),
+        // and the group is Degraded because mod_ssl is excluded, not because
+        // httpd is absent.
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6277,21 +6346,23 @@ mod tests {
     }
 
     #[test]
-    fn leaf_filtered_member_excluded_from_group_eval() {
+    fn leaf_filtered_member_still_counted_in_group_eval() {
         // Setup: group "Core Libs" has members vim and glibc.
-        // glibc is a transitive dep (not a leaf), so leaf filtering removes it.
-        // vim is a leaf and remains visible with include=true.
+        // glibc is a transitive dep (not a leaf), so leaf filtering hides it
+        // from the individual Packages view and construction-time
+        // normalization excludes it (non-leaf, Site bucket). vim is a leaf
+        // and remains visible with include=true.
         //
-        // OLD behavior (bug): effective_packages includes glibc (from raw
-        //   projection). Both have include=true => Renderable. But the view
-        //   only shows vim. If the user exports, `dnf group install` would
-        //   try to install glibc explicitly, which is wasteful — it's a dep.
-        //
-        // NEW behavior (fix): effective_packages comes from filtered packages.
-        //   glibc is absent (leaf-filtered). Only vim remains, include=true.
-        //   derive_group_state sees 1 member, included => Renderable. The
-        //   result is the same in this case, but the derivation is honest:
-        //   it's Renderable because the *visible* members are all included.
+        // § 3.7: group evaluation uses the effective set built from the raw
+        // `packages_added` (present, actionable, not locked), BEFORE the
+        // leaf/display filter — the leaf filter governs the individual
+        // install list, not group evaluation. glibc is present (not absent
+        // from `packages_added`, merely hidden from the individual view), so
+        // its excluded state degrades the group even though the view only
+        // shows vim. The two filters answer different questions: the display
+        // filter says what the user sees per-package; group evaluation says
+        // whether the group's members, in full, are safe to install as one
+        // `dnf group install`.
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6349,17 +6420,18 @@ mod tests {
             "vim must be visible in view"
         );
 
-        // Group state should reflect only the visible member (vim, included).
-        // With the fix, glibc is absent from effective_packages, so the
-        // group state is based solely on vim. Before the fix, glibc would
-        // have been in effective_packages from the raw projection.
+        // glibc is present, actionable, not locked, and excluded (normalized
+        // non-leaf) — it's in the effective set despite being leaf-filtered
+        // out of the individual view, so the group is Degraded, not
+        // Renderable, even though vim (the only visible member) is included.
         let ctx = session.render_context();
         assert!(
-            ctx.is_renderable("Core Libs"),
-            "group with only visible members included should be Renderable"
+            ctx.is_degraded("Core Libs"),
+            "a present-but-leaf-filtered excluded member must still degrade the group"
         );
 
-        // Now exclude vim to prove the filtered surface drives group state.
+        // Excluding vim too leaves both effective members excluded: still
+        // Degraded (MemberExcluded), now for both reasons at once.
         let mut session2 = RefineSession::new({
             let mut s = InspectionSnapshot {
                 schema_version: inspectah_core::snapshot::SCHEMA_VERSION,

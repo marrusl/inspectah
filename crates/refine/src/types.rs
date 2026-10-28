@@ -732,6 +732,8 @@ pub enum RefineError {
     InventoryNotToggleable(String),
     #[error("advisory item is not toggleable: {0}")]
     AdvisoryNotToggleable(String),
+    #[error("nothing to change: {0}")]
+    NoopTarget(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

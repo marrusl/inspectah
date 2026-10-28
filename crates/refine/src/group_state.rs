@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry};
 
@@ -25,15 +26,35 @@ pub struct GroupEvalContext<'a> {
     pub divergent_overrides: &'a HashSet<String>,
 }
 
+/// The effective member set for a group op: declared members present in
+/// `packages_added`, actionable (not advisory/inventory), and not locked.
+/// One definition, used three times (§ 3.7): the no-op refusal
+/// (`RefineSession::check_group_noop`), `GroupInfo`'s `effective_member_count`
+/// and `effective_included`, and `derive_group_state`'s own evaluation below,
+/// via the caller that builds its `effective_packages`.
+pub fn effective_members<'a>(
+    packages_added: &'a [PackageEntry],
+    members: &[String],
+) -> Vec<&'a PackageEntry> {
+    packages_added
+        .iter()
+        .filter(|p| members.contains(&p.name))
+        .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
+        .filter(|p| !p.locked)
+        .collect()
+}
+
 /// Determine the rendering state for a single installed group.
 ///
 /// Priority order:
 /// 1. Ungrouped — group dissolved, members render individually
 /// 2. Multilib conflict — member appears in multiple architectures
 /// 3. Divergent override — member op contradicts group-level op
-/// 4. Excluded — group-level exclude with all non-locked members off
-/// 5. Member excluded — non-locked member excluded without group op
-/// 6. Renderable — all non-locked members included
+/// 4. Inert — no effective member at all (all locked, all base, or no
+///    member present); nothing to render and nothing to decide
+/// 5. Excluded — group-level exclude with all non-locked members off
+/// 6. Member excluded — non-locked member excluded without group op
+/// 7. Renderable — all non-locked members included
 pub fn derive_group_state(ctx: &GroupEvalContext) -> GroupRenderState {
     // Priority 1: ungrouped dissolves the group entirely.
     if ctx.ungrouped {
@@ -85,26 +106,32 @@ pub fn derive_group_state(ctx: &GroupEvalContext) -> GroupRenderState {
         }
     }
 
-    // Priority 4: explicit group exclude with all non-locked confirmed off.
-    if ctx.group_excluded && has_non_locked && all_non_locked_excluded {
+    // Priority 4: no effective member at all. Without this, the fallthrough
+    // below would call a group with nothing to evaluate `Renderable`, which
+    // is item 1.9's bug: an empty group still emits `dnf group install`.
+    if !has_non_locked {
+        return GroupRenderState::Inert;
+    }
+
+    // Priority 5: explicit group exclude with all non-locked confirmed off.
+    if ctx.group_excluded && all_non_locked_excluded {
         return GroupRenderState::Excluded;
     }
 
-    // Priority 5: non-locked member excluded without group op.
+    // Priority 6: non-locked member excluded without group op.
     if any_non_locked_excluded {
         return GroupRenderState::Degraded {
             reason: DegradationReason::MemberExcluded,
         };
     }
 
-    // Priority 6: everything checks out.
+    // Priority 7: everything checks out.
     GroupRenderState::Renderable
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::FindingKind;
 
     fn group(name: &str, members: &[&str]) -> InstalledGroup {
         InstalledGroup {

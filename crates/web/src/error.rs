@@ -34,6 +34,14 @@ impl IntoResponse for AppError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("inventory finding is not toggleable: {t}"),
             ),
+            // A group (and, by the same § 3.7 rule, a repo) op whose
+            // effective members already hold the requested state, or whose
+            // effective set is empty, is refused rather than silently
+            // accepted with 200 and no recorded change (item 1.9).
+            RefineError::NoopTarget(t) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("nothing to change: {t}"),
+            ),
             // Internal errors — do not leak details
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into()),
         };

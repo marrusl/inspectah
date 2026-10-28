@@ -5,7 +5,11 @@ use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::{AggregatePrevalence, AggregateSnapshotMeta};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+use inspectah_core::types::group_render::GroupRenderState;
+use inspectah_core::types::rpm::{
+    InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
+};
+use inspectah_refine::group_state;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
@@ -1355,4 +1359,228 @@ fn test_include_repo_case_insensitive() {
         nginx.disposition.is_included(),
         "SetInclude(include repo) must match case-insensitively after SetInclude(exclude repo)"
     );
+}
+
+// -- § 3.7: group NoopTarget and Inert render state --------------------------
+
+/// Mirrors the § 3.7 host example: "Container Management" has three declared
+/// members. `buildah` and `containernetworking-plugins` are present and
+/// non-leaf, so an empty baseline (all packages Site-bucket) plus an empty
+/// `leaf_packages` list normalizes both to excluded at construction. `podman`
+/// is declared but absent from `packages_added` (baseline-suppressed), so it
+/// never enters the effective set.
+fn container_management_session() -> RefineSession {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "buildah".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "containernetworking-plugins".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec![]),
+        auto_packages: Some(vec![
+            "buildah.x86_64".into(),
+            "containernetworking-plugins.x86_64".into(),
+        ]),
+        baseline_suppressed: Some(vec!["podman.x86_64".into()]),
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec![
+                "buildah".into(),
+                "containernetworking-plugins".into(),
+                "podman".into(),
+            ],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    RefineSession::new(snap)
+}
+
+/// A group whose two declared members are both present and locked, so the
+/// effective set (present, actionable, not locked) is empty.
+fn all_locked_group_session() -> RefineSession {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "systemd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+        ],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Locked Group".into(),
+            members: vec!["glibc".into(), "systemd".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    RefineSession::new(snap)
+}
+
+fn set_include_group(name: &str, include: bool) -> RefinementOp {
+    RefinementOp::SetInclude {
+        item_id: ItemId::Group {
+            name: name.to_string(),
+        },
+        include,
+    }
+}
+
+fn containerfile_of(s: &RefineSession) -> String {
+    s.view().containerfile_preview.clone()
+}
+
+/// Extracts package names from `RUN dnf install -y` blocks only (never
+/// `dnf group install`), so a caller can confirm a package did not slip
+/// into the individual install list.
+fn active_install_list(containerfile: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_block = false;
+    for line in containerfile.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("RUN dnf install -y") {
+            in_block = true;
+            continue;
+        }
+        if !in_block {
+            continue;
+        }
+        if trimmed.starts_with("&&") || trimmed.is_empty() {
+            in_block = false;
+            continue;
+        }
+        names.push(trimmed.trim_end_matches('\\').trim().to_string());
+    }
+    names
+}
+
+struct TestGroupInfo {
+    render_state: String,
+    effective_member_count: usize,
+}
+
+/// A minimal stand-in for `web::web_types::GroupInfo`, computed independently
+/// here since `crates/web` isn't a dependency of this integration test.
+fn group_info(s: &RefineSession, name: &str) -> TestGroupInfo {
+    let render_state = match s.render_context().group_states.get(name) {
+        Some(GroupRenderState::Renderable) | None => "renderable",
+        Some(GroupRenderState::Excluded) => "excluded",
+        Some(GroupRenderState::Ungrouped) => "ungrouped",
+        Some(GroupRenderState::Inert) => "inert",
+        Some(GroupRenderState::Degraded { .. }) => "degraded",
+    }
+    .to_string();
+
+    let projected = s.snapshot_projected();
+    let (packages_added, members): (Vec<PackageEntry>, Vec<String>) = projected
+        .rpm
+        .as_ref()
+        .map(|r| {
+            let members = r
+                .installed_groups
+                .as_ref()
+                .and_then(|gs| gs.iter().find(|g| g.name == name))
+                .map(|g| g.members.clone())
+                .unwrap_or_default();
+            (r.packages_added.clone(), members)
+        })
+        .unwrap_or_default();
+
+    let effective_member_count = group_state::effective_members(&packages_added, &members).len();
+
+    TestGroupInfo {
+        render_state,
+        effective_member_count,
+    }
+}
+
+#[test]
+fn group_exclude_on_an_already_excluded_set_is_refused() {
+    // § 8.8: Container Management, two non-leaf present members, one
+    // baseline-suppressed. Both present members normalize to excluded at
+    // construction, so a fresh exclude is a no-op before any op runs.
+    let mut s = container_management_session();
+    assert!(matches!(
+        s.apply(set_include_group("Container Management", false)),
+        Err(RefineError::NoopTarget(_))
+    ));
+    assert_eq!(s.timeline_len(), 0);
+}
+
+#[test]
+fn group_include_then_exclude_moves_the_render_state_and_the_export() {
+    let mut s = container_management_session();
+    s.apply(set_include_group("Container Management", true))
+        .unwrap();
+    assert_eq!(s.timeline_len(), 1);
+    // The group is now Renderable: `dnf group install` carries the group
+    // name, and its members are suppressed from the individual install list
+    // by design (see containerfile.rs's `group_member_suppressed`).
+    let cf = containerfile_of(&s);
+    assert!(cf.contains("dnf group install") && cf.contains("\"Container Management\""));
+
+    s.apply(set_include_group("Container Management", false))
+        .unwrap();
+    assert_eq!(
+        group_info(&s, "Container Management").render_state,
+        "excluded"
+    );
+    let cf = containerfile_of(&s);
+    // Pre-fix, the group's effective set was built from the leaf-filtered
+    // display list: both members are non-leaf and excluded, so they drop out
+    // of that list entirely, the group reads as having zero members, and the
+    // old code's fallthrough treats zero members as Renderable — `dnf group
+    // install` would still be emitted for a group installing nothing.
+    assert!(!cf.contains("dnf group install"));
+    assert!(!active_install_list(&cf).contains(&"buildah".to_string()));
+
+    s.undo().unwrap();
+    assert!(containerfile_of(&s).contains("dnf group install"));
+    s.redo().unwrap();
+    assert!(!containerfile_of(&s).contains("dnf group install"));
+}
+
+#[test]
+fn a_group_whose_present_members_are_all_locked_is_inert() {
+    let mut s = all_locked_group_session();
+    let gi = group_info(&s, "Locked Group");
+    assert_eq!(gi.render_state, "inert");
+    assert_eq!(gi.effective_member_count, 0);
+    assert!(!containerfile_of(&s).contains("dnf group install"));
+    for include in [true, false] {
+        assert!(matches!(
+            s.apply(set_include_group("Locked Group", include)),
+            Err(RefineError::NoopTarget(_))
+        ));
+    }
 }
