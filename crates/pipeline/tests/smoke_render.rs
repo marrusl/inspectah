@@ -1011,16 +1011,42 @@ fn selinux_conflicting_collected_equivalence_emits_no_run_and_a_fixme_naming_bot
         .lines()
         .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
         .unwrap_or_else(|| panic!("no cause line under the FIXME instruction:\n{block}"));
-    // The two rows of the conflict. The synthesized row's `/srv` is not
-    // asserted here: `/var/srv` ends in it, so no fixture makes it
-    // independently checkable, and the sentence is not byte-specified yet.
-    assert!(
-        cause.contains("/var/srv"),
-        "cause names no subject: {cause}"
+    // Byte-specified now, where it was two `contains` before. The sentence
+    // names which row is the renderer's own: "exclude the other" otherwise
+    // points at an action the operator does not have for one of the two,
+    // and cannot tell which.
+    assert_eq!(
+        cause,
+        format!(
+            "{}these equivalences conflict: \"/var/srv\" = \"{COLLECTED_TARGET}\" and \
+             \"/var/srv\" = \"/srv\" (inspectah adds this one itself); exclude the other \
+             and rebuild",
+            sel::UNRENDERABLE_FIXME_CAUSE_PREFIX
+        )
     );
-    assert!(
-        cause.contains(COLLECTED_TARGET),
-        "cause names no collected target: {cause}"
+}
+
+/// The attribution is only for the collected-versus-synthesized case. Two
+/// collected rows are both the operator's, both excludable, and "keep one
+/// and exclude the other" already tells them everything; a note about the
+/// renderer there is noise in a build log.
+#[test]
+fn selinux_conflict_between_two_collected_rows_carries_no_attribution() {
+    let block = render_block_text(&sel::snapshot_rules(vec![
+        sel::equivalence("/opt/a", "/x"),
+        sel::equivalence("/opt/a", "/y"),
+    ]));
+    let cause = block
+        .lines()
+        .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+        .unwrap_or_else(|| panic!("no cause line under the FIXME instruction:\n{block}"));
+    assert_eq!(
+        cause,
+        format!(
+            "{}these equivalences conflict: \"/opt/a\" = \"/x\" and \"/opt/a\" = \"/y\"; \
+             keep one and exclude the other, then rebuild",
+            sel::UNRENDERABLE_FIXME_CAUSE_PREFIX
+        )
     );
 }
 
@@ -2703,7 +2729,7 @@ const HOST_RULE_ROW: &str = "/srv/www(/.*)? -> httpd_sys_content_t";
 /// The conflict fixture's rows. The collected row claims `/var/srv` and the
 /// synthesis claims it too, so neither is added and the cause names both.
 const CONFLICT_ROW: &str = "/var/srv = /opt/srv";
-const CONFLICT_DISPOSITION: &str = "not applied: these equivalences conflict: \"/var/srv\" = \"/opt/srv\" and \"/var/srv\" = \"/srv\"; keep one and exclude the other, then rebuild";
+const CONFLICT_DISPOSITION: &str = "not applied: these equivalences conflict: \"/var/srv\" = \"/opt/srv\" and \"/var/srv\" = \"/srv\" (inspectah adds this one itself); exclude the other and rebuild";
 
 /// A collected `/var/srv = /opt/srv` against the synthesized `/var/srv =
 /// /srv`. § 4 asks for conflict rows to be marked, and no other test in this
@@ -2825,4 +2851,29 @@ fn both_report_surfaces_word_a_row_identically() {
             );
         }
     }
+}
+
+/// The conflict sentence is one string reaching three surfaces. Changing it
+/// in `conflict_cause` has to move all three or none, which is the property
+/// that makes it safe to change at all, and the reason the attribution went
+/// there rather than into the reports.
+#[test]
+fn the_conflict_sentence_reaches_all_three_surfaces() {
+    let snap = conflict_snapshot();
+    let cause = CONFLICT_DISPOSITION
+        .strip_prefix("not applied: ")
+        .expect("the conflict disposition is a not-applied row");
+
+    assert!(
+        render_block_text(&snap).contains(cause),
+        "the Containerfile's FIXME does not carry {cause:?}"
+    );
+    assert!(
+        audit::render_audit(&snap).contains(cause),
+        "the audit report does not carry {cause:?}"
+    );
+    assert!(
+        html_of(&snap).contains(&html_escape(cause)),
+        "the HTML report does not carry {cause:?}"
+    );
 }

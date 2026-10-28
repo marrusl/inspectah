@@ -908,16 +908,50 @@ fn rule_identity(rule: &FcontextRule) -> String {
     }
 }
 
+/// Marks the row of a conflict that the renderer contributes, so that the
+/// instruction below names an action the operator actually has.
+const SYNTHESIS_ATTRIBUTION: &str = "inspectah adds this one itself";
+
+/// Whether a row is the equivalence the renderer synthesizes for a
+/// [`VAR_SYMLINKED_TOPLEVELS`] pair.
+///
+/// A *collected* row carrying the same two operands answers yes, and that is
+/// right rather than a false positive: excluding it does not remove it,
+/// because the synthesis puts it back. The attribution is about what the
+/// operator can act on, not about which struct the row came from.
+fn is_synthesized_pair(rule: &FcontextRule) -> bool {
+    equivalence_pair(rule).is_some_and(|pair| {
+        VAR_SYMLINKED_TOPLEVELS
+            .iter()
+            .any(|(link, target)| pair == (*target, *link))
+    })
+}
+
 /// The cause line of a conflicting equivalence pair: both rows, and the
 /// instruction that resolves them.
+///
+/// When one row is the renderer's own, it is named as such. Without that,
+/// "keep one and exclude the other" offers a choice that is only half
+/// available and does not say which half: a synthesized row has no
+/// disposition to turn off. Two collected rows are both the operator's and
+/// keep the original wording, because the note would be noise there.
 fn conflict_cause(rows: &[FcontextRule]) -> String {
     let pairs: Vec<String> = rows
         .iter()
-        .filter_map(equivalence_pair)
-        .map(|(subject, labeled_like)| format!("{subject:?} = {labeled_like:?}"))
+        .filter_map(|rule| {
+            let (subject, labeled_like) = equivalence_pair(rule)?;
+            Some(match is_synthesized_pair(rule) {
+                true => format!("{subject:?} = {labeled_like:?} ({SYNTHESIS_ATTRIBUTION})"),
+                false => format!("{subject:?} = {labeled_like:?}"),
+            })
+        })
         .collect();
+    let instruction = match rows.iter().any(is_synthesized_pair) {
+        true => "exclude the other and rebuild",
+        false => "keep one and exclude the other, then rebuild",
+    };
     format!(
-        "these equivalences conflict: {}; keep one and exclude the other, then rebuild",
+        "these equivalences conflict: {}; {instruction}",
         pairs.join(" and ")
     )
 }
