@@ -6,6 +6,7 @@ pub mod group_state;
 pub mod normalize;
 pub mod projection;
 pub mod repo_index;
+pub mod rpm_filename;
 pub mod session;
 pub mod tarball;
 pub mod types;

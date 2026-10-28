@@ -685,7 +685,11 @@ impl RefineSession {
         // filenames like "epel-release-latest-10.noarch.rpm" where the
         // heuristic name ("epel-release-latest") doesn't match the real
         // package name ("epel-release").
-        let (extracted_name, extracted_arch, extracted_ver) = parse_rpm_filename(filename)?;
+        let crate::rpm_filename::RpmFilename {
+            name: extracted_name,
+            arch: extracted_arch,
+            version_release: extracted_ver,
+        } = crate::rpm_filename::RpmFilename::parse(filename)?;
 
         // Build candidate names: full extracted name, then progressively
         // shorter prefixes by stripping trailing `-segment` pieces.
@@ -3755,78 +3759,6 @@ fn sanitize_path_for_log(path: &str) -> String {
     path.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
-}
-
-/// Known RPM architectures for filename parsing.
-const KNOWN_ARCHES: &[&str] = &[
-    "x86_64", "aarch64", "ppc64le", "s390x", "i686", "i386", "armv7hl", "noarch", "src",
-];
-
-/// Parse an RPM filename into (name, arch, optional version string).
-///
-/// Tries two strategies:
-/// 1. Standard NEVRA: `name-version-release.arch.rpm` — split on the arch
-///    segment and extract version-release from between name and arch.
-/// 2. Non-standard: scan for a known arch before `.rpm` and treat everything
-///    before the version-start (`-\d`) as the package name.
-///
-/// Returns `None` if the filename has no recognizable arch or name.
-fn parse_rpm_filename(filename: &str) -> Option<(String, String, Option<String>)> {
-    let stem = filename.strip_suffix(".rpm")?;
-
-    // Find the arch: last dot-separated segment that is a known arch.
-    // E.g. "epel-release-latest-10.noarch" → arch = "noarch"
-    // E.g. "google-chrome-stable_current_x86_64" → need underscore check too
-    let arch = KNOWN_ARCHES.iter().find(|&&a| {
-        // Check `.arch` suffix (standard)
-        stem.ends_with(&format!(".{a}"))
-            // Check `_arch` suffix (vendor convention like google-chrome)
-            || stem.ends_with(&format!("_{a}"))
-    })?;
-
-    // Strip the arch suffix to get name-version-release (or just name)
-    let before_arch = if stem.ends_with(&format!(".{arch}")) {
-        &stem[..stem.len() - arch.len() - 1]
-    } else {
-        // underscore separator
-        &stem[..stem.len() - arch.len() - 1]
-    };
-
-    if before_arch.is_empty() {
-        return None;
-    }
-
-    // Extract name: everything before the first `-\d` pattern (version start).
-    // E.g. "epel-release-latest-10" → name = "epel-release-latest", ver = "10"
-    // E.g. "google-chrome-stable_current" → name = "google-chrome-stable_current", ver = None
-    let mut name_end = None;
-    let bytes = before_arch.as_bytes();
-    for i in 0..bytes.len().saturating_sub(1) {
-        if bytes[i] == b'-' && bytes[i + 1].is_ascii_digit() {
-            name_end = Some(i);
-            break;
-        }
-    }
-
-    match name_end {
-        Some(pos) => {
-            let name = &before_arch[..pos];
-            let version = &before_arch[pos + 1..]; // skip the leading '-'
-            if name.is_empty() {
-                None
-            } else {
-                Some((
-                    name.to_string(),
-                    arch.to_string(),
-                    Some(version.to_string()),
-                ))
-            }
-        }
-        None => {
-            // No version detected — use the whole thing as the name
-            Some((before_arch.to_string(), arch.to_string(), None))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -6961,53 +6893,6 @@ mod tests {
     fn compose_path_control_chars_rejected() {
         assert!(!is_safe_compose_path("foo\nbar.yml"));
         assert!(!is_safe_compose_path("foo\x00bar.yml"));
-    }
-
-    // -- RPM filename parsing tests ---------------------------------------------
-
-    #[test]
-    fn parse_rpm_filename_standard_nevra() {
-        let result = parse_rpm_filename("httpd-2.4.57-5.el9.x86_64.rpm");
-        assert_eq!(
-            result,
-            Some(("httpd".into(), "x86_64".into(), Some("2.4.57-5.el9".into())))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_epel_release() {
-        let result = parse_rpm_filename("epel-release-latest-10.noarch.rpm");
-        assert_eq!(
-            result,
-            Some((
-                "epel-release-latest".into(),
-                "noarch".into(),
-                Some("10".into())
-            ))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_google_chrome_underscore_arch() {
-        let result = parse_rpm_filename("google-chrome-stable_current_x86_64.rpm");
-        assert_eq!(
-            result,
-            Some(("google-chrome-stable_current".into(), "x86_64".into(), None))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_no_version() {
-        // Filename with arch but no version digits after a dash
-        let result = parse_rpm_filename("my-tool.noarch.rpm");
-        assert_eq!(result, Some(("my-tool".into(), "noarch".into(), None)));
-    }
-
-    #[test]
-    fn parse_rpm_filename_unparseable() {
-        assert_eq!(parse_rpm_filename("(1).rpm"), None);
-        assert_eq!(parse_rpm_filename("random-file.txt"), None);
-        assert_eq!(parse_rpm_filename(""), None);
     }
 
     // -- mark_uploaded_rpm tests ------------------------------------------------
