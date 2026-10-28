@@ -14,6 +14,7 @@ use minijinja::{Environment, Value, context};
 
 use super::advisory::{advisory_type_str, config_advisories};
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
+use super::selinux;
 
 /// Advisory discriminant for synthesized orphan full-shadow entries. Not an
 /// `AdvisoryType` variant — the finding lives on the drop-in's `shadow_type`,
@@ -907,18 +908,28 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let selinux_fcontexts: Vec<Value> = snap
-        .selinux
-        .as_ref()
-        .map(|s| {
-            // Placeholder text: `FcontextRule` is now a typed enum (task
-            // 10); the real per-variant display text is a renderer task.
-            s.fcontext_rules
-                .iter()
-                .map(|f| Value::from(format!("{f:?}")))
-                .collect()
+    // § 4: each rule as the command the Containerfile emits or the reason it
+    // emits none, read from the one helper all three consumers read. The
+    // emitted state is on every row because this is a decision surface: a
+    // row shown with no command and no reason reads as "this will be added",
+    // which is the inverse of the truth for a row the build refuses.
+    let selinux_fcontexts: Vec<Value> = selinux::fcontext_summaries(snap)
+        .into_iter()
+        .map(|row| {
+            let note = selinux::origin_note(row.origin.as_ref());
+            let (state, cause, command) = match row.action {
+                selinux::BuildAction::Emits(command) => ("applied", None, command),
+                selinux::BuildAction::Skips(cause) => ("not applied", Some(cause), String::new()),
+            };
+            let detail: Vec<String> = note.into_iter().chain(cause).collect();
+            Value::from_serialize(serde_json::json!({
+                "rule": selinux::summary_label(&row.rule),
+                "state": state,
+                "detail": detail.join("; "),
+                "command": command,
+            }))
         })
-        .unwrap_or_default();
+        .collect();
     let security_count = selinux_modules.len() + selinux_booleans.len() + selinux_fcontexts.len();
     let security_state = section_state(InspectorId::Selinux, &snap.completeness);
     let security_state_str = match security_state {

@@ -11,6 +11,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::aggregate::AggregatePrevalence;
 use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
 };
@@ -98,24 +99,41 @@ const FIXME_CAUSE_PREFIX: &str = "#   the collected rule could not be rendered: 
 /// The caveat a sorted source puts before the rules (§ 3.1 rule 3).
 const SEMANAGE_LIST_NOTE: &str = "# NOTE: rule order comes from a sorted listing, not insertion order; if two expressions overlap, reorder so the intended winner is last.";
 
-/// One row of the equivalence list, with where it came from and whether the
-/// Containerfile emits it.
+/// One row of the equivalence list, with where it came from and what the
+/// Containerfile does with it.
 ///
-/// `emitted` is part of the contract rather than something each consumer
-/// re-derives: the Containerfile's emission depends on operand validation,
-/// on conflicts, and (since the collision rule) on whether any rule needing
-/// a synthesized row survives, none of which a consumer can see. § 3.1 says
-/// this helper exists so the three consumers report the same thing, and a
-/// row reported as synthesized that the build never adds breaks exactly that
-/// (Mark, 2026-10-28).
+/// Emission is part of the contract rather than something each consumer
+/// re-derives: it depends on operand validation, on conflicts, and (since the
+/// collision rule) on whether any rule needing a synthesized row survives,
+/// none of which a consumer can see. § 3.1 says this helper exists so the
+/// three consumers report the same thing, and a row reported as synthesized
+/// that the build never adds breaks exactly that (Mark, 2026-10-28).
+///
+/// The cause travels with the fact because a consumer cannot reconstruct it:
+/// [`rule_faults`] is private, and a synthesized row nothing needs leaves no
+/// trace anywhere else: the Containerfile emits no command *and no FIXME*
+/// for it, so the reports are the only surface that can say it existed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Equivalence {
     pub rule: FcontextRule,
     pub origin: EquivalenceOrigin,
-    /// Whether the Containerfile renders this row as a `semanage` command.
-    /// False for a conflict, for operands that fail validation, and for a
-    /// synthesized row whose every triggering rule was refused.
-    pub emitted: bool,
+    /// Why the Containerfile renders no `semanage` command for this row, or
+    /// `None` when it renders one. Set for a conflict, for operands that fail
+    /// validation, and for a synthesized row whose every triggering rule was
+    /// refused.
+    pub not_emitted: Option<String>,
+}
+
+/// The cause a synthesized row carries when nothing is left for it to serve.
+///
+/// Unlike the other two causes this text appears nowhere in the Containerfile:
+/// a comment about an equivalence that was never going to be added is noise in
+/// a build file. It is still a fact about the export, so the reports carry it.
+fn unneeded_cause(link: &str, target: &str) -> String {
+    format!(
+        "nothing is left needing it, because every included {link} rule is itself refused, \
+         so the block replays none of them and adds no {target} equivalence"
+    )
 }
 
 /// Where an emitted equivalence came from.
@@ -173,12 +191,12 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<Equivalence> {
             None => entries.push(Equivalence {
                 rule: rule.clone(),
                 origin: EquivalenceOrigin::Collected,
-                emitted: true,
+                not_emitted: None,
             }),
         }
     }
     // The synthesis loop asks `collision` which rules survive, and that reads
-    // `emitted`, so the collected rows settle first. They can: a collected
+    // `not_emitted`, so the collected rows settle first. They can: a collected
     // row's emission depends on nothing but itself.
     settle_emission(&mut entries);
 
@@ -231,7 +249,7 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<Equivalence> {
                 origin: EquivalenceOrigin::Synthesized {
                     reason: symlink_fact(link, target),
                 },
-                emitted: needed,
+                not_emitted: (!needed).then(|| unneeded_cause(link, target)),
             }),
         }
     }
@@ -240,15 +258,279 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<Equivalence> {
     entries
 }
 
-/// Clear `emitted` on every entry the block will not render as a command. It
-/// only clears, so the synthesis loop's "no surviving trigger" answer
-/// survives the second call.
+/// Record, on every entry the block will not render as a command, why it
+/// will not. It never clears a cause, so the synthesis loop's "no surviving
+/// trigger" answer survives the second call.
 fn settle_emission(entries: &mut [Equivalence]) {
     for entry in entries {
-        if matches!(entry.origin, EquivalenceOrigin::Conflict { .. }) || !is_renderable(&entry.rule)
-        {
-            entry.emitted = false;
+        // [`emit_equivalence`]'s precedence, so the cause reported is the one
+        // the build prints: a conflicting pair is a conflict even when one of
+        // its rows also carries an operand that fails validation.
+        entry.not_emitted = match &entry.origin {
+            EquivalenceOrigin::Conflict { rows } => Some(conflict_cause(rows)),
+            _ if !is_renderable(&entry.rule) => Some(unrenderable_cause(&entry.rule)),
+            // A row nothing needs keeps the cause the synthesis loop gave it.
+            _ => entry.not_emitted.take(),
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The report surfaces (§ 4)
+// ---------------------------------------------------------------------------
+
+/// What the SELinux block does with one row, as the audit and HTML reports
+/// show it.
+///
+/// Two variants rather than a command and a reason side by side: "no command
+/// and no reason" and "a command and a reason" are both lies about the build,
+/// and neither is expressible here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BuildAction {
+    /// The `RUN` the block emits for this row, its lines joined with `\n`.
+    Emits(String),
+    /// The block emits no command for this row, and why. For a rule the
+    /// renderer refused this is the cause printed in the Containerfile's own
+    /// FIXME; for an excluded rule and for a synthesized row nothing needs,
+    /// the Containerfile is silent and this is the only place it is said.
+    Skips(String),
+}
+
+/// One row of the fcontext story the reports tell: a collected rule, or a row
+/// the renderer synthesized, with what the build does about it.
+///
+/// Both report surfaces read this rather than walking `fcontext_rules`
+/// themselves, because the gap that matters is between what the Containerfile
+/// does and what a report says it does, and a second walk is a second place
+/// for that gap to open.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FcontextSummary {
+    /// The rule this row speaks for. Owned because a synthesized row has no
+    /// counterpart in the snapshot.
+    pub rule: FcontextRule,
+    /// Where an equivalence came from. `None` for a label, an unlabel, and an
+    /// unparsed line.
+    pub origin: Option<EquivalenceOrigin>,
+    pub action: BuildAction,
+}
+
+/// Whether a rule carries a disposition, and so is one the § 4 count line
+/// counts. An `Unparsed` line is display-only: nothing decided it and nothing
+/// can include it.
+pub fn is_decision_bearing(rule: &FcontextRule) -> bool {
+    !matches!(rule, FcontextRule::Unparsed { .. })
+}
+
+/// How a row is named on the report surfaces: the identity an operator
+/// recognises from their own policy, not the command it renders as.
+pub fn summary_label(rule: &FcontextRule) -> String {
+    match rule {
+        FcontextRule::Label {
+            spec,
+            file_type,
+            context,
+            ..
+        } => format!(
+            "{spec}{} -> {}",
+            file_type_suffix(*file_type),
+            context.type_
+        ),
+        FcontextRule::Unlabel {
+            spec, file_type, ..
+        } => format!("{spec}{} -> <<none>>", file_type_suffix(*file_type)),
+        FcontextRule::Equivalence {
+            subject,
+            labeled_like,
+            ..
+        } => format!("{subject} = {labeled_like}"),
+        // The line is its own identity: nothing was parsed out of it to name
+        // it by.
+        FcontextRule::Unparsed { raw } => raw.clone(),
+    }
+}
+
+/// The `-f` scope a rule carries, or nothing for the default.
+fn file_type_suffix(file_type: FcontextFileType) -> String {
+    file_type
+        .semanage_flag()
+        .map(|flag| format!(" (-f {flag})"))
+        .unwrap_or_default()
+}
+
+/// What a surface says about where an equivalence came from, beyond the row
+/// itself. A collected row came from the host and needs no note, and a
+/// conflict's cause already says it conflicts.
+pub fn origin_note(origin: Option<&EquivalenceOrigin>) -> Option<String> {
+    match origin? {
+        EquivalenceOrigin::Synthesized { reason } => {
+            Some(format!("synthesized by inspectah: {reason}"))
         }
+        EquivalenceOrigin::Collected | EquivalenceOrigin::Conflict { .. } => None,
+    }
+}
+
+/// Why a rule nobody included is not in the export.
+///
+/// Two sentences, not one. `aggregate_count` is the only thing that separates
+/// a key only some hosts carry from a key every host carries and disagrees
+/// about, and an audit that prints "excluded" for both erases the distinction
+/// the aggregate merge exists to surface. `aggregate_hosts` names *which*
+/// hosts dissent and never *what* they carry, so the line stops there.
+fn exclusion_cause(rule: &FcontextRule) -> String {
+    let Some(prevalence) = aggregate_of(rule) else {
+        return "excluded from the export".to_string();
+    };
+    let total = prevalence.total;
+    let shown = prevalence.hosts.join(", ");
+
+    let Some(key_count) = prevalence.aggregate_count else {
+        return format!(
+            "this rule is on {} of {total} hosts ({shown}); excluded from the export, \
+             include it explicitly to ship it",
+            prevalence.count
+        );
+    };
+
+    let dissenting: Vec<&str> = prevalence
+        .aggregate_hosts
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .filter(|host| !prevalence.hosts.iter().any(|kept| kept == host))
+        .collect();
+    format!(
+        "{key_count} of {total} hosts define this rule and disagree on its content; the \
+         content shown is the one carried by {shown}; it differs on {}; excluded from the \
+         export, include it explicitly to ship the content shown",
+        dissenting.join(", ")
+    )
+}
+
+fn aggregate_of(rule: &FcontextRule) -> Option<&AggregatePrevalence> {
+    match rule {
+        FcontextRule::Label { aggregate, .. }
+        | FcontextRule::Unlabel { aggregate, .. }
+        | FcontextRule::Equivalence { aggregate, .. } => aggregate.as_ref(),
+        FcontextRule::Unparsed { .. } => None,
+    }
+}
+
+/// The cause a second collected row carries when an identical earlier one
+/// already stands for it. The block adds the equivalence once.
+const DUPLICATE_EQUIVALENCE: &str =
+    "an identical equivalence is listed above; the block adds it once";
+
+/// Every fcontext row the reports show, in the order the Containerfile
+/// renders them: the collected rules in collected order, each synthesized row
+/// ahead of the first rule that needs it, and any synthesized row nothing
+/// needs at the end.
+///
+/// Excluded rules are rows here, not omissions (§ 4 lists "dispositions",
+/// plural). Dropping them would make a contested key vanish from the report
+/// entirely, which is the one thing the aggregate merge's exclusion exists to
+/// prevent.
+pub fn fcontext_summaries(snap: &InspectionSnapshot) -> Vec<FcontextSummary> {
+    let Some(sel) = snap.selinux.as_ref() else {
+        return Vec::new();
+    };
+    let equivalences = selinux_equivalences(snap);
+    let mut shown = vec![false; equivalences.len()];
+    let mut rows = Vec::new();
+
+    for rule in &sel.fcontext_rules {
+        if let FcontextRule::Unparsed { .. } = rule {
+            rows.push(skipped(rule.clone(), None, unrenderable_cause(rule)));
+            continue;
+        }
+        if !is_included(rule) {
+            rows.push(skipped(rule.clone(), None, exclusion_cause(rule)));
+            continue;
+        }
+        let Some(replay) = ReplayRule::of(rule) else {
+            // An included rule that is not a replay is an equivalence. It
+            // reaches its entry through whichever row named it, so both
+            // halves of a conflict find the one entry that speaks for them.
+            let Some(idx) = entry_of(&equivalences, |row| row == rule) else {
+                continue;
+            };
+            rows.push(equivalence_row(
+                rule.clone(),
+                &equivalences[idx],
+                shown[idx],
+            ));
+            shown[idx] = true;
+            continue;
+        };
+
+        match collision(&equivalences, rule) {
+            Some(cause) => rows.push(skipped(rule.clone(), None, cause)),
+            None => {
+                let synthesis = var_symlink_target(replay.spec).and_then(|target| {
+                    entry_of(&equivalences, |row| subject_of(row) == Some(target))
+                });
+                if let Some(idx) = synthesis
+                    && !shown[idx]
+                {
+                    let entry = &equivalences[idx];
+                    rows.push(equivalence_row(entry.rule.clone(), entry, false));
+                    shown[idx] = true;
+                }
+                let args = rule1_args(replay.file_type, replay.context);
+                rows.push(FcontextSummary {
+                    rule: rule.clone(),
+                    origin: None,
+                    action: BuildAction::Emits(
+                        rule1_lines(replay.spec, &args.delete, &args.add_modify).join("\n"),
+                    ),
+                });
+            }
+        }
+    }
+
+    // A synthesized row no rule reached: the one case the Containerfile says
+    // nothing at all about, so the reports are the only surface that carries
+    // it.
+    for (idx, entry) in equivalences.iter().enumerate() {
+        if !shown[idx] {
+            rows.push(equivalence_row(entry.rule.clone(), entry, false));
+        }
+    }
+    rows
+}
+
+fn skipped(
+    rule: FcontextRule,
+    origin: Option<EquivalenceOrigin>,
+    cause: String,
+) -> FcontextSummary {
+    FcontextSummary {
+        rule,
+        origin,
+        action: BuildAction::Skips(cause),
+    }
+}
+
+/// One equivalence row, reading the entry's own cause so that a report and
+/// the build never name different reasons for the same refusal.
+fn equivalence_row(
+    rule: FcontextRule,
+    entry: &Equivalence,
+    already_shown: bool,
+) -> FcontextSummary {
+    let origin = Some(entry.origin.clone());
+    if let Some(cause) = &entry.not_emitted {
+        return skipped(rule, origin, cause.clone());
+    }
+    if already_shown {
+        return skipped(rule, origin, DUPLICATE_EQUIVALENCE.to_string());
+    }
+    let (subject, labeled_like) =
+        equivalence_pair(&entry.rule).expect("an equivalence entry holds an Equivalence rule");
+    FcontextSummary {
+        rule,
+        origin,
+        action: BuildAction::Emits(rule2_lines(subject, labeled_like).join("\n")),
     }
 }
 
@@ -377,14 +659,13 @@ fn collision(equivalences: &[Equivalence], rule: &FcontextRule) -> Option<String
     // operator's spec: the rewritten form is only equivalent while the
     // equivalence is in place, which is a target-side fact the renderer
     // cannot know, so the FIXME hands the operator the rewrite as advice.
-    let (subject, labeled_like) =
-        equivalences
-            .iter()
-            .filter(|entry| entry.emitted)
-            .find_map(|entry| {
-                let (subject, labeled_like) = equivalence_pair(&entry.rule)?;
-                begins_with_toplevel(spec, subject).then_some((subject, labeled_like))
-            })?;
+    let (subject, labeled_like) = equivalences
+        .iter()
+        .filter(|entry| entry.not_emitted.is_none())
+        .find_map(|entry| {
+            let (subject, labeled_like) = equivalence_pair(&entry.rule)?;
+            begins_with_toplevel(spec, subject).then_some((subject, labeled_like))
+        })?;
     let rewritten = format!("{labeled_like}{}", &spec[subject.len()..]);
     Some(collision_cause(spec, subject, &rewritten))
 }
@@ -875,20 +1156,23 @@ fn emit_equivalence(entry: &Equivalence, emitted: &mut bool, rendering: &mut Fco
     }
     *emitted = true;
 
-    let Equivalence { rule, origin, .. } = entry;
-    if let EquivalenceOrigin::Conflict { rows } = origin {
-        rendering.rules.extend(fixme_lines(&conflict_cause(rows)));
+    let Equivalence {
+        rule,
+        origin,
+        not_emitted,
+    } = entry;
+    // The cause the entry carries is the one printed, so the reports and the
+    // build cannot name different reasons for the same refusal. Only a
+    // synthesized row nothing needs has a cause with no FIXME, and nothing
+    // reaches this function for one: it is reached from a rule that asks for
+    // it, and a rule asking for it is a surviving trigger.
+    if let Some(cause) = not_emitted {
+        rendering.rules.extend(fixme_lines(cause));
         return;
     }
     let Some((subject, labeled_like)) = equivalence_pair(rule) else {
         return;
     };
-    if !is_renderable(rule) {
-        rendering
-            .rules
-            .extend(fixme_lines(&unrenderable_cause(rule)));
-        return;
-    }
     if matches!(origin, EquivalenceOrigin::Synthesized { .. }) {
         rendering
             .rules

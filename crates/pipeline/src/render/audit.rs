@@ -6,9 +6,11 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::finding::ShadowType;
+use inspectah_core::types::selinux::FcontextSource;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
+use super::selinux;
 use crate::section_group::SectionGroup;
 
 /// Advisory entry for the Advisories section within a group.
@@ -614,15 +616,94 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                     "- **Non-default booleans:** {non_default_booleans}"
                 ));
             }
+            // § 4: decision-bearing rules only. This will not match the
+            // Containerfile's own count and must not be made to: the audit
+            // lists dispositions, so it counts the excluded rules too, while
+            // the Containerfile introduces the block it actually carries.
+            // Neither counts an `Unparsed` line, which nothing decided.
+            let decisions = sel
+                .fcontext_rules
+                .iter()
+                .filter(|r| selinux::is_decision_bearing(r))
+                .count();
+            if decisions > 0 {
+                lines.push(format!("- **File context rules:** {decisions}"));
+            }
             if !sel.fcontext_rules.is_empty() {
                 lines.push(format!(
-                    "- **File context rules:** {}",
-                    sel.fcontext_rules.len()
+                    "- **File context source:** {}",
+                    fcontext_source_text(sel.fcontext_source)
                 ));
             }
             if sel.fips_mode {
                 lines.push("- **FIPS mode:** enabled".into());
             }
+            lines.push(String::new());
+            render_fcontext_rules(snap, lines);
+        }
+    }
+}
+
+/// Where the collected rule order came from, and what that costs the reader.
+fn fcontext_source_text(source: FcontextSource) -> &'static str {
+    match source {
+        FcontextSource::PolicyStore => "policy store, in insertion order",
+        FcontextSource::SemanageList => {
+            "semanage listing, sorted by expression rather than insertion order; where two \
+             expressions overlap, the intended winner has to be last"
+        }
+    }
+}
+
+/// § 4's fcontext section: every collected rule and every equivalence the
+/// renderer added, each with what the Containerfile's SELinux block does
+/// about it.
+///
+/// The commands are quoted whole rather than summarized. A summary of a
+/// guarded command is a claim about behaviour the guard may not perform, and
+/// the gap between what the build does and what this report says it does is
+/// the only defect this section can have.
+fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    let rows = selinux::fcontext_summaries(snap);
+    if rows.is_empty() {
+        return;
+    }
+
+    lines.push("#### File Context Rules".into());
+    lines.push(String::new());
+    lines.push(
+        "What the Containerfile's SELinux block does with each rule. Every rule it replays \
+         runs its own `semanage` command in its own build layer, which costs roughly 21 MB \
+         of image size per rule."
+            .into(),
+    );
+    lines.push(String::new());
+
+    for row in rows {
+        let mut qualifiers = Vec::new();
+        if let Some(note) = selinux::origin_note(row.origin.as_ref()) {
+            qualifiers.push(note);
+        }
+        let command = match row.action {
+            selinux::BuildAction::Emits(command) => {
+                qualifiers.push("applied".into());
+                Some(command)
+            }
+            selinux::BuildAction::Skips(cause) => {
+                qualifiers.push(format!("not applied: {cause}"));
+                None
+            }
+        };
+        lines.push(format!(
+            "**`{}`** ({})",
+            selinux::summary_label(&row.rule),
+            qualifiers.join("; ")
+        ));
+        lines.push(String::new());
+        if let Some(command) = command {
+            lines.push("```sh".into());
+            lines.extend(command.lines().map(str::to_string));
+            lines.push("```".into());
             lines.push(String::new());
         }
     }

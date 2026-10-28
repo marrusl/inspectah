@@ -2011,9 +2011,16 @@ fn selinux_equivalences_marks_a_synthesis_the_block_never_emits() {
         sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
     ]);
     let entry = synthesized_of(&selinux_equivalences(&refused));
+    let cause = entry
+        .not_emitted
+        .as_deref()
+        .unwrap_or_else(|| panic!("the helper reports a synthesis the Containerfile never adds"));
+    // The cause travels with the fact: this row is the one case the
+    // Containerfile is silent about, so a reader of the helper who is handed
+    // only "not emitted" has nowhere else to look.
     assert!(
-        !entry.emitted,
-        "the helper reports a synthesis the Containerfile never adds"
+        cause.contains("nothing is left needing it"),
+        "the unneeded synthesis must carry its own cause, not just the fact: {cause:?}"
     );
     let block = render_block_text(&refused);
     assert!(
@@ -2029,9 +2036,514 @@ fn selinux_equivalences_marks_a_synthesis_the_block_never_emits() {
         HTTPD_TYPE,
     )]);
     let entry = synthesized_of(&selinux_equivalences(&emitted));
-    assert!(entry.emitted, "an unobstructed synthesis is emitted");
+    assert_eq!(
+        entry.not_emitted, None,
+        "an unobstructed synthesis is emitted"
+    );
     assert!(
         render_block_text(&emitted).contains("-a -e '/srv' '/var/srv'"),
         "the Containerfile must agree with the helper"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Step 7: the three consumers (§ 4)
+// ---------------------------------------------------------------------------
+//
+// The defect class these cover is the gap between what the Containerfile does
+// and what a report says it does, so every "the report mentions X" assertion
+// below has a paired case in which X is absent and the assertion fails. An
+// assertion with no such pair passes against a report that says nothing.
+
+use inspectah_core::types::aggregate::AggregatePrevalence;
+use inspectah_pipeline::render::readme;
+use inspectah_pipeline::render::selinux::selinux_equivalences;
+
+/// The two hosts the aggregate fixtures below are merged from.
+const HOST_A: &str = "alpha";
+const HOST_B: &str = "beta";
+
+/// A label the aggregate merge or the operator kept out of the export.
+fn excluded_label(spec: &str, aggregate: Option<AggregatePrevalence>) -> FcontextRule {
+    FcontextRule::Label {
+        spec: spec.into(),
+        file_type: FcontextFileType::All,
+        context: sel::ctx(HTTPD_TYPE),
+        disposition: FindingKind::excluded(),
+        aggregate,
+    }
+}
+
+/// What the merge writes for a key only one of two hosts carries: one content
+/// variant, so no `aggregate_count`.
+fn partial_prevalence() -> AggregatePrevalence {
+    AggregatePrevalence {
+        count: 1,
+        total: 2,
+        hosts: vec![HOST_A.into()],
+        aggregate_count: None,
+        aggregate_hosts: None,
+    }
+}
+
+/// What it writes for a key both hosts carry under differing content:
+/// `aggregate_count` set, `aggregate_hosts` naming both sides. This is the
+/// row that looks identical to the one above unless the renderer reads
+/// `aggregate_count`.
+fn contested_prevalence() -> AggregatePrevalence {
+    AggregatePrevalence {
+        count: 1,
+        total: 2,
+        hosts: vec![HOST_A.into()],
+        aggregate_count: Some(2),
+        aggregate_hosts: Some(vec![HOST_A.into(), HOST_B.into()]),
+    }
+}
+
+/// A snapshot whose `/srv/www` label collides with a collected `/srv`
+/// equivalence, so the label is refused and nothing is left needing the
+/// synthesized `/var/srv = /srv`. The Containerfile says nothing at all about
+/// that row, which makes the reports its only surface.
+fn unneeded_synthesis_snapshot() -> inspectah_core::snapshot::InspectionSnapshot {
+    sel::snapshot_rules(vec![
+        sel::equivalence("/srv", "/x"),
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+    ])
+}
+
+/// The same label with nothing to collide with: the synthesis is needed and
+/// the block adds it.
+fn needed_synthesis_snapshot() -> inspectah_core::snapshot::InspectionSnapshot {
+    sel::snapshot_rules(vec![sel::label(
+        "/srv/www(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )])
+}
+
+/// The report lines that name `needle`, so an assertion about one row cannot
+/// be satisfied by a different row's text.
+fn lines_naming<'a>(text: &'a str, needle: &str) -> Vec<&'a str> {
+    text.lines().filter(|l| l.contains(needle)).collect()
+}
+
+/// A path as the HTML report carries it. The template engine escapes `/`,
+/// so a raw path never appears in the rendered page.
+fn html_path(path: &str) -> String {
+    path.replace('/', "&#x2f;")
+}
+
+const FCONTEXT_HEADING: &str = "File Context Rules";
+const ADD_EQUAL: &str = "-a -e '/srv' '/var/srv'";
+
+// ---- Audit report ---------------------------------------------------------
+
+#[test]
+fn audit_fcontext_section_shows_the_command_the_block_emits() {
+    let snap = sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]);
+    let md = audit::render_audit(&snap);
+    assert!(
+        md.contains(&sel::rule1_rendered("/opt/app(/.*)?", "", HTTPD_ARGS)),
+        "the audit must carry the rule's command verbatim, not a paraphrase of it:\n{md}"
+    );
+
+    // Paired absence: with no rules collected there is no section to carry it.
+    let empty = audit::render_audit(&sel::snapshot_rules(Vec::new()));
+    assert!(
+        !empty.contains(FCONTEXT_HEADING),
+        "a snapshot with no file context rules must render no fcontext section:\n{empty}"
+    );
+}
+
+#[test]
+fn audit_names_the_two_kinds_of_excluded_row_differently() {
+    let snap = sel::snapshot_rules(vec![
+        excluded_label("/opt/partial", Some(partial_prevalence())),
+        excluded_label("/opt/shared", Some(contested_prevalence())),
+    ]);
+    let md = audit::render_audit(&snap);
+
+    let partial = lines_naming(&md, "/opt/partial").join("\n");
+    let contested = lines_naming(&md, "/opt/shared").join("\n");
+    assert!(
+        partial.contains("this rule is on 1 of 2 hosts"),
+        "a key only some hosts carry must say so: {partial:?}"
+    );
+    assert!(
+        !partial.contains("disagree"),
+        "a key no host disagrees about must not be reported as contested: {partial:?}"
+    );
+    assert!(
+        contested.contains("disagree on its content") && contested.contains(HOST_B),
+        "a contested key must say the hosts disagree and name the dissenter: {contested:?}"
+    );
+
+    // Paired absence: the same row with no content variants. `aggregate_count`
+    // is the only discriminator, so if it is ignored this report is identical
+    // to the one above and "disagree" survives.
+    let uncontested = audit::render_audit(&sel::snapshot_rules(vec![
+        excluded_label("/opt/partial", Some(partial_prevalence())),
+        excluded_label("/opt/shared", Some(partial_prevalence())),
+    ]));
+    assert!(
+        !uncontested.contains("disagree"),
+        "no row here has content variants, so nothing may be reported as contested:\n{uncontested}"
+    );
+}
+
+#[test]
+fn audit_lists_excluded_rows_rather_than_filtering_them() {
+    let snap = sel::snapshot_rules(vec![
+        sel::label("/opt/kept(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        excluded_label("/opt/dropped", Some(contested_prevalence())),
+    ]);
+    let md = audit::render_audit(&snap);
+    assert!(
+        md.contains("/opt/dropped"),
+        "an excluded rule that vanishes from the report makes the exclusion invisible:\n{md}"
+    );
+    assert!(
+        md.contains("/opt/kept(/.*)?"),
+        "the included rule must be listed too:\n{md}"
+    );
+
+    // Paired absence: drop the row from the snapshot and it leaves the report.
+    let without = audit::render_audit(&sel::snapshot_rules(vec![sel::label(
+        "/opt/kept(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        !without.contains("/opt/dropped"),
+        "a rule the snapshot does not carry must not appear:\n{without}"
+    );
+}
+
+/// The audit's count and the Containerfile's count answer different questions
+/// and must not be aligned: the audit lists dispositions and so counts
+/// excluded rules, while the Containerfile introduces the block it carries.
+/// Neither counts an `Unparsed` line, which nothing decided.
+#[test]
+fn audit_counts_decisions_where_the_containerfile_counts_what_it_carries() {
+    let rules = vec![
+        sel::label("/opt/a(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label("/opt/b(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        excluded_label("/opt/c", Some(partial_prevalence())),
+        sel::unparsed("this line is not a rule"),
+    ];
+    let snap = sel::snapshot_rules(rules.clone());
+    assert!(
+        audit::render_audit(&snap).contains("- **File context rules:** 3"),
+        "the count line counts the three decision-bearing rules"
+    );
+    assert!(
+        render_block_text(&snap).contains("# SELinux file contexts (2 custom rules)."),
+        "the Containerfile introduces the two rules it carries"
+    );
+
+    // Paired movement: a second unparsed line leaves the count alone, a
+    // fourth decision moves it. Without the second half, a count line that
+    // simply printed a constant would pass the first.
+    let mut more_noise = rules.clone();
+    more_noise.push(sel::unparsed("nor is this one"));
+    assert!(
+        audit::render_audit(&sel::snapshot_rules(more_noise))
+            .contains("- **File context rules:** 3"),
+        "an unparsed line is not a decision and must not move the count"
+    );
+    let mut more_rules = rules;
+    more_rules.push(excluded_label("/opt/d", None));
+    assert!(
+        audit::render_audit(&sel::snapshot_rules(more_rules))
+            .contains("- **File context rules:** 4"),
+        "a fourth decision-bearing rule must move the count"
+    );
+}
+
+#[test]
+fn audit_names_the_fcontext_source() {
+    let rules = vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )];
+    let sorted = audit::render_audit(&sel::snapshot(
+        rules.clone(),
+        FcontextSource::SemanageList,
+        Vec::new(),
+    ));
+    assert!(
+        sorted.contains("sorted by expression"),
+        "a sorted source must say the order is not insertion order:\n{sorted}"
+    );
+
+    // Paired absence: the policy store preserves insertion order, so the
+    // caveat must not appear.
+    let stored = audit::render_audit(&sel::snapshot(
+        rules,
+        FcontextSource::PolicyStore,
+        Vec::new(),
+    ));
+    assert!(
+        !stored.contains("sorted by expression"),
+        "a policy-store source carries no sorting caveat:\n{stored}"
+    );
+}
+
+/// The one case the Containerfile is silent about. The audit is the only
+/// surface in the product that can report it, so a row reported without its
+/// cause loses the fact entirely.
+#[test]
+fn audit_reports_a_synthesis_the_block_never_adds() {
+    let md = audit::render_audit(&unneeded_synthesis_snapshot());
+    assert!(
+        md.contains("not applied") && md.contains("nothing is left needing it"),
+        "an unemitted synthesis must be reported as not applied, with its cause:\n{md}"
+    );
+    assert!(
+        !render_block_text(&unneeded_synthesis_snapshot()).contains(ADD_EQUAL),
+        "the premise of this case is that the block adds nothing"
+    );
+
+    // Paired positive: the same synthesis with a surviving trigger is
+    // reported as the command the block runs, and carries no cause.
+    let applied = audit::render_audit(&needed_synthesis_snapshot());
+    assert!(
+        applied.contains(ADD_EQUAL),
+        "an emitted synthesis must be reported as the command it is:\n{applied}"
+    );
+    assert!(
+        !applied.contains("nothing is left needing it"),
+        "an emitted synthesis must carry no not-applied cause:\n{applied}"
+    );
+}
+
+// ---- HTML report ----------------------------------------------------------
+
+fn html_of(snap: &inspectah_core::snapshot::InspectionSnapshot) -> String {
+    report::render_report(
+        snap,
+        &inspectah_core::traits::renderer::RenderContext { target: None },
+    )
+}
+
+#[test]
+fn report_html_renders_commands_rather_than_the_debug_placeholder() {
+    let html = html_of(&sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        html.contains("semanage fcontext -a -t httpd_sys_content_t"),
+        "the HTML report must show the command the build runs:\n{html}"
+    );
+    assert!(
+        !html.contains("file_type:"),
+        "the Task 10 `{{:?}}` placeholder must be gone:\n{html}"
+    );
+
+    // Paired absence: no rules, no section.
+    let empty = html_of(&sel::snapshot_rules(Vec::new()));
+    assert!(
+        !empty.contains(FCONTEXT_HEADING),
+        "a snapshot with no file context rules renders no fcontext list:\n{empty}"
+    );
+}
+
+/// HTML is a decision surface. A row shown with no command and no cause reads
+/// to an operator as "this will be added", which is the inverse of the truth.
+#[test]
+fn report_html_marks_an_unemitted_synthesized_row_as_not_applied() {
+    let html = html_of(&unneeded_synthesis_snapshot());
+    assert!(
+        html.contains("not applied") && html.contains("nothing is left needing it"),
+        "an unemitted synthesis must read as not applied, with its cause:\n{html}"
+    );
+
+    // Paired positive: the emitted one shows its command and no cause.
+    let applied = html_of(&needed_synthesis_snapshot());
+    assert!(
+        applied.contains("semanage fcontext -a -e"),
+        "an emitted synthesis must show its command:\n{applied}"
+    );
+    assert!(
+        !applied.contains("not applied"),
+        "an emitted synthesis must not read as skipped:\n{applied}"
+    );
+}
+
+#[test]
+fn report_html_lists_an_excluded_rule_with_its_reason() {
+    let html = html_of(&sel::snapshot_rules(vec![excluded_label(
+        "/opt/shared",
+        Some(contested_prevalence()),
+    )]));
+    assert!(
+        html.contains(&html_path("/opt/shared")) && html.contains("disagree on its content"),
+        "an excluded contested rule must be listed with why it was excluded:\n{html}"
+    );
+
+    // Paired absence: the same rule included carries no exclusion sentence.
+    let included = html_of(&sel::snapshot_rules(vec![sel::label(
+        "/opt/shared",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        !included.contains("disagree"),
+        "an included rule has nothing to disagree about:\n{included}"
+    );
+}
+
+// ---- README ---------------------------------------------------------------
+
+const README_SELINUX_HEADING: &str = "## SELinux file contexts";
+
+#[test]
+fn readme_selinux_paragraph_appears_only_when_rules_were_collected() {
+    let md = readme::render_readme(&sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        md.contains(README_SELINUX_HEADING),
+        "a snapshot carrying file context rules needs the paragraph:\n{md}"
+    );
+
+    // Paired absence: nothing to say, so nothing is said.
+    let empty = readme::render_readme(&sel::snapshot_rules(Vec::new()));
+    assert!(
+        !empty.contains(README_SELINUX_HEADING),
+        "a snapshot with no file context rules must not grow the section:\n{empty}"
+    );
+}
+
+#[test]
+fn readme_carries_the_restored_data_restorecon_sentence() {
+    let md = readme::render_readme(&sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    assert!(
+        md.contains("restorecon -R"),
+        "data restored into /var keeps its old labels; the README has to say so:\n{md}"
+    );
+
+    let empty = readme::render_readme(&sel::snapshot_rules(Vec::new()));
+    assert!(
+        !empty.contains("restorecon -R"),
+        "the sentence belongs to the section and leaves with it:\n{empty}"
+    );
+}
+
+/// The caution is a caution, not a claim. Where the rules land was measured;
+/// what happens to a policy store an admin edits on a deployed machine is an
+/// inference from ostree merge semantics that nobody has run an install, a
+/// boot and a switch against. A sentence that tells an operator what will
+/// happen on evidence that thin is the confident misinformation this whole
+/// task exists to stop shipping.
+#[test]
+fn readme_semanage_caution_states_no_unmeasured_mechanism() {
+    let md = readme::render_readme(&sel::snapshot_rules(vec![sel::label(
+        "/opt/app(/.*)?",
+        FcontextFileType::All,
+        HTTPD_TYPE,
+    )]));
+    let caution = lines_naming(&md, "semanage").join("\n");
+    assert!(
+        !caution.is_empty(),
+        "the README must warn against running semanage on the deployed machine:\n{md}"
+    );
+    // The phrasings that assert the untested outcome as fact.
+    for claimed in [
+        "silently loses",
+        "will lose",
+        "pins the policy store",
+        "will be overwritten",
+        "will not be applied",
+    ] {
+        assert!(
+            !md.contains(claimed),
+            "{claimed:?} states an unmeasured mechanism as fact:\n{caution}"
+        );
+    }
+}
+
+// ---- The helper and the block cannot drift apart --------------------------
+
+/// Every equivalence the helper reports as emitted is an `-a -e` the block
+/// renders, and there are no others. Nothing else pins the two together, and
+/// the drift between them is what put a cause on the helper's rows in the
+/// first place.
+#[test]
+fn emitted_equivalences_match_the_blocks_add_equal_commands() {
+    let cases: &[(&str, inspectah_core::snapshot::InspectionSnapshot)] = &[
+        (
+            "a port label and no fcontext rule at all",
+            sel::snapshot(
+                Vec::new(),
+                FcontextSource::PolicyStore,
+                vec![sel::port_label("ssh_port_t", "tcp", "2222")],
+            ),
+        ),
+        (
+            "an /opt rule, which triggers no synthesis",
+            sel::snapshot_rules(vec![sel::label(
+                "/opt/app(/.*)?",
+                FcontextFileType::All,
+                HTTPD_TYPE,
+            )]),
+        ),
+        ("one /srv rule", needed_synthesis_snapshot()),
+        (
+            "two /srv rules, one synthesis between them",
+            sel::snapshot_rules(vec![
+                sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+                sel::label("/srv/data(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            ]),
+        ),
+        (
+            "a collected /var/srv = /srv plus the synthesis",
+            sel::snapshot_rules(vec![
+                sel::equivalence("/var/srv", "/srv"),
+                sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            ]),
+        ),
+        (
+            "a conflicting collected /var/srv",
+            sel::snapshot_rules(vec![
+                sel::equivalence("/var/srv", "/opt/srv"),
+                sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            ]),
+        ),
+        (
+            "an equivalence operand that fails validation",
+            sel::snapshot_rules(vec![sel::equivalence("/opt/a(b)", "/opt/b")]),
+        ),
+        (
+            "a synthesis nothing is left needing",
+            unneeded_synthesis_snapshot(),
+        ),
+    ];
+
+    for (name, snap) in cases {
+        let emitted = selinux_equivalences(snap)
+            .iter()
+            .filter(|e| e.not_emitted.is_none())
+            .count();
+        let block = render_block_text(snap);
+        let rendered = block.matches("semanage fcontext -a -e ").count();
+        assert_eq!(
+            emitted, rendered,
+            "the helper and the block disagree for {name}: the helper reports {emitted} \
+             emitted equivalence(s) and the block renders {rendered} `-a -e`:\n{block}"
+        );
+    }
 }

@@ -246,6 +246,49 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     );
     lines.push(String::new());
 
+    // SELinux file contexts
+    //
+    // § 4 asks the README to repeat the block's restored-data `restorecon`
+    // sentence. There was no SELinux paragraph to add it to: the spec cites
+    // one that has never existed, so this is the paragraph.
+    if snap
+        .selinux
+        .as_ref()
+        .is_some_and(|sel| !sel.fcontext_rules.is_empty())
+    {
+        lines.push("## SELinux file contexts".into());
+        lines.push(String::new());
+        lines.push(
+            "The Containerfile replays this host's custom file context rules into the \
+             image's own policy store. Labels for image content are computed when bootc \
+             pulls the image, so the rules need no `restorecon` at build time. Any rule \
+             that could not be replayed is a `FIXME` comment in the Containerfile: search \
+             for `FIXME` and resolve each one before you build."
+                .into(),
+        );
+        lines.push(String::new());
+        lines.push(
+            "Data you restore into `/var` after deployment, `/var/srv` included, keeps the \
+             labels it arrived with. Run `restorecon -R` on it before starting the services \
+             that use it."
+                .into(),
+        );
+        lines.push(String::new());
+        // A caution, not a claim. Where the rules land was measured; what a
+        // local `semanage` edit does to a later image's rules is an inference
+        // from ostree merge semantics that no install, boot and switch has
+        // been run against, so this says what is unknown rather than what
+        // will happen.
+        lines.push(
+            "Change file contexts by editing the Containerfile and rebuilding, not by \
+             running `semanage` on a deployed machine. How a policy store edited in place \
+             interacts with the rules a later image carries has not been tested, so a local \
+             change may not survive the next `bootc switch` and may not fail visibly either."
+                .into(),
+        );
+        lines.push(String::new());
+    }
+
     // Artifacts
     lines.push("## Artifacts".into());
     lines.push(String::new());
