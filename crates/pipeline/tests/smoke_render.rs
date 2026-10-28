@@ -626,14 +626,22 @@ use selinux_support as sel;
 /// § 5.1's "After" text for the host's own rule, quoted whole. The fixture is
 /// the one the spec rendered it from: one `Label` on `/srv/www(/.*)?` and the
 /// pre-existing `ssh_port_t` port label.
-const AFTER_TEXT: &str = r#"# SELinux file contexts (1 custom rule). Labels for image content are computed at
-# deploy time from the image's own policy under /etc/selinux, so a rule only needs
-# to be in the policy store: no restorecon at build time. Data you restore into
-# /var (/var/srv included) keeps the labels it arrived with; run restorecon -R on
-# it before starting the services that use it.
+const AFTER_TEXT: &str = r#"# SELinux file contexts (1 custom rule). Labels for image content are computed
+# when bootc pulls the image, from the image's own policy under /etc/selinux, so
+# a rule only needs to be in the policy store: no restorecon at build time. Each
+# rule below is either a command or a FIXME saying why it could not be one. Data
+# you restore into /var (/var/srv included) keeps the labels it arrived with;
+# run restorecon -R on it before starting the services that use it.
 # The file context and port rules below need semanage, which this base does not
 # carry; policycoreutils-python-utils provides it.
-RUN dnf install -y policycoreutils-python-utils
+RUN dnf install -y policycoreutils-python-utils \
+    && dnf clean all \
+    && rm -rf \
+        /var/cache/dnf \
+        /var/lib/dnf/history* \
+        /var/log/dnf* \
+        /var/log/hawkey.log \
+        /var/log/rhsm
 # Each rule removes its own key from the local store if present, then adds it, or
 # modifies it when the target policy defines the key; the rules end the local
 # list in the order the source host held them. A rule whose path the target
@@ -643,13 +651,14 @@ RUN dnf install -y policycoreutils-python-utils
 # this makes every /srv rule, stock and custom, apply to the real path. The
 # equivalence is added when absent and left alone when identical; a different
 # target mapping stops the build with an instruction.
-RUN eq="$(semanage fcontext -l -C | awk -v s='/var/srv' '$2 == "=" && $1 == s { print $3 }')"; \
+RUN eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before adding the equivalence for %s; fix semanage in the base, or exclude this rule, then rebuild\n' '/var/srv' >&2; exit 1; }; \
+    eq="$(printf '%s\n' "$eqs" | awk -v s='/var/srv' '$2 == "=" && $1 == s { print $3 }')"; \
     if [ -z "$eq" ]; then semanage fcontext -a -e '/srv' '/var/srv'; \
-    elif [ "$eq" != '/srv' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\n' '/var/srv' "$eq" '/srv' >&2; exit 1; fi
+    elif [ "$eq" != '/srv' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e %s %s, or exclude this rule, then rebuild\n' '/var/srv' "$eq" '/srv' "$eq" '/var/srv' >&2; exit 1; fi
 RUN spec='/srv/www(/.*)?'; \
     eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before replaying the rule for %s; fix semanage in the base, or exclude this rule, then rebuild\n' "$spec" >&2; exit 1; }; \
     if printf '%s\n' "$eqs" | awk '$2 == "=" { print $1 }' | grep -qxF -- "$spec"; then \
-      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild\n' "$spec" >&2; \
+      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e <its target> %s, or exclude this rule, then rebuild\n' "$spec" "$spec" >&2; \
     else semanage fcontext -d "$spec" 2>/dev/null || true; \
       semanage fcontext -a -t httpd_sys_content_t "$spec" \
       || semanage fcontext -m -t httpd_sys_content_t "$spec"; fi
@@ -685,9 +694,10 @@ fn rendered_runs(snap: &inspectah_core::snapshot::InspectionSnapshot) -> Vec<Str
 }
 
 /// The `RUN` of the install precondition, which leads every block that renders
-/// a rule or a port label.
+/// a rule or a port label. Its two comment lines are not part of the `RUN`;
+/// everything from index 2 on is, continuations included.
 fn install_run() -> String {
-    sel::INSTALL_PRECONDITION[2].to_string()
+    sel::INSTALL_PRECONDITION[2..].join("\n")
 }
 
 #[test]
@@ -1391,5 +1401,385 @@ fn assert_precondition_present(
         !lines[install_at].contains("--enablerepo"),
         "the precondition carries --enablerepo: {}",
         lines[install_at]
+    );
+}
+
+// --- Fix round 1: the operand positions and paths the first suite missed ----
+
+use inspectah_core::types::selinux::{FcontextRule, SelinuxContext};
+
+fn context_of(type_: &str, user: &str, level: Option<&str>) -> SelinuxContext {
+    SelinuxContext {
+        user: user.into(),
+        role: "object_r".into(),
+        type_: type_.into(),
+        level: level.map(|l| l.to_string()),
+    }
+}
+
+/// `-t`, `-s` and `-r` are the only operands the emitted command carries
+/// **unquoted**, so the bare-token check, and no quoting, is what keeps them
+/// inert. Nothing in the first suite reached it: every fixture's context was
+/// `httpd_sys_content_t` / `system_u` / `s0`, all of which pass.
+#[test]
+fn selinux_hostile_context_tokens_reject_the_rule() {
+    const SPEC: &str = "/opt/tokens(/.*)?";
+    // One case per unquoted field, each failing for a different reason: a
+    // command substitution, whitespace, a backslash.
+    let cases: &[(&str, &str, &str, Option<&str>)] = &[
+        ("type", "t`c6_exec`", "system_u", Some("s0")),
+        ("user", HTTPD_TYPE, "u u", Some("s0")),
+        ("level", HTTPD_TYPE, "system_u", Some(r"s0\x")),
+    ];
+    for (field, type_, user, level) in cases {
+        let offending = match *field {
+            "type" => *type_,
+            "user" => *user,
+            _ => level.expect("the level case carries one"),
+        };
+        let snap = sel::snapshot_rules(vec![sel::label_with(
+            SPEC,
+            FcontextFileType::All,
+            context_of(type_, user, *level),
+        )]);
+        assert_rejected(&snap, offending, &format!("hostile {field}"));
+    }
+
+    // Paired positive: the same three fields, carrying values that pass,
+    // render the command. Without it the rejections above would hold against
+    // a renderer that refuses every context.
+    let ok = sel::snapshot_rules(vec![sel::label_with(
+        SPEC,
+        FcontextFileType::All,
+        context_of(HTTPD_TYPE, "user_u", Some("s0-s0:c0")),
+    )]);
+    assert_eq!(
+        rendered_runs(&ok),
+        vec![
+            install_run(),
+            sel::rule1_rendered(SPEC, "", "-r s0-s0:c0 -s user_u -t httpd_sys_content_t"),
+        ]
+    );
+}
+
+/// An excluded rule is a rule the user removed in the refine UI. Nothing in
+/// the first suite used one, so a renderer that ignored the disposition
+/// passed all 36 tests. § 4's aggregate row makes exclusion the normal
+/// outcome of hosts disagreeing, so this is the common path.
+#[test]
+fn selinux_excluded_rules_render_nothing_anywhere() {
+    const EXCLUDED: &str = "/opt/the-user-removed-this(/.*)?";
+    const INCLUDED: &str = "/opt/a(/.*)?";
+
+    let excluded_rule = |spec: &str| FcontextRule::Label {
+        spec: spec.into(),
+        file_type: FcontextFileType::All,
+        context: sel::ctx(HTTPD_TYPE),
+        disposition: FindingKind::excluded(),
+        aggregate: None,
+    };
+
+    let mixed = sel::snapshot_rules(vec![
+        sel::label(INCLUDED, FcontextFileType::All, HTTPD_TYPE),
+        excluded_rule(EXCLUDED),
+    ]);
+    assert_eq!(
+        rendered_runs(&mixed),
+        vec![install_run(), sel::rule1_rendered(INCLUDED, "", HTTPD_ARGS),],
+        "an excluded rule renders no command"
+    );
+    let block = render_block_text(&mixed);
+    assert!(
+        !block.contains(EXCLUDED),
+        "an excluded rule reached the block, in a comment or otherwise:\n{block}"
+    );
+    assert!(
+        block.contains("# SELinux file contexts (1 custom rule)."),
+        "the count must exclude it too:\n{block}"
+    );
+
+    // Excluded-only: the section carries no fcontext content at all, so the
+    // install precondition has nothing to install for.
+    let only_excluded = sel::snapshot_rules(vec![excluded_rule(EXCLUDED)]);
+    let output = containerfile::render_containerfile(&only_excluded, None, None);
+    assert!(!output.contains(EXCLUDED), "excluded-only:\n{output}");
+    for line in sel::INSTALL_PRECONDITION {
+        assert!(
+            !output.contains(line),
+            "excluded-only emitted {line:?}:\n{output}"
+        );
+    }
+}
+
+/// The synthesis fires on a top-level boundary, not a string prefix: `/srv`
+/// itself and `/srv(/.*)?` need the equivalence, `/srvbackup` does not. Every
+/// fixture in the first suite used `/srv/...`, so `starts_with` would have
+/// passed all of them while giving a `/srvbackup` host a spurious
+/// equivalence and the install precondition that comes with it.
+#[test]
+fn selinux_synthesis_fires_on_a_top_level_boundary_only() {
+    let cases: &[(&str, bool)] = &[
+        ("/srv", true),
+        ("/srv(/.*)?", true),
+        ("/srv/www(/.*)?", true),
+        ("/srvbackup/data(/.*)?", false),
+        ("/opt/srv/data(/.*)?", false),
+    ];
+    for (spec, expected) in cases {
+        let snap = sel::snapshot_rules(vec![sel::label(spec, FcontextFileType::All, HTTPD_TYPE)]);
+        let emitted = rendered_runs(&snap).iter().any(|r| r.contains("-a -e"));
+        assert_eq!(emitted, *expected, "{spec}");
+    }
+}
+
+/// `-e` takes a literal path, so an equivalence operand refuses the regex
+/// characters; a label `spec` is a regex and keeps them. The backslash is the
+/// one § 3.1 rule 4 gives a reason for: the subject reaches `awk -v s=`,
+/// which escape-processes its assignment value, so a surviving backslash
+/// would compare a different string at build time with no diagnostic.
+#[test]
+fn selinux_regex_bytes_reject_an_equivalence_operand_and_render_in_a_spec() {
+    for (name, byte) in [
+        ("backslash", r"\"),
+        ("star", "*"),
+        ("bracket", "["),
+        ("pipe", "|"),
+    ] {
+        let operand = format!("/tmp/a{byte}b");
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::equivalence(&operand, "/srv")]),
+            &operand,
+            &format!("equivalence subject with a {name}"),
+        );
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::equivalence("/var/other", &operand)]),
+            &operand,
+            &format!("equivalence labeled_like with a {name}"),
+        );
+        let as_spec = sel::snapshot_rules(vec![sel::label(
+            &operand,
+            FcontextFileType::All,
+            HTTPD_TYPE,
+        )]);
+        assert_eq!(
+            rendered_runs(&as_spec),
+            vec![install_run(), sel::rule1_rendered(&operand, "", HTTPD_ARGS)],
+            "a label spec keeps its {name}"
+        );
+    }
+}
+
+/// A space in a label spec defeats the build-time guard: `awk` splits the
+/// target's listing on one space where the collector splits on two or more,
+/// so the subject column is read short, `grep -qxF` does not match, and the
+/// rule proceeds to a `semanage fcontext -d` that deletes the equivalence.
+#[test]
+fn selinux_spec_with_whitespace_is_rejected() {
+    assert_rejected(
+        &sel::snapshot_rules(vec![sel::label(
+            "/var/my srv",
+            FcontextFileType::All,
+            HTTPD_TYPE,
+        )]),
+        "/var/my srv",
+        "a label spec carrying a space",
+    );
+}
+
+/// Control characters are inert to the shell inside single quotes, but the
+/// rendered Containerfile is read by someone who was not the scanner, and a
+/// spec carrying CR or an ANSI escape displays as something other than its
+/// bytes.
+#[test]
+fn selinux_control_characters_are_rejected() {
+    for (name, byte) in [("carriage return", "\r"), ("escape", "\x1b")] {
+        let spec = format!("/tmp/a{byte}b");
+        assert_rejected(
+            &sel::snapshot_rules(vec![sel::label(&spec, FcontextFileType::All, HTTPD_TYPE)]),
+            &spec,
+            &format!("a label spec carrying a {name}"),
+        );
+    }
+}
+
+/// Two collected rows claiming one subject. The first suite reached the
+/// collected-versus-synthesized fold only, so the collected-versus-collected
+/// arm was never taken.
+#[test]
+fn selinux_two_collected_rows_with_one_subject_dedup_or_conflict() {
+    let identical = sel::snapshot_rules(vec![
+        sel::equivalence("/a", "/b"),
+        sel::equivalence("/a", "/b"),
+    ]);
+    assert_eq!(
+        rendered_runs(&identical),
+        vec![install_run(), sel::rule2_rendered("/a", "/b")],
+        "two identical rows are one equivalence"
+    );
+
+    let differing = sel::snapshot_rules(vec![
+        sel::equivalence("/a", "/b"),
+        sel::equivalence("/a", "/c"),
+    ]);
+    for run in sel::block_runs(&differing) {
+        assert!(
+            !run.rendered.contains("-a -e"),
+            "two rows claiming /a must emit no equivalence RUN:\n{}",
+            run.rendered
+        );
+    }
+    let block = render_block_text(&differing);
+    let cause = block
+        .lines()
+        .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+        .unwrap_or_else(|| panic!("no cause line:\n{block}"));
+    assert!(
+        cause.contains("\"/b\""),
+        "cause names no first target: {cause}"
+    );
+    assert!(
+        cause.contains("\"/c\""),
+        "cause names no second target: {cause}"
+    );
+}
+
+/// A collected row mapping the other direction is a conflict whether or not
+/// anything triggers the synthesis (Mark, 2026-10-28): `/srv` is a symlink to
+/// `/var/srv` on the image, so the row inverts the base's own layout and is
+/// wrong on its own terms.
+#[test]
+fn selinux_reversed_equivalence_is_a_conflict_with_or_without_a_srv_rule() {
+    let cases: Vec<(&str, Vec<FcontextRule>)> = vec![
+        ("alone", vec![sel::equivalence("/srv", "/var/srv")]),
+        (
+            "with a /srv rule",
+            vec![
+                sel::equivalence("/srv", "/var/srv"),
+                sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+            ],
+        ),
+    ];
+    for (case, rules) in cases {
+        let snap = sel::snapshot_rules(rules);
+        for run in sel::block_runs(&snap) {
+            assert!(
+                !run.rendered.contains("-a -e"),
+                "{case}: a reversed row must emit no equivalence RUN:\n{}",
+                run.rendered
+            );
+        }
+        let block = render_block_text(&snap);
+        assert!(
+            block.contains(sel::UNRENDERABLE_FIXME_INSTRUCTION),
+            "{case}: no FIXME:\n{block}"
+        );
+    }
+}
+
+/// Measured on rhel9/rhel-bootc:9.8: once `/var/srv = /srv` is in the store,
+/// `semanage fcontext -a` **and** `-m` refuse a spec under `/var/srv`, and
+/// rule 1 has no `|| true` after the `-m`, so the build dies. It dies because
+/// of an equivalence this block added two lines earlier, so the renderer
+/// refuses the rule and hands the operator the rewritten spec instead.
+#[test]
+fn selinux_rule_under_an_emitted_equivalence_subject_is_refused() {
+    const UNDER: &str = "/var/srv/data(/.*)?";
+    const REWRITTEN: &str = "/srv/data(/.*)?";
+    let snap = sel::snapshot_rules(vec![
+        sel::label("/srv/www(/.*)?", FcontextFileType::All, HTTPD_TYPE),
+        sel::label(UNDER, FcontextFileType::All, HTTPD_TYPE),
+    ]);
+    let block = render_block_text(&snap);
+    assert!(
+        block.contains("-a -e"),
+        "the equivalence must be emitted, or there is no collision to refuse:\n{block}"
+    );
+    for run in sel::block_runs(&snap) {
+        assert!(
+            !run.rendered.contains(UNDER),
+            "the colliding rule rendered a command:\n{}",
+            run.rendered
+        );
+    }
+    let cause = block
+        .lines()
+        .find(|l| l.starts_with(sel::UNRENDERABLE_FIXME_CAUSE_PREFIX))
+        .unwrap_or_else(|| panic!("no cause line:\n{block}"));
+    assert!(cause.contains(UNDER), "cause names no spec: {cause}");
+    assert!(
+        cause.contains(REWRITTEN),
+        "cause does not hand over the rewritten spec: {cause}"
+    );
+
+    // Paired positive: without an emitted equivalence the same rule renders.
+    let alone = sel::snapshot_rules(vec![sel::label(UNDER, FcontextFileType::All, HTTPD_TYPE)]);
+    assert_eq!(
+        rendered_runs(&alone),
+        vec![install_run(), sel::rule1_rendered(UNDER, "", HTTPD_ARGS)],
+    );
+}
+
+/// `selinux_no_restorecon_outside_the_comment_sentence` skips comment lines,
+/// and the line this task removed (`# RUN restorecon -Rv /`) was a comment,
+/// so restoring it verbatim would pass. This collects every carrier, comment
+/// or not, over the block layouts that test's one fixture never produces.
+#[test]
+fn selinux_restorecon_appears_only_in_its_three_known_sentences() {
+    const KNOWN: &[&str] = &[
+        "# a rule only needs to be in the policy store: no restorecon at build time. Each",
+        "# run restorecon -R on it before starting the services that use it.",
+        sel::UNRENDERABLE_FIXME_INSTRUCTION,
+    ];
+    let fixtures: Vec<(&str, inspectah_core::snapshot::InspectionSnapshot)> = vec![
+        ("host rule", host_snapshot()),
+        (
+            "equivalence only",
+            sel::snapshot_rules(vec![sel::equivalence("/var/other", "/other")]),
+        ),
+        (
+            "all unrenderable",
+            sel::snapshot_rules(vec![sel::label(
+                "/tmp/it's",
+                FcontextFileType::All,
+                HTTPD_TYPE,
+            )]),
+        ),
+        (
+            "sorted source",
+            sel::snapshot(
+                vec![sel::label(
+                    "/opt/a(/.*)?",
+                    FcontextFileType::All,
+                    HTTPD_TYPE,
+                )],
+                FcontextSource::SemanageList,
+                Vec::new(),
+            ),
+        ),
+        (
+            "port label only",
+            sel::snapshot(
+                Vec::new(),
+                FcontextSource::PolicyStore,
+                vec![sel::port_label("ssh_port_t", "tcp", "2222")],
+            ),
+        ),
+    ];
+    let mut seen = 0usize;
+    for (case, snap) in fixtures {
+        for line in render_block_text(&snap).lines() {
+            if !line.contains("restorecon") {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                KNOWN.contains(&line),
+                "{case}: unexpected restorecon carrier {line:?}"
+            );
+        }
+    }
+    assert!(
+        seen >= KNOWN.len(),
+        "the fixtures reached {seen} carriers, so the check is thin"
     );
 }

@@ -265,18 +265,31 @@ pub const FLAG_ORDER: &[&str] = &["-f", "-r", "-s", "-t"];
 /// § 3.1 rule 1, transcribed from the spec. `@D_ARGS@` is what the `-d`
 /// carries beyond the spec (`" -f d"` or nothing), `@AM_ARGS@` the arguments
 /// the `-a` and the `-m` share.
+/// The `semanage fcontext -d -e` a diagnostic tells the operator to run needs
+/// both operands: measured on rhel9/rhel-bootc:9.8 (2026-10-28), the one-operand
+/// form answers with a `KeyError` and exits 1. Rule 1 does not capture the
+/// equivalence's target, so its own diagnostic names it as a placeholder.
 const RULE1_TEMPLATE: &str = r#"RUN spec='@SPEC@'; \
     eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before replaying the rule for %s; fix semanage in the base, or exclude this rule, then rebuild\n' "$spec" >&2; exit 1; }; \
     if printf '%s\n' "$eqs" | awk '$2 == "=" { print $1 }' | grep -qxF -- "$spec"; then \
-      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild\n' "$spec" >&2; \
+      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e <its target> %s, or exclude this rule, then rebuild\n' "$spec" "$spec" >&2; \
     else semanage fcontext -d@D_ARGS@ "$spec" 2>/dev/null || true; \
       semanage fcontext -a @AM_ARGS@ "$spec" \
       || semanage fcontext -m @AM_ARGS@ "$spec"; fi"#;
 
-/// § 3.1 rule 2, transcribed from the spec.
-const RULE2_TEMPLATE: &str = r#"RUN eq="$(semanage fcontext -l -C | awk -v s='@SUBJECT@' '$2 == "=" && $1 == s { print $3 }')"; \
+/// § 3.1 rule 2, transcribed from the spec, with the listing capture the spec
+/// omits.
+///
+/// The spec omits it because `add_equal` is said to refuse a duplicate
+/// subject, so a failed listing would stop the build on semanage's own
+/// message. Measured false on rhel9/rhel-bootc:9.8 with libsemanage-3.6-5
+/// (2026-10-28): the `-a -e` prints "Equivalence class for /var/srv already
+/// exists, modifying instead" and exits 0, destroying the operator's
+/// equivalence. The capture is rule 1's, applied symmetrically.
+const RULE2_TEMPLATE: &str = r#"RUN eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before adding the equivalence for %s; fix semanage in the base, or exclude this rule, then rebuild\n' '@SUBJECT@' >&2; exit 1; }; \
+    eq="$(printf '%s\n' "$eqs" | awk -v s='@SUBJECT@' '$2 == "=" && $1 == s { print $3 }')"; \
     if [ -z "$eq" ]; then semanage fcontext -a -e '@LABELED_LIKE@' '@SUBJECT@'; \
-    elif [ "$eq" != '@LABELED_LIKE@' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\n' '@SUBJECT@' "$eq" '@LABELED_LIKE@' >&2; exit 1; fi"#;
+    elif [ "$eq" != '@LABELED_LIKE@' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e %s %s, or exclude this rule, then rebuild\n' '@SUBJECT@' "$eq" '@LABELED_LIKE@' "$eq" '@SUBJECT@' >&2; exit 1; fi"#;
 
 /// The rule 1 body for a rule whose `-d` carries `d_args` and whose `-a`/`-m`
 /// carry `am_args`.
@@ -298,7 +311,7 @@ pub fn rule2_rendered(subject: &str, labeled_like: &str) -> String {
 /// substitutes away.
 pub fn rule2_printf_line(subject: &str, labeled_like: &str) -> String {
     format!(
-        "    elif [ \"$eq\" != '{labeled_like}' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\\n' '{subject}' \"$eq\" '{labeled_like}' >&2; exit 1; fi"
+        "    elif [ \"$eq\" != '{labeled_like}' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e %s %s, or exclude this rule, then rebuild\\n' '{subject}' \"$eq\" '{labeled_like}' \"$eq\" '{subject}' >&2; exit 1; fi"
     )
 }
 
@@ -307,7 +320,7 @@ pub fn rule2_printf_line(subject: &str, labeled_like: &str) -> String {
 /// the `printf` line and requires the whole-body comparison to reject it.
 pub fn rule2_echo_line(subject: &str, labeled_like: &str) -> String {
     format!(
-        "    elif [ \"$eq\" != '{labeled_like}' ]; then echo \"FIXME: {subject} is already equivalent to $eq on the target, not {labeled_like}; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\" >&2; exit 1; fi"
+        "    elif [ \"$eq\" != '{labeled_like}' ]; then echo \"FIXME: {subject} is already equivalent to $eq on the target, not {labeled_like}; delete that equivalence with semanage fcontext -d -e $eq {subject}, or exclude this rule, then rebuild\" >&2; exit 1; fi"
     )
 }
 
@@ -327,10 +340,24 @@ pub fn rule2_rendered_round2_echo(subject: &str, labeled_like: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// § 3.1's install precondition: two comment lines and one `RUN`.
+///
+/// The `RUN` carries the cleanup every other `dnf install` in
+/// `containerfile.rs` carries. Measured on rhel9/rhel-bootc:9.8 (2026-10-28):
+/// without it the layer is 617 MB for a 10.9 MB payload, 533 MB of it
+/// `/var/cache/dnf`, which `bootc install` writes to the machine's persistent
+/// `/var`. Index 2 is the `RUN` line that names the package, which is what
+/// the positional assertions look for.
 pub const INSTALL_PRECONDITION: &[&str] = &[
     "# The file context and port rules below need semanage, which this base does not",
     "# carry; policycoreutils-python-utils provides it.",
-    "RUN dnf install -y policycoreutils-python-utils",
+    "RUN dnf install -y policycoreutils-python-utils \\",
+    "    && dnf clean all \\",
+    "    && rm -rf \\",
+    "        /var/cache/dnf \\",
+    "        /var/lib/dnf/history* \\",
+    "        /var/log/dnf* \\",
+    "        /var/log/hawkey.log \\",
+    "        /var/log/rhsm",
 ];
 
 /// The package `semanage` comes from. Named because three separate rules are
@@ -339,7 +366,10 @@ pub const SEMANAGE_PACKAGE: &str = "policycoreutils-python-utils";
 
 /// First line of § 5.1's two-line unrenderable form: the imperative, which the
 /// § 5.6 wording rule puts ahead of the cause.
-pub const UNRENDERABLE_FIXME_INSTRUCTION: &str = "# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' || semanage fcontext -m -t <type> '<spec>' (labels apply at deploy; no restorecon needed)";
+/// The parenthetical reads "when bootc pulls the image" where § 5.1 writes
+/// "at deploy": the relabel happens at pull, measured on rhel9/rhel-bootc:9.8
+/// (2026-10-28), and the count paragraph in the same block says so too.
+pub const UNRENDERABLE_FIXME_INSTRUCTION: &str = "# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' || semanage fcontext -m -t <type> '<spec>' (labels apply when bootc pulls the image; no restorecon needed)";
 
 /// Prefix of the second line, which carries the cause.
 pub const UNRENDERABLE_FIXME_CAUSE_PREFIX: &str = "#   the collected rule could not be rendered: ";

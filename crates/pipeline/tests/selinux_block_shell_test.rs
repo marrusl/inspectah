@@ -167,14 +167,17 @@ fn assert_outcome(
     stderr: &str,
     log: &[&str],
 ) {
-    assert_eq!(got.stdout, stdout, "{case}: stdout");
-    assert_eq!(got.stderr, stderr, "{case}: stderr");
-    assert_eq!(got.argv, argv(log), "{case}: argv log");
-    assert_eq!(got.status, status, "{case}: exit status");
+    // First, so that a regression which runs an operand says so. Every
+    // realistic one also changes stdout, stderr or argv, and whichever
+    // assertion fires first is the sentence the next reader starts from.
     assert!(
         !got.executed,
         "{case}: an operand executed — the {EXEC_MARKER} marker exists"
     );
+    assert_eq!(got.stdout, stdout, "{case}: stdout");
+    assert_eq!(got.stderr, stderr, "{case}: stderr");
+    assert_eq!(got.argv, argv(log), "{case}: argv log");
+    assert_eq!(got.status, status, "{case}: exit status");
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +193,9 @@ fn rule_commands(snap: &InspectionSnapshot) -> Vec<String> {
     let commands: Vec<String> = sel::block_runs(snap)
         .into_iter()
         .map(|r| r.command)
-        .filter(|c| c != "dnf install -y policycoreutils-python-utils")
+        // The precondition's own `RUN`, whose folded command carries the
+        // package install and its cleanup.
+        .filter(|c| !c.starts_with("dnf install -y policycoreutils-python-utils"))
         .collect();
     assert!(
         !commands.is_empty(),
@@ -215,9 +220,11 @@ fn rule1_command(snap: &InspectionSnapshot) -> String {
 
 /// The single rule 2 (equivalence) command of a fixture.
 fn rule2_command(snap: &InspectionSnapshot) -> String {
+    // Rule 2 opens with the listing capture, `eqs=`, and derives `eq=` from
+    // it on the next line.
     let mut found: Vec<String> = rule_commands(snap)
         .into_iter()
-        .filter(|c| c.starts_with("eq="))
+        .filter(|c| c.starts_with("eqs="))
         .collect();
     assert_eq!(
         found.len(),
@@ -244,10 +251,16 @@ fn equivalence_command(subject: &str, labeled_like: &str) -> String {
 // Expected diagnostics
 // ---------------------------------------------------------------------------
 
+/// The `semanage fcontext -d -e` these diagnostics name carries both
+/// operands: the one-operand form answers with a `KeyError` (measured on
+/// rhel9/rhel-bootc:9.8, 2026-10-28). Rule 1 does not capture the
+/// equivalence's target, so its own diagnostic leaves that operand as a
+/// placeholder.
 fn conflict_diagnostic(subject: &str, listed: &str, labeled_like: &str) -> String {
     format!(
         "FIXME: {subject} is already equivalent to {listed} on the target, not {labeled_like}; \
-         delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\n"
+         delete that equivalence with semanage fcontext -d -e {listed} {subject}, or exclude \
+         this rule, then rebuild\n"
     )
 }
 
@@ -255,7 +268,16 @@ fn skip_diagnostic(spec: &str) -> String {
     format!(
         "FIXME: skipped the file context rule for {spec}; the target maps that path as an \
          equivalence, which semanage fcontext -d would delete instead of a label; delete it \
-         with semanage fcontext -d -e, or exclude this rule, then rebuild\n"
+         with semanage fcontext -d -e <its target> {spec}, or exclude this rule, then rebuild\n"
+    )
+}
+
+/// The diagnostic rule 2 prints when it cannot read the target's equivalence
+/// table. Rule 1's equivalent is [`listing_failure_diagnostic`].
+fn equivalence_listing_failure_diagnostic(subject: &str) -> String {
+    format!(
+        "FIXME: could not list the target file contexts before adding the equivalence for \
+         {subject}; fix semanage in the base, or exclude this rule, then rebuild\n"
     )
 }
 
@@ -507,17 +529,140 @@ fn selinux_label_stops_the_build_when_the_listing_fails() {
     }
 }
 
+/// **This case's expectation was reversed on measured evidence** (Collins,
+/// 2026-10-28, on `registry.redhat.io/rhel9/rhel-bootc:9.8`). It previously
+/// asserted that rule 2 adds the equivalence when the listing fails, on the
+/// spec's premise that `add_equal` refuses a duplicate subject and the build
+/// stops on semanage's own message. The real `semanage` does not refuse: with
+/// `/var/srv = /opt/srv` already in the store it prints "Equivalence class
+/// for /var/srv already exists, modifying instead" and exits 0, replacing the
+/// operator's equivalence with no diagnostic. The stub cannot reproduce that,
+/// which is why the previous expectation looked safe. Rule 2 now captures the
+/// listing the way rule 1 does and stops the build instead of adding blind.
 #[test]
-fn selinux_equivalence_adds_once_and_fails_when_the_listing_fails() {
-    // Rule 2 has no guard on the listing: an empty read looks like an absent
-    // equivalence, so it adds, and the add's own failure is the exit status.
-    let cmd = equivalence_command("/var/srv", "/srv");
+fn selinux_equivalence_stops_the_build_when_the_listing_fails() {
+    const SUBJECT: &str = "/var/srv";
+    let cmd = equivalence_command(SUBJECT, "/srv");
     let got = Harness::new("", 1, 1).run(&cmd);
-    assert_eq!(got.stdout, "");
-    assert_eq!(
-        got.argv,
-        argv(&[LISTING_CALL, &["fcontext", "-a", "-e", "/srv", "/var/srv"]].concat())
+    assert_outcome(
+        "equivalence/listing failure",
+        &got,
+        1,
+        "",
+        &equivalence_listing_failure_diagnostic(SUBJECT),
+        LISTING_CALL,
     );
-    assert_ne!(got.status, 0, "a failed add must not exit 0");
-    assert!(!got.executed, "an operand executed");
+}
+
+// ---------------------------------------------------------------------------
+// Fix round 1: the unquoted operands, and the input the renderer cannot
+// validate
+// ---------------------------------------------------------------------------
+
+/// Every command the original harness executed carried `-t` and nothing else,
+/// because `label_command` builds its rule from `ctx()`, whose `system_u` and
+/// `s0` are the two values § 5.1 suppresses `-s` and `-r` for. These are the
+/// only operands the emitted command carries unquoted, so this is the one
+/// case that hands them to a real shell. The values are unusual but legal:
+/// a hostile one cannot be executed here, because the renderer refuses it
+/// (`smoke_render.rs::selinux_hostile_context_tokens_reject_the_rule`).
+#[test]
+fn selinux_label_with_a_user_and_a_range_runs_them_as_argv_entries() {
+    const SPEC: &str = "/x/`c6_exec`";
+    const USER: &str = "user_u";
+    const RANGE: &str = "s0-s0:c0.c1023";
+    let snap = sel::snapshot_rules(vec![sel::label_with(
+        SPEC,
+        FcontextFileType::All,
+        inspectah_core::types::selinux::SelinuxContext {
+            user: USER.into(),
+            role: "object_r".into(),
+            type_: HTTPD_TYPE.into(),
+            level: Some(RANGE.into()),
+        },
+    )]);
+    let got = Harness::new("", 0, 0).run(&rule1_command(&snap));
+    assert_outcome(
+        "user and range",
+        &got,
+        0,
+        "",
+        "",
+        &[
+            LISTING_CALL,
+            &["fcontext", "-d", SPEC],
+            &[
+                "fcontext", "-a", "-r", RANGE, "-s", USER, "-t", HTTPD_TYPE, SPEC,
+            ],
+        ]
+        .concat(),
+    );
+}
+
+/// The design has two untrusted inputs. The scanned host's data is validated
+/// at render time; the **target's** `semanage fcontext -l -C` output cannot
+/// be, because the renderer never sees it, and it flows into `$eqs` and
+/// `$eq`. That is the whole reason § 3.1 rule 2 replaced a double-quoted
+/// `echo` with a static `printf` taking operands as arguments. Every other
+/// case in this file feeds a listing the test wrote with a benign value.
+const HOSTILE_LISTED: &str = "/opt/`c6_exec`$(c6_exec)${IFS}";
+
+#[test]
+fn selinux_equivalence_conflict_with_a_hostile_target_listing() {
+    const SUBJECT: &str = "/var/srv";
+    const LABELED_LIKE: &str = "/srv";
+    let cmd = equivalence_command(SUBJECT, LABELED_LIKE);
+    let listing = format!("{SUBJECT} = {HOSTILE_LISTED}\n");
+    let got = Harness::new(&listing, 0, 0).run(&cmd);
+    assert_outcome(
+        "hostile listing/conflict",
+        &got,
+        1,
+        "",
+        &conflict_diagnostic(SUBJECT, HOSTILE_LISTED, LABELED_LIKE),
+        LISTING_CALL,
+    );
+}
+
+#[test]
+fn selinux_label_guard_reads_a_hostile_target_listing_inertly() {
+    // The spec is the listing's subject, so the guard fires and the hostile
+    // bytes have travelled through `$eqs`, awk, and grep to get there.
+    const SPEC: &str = "/x/`c6_exec`";
+    let listing = format!("{SPEC} = {HOSTILE_LISTED}\n");
+    let cmd = label_command(SPEC, FcontextFileType::All);
+    let got = Harness::new(&listing, 0, 0).run(&cmd);
+    assert_outcome(
+        "hostile listing/skip",
+        &got,
+        0,
+        "",
+        &skip_diagnostic(SPEC),
+        LISTING_CALL,
+    );
+}
+
+/// `-t '<<none>>'` is single-quoted in the renderer because `<<` unquoted
+/// makes `/bin/sh` read a here-document delimited by `none`, which would
+/// swallow the rest of the command. The render side pins the text; this is
+/// the only case that hands the argument to a shell. The block's one other
+/// `Unlabel` case takes the skip branch and logs no `-a` at all.
+#[test]
+fn selinux_unlabel_passes_the_none_type_as_one_argv_entry() {
+    const SPEC: &str = "/x/`c6_exec`";
+    let snap = sel::snapshot_rules(vec![sel::unlabel(SPEC, FcontextFileType::All)]);
+    let got = Harness::new("", 0, 0).run(&rule1_command(&snap));
+    assert_outcome(
+        "unlabel",
+        &got,
+        0,
+        "",
+        "",
+        &[
+            LISTING_CALL,
+            &["fcontext", "-d", SPEC],
+            &["fcontext", "-a", "-t", "<<none>>", SPEC],
+        ]
+        .concat(),
+    );
 }

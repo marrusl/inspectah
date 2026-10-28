@@ -15,19 +15,40 @@ use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
 };
 
-/// Top-level directories that are symlinks into `/var` on bootc derivation
-/// bases and have no `subs_dist` alias in the policy, each paired with the
-/// real path it resolves to. Verified for `/srv` on fedora-bootc:42 and
-/// centos-bootc:stream10; the CoreOS-lineage extras (`/opt`, `/usr/local`,
-/// `/home`, `/root`, `/mnt`) already have aliases.
+/// Top-level directories that are symlinks into `/var` and that the policy
+/// does not alias, each paired with the real path it resolves to.
+///
+/// Measured on `registry.redhat.io/rhel9/rhel-bootc:9.8` (2026-10-28):
+/// `/srv` is the only `/var` symlink with no `file_contexts.subs_dist` entry.
+/// `/home`, `/root` and `/mnt` are symlinks and are aliased; `/opt` and
+/// `/usr/local` are real directories on that base, so the alias question does
+/// not arise for them. A fedora-bootc or centos-bootc base creates a
+/// different set, so this wants re-verifying when inspectah grows base
+/// support.
 pub const VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")];
 
 /// § 3.1's install precondition: `semanage` is not in the bootc base, and
 /// every command this block emits needs it.
+///
+/// The cleanup is the form every other `dnf install` in `containerfile.rs`
+/// uses, and it is not optional here: measured on `rhel9/rhel-bootc:9.8`, the
+/// uncleaned layer is 617 MB for a 10.9 MB payload, 533 MB of it
+/// `/var/cache/dnf`, which `bootc install` then writes to the machine's
+/// persistent `/var`. This block renders after the package install block, so
+/// without this it also re-fills the cache that block just cleared. The
+/// package name stays on the `RUN` line rather than on a continuation, unlike
+/// the package block's, so the two are never mistaken for each other.
 pub const INSTALL_PRECONDITION: &[&str] = &[
     "# The file context and port rules below need semanage, which this base does not",
     "# carry; policycoreutils-python-utils provides it.",
-    "RUN dnf install -y policycoreutils-python-utils",
+    "RUN dnf install -y policycoreutils-python-utils \\",
+    "    && dnf clean all \\",
+    "    && rm -rf \\",
+    "        /var/cache/dnf \\",
+    "        /var/lib/dnf/history* \\",
+    "        /var/log/dnf* \\",
+    "        /var/log/hawkey.log \\",
+    "        /var/log/rhsm",
 ];
 
 /// The SELinux user `-s` is suppressed for (§ 5.1).
@@ -38,18 +59,37 @@ const DEFAULT_LEVEL: &str = "s0";
 /// `>` would otherwise reach the shell as redirections.
 const UNLABEL_TYPE_ARG: &str = "'<<none>>'";
 
-/// The bytes single quotes do not make inert, so no operand may carry them
-/// (containerfile-value-quoting skill, § 3.1 rule 4).
-const UNQUOTABLE: &[char] = &['\'', '\n', '\0'];
+/// Bytes no operand may carry: the apostrophe, which single quotes cannot
+/// make inert (containerfile-value-quoting skill, § 3.1 rule 4), and the
+/// control characters.
+///
+/// `\n` and `\0` are the two § 3.1 rule 4 names and both are control
+/// characters. The rest of C0 is inert to the shell but misrepresents the
+/// artifact: a spec carrying CR or an ANSI escape renders a Containerfile
+/// that displays, to a reviewer who was not the scanner, as something other
+/// than its bytes. A real `file_contexts` expression never carries one.
+fn is_unquotable(c: char) -> bool {
+    c == '\'' || c.is_control()
+}
 
 /// Characters an equivalence operand may not carry: `semanage fcontext -e`
-/// takes a literal path, not a regex (§ 3.1 rule 4).
+/// takes a literal path, not a regex (§ 3.1 rule 4). The backslash is here
+/// for a second reason: the subject reaches `awk -v s=`, which
+/// escape-processes its assignment value under POSIX semantics, so a
+/// surviving backslash would compare a different string at build time.
 const EQUIVALENCE_FORBIDDEN: &[char] = &['*', '?', '[', ']', '(', ')', '|', '\\'];
 
 /// First line of § 5.1's two-line unrenderable form. It stays generic: the
 /// same two lines also serve a conflicting equivalence pair, which has no
 /// type and no single spec. Line 2 carries the specifics.
-const FIXME_INSTRUCTION: &str = "# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' || semanage fcontext -m -t <type> '<spec>' (labels apply at deploy; no restorecon needed)";
+///
+/// § 5.1 writes the parenthetical as "labels apply at deploy", which is the
+/// wrong moment: ostree-ext relabels against the image's own policy when
+/// bootc pulls the image, and deployment checkout is later (verified in
+/// `container/store.rs` against rhel9/rhel-bootc:9.8, 2026-10-28). The
+/// count paragraph says the same thing, and two sentences in one block
+/// disagreeing is worse than one being imprecise (Mark, 2026-10-28).
+const FIXME_INSTRUCTION: &str = "# FIXME: add this file context by hand with: RUN semanage fcontext -a -t <type> '<spec>' || semanage fcontext -m -t <type> '<spec>' (labels apply when bootc pulls the image; no restorecon needed)";
 
 /// Prefix of the second line of the unrenderable form, which carries the
 /// cause.
@@ -115,26 +155,33 @@ pub fn selinux_equivalences(snap: &InspectionSnapshot) -> Vec<(FcontextRule, Equ
     }
 
     for (link, target) in VAR_SYMLINKED_TOPLEVELS {
-        if !sel
-            .fcontext_rules
-            .iter()
-            .any(|r| triggers_synthesis(r, link))
-        {
-            continue;
-        }
         let synthesized = FcontextRule::Equivalence {
             subject: (*target).to_string(),
             labeled_like: (*link).to_string(),
             disposition: FindingKind::included(),
             aggregate: None,
         };
-        // A collected row mapping the other direction claims a different
-        // subject, so the subject key below would never see it.
+
+        // A collected row mapping the other direction is a conflict whether
+        // or not anything triggers the synthesis, and whatever the subject
+        // key below would do with it (Mark, 2026-10-28). `/srv` **is** a
+        // symlink to `/var/srv` on the image, so a row declaring the reverse
+        // inverts the base's own layout; emitting it is wrong on its own
+        // terms. It claims a different subject, so the subject key would
+        // never see it.
         if let Some(idx) = entries
             .iter()
             .position(|(r, _)| equivalence_pair(r) == Some((link, target)))
         {
             absorb(&mut entries[idx], &synthesized);
+            continue;
+        }
+
+        if !sel
+            .fcontext_rules
+            .iter()
+            .any(|r| triggers_synthesis(r, link))
+        {
             continue;
         }
         match entries
@@ -180,7 +227,7 @@ pub fn render_fcontext_rules(snap: &InspectionSnapshot) -> FcontextRendering {
     let any_replay = sel
         .fcontext_rules
         .iter()
-        .any(|r| is_label(r) && is_included(r) && offending_operand(r).is_none());
+        .any(|r| is_included(r) && renders_as_replay(r, &equivalences));
     if any_replay {
         if sel.fcontext_source == FcontextSource::SemanageList {
             rendering.preamble.insert(0, SEMANAGE_LIST_NOTE.to_string());
@@ -189,46 +236,123 @@ pub fn render_fcontext_rules(snap: &InspectionSnapshot) -> FcontextRendering {
     }
 
     for rule in &sel.fcontext_rules {
-        if let FcontextRule::Unparsed { raw } = rule {
-            rendering.rules.extend(fixme_lines(&format!("{raw:?}")));
+        if let FcontextRule::Unparsed { .. } = rule {
+            rendering
+                .rules
+                .extend(fixme_lines(&unrenderable_cause(rule)));
             continue;
         }
         if !is_included(rule) {
             continue;
         }
-        match rule {
-            FcontextRule::Equivalence { .. } => {
-                // A row absent from the list was deduplicated against an
-                // identical earlier one, which has already been emitted.
-                if let Some(idx) = entry_of(&equivalences, |row| row == rule) {
+        let Some(replay) = ReplayRule::of(rule) else {
+            // An included rule that is not a replay is an equivalence. A row
+            // absent from the list was deduplicated against an identical
+            // earlier one, which has already been emitted.
+            if let Some(idx) = entry_of(&equivalences, |row| row == rule) {
+                emit_equivalence(&equivalences[idx], &mut emitted[idx], &mut rendering);
+            }
+            continue;
+        };
+
+        let lines = match collision(&equivalences, rule) {
+            Some(cause) => fixme_lines(&cause),
+            None => {
+                // The equivalence that makes a `/srv` rule apply to the real
+                // path goes ahead of the first rule needing it (§ 3.1).
+                let synthesis = var_symlink_target(replay.spec).and_then(|target| {
+                    entry_of(&equivalences, |row| subject_of(row) == Some(target))
+                });
+                if let Some(idx) = synthesis {
                     emit_equivalence(&equivalences[idx], &mut emitted[idx], &mut rendering);
                 }
+                rendering.emits_command = true;
+                let args = rule1_args(replay.file_type, replay.context);
+                rule1_lines(replay.spec, &args.delete, &args.add_modify)
             }
-            FcontextRule::Label { spec, .. } | FcontextRule::Unlabel { spec, .. } => {
-                let lines = match offending_operand(rule) {
-                    Some(offending) => fixme_lines(&format!("{offending:?}")),
-                    None => {
-                        // The equivalence that makes a `/srv` rule apply to
-                        // the real path goes ahead of the first rule needing
-                        // it (§ 3.1).
-                        let synthesis = var_symlink_target(spec).and_then(|target| {
-                            entry_of(&equivalences, |row| subject_of(row) == Some(target))
-                        });
-                        if let Some(idx) = synthesis {
-                            emit_equivalence(&equivalences[idx], &mut emitted[idx], &mut rendering);
-                        }
-                        rendering.emits_command = true;
-                        let args = rule1_args(rule);
-                        rule1_lines(spec, &args.delete, &args.add_modify)
-                    }
-                };
-                rendering.rules.extend(lines);
-            }
-            FcontextRule::Unparsed { .. } => unreachable!("handled above"),
-        }
+        };
+        rendering.rules.extend(lines);
     }
 
     rendering
+}
+
+/// The two variants rule 1 replays, carrying only the fields the replay
+/// needs. Converting once here is what keeps `Equivalence` and `Unparsed`
+/// out of [`rule1_args`], whose `None` context means "render `<<none>>`".
+struct ReplayRule<'a> {
+    spec: &'a str,
+    file_type: FcontextFileType,
+    /// `None` for an `Unlabel`, which carries no context field.
+    context: Option<&'a SelinuxContext>,
+}
+
+impl<'a> ReplayRule<'a> {
+    fn of(rule: &'a FcontextRule) -> Option<Self> {
+        match rule {
+            FcontextRule::Label {
+                spec,
+                file_type,
+                context,
+                ..
+            } => Some(ReplayRule {
+                spec,
+                file_type: *file_type,
+                context: Some(context),
+            }),
+            FcontextRule::Unlabel {
+                spec, file_type, ..
+            } => Some(ReplayRule {
+                spec,
+                file_type: *file_type,
+                context: None,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Why a `Label`/`Unlabel` cannot be rendered as a command, if it cannot:
+/// its own operands, or a collision with an equivalence this block adds.
+fn collision(
+    equivalences: &[(FcontextRule, EquivalenceOrigin)],
+    rule: &FcontextRule,
+) -> Option<String> {
+    if !is_renderable(rule) {
+        return Some(unrenderable_cause(rule));
+    }
+    let spec = ReplayRule::of(rule)?.spec;
+    // Measured on rhel9/rhel-bootc:9.8 (2026-10-28): with `/var/srv = /srv`
+    // in the store, `semanage fcontext -a -t t "/var/srv/data(/.*)?"` exits 1
+    // with "File spec ... conflicts with equivalency rule", and so does the
+    // `-m`. Rule 1 has no `|| true` after the `-m`, so the build would die,
+    // and it would die because of an equivalence this block added two lines
+    // earlier. The refusal is deliberate rather than a rewrite of the
+    // operator's spec: the rewritten form is only equivalent while the
+    // equivalence is in place, which is a target-side fact the renderer
+    // cannot know, so the FIXME hands the operator the rewrite as advice.
+    let (subject, labeled_like) = equivalences
+        .iter()
+        .filter(|entry| emits_command(entry))
+        .find_map(|(row, _)| {
+            let (subject, labeled_like) = equivalence_pair(row)?;
+            begins_with_toplevel(spec, subject).then_some((subject, labeled_like))
+        })?;
+    let rewritten = format!("{labeled_like}{}", &spec[subject.len()..]);
+    Some(collision_cause(spec, subject, &rewritten))
+}
+
+/// Whether an equivalence entry reaches the block as a `semanage` command.
+fn emits_command(entry: &(FcontextRule, EquivalenceOrigin)) -> bool {
+    !matches!(entry.1, EquivalenceOrigin::Conflict { .. }) && is_renderable(&entry.0)
+}
+
+/// Whether a rule renders as the rule 1 replay triple.
+fn renders_as_replay(
+    rule: &FcontextRule,
+    equivalences: &[(FcontextRule, EquivalenceOrigin)],
+) -> bool {
+    is_label(rule) && collision(equivalences, rule).is_none()
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +365,7 @@ pub fn render_fcontext_rules(snap: &InspectionSnapshot) -> FcontextRendering {
 const RULE1_GUARD_LINES: &[&str] = &[
     r#"    eqs="$(semanage fcontext -l -C)" || { printf 'FIXME: could not list the target file contexts before replaying the rule for %s; fix semanage in the base, or exclude this rule, then rebuild\n' "$spec" >&2; exit 1; }; \"#,
     r#"    if printf '%s\n' "$eqs" | awk '$2 == "=" { print $1 }' | grep -qxF -- "$spec"; then \"#,
-    r#"      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild\n' "$spec" >&2; \"#,
+    r#"      printf 'FIXME: skipped the file context rule for %s; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e <its target> %s, or exclude this rule, then rebuild\n' "$spec" "$spec" >&2; \"#,
 ];
 
 /// § 3.1 rule 1: delete the exact key, then add, then modify, guarded by the
@@ -267,21 +391,40 @@ fn rule1_lines(spec: &str, delete_args: &str, add_modify_args: &str) -> Vec<Stri
 
 /// § 3.1 rule 2: read the target's mapping for this subject, then add it,
 /// leave it alone, or stop the build.
+///
+/// **The listing is captured and its failure stops the build, which § 3.1
+/// says is unnecessary.** The spec's reason is that `add_equal` refuses a
+/// duplicate subject, so a failed listing would leave `$eq` empty, run the
+/// `-a -e`, and stop on semanage's own message. Measured false on
+/// `registry.redhat.io/rhel9/rhel-bootc:9.8` with `libsemanage-3.6-5.el9_6`
+/// (2026-10-28): with `/var/srv = /opt/srv` already in the store, the `-a -e`
+/// prints `Equivalence class for /var/srv already exists, modifying instead`
+/// and **exits 0**, replacing the operator's equivalence with no diagnostic.
+/// That is the same auto-modify `-a` performs on a duplicate label key, which
+/// the spec already recorded as a correction but did not carry across to this
+/// rule. The capture is rule 1's, applied symmetrically, and it is the only
+/// thing standing between a failed listing and silent destruction of target
+/// state. A spec correction is filed; do not remove this.
 fn rule2_lines(subject: &str, labeled_like: &str) -> Vec<String> {
     // `{{` and `}}` are `format!`'s escapes; the emitted awk program carries
     // single braces.
     vec![
         format!(
-            r#"RUN eq="$(semanage fcontext -l -C | awk -v s='{subject}' '$2 == "=" && $1 == s {{ print $3 }}')"; \"#
+            r#"RUN eqs="$(semanage fcontext -l -C)" || {{ printf 'FIXME: could not list the target file contexts before adding the equivalence for %s; fix semanage in the base, or exclude this rule, then rebuild\n' '{subject}' >&2; exit 1; }}; \"#
+        ),
+        format!(
+            r#"    eq="$(printf '%s\n' "$eqs" | awk -v s='{subject}' '$2 == "=" && $1 == s {{ print $3 }}')"; \"#
         ),
         format!(
             r#"    if [ -z "$eq" ]; then semanage fcontext -a -e '{labeled_like}' '{subject}'; \"#
         ),
         // The diagnostic is a static `printf` format with the operands as
         // arguments: a double-quoted `echo` would run the backticks a
-        // target's own equivalence table can put in `$eq`.
+        // target's own equivalence table can put in `$eq`. It spells the
+        // whole delete command because `semanage fcontext -d -e` without
+        // both operands answers with a KeyError.
         format!(
-            r#"    elif [ "$eq" != '{labeled_like}' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild\n' '{subject}' "$eq" '{labeled_like}' >&2; exit 1; fi"#
+            r#"    elif [ "$eq" != '{labeled_like}' ]; then printf 'FIXME: %s is already equivalent to %s on the target, not %s; delete that equivalence with semanage fcontext -d -e %s %s, or exclude this rule, then rebuild\n' '{subject}' "$eq" '{labeled_like}' "$eq" '{subject}' >&2; exit 1; fi"#
         ),
     ]
 }
@@ -298,15 +441,11 @@ struct Rule1Args {
     add_modify: String,
 }
 
-fn rule1_args(rule: &FcontextRule) -> Rule1Args {
-    let (file_type, context) = match rule {
-        FcontextRule::Label {
-            file_type, context, ..
-        } => (*file_type, Some(context)),
-        FcontextRule::Unlabel { file_type, .. } => (*file_type, None),
-        _ => (FcontextFileType::All, None),
-    };
-
+/// `context` is `None` for an `Unlabel`, which carries no context field and
+/// renders the `<<none>>` literal instead. The two are parameters rather than
+/// a `&FcontextRule` so that no other variant can reach this function and
+/// pick up an unlabel by default.
+fn rule1_args(file_type: FcontextFileType, context: Option<&SelinuxContext>) -> Rule1Args {
     // One `-f` fragment reaches all three commands.
     let file_flag = file_type.semanage_flag().map(|f| format!("-f {f}"));
     let delete = file_flag
@@ -340,16 +479,25 @@ fn rule1_args(rule: &FcontextRule) -> Rule1Args {
 // Comments
 // ---------------------------------------------------------------------------
 
+/// The paragraph that opens the fcontext rules.
+///
+/// The count is the rules collected from the source host, including any the
+/// block could not render: it is what this block is responsible for, not what
+/// it applies, and the sentence about FIXMEs says so. "when bootc pulls the
+/// image" is the moment ostree-ext relabels against the image's own policy
+/// (`container/store.rs`, verified on rhel9/rhel-bootc:9.8); deployment
+/// checkout is later and is the wrong place to look when debugging.
 fn count_paragraph(count: usize) -> Vec<String> {
     let noun = if count == 1 { "rule" } else { "rules" };
     vec![
         format!(
-            "# SELinux file contexts ({count} custom {noun}). Labels for image content are computed at"
+            "# SELinux file contexts ({count} custom {noun}). Labels for image content are computed"
         ),
-        "# deploy time from the image's own policy under /etc/selinux, so a rule only needs".into(),
-        "# to be in the policy store: no restorecon at build time. Data you restore into".into(),
-        "# /var (/var/srv included) keeps the labels it arrived with; run restorecon -R on".into(),
-        "# it before starting the services that use it.".into(),
+        "# when bootc pulls the image, from the image's own policy under /etc/selinux, so".into(),
+        "# a rule only needs to be in the policy store: no restorecon at build time. Each".into(),
+        "# rule below is either a command or a FIXME saying why it could not be one. Data".into(),
+        "# you restore into /var (/var/srv included) keeps the labels it arrived with;".into(),
+        "# run restorecon -R on it before starting the services that use it.".into(),
     ]
 }
 
@@ -382,6 +530,39 @@ fn fixme_lines(cause: &str) -> Vec<String> {
     ]
 }
 
+/// The cause line of a rule no operand check passed: every failing operand
+/// with its reason, then enough of the rule to locate it in the source host's
+/// policy. Line 1 is generic, so without the second half a type-rejected rule
+/// would name no path and a spec-rejected rule would name no type.
+fn unrenderable_cause(rule: &FcontextRule) -> String {
+    if let FcontextRule::Unparsed { raw } = rule {
+        // The line is its own identity; § 5.1's "raw line" case.
+        return format!("{raw:?} ({UNPARSED_LINE})");
+    }
+    let faults: Vec<String> = rule_faults(rule)
+        .iter()
+        .map(|f| format!("{:?} ({}: {})", f.value, f.field, f.reason))
+        .collect();
+    format!("{}; {}", faults.join(", "), rule_identity(rule))
+}
+
+/// How a rule is named once its own operands can no longer be trusted to
+/// name it.
+fn rule_identity(rule: &FcontextRule) -> String {
+    match rule {
+        FcontextRule::Label { spec, context, .. } => {
+            format!("the rule labels {spec:?} as type {:?}", context.type_)
+        }
+        FcontextRule::Unlabel { spec, .. } => format!("the rule unlabels {spec:?}"),
+        FcontextRule::Equivalence {
+            subject,
+            labeled_like,
+            ..
+        } => format!("the rule maps {subject:?} to {labeled_like:?}"),
+        FcontextRule::Unparsed { raw } => format!("the collected line was {raw:?}"),
+    }
+}
+
 /// The cause line of a conflicting equivalence pair: both rows, and the
 /// instruction that resolves them.
 fn conflict_cause(rows: &[FcontextRule]) -> String {
@@ -396,75 +577,154 @@ fn conflict_cause(rows: &[FcontextRule]) -> String {
     )
 }
 
+/// The cause line of a rule whose path an equivalence this block adds makes
+/// unaddressable. `semanage` refuses such a spec on both the `-a` and the
+/// `-m`, so emitting it would end the build.
+fn collision_cause(spec: &str, subject: &str, rewritten: &str) -> String {
+    format!(
+        "{spec:?} sits under {subject:?}, which this block adds as an equivalence, and \
+         semanage refuses a file context under an equivalence subject; label {rewritten:?} \
+         instead, which reaches the same files through that equivalence, or exclude the \
+         equivalence, then rebuild"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Operand validation (§ 3.1 rule 4)
 // ---------------------------------------------------------------------------
 
-/// A label `spec` is renderable when single quotes make it inert and it is a
-/// `file_contexts` expression, which always begins with `/`. A spec that does
-/// not (`--help`) would be read as a flag and skip its rule silently.
-fn spec_ok(spec: &str) -> bool {
-    spec.starts_with('/') && !spec.contains(UNQUOTABLE)
+const NOT_ABSOLUTE: &str = "it is not an absolute path";
+const UNQUOTABLE_BYTE: &str = "it carries an apostrophe or a control character";
+const HAS_WHITESPACE: &str = "it carries whitespace";
+const REGEX_CHARACTER: &str = "it carries a regex character, and -e takes a literal path";
+const NOT_BARE_TOKEN: &str = "it is not a bare token";
+const UNPARSED_LINE: &str = "the collector could not place this line";
+
+/// One operand that stops its rule from being rendered.
+struct OperandFault<'a> {
+    /// The field the operand came from, named as § 3.1 names it.
+    field: &'static str,
+    value: &'a str,
+    reason: &'static str,
 }
 
-/// An equivalence operand is additionally a literal absolute path prefix:
-/// `-e` takes a path, not a regex.
-fn equivalence_operand_ok(operand: &str) -> bool {
-    operand.starts_with('/')
-        && !operand.contains(UNQUOTABLE)
-        && !operand.contains(EQUIVALENCE_FORBIDDEN)
-        && !operand.contains(char::is_whitespace)
+/// Why a label `spec` cannot be rendered, if it cannot.
+///
+/// Whitespace is refused even though single quotes make it inert, because the
+/// build-time guard reads the target's listing through `awk`, which splits on
+/// a single space where the collector deliberately splits on two or more. A
+/// space-bearing spec would slip past the guard and reach a
+/// `semanage fcontext -d` that deletes the target's equivalence instead of a
+/// label key.
+fn spec_fault(spec: &str) -> Option<&'static str> {
+    if !spec.starts_with('/') {
+        // `semanage fcontext -a --help` answers with usage text and exits 0,
+        // so a spec that is not a path would skip its rule silently.
+        Some(NOT_ABSOLUTE)
+    } else if spec.contains(is_unquotable) {
+        Some(UNQUOTABLE_BYTE)
+    } else if spec.contains(char::is_whitespace) {
+        Some(HAS_WHITESPACE)
+    } else {
+        None
+    }
 }
 
-/// `type_`, `user`, and `level` reach the command as bare tokens.
-fn bare_token_ok(token: &str) -> bool {
-    !token.is_empty()
+/// Why an equivalence operand cannot be rendered, if it cannot. It is
+/// additionally a literal absolute path prefix: `-e` takes a path, not a
+/// regex.
+fn equivalence_operand_fault(operand: &str) -> Option<&'static str> {
+    if !operand.starts_with('/') {
+        Some(NOT_ABSOLUTE)
+    } else if operand.contains(is_unquotable) {
+        Some(UNQUOTABLE_BYTE)
+    } else if operand.contains(char::is_whitespace) {
+        Some(HAS_WHITESPACE)
+    } else if operand.contains(EQUIVALENCE_FORBIDDEN) {
+        Some(REGEX_CHARACTER)
+    } else {
+        None
+    }
+}
+
+/// `type_`, `user` and `level` are the only operands the emitted command
+/// carries unquoted, so this check, and not any quoting, is what keeps them
+/// inert. It is coupled to the emission conditions in [`rule1_args`]: a field
+/// is checked exactly when it is emitted.
+fn bare_token_fault(token: &str) -> Option<&'static str> {
+    let ok = !token.is_empty()
         && token
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
+    (!ok).then_some(NOT_BARE_TOKEN)
 }
 
-/// The first operand that stops a rule from being rendered, or `None` when
-/// the whole rule can be.
-fn offending_operand(rule: &FcontextRule) -> Option<&str> {
+/// Every operand of a rule that cannot be rendered, in the order the command
+/// would have carried them. Empty means the rule renders.
+fn rule_faults(rule: &FcontextRule) -> Vec<OperandFault<'_>> {
+    fn fault<'a>(
+        field: &'static str,
+        value: &'a str,
+        reason: Option<&'static str>,
+    ) -> Option<OperandFault<'a>> {
+        reason.map(|reason| OperandFault {
+            field,
+            value,
+            reason,
+        })
+    }
+
+    let mut faults = Vec::new();
     match rule {
         FcontextRule::Label { spec, context, .. } => {
-            if !spec_ok(spec) {
-                return Some(spec);
+            faults.extend(fault("spec", spec, spec_fault(spec)));
+            faults.extend(fault(
+                "type",
+                &context.type_,
+                bare_token_fault(&context.type_),
+            ));
+            if context.user != DEFAULT_USER {
+                faults.extend(fault(
+                    "user",
+                    &context.user,
+                    bare_token_fault(&context.user),
+                ));
             }
-            offending_context_token(context)
+            if let Some(level) = context.level.as_deref()
+                && level != DEFAULT_LEVEL
+            {
+                faults.extend(fault("level", level, bare_token_fault(level)));
+            }
         }
-        FcontextRule::Unlabel { spec, .. } => (!spec_ok(spec)).then_some(spec.as_str()),
+        FcontextRule::Unlabel { spec, .. } => {
+            faults.extend(fault("spec", spec, spec_fault(spec)));
+        }
         FcontextRule::Equivalence {
             subject,
             labeled_like,
             ..
         } => {
-            if !equivalence_operand_ok(subject) {
-                Some(subject)
-            } else if !equivalence_operand_ok(labeled_like) {
-                Some(labeled_like)
-            } else {
-                None
-            }
+            faults.extend(fault(
+                "subject",
+                subject,
+                equivalence_operand_fault(subject),
+            ));
+            faults.extend(fault(
+                "labeled_like",
+                labeled_like,
+                equivalence_operand_fault(labeled_like),
+            ));
         }
-        FcontextRule::Unparsed { raw } => Some(raw),
+        FcontextRule::Unparsed { raw } => {
+            faults.extend(fault("raw", raw, Some(UNPARSED_LINE)));
+        }
     }
+    faults
 }
 
-/// Only the tokens a rule actually emits are checked: a non-default `user`
-/// or `level` reaches the command, a default one is suppressed.
-fn offending_context_token(context: &SelinuxContext) -> Option<&str> {
-    if !bare_token_ok(&context.type_) {
-        return Some(&context.type_);
-    }
-    if context.user != DEFAULT_USER && !bare_token_ok(&context.user) {
-        return Some(&context.user);
-    }
-    match context.level.as_deref() {
-        Some(level) if level != DEFAULT_LEVEL && !bare_token_ok(level) => Some(level),
-        _ => None,
-    }
+/// Whether every operand of a rule passed its check.
+fn is_renderable(rule: &FcontextRule) -> bool {
+    rule_faults(rule).is_empty()
 }
 
 // ---------------------------------------------------------------------------
@@ -542,11 +802,10 @@ fn absorb(entry: &mut (FcontextRule, EquivalenceOrigin), incoming: &FcontextRule
 /// included `Label`/`Unlabel` the block will actually emit, whose spec begins
 /// with the symlinked top level.
 fn triggers_synthesis(rule: &FcontextRule, link: &str) -> bool {
-    let spec = match rule {
-        FcontextRule::Label { spec, .. } | FcontextRule::Unlabel { spec, .. } => spec,
-        _ => return false,
+    let Some(replay) = ReplayRule::of(rule) else {
+        return false;
     };
-    is_included(rule) && offending_operand(rule).is_none() && begins_with_toplevel(spec, link)
+    is_included(rule) && is_renderable(rule) && begins_with_toplevel(replay.spec, link)
 }
 
 /// The real path a spec's top level resolves to, when it has one.
@@ -586,10 +845,10 @@ fn emit_equivalence(
     let Some((subject, labeled_like)) = equivalence_pair(rule) else {
         return;
     };
-    if let Some(offending) = offending_operand(rule) {
+    if !is_renderable(rule) {
         rendering
             .rules
-            .extend(fixme_lines(&format!("{offending:?}")));
+            .extend(fixme_lines(&unrenderable_cause(rule)));
         return;
     }
     if matches!(origin, EquivalenceOrigin::Synthesized { .. }) {
