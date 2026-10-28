@@ -26,9 +26,26 @@ pub struct GroupEvalContext<'a> {
     pub divergent_overrides: &'a HashSet<String>,
 }
 
+/// Whether a package is actionable (not advisory/inventory) — the
+/// disposition half of [`is_effective_member`]. Exposed on its own because
+/// the no-op refusal's "all members are locked" vs. "no package is
+/// attributed to it" distinction needs to count present, actionable members
+/// *without* excluding locked ones.
+pub fn is_actionable(p: &PackageEntry) -> bool {
+    matches!(p.disposition, FindingKind::Actionable { .. })
+}
+
+/// Whether a package counts as an effective member: actionable and not
+/// locked. Does not check group membership on its own — [`effective_members`]
+/// combines this with a name filter; `RefineSession`'s render-state pool
+/// (`recompute_view`) applies it globally before narrowing per group.
+pub fn is_effective_member(p: &PackageEntry) -> bool {
+    is_actionable(p) && !p.locked
+}
+
 /// The effective member set for a group op: declared members present in
-/// `packages_added`, actionable (not advisory/inventory), and not locked.
-/// One definition, used three times (§ 3.7): the no-op refusal
+/// `packages_added` and effective ([`is_effective_member`]). One predicate,
+/// used three times (§ 3.7): the no-op refusal
 /// (`RefineSession::check_group_noop`), `GroupInfo`'s `effective_member_count`
 /// and `effective_included`, and `derive_group_state`'s own evaluation below,
 /// via the caller that builds its `effective_packages`.
@@ -39,8 +56,7 @@ pub fn effective_members<'a>(
     packages_added
         .iter()
         .filter(|p| members.contains(&p.name))
-        .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
-        .filter(|p| !p.locked)
+        .filter(|p| is_effective_member(p))
         .collect()
 }
 

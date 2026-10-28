@@ -276,12 +276,22 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
 
             // A member is in the base image if it's recorded as baseline-
             // suppressed or base-image-only, not merely absent from
-            // `packages_added` (position 5).
+            // `packages_added` (position 5). `baseline_suppressed` entries
+            // are canonical `name.arch` ids; split on the LAST dot, since
+            // package names can contain dots themselves (`java-1.8.0-openjdk`,
+            // `python3.11`) while arch values never do.
             let baseline_suppressed_names: std::collections::HashSet<&str> = projected
                 .rpm
                 .as_ref()
                 .and_then(|r| r.baseline_suppressed.as_ref())
-                .map(|v| v.iter().filter_map(|id| id.split('.').next()).collect())
+                .map(|v| {
+                    v.iter()
+                        .map(|id| {
+                            id.rsplit_once('.')
+                                .map_or(id.as_str(), |(name, _arch)| name)
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
             let base_image_only_names: std::collections::HashSet<&str> = projected
                 .rpm
@@ -1919,6 +1929,77 @@ mod tests {
                 .unwrap()
                 .in_base_image
         );
+    }
+
+    /// Discriminates position 5's rule change from the old absence-based
+    /// one, and covers finding 1 (dotted canonical ids) in the same fixture.
+    ///
+    /// `java-1.8.0-openjdk` is absent from `packages_added` but genuinely
+    /// baseline-suppressed, recorded as the canonical id
+    /// `java-1.8.0-openjdk.x86_64` — a package name containing dots. Parsing
+    /// that id by splitting on the FIRST dot (the pre-fix bug) yields
+    /// `"java-1"`, which never matches the member name, so `in_base_image`
+    /// would wrongly read `false`. Splitting on the LAST dot (arch never
+    /// contains one) yields the correct name.
+    ///
+    /// `orphan-base-pkg` is also absent from `packages_added`, but recorded
+    /// in neither `baseline_suppressed` nor `base_image_only`. Under the old
+    /// absence-based rule this member would read `in_base_image: true`
+    /// (nothing in `packages_added` named it) and not count toward
+    /// `added_count`; under § 3.7 position 5 it reads `false` instead, since
+    /// no record attests it's actually a base-image package, and it does
+    /// count.
+    #[test]
+    fn in_base_image_reflects_membership_not_absence() {
+        use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "gcc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                locked: false,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            }],
+            baseline_suppressed: Some(vec!["java-1.8.0-openjdk.x86_64".into()]),
+            installed_groups: Some(vec![InstalledGroup {
+                name: "Dev Tools".into(),
+                members: vec![
+                    "gcc".into(),
+                    "java-1.8.0-openjdk".into(),
+                    "orphan-base-pkg".into(),
+                ],
+                optional_installed: vec![],
+            }]),
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let response = build_web_view(&session);
+        let gi = response
+            .package_groups
+            .into_iter()
+            .find(|g| g.name == "Dev Tools")
+            .expect("group present in view");
+
+        let member = |name: &str| gi.members.iter().find(|m| m.name == name).unwrap();
+        assert!(
+            member("java-1.8.0-openjdk").in_base_image,
+            "a dotted canonical id must be parsed by its last dot (arch), not its first"
+        );
+        assert!(
+            !member("orphan-base-pkg").in_base_image,
+            "absence from packages_added alone must not imply in_base_image \
+             without a baseline_suppressed or base_image_only record"
+        );
+        // added_count = members where !in_base_image: gcc (present, not
+        // base-image) and orphan-base-pkg (absent but unrecorded, so it
+        // counts as added under the new rule); java-1.8.0-openjdk is
+        // base-image and does not count.
+        assert_eq!(gi.added_count, 2);
     }
 
     #[test]

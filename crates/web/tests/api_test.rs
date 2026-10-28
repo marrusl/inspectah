@@ -333,12 +333,9 @@ async fn set_include_group_already_excluded_returns_422_and_records_nothing() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    let message = json["error"]
-        .as_str()
-        .expect("error body carries a message");
-    assert!(
-        message.starts_with("nothing to change"),
-        "the refusal must start with 'nothing to change': {message}"
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 1 effective members of 'Container Management' are already excluded"
     );
 
     let (_, ops_after) = get_json(&app, "/api/ops").await;

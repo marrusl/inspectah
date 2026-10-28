@@ -1915,7 +1915,7 @@ impl RefineSession {
             let present_count = packages_added
                 .iter()
                 .filter(|p| group.members.contains(&p.name))
-                .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
+                .filter(|p| group_state::is_actionable(p))
                 .count();
             let reason = if present_count > 0 {
                 format!("all {present_count} members are locked")
@@ -2714,24 +2714,22 @@ impl RefineSession {
         }
 
         // Build RenderContext from the group's effective members: present in
-        // `packages_added`, actionable, and not locked (§ 3.7) — evaluated
-        // BEFORE any display filter (baseline-suppressed, leaf), so a member
-        // hidden from the view by those filters still counts toward group
-        // state. This is the same definition `check_group_noop` and
-        // `GroupInfo`'s effective counts use (`group_state::effective_members`
-        // applies it per group; `derive_group_state` below does its own
-        // per-group name match over this shared, already actionable-and-
-        // unlocked pool). Without this, a group whose only members are
-        // filtered out of the view reads as Renderable instead of Inert
-        // (item 1.9).
+        // `packages_added` and effective (`group_state::is_effective_member`
+        // — actionable and not locked), evaluated BEFORE any display filter
+        // (baseline-suppressed, leaf), so a member hidden from the view by
+        // those filters still counts toward group state. This is the same
+        // predicate `check_group_noop` and `GroupInfo`'s effective counts use
+        // via `group_state::effective_members` (`derive_group_state` below
+        // does its own per-group name match over this shared pool). Without
+        // this, a group whose only members are filtered out of the view
+        // reads as Renderable instead of Inert (item 1.9).
         let effective_packages: Vec<PackageEntry> = projected
             .rpm
             .as_ref()
             .map(|r| {
                 r.packages_added
                     .iter()
-                    .filter(|p| matches!(p.disposition, FindingKind::Actionable { .. }))
-                    .filter(|p| !p.locked)
+                    .filter(|p| group_state::is_effective_member(p))
                     .cloned()
                     .collect()
             })
@@ -6255,18 +6253,19 @@ mod tests {
 
     #[test]
     fn baseline_suppressed_member_excluded_from_group_eval() {
-        // Setup: group "Web Server" has members httpd and mod_ssl.
-        // httpd is baseline-suppressed (present in target image) but, unlike
-        // the leaf-filter case below, also absent from `packages_added`
-        // entirely — the baseline rule exempts it from evaluation.
-        // mod_ssl is present and include=false (user excluded it).
+        // Setup: group "Web Server" has members httpd and mod_ssl. httpd is
+        // present in `packages_added` (included, unlocked) AND flagged
+        // `baseline_suppressed`, which hides it from the individual
+        // Packages view but does NOT remove it from `packages_added` — so
+        // under § 3.7's rule, httpd IS in the effective set. mod_ssl is
+        // present and include=false (user excluded it).
         //
-        // The effective set is {mod_ssl}: httpd never entered it, so this
-        // case can't by itself distinguish the two designs — mod_ssl's
-        // exclusion degrades the group either way. It still documents the
-        // baseline exemption: only 1 package appears in the view (mod_ssl),
-        // and the group is Degraded because mod_ssl is excluded, not because
-        // httpd is absent.
+        // The effective set is {httpd, mod_ssl}: this fixture does not
+        // exercise the "absent from packages_added entirely" baseline
+        // exemption (see the host-example comment above) — it shows that
+        // `baseline_suppressed` alone does not exempt a present member.
+        // mod_ssl's exclusion degrades the group regardless of httpd's
+        // inclusion.
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6335,13 +6334,14 @@ mod tests {
             "mod_ssl must be visible in view"
         );
 
-        // Group state must reflect the filtered surface: mod_ssl excluded
-        // means Degraded(MemberExcluded). Before the fix, httpd would have
-        // polluted effective_packages from the raw projection.
+        // httpd is in the effective set (present, actionable, unlocked) but
+        // included, so it doesn't itself trigger Degraded; mod_ssl's
+        // exclusion does: Degraded(MemberExcluded).
         let ctx = session.render_context();
         assert!(
             ctx.is_degraded("Web Server"),
-            "group with baseline-suppressed member must derive state from filtered surface"
+            "an excluded effective member must degrade the group even when a \
+             baseline-suppressed, included member is also in the effective set"
         );
     }
 

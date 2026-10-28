@@ -1390,8 +1390,21 @@ fn container_management_session() -> RefineSession {
                 disposition: FindingKind::included(),
                 ..Default::default()
             },
+            // Leaf, non-member package: survives normalization as included,
+            // so the Containerfile always has a non-empty `RUN dnf install`
+            // block to assert `active_install_list` against — otherwise the
+            // "buildah must not be in the active install list" checks below
+            // would hold vacuously against an empty parse.
+            PackageEntry {
+                name: "vim".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
         ],
-        leaf_packages: Some(vec![]),
+        leaf_packages: Some(vec!["vim.x86_64".into()]),
         auto_packages: Some(vec![
             "buildah.x86_64".into(),
             "containernetworking-plugins.x86_64".into(),
@@ -1530,10 +1543,13 @@ fn group_exclude_on_an_already_excluded_set_is_refused() {
     // baseline-suppressed. Both present members normalize to excluded at
     // construction, so a fresh exclude is a no-op before any op runs.
     let mut s = container_management_session();
-    assert!(matches!(
-        s.apply(set_include_group("Container Management", false)),
-        Err(RefineError::NoopTarget(_))
-    ));
+    match s.apply(set_include_group("Container Management", false)) {
+        Err(RefineError::NoopTarget(msg)) => assert_eq!(
+            msg,
+            "all 2 effective members of 'Container Management' are already excluded"
+        ),
+        other => panic!("expected NoopTarget, got {other:?}"),
+    }
     assert_eq!(s.timeline_len(), 0);
 }
 
@@ -1548,6 +1564,32 @@ fn group_include_then_exclude_moves_the_render_state_and_the_export() {
     // by design (see containerfile.rs's `group_member_suppressed`).
     let cf = containerfile_of(&s);
     assert!(cf.contains("dnf group install") && cf.contains("\"Container Management\""));
+    // Falsifies both the suppression claim above and `active_install_list`
+    // itself: the list is non-empty (vim, a leaf non-member) and excludes
+    // buildah, a renderable group's member suppressed from individual
+    // install. Without `vim` in the fixture this would hold vacuously —
+    // there would be no `RUN dnf install` block to parse at all.
+    let installed = active_install_list(&cf);
+    assert!(
+        !installed.is_empty(),
+        "vim must appear in the active install list"
+    );
+    assert!(!installed.contains(&"buildah".to_string()));
+
+    // A second include is the "already included" branch — exact message,
+    // not just the refusal kind, since Task 7 and the frontend assert on it.
+    match s.apply(set_include_group("Container Management", true)) {
+        Err(RefineError::NoopTarget(msg)) => assert_eq!(
+            msg,
+            "all 2 effective members of 'Container Management' are already included"
+        ),
+        other => panic!("expected NoopTarget, got {other:?}"),
+    }
+    assert_eq!(
+        s.timeline_len(),
+        1,
+        "the refused re-include must not record"
+    );
 
     s.apply(set_include_group("Container Management", false))
         .unwrap();
@@ -1577,10 +1619,17 @@ fn a_group_whose_present_members_are_all_locked_is_inert() {
     assert_eq!(gi.render_state, "inert");
     assert_eq!(gi.effective_member_count, 0);
     assert!(!containerfile_of(&s).contains("dnf group install"));
-    for include in [true, false] {
-        assert!(matches!(
-            s.apply(set_include_group("Locked Group", include)),
-            Err(RefineError::NoopTarget(_))
-        ));
+    match s.apply(set_include_group("Locked Group", true)) {
+        Err(RefineError::NoopTarget(msg)) => {
+            assert_eq!(
+                msg,
+                "nothing to decide in 'Locked Group': all 2 members are locked"
+            )
+        }
+        other => panic!("expected NoopTarget, got {other:?}"),
     }
+    assert!(matches!(
+        s.apply(set_include_group("Locked Group", false)),
+        Err(RefineError::NoopTarget(_))
+    ));
 }
