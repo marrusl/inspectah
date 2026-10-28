@@ -27,7 +27,7 @@ use crate::types::{
     UserPasswordOp, ViewDirective,
 };
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
@@ -77,6 +77,26 @@ fn canonical_package_id(name: &str, arch: &str) -> String {
 /// arm) already uses.
 fn package_attributed_to_repo(pkg: &PackageEntry, id: &RepoId) -> bool {
     pkg.source_repo.eq_ignore_ascii_case(id.as_str())
+}
+
+/// The package half of the `ItemId::Repo` cascade (§ 3.2): set every
+/// package attributed to `section_id` to `include`, skipping locked
+/// packages -- they are outside both the effective-member counts
+/// (`group_state::is_effective_member`) and this cascade. Extracted so it
+/// can be unit-tested directly: `project_snapshot`'s final
+/// `clamp_locked_items` pass unconditionally forces every locked RPM
+/// package's disposition to excluded in every snapshot the session ever
+/// returns, which makes a locked package's disposition after this cascade
+/// indistinguishable from before it when observed through `view()` /
+/// `snapshot_projected()` -- this function's own `rpm.packages_added` is
+/// the only place the behavior this fixes is actually visible.
+fn cascade_repo_packages(rpm: &mut RpmSection, section_id: &str, include: bool) {
+    let disposition = FindingKind::from_bool(include);
+    for pkg in &mut rpm.packages_added {
+        if pkg.source_repo.eq_ignore_ascii_case(section_id) && !pkg.locked {
+            pkg.disposition = disposition.clone();
+        }
+    }
 }
 
 /// Check whether an item is locked in the original (normalized) snapshot.
@@ -2106,12 +2126,9 @@ impl RefineSession {
                                     let excluded_sections = self.excluded_sections_at(&snap);
 
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Exclude all packages from this repo (case-insensitive)
-                                        for pkg in &mut rpm.packages_added {
-                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                                pkg.disposition = FindingKind::excluded();
-                                            }
-                                        }
+                                        // 1. Exclude all packages from this repo (case-insensitive),
+                                        // skipping locked members (§ 3.2).
+                                        cascade_repo_packages(rpm, section_id, false);
 
                                         // 2. For repo files: exclude only if ALL sections
                                         // defined in that file are now excluded
@@ -2167,12 +2184,9 @@ impl RefineSession {
                                 } else {
                                     // Include repo: re-enable packages, repo files, GPG keys
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Include all packages from this repo (case-insensitive)
-                                        for pkg in &mut rpm.packages_added {
-                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                                pkg.disposition = FindingKind::included();
-                                            }
-                                        }
+                                        // 1. Include all packages from this repo (case-insensitive),
+                                        // skipping locked members (§ 3.2).
+                                        cascade_repo_packages(rpm, section_id, true);
 
                                         // 2. Re-enable repo files for this section
                                         if let Some(file_paths) =
@@ -5504,6 +5518,69 @@ mod tests {
         assert!(
             sshd.disposition.is_included(),
             "clamp must not affect unlocked items"
+        );
+    }
+
+    /// Review round 1, item 1: the `ItemId::Repo` cascade matched packages
+    /// on `source_repo` alone, with no `locked` guard -- a repo op would
+    /// flip a locked member's disposition exactly like an unlocked one.
+    /// `project_snapshot`'s final `clamp_locked_items` pass unconditionally
+    /// re-forces every locked RPM package back to excluded afterward, so
+    /// this is invisible through `view()`/`snapshot_projected()` (confirmed
+    /// empirically: reverting the `!pkg.locked` guard and rerunning an
+    /// integration-level assertion against `install_list`/
+    /// `snapshot_projected()` fails identically with or without the guard,
+    /// because the locked package already reads excluded before any op
+    /// even runs). `cascade_repo_packages` is tested directly here,
+    /// bypassing `project_snapshot`/clamp entirely, which is the only point
+    /// in the pipeline where the fixed behavior is actually observable.
+    #[test]
+    fn repo_package_cascade_skips_locked_members_in_both_directions() {
+        fn pkg(name: &str, locked: bool, included: bool) -> PackageEntry {
+            PackageEntry {
+                name: name.into(),
+                arch: "x86_64".into(),
+                source_repo: "vendor".into(),
+                disposition: FindingKind::from_bool(included),
+                locked,
+                ..Default::default()
+            }
+        }
+
+        // Exclude-all: both members start included. Against code without
+        // the `!pkg.locked` guard, the locked member's disposition flips to
+        // excluded right alongside the unlocked one -- this is a fresh
+        // scenario per direction specifically so each block independently
+        // catches a guard missing from only that one branch.
+        let mut rpm = RpmSection {
+            packages_added: vec![pkg("locked", true, true), pkg("free", false, true)],
+            ..Default::default()
+        };
+        cascade_repo_packages(&mut rpm, "vendor", false);
+        assert!(
+            rpm.packages_added[0].disposition.is_included(),
+            "exclude-all must not touch the locked member"
+        );
+        assert!(
+            !rpm.packages_added[1].disposition.is_included(),
+            "exclude-all must still exclude the unlocked member"
+        );
+
+        // Include-all: both members start excluded. Against code without
+        // the guard, the locked member's disposition flips to included
+        // right alongside the unlocked one.
+        let mut rpm = RpmSection {
+            packages_added: vec![pkg("locked", true, false), pkg("free", false, false)],
+            ..Default::default()
+        };
+        cascade_repo_packages(&mut rpm, "vendor", true);
+        assert!(
+            !rpm.packages_added[0].disposition.is_included(),
+            "include-all must not touch the locked member"
+        );
+        assert!(
+            rpm.packages_added[1].disposition.is_included(),
+            "include-all must include the unlocked member"
         );
     }
 

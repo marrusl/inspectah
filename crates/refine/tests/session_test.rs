@@ -1892,13 +1892,26 @@ fn a_repo_with_no_effective_member_is_refused_in_both_directions() {
     // -> accepted and recorded, cascading onto a repo file no package
     // justifies deciding through this control (position 26's bug). Either
     // branch fails this assertion against pre-task code.
-    for mut s in [
-        all_members_locked_repo_session(),
-        repo_known_to_index_with_no_packages(),
+    //
+    // Review round 1: a single `starts_with("nothing to decide")` shared by
+    // both fixtures cannot tell the two reasons apart -- it passes whether
+    // `present_count` is always 0, always positive, or correct. Each fixture
+    // is paired with its own full expected message and asserted with
+    // `assert_eq!` instead, which would fail if `present_count` collapsed to
+    // either constant.
+    for (mut s, expected) in [
+        (
+            all_members_locked_repo_session(),
+            "nothing to decide in 'vendor': all 2 members are locked",
+        ),
+        (
+            repo_known_to_index_with_no_packages(),
+            "nothing to decide in 'vendor': no package is attributed to it",
+        ),
     ] {
         for include in [true, false] {
             match s.apply(set_include_repo("vendor", include)) {
-                Err(RefineError::NoopTarget(m)) => assert!(m.starts_with("nothing to decide")),
+                Err(RefineError::NoopTarget(m)) => assert_eq!(m, expected),
                 other => panic!("expected NoopTarget, got {other:?}"),
             }
         }
