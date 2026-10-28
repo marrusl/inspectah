@@ -20,6 +20,7 @@ pub mod readme;
 pub mod report;
 pub mod safety;
 pub mod secrets;
+pub mod selinux;
 pub mod tarball;
 
 pub mod users;

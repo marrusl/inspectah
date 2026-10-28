@@ -356,14 +356,16 @@ fn packages_section_lines(
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
                 gpg_body.push(format!(
-                    "# FIXME: GPG key path contains unsafe characters: {}",
+                    "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
+                     its path contains unsafe characters: {}",
                     super::safety::html_escape(&key.path)
                 ));
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
                 gpg_body.push(format!(
-                    "# FIXME: GPG key path unsafe for shell: {}",
+                    "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
+                     its path is unsafe for the shell: {}",
                     super::safety::html_escape(&key.path)
                 ));
                 continue;
@@ -1383,6 +1385,15 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Security & Access Control section ---
 
+/// Whether a port label renders as a `semanage port` command rather than a
+/// FIXME. The install precondition and the port loop read the same answer, so
+/// the block never installs `semanage` for a command it will not emit.
+fn port_label_renders(pl: &inspectah_core::types::selinux::SelinuxPortLabel) -> bool {
+    sanitize_shell_value(&pl.protocol).is_some()
+        && sanitize_shell_value(&pl.port).is_some()
+        && sanitize_shell_value(&pl.label_type).is_some()
+}
+
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let sel = match &snap.selinux {
         Some(s) => s,
@@ -1442,31 +1453,21 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
 
-    if !sel.fcontext_rules.is_empty() {
-        body.push(format!(
-            "# FIXME: {} custom fcontext rule(s) detected — apply in image",
-            sel.fcontext_rules.len()
-        ));
-        let limit = sel.fcontext_rules.len().min(10);
-        for fc in &sel.fcontext_rules[..limit] {
-            // Placeholder rendering: `FcontextRule` is now a typed enum
-            // (collection side, item 1.4/task 10) rather than a raw row
-            // string. The real per-variant renderer from spec § 3.1
-            // (replay via semanage -d/-a/-m, quoting, equivalence
-            // synthesis) is a separate task; this keeps the type change
-            // compiling without inventing that design here.
-            let fc_text = format!("{fc:?}");
-            if sanitize_shell_value(&fc_text).is_some() {
-                body.push(format!("# RUN semanage fcontext -a {}", fc_text));
-            } else {
-                body.push(format!(
-                    "# FIXME: fcontext rule contains unsafe characters: {:?}",
-                    fc_text
-                ));
-            }
-        }
-        body.push("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs".into());
+    // The fcontext rules, and the precondition that installs the tool their
+    // commands need. The precondition sits here rather than beside the port
+    // labels because it has to precede whichever `semanage` command the block
+    // emits first (spec § 3.1).
+    let fcontext = super::selinux::render_fcontext_rules(snap);
+    let ports_need_semanage = sel.port_labels.iter().any(port_label_renders);
+    body.extend(fcontext.preamble);
+    if fcontext.emits_command || ports_need_semanage {
+        body.extend(
+            super::selinux::INSTALL_PRECONDITION
+                .iter()
+                .map(|l| (*l).to_string()),
+        );
     }
+    body.extend(fcontext.rules);
 
     if !sel.audit_rules.is_empty() {
         body.push(format!(
@@ -1488,10 +1489,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             sel.port_labels.len()
         ));
         for pl in &sel.port_labels {
-            if sanitize_shell_value(&pl.protocol).is_some()
-                && sanitize_shell_value(&pl.port).is_some()
-                && sanitize_shell_value(&pl.label_type).is_some()
-            {
+            if port_label_renders(pl) {
                 body.push(format!(
                     "RUN semanage port -a -t {} -p {} {}",
                     pl.label_type, pl.protocol, pl.port
