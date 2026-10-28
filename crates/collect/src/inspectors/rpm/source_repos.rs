@@ -9,6 +9,9 @@
 //! NeedsReview.
 
 use inspectah_core::traits::executor::Executor;
+use inspectah_core::types::repo::{
+    PseudoRepo, RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections,
+};
 use inspectah_core::types::rpm::{PackageEntry, RepoFile};
 use std::collections::{HashMap, HashSet};
 
@@ -156,53 +159,96 @@ fn try_rpm_source_repo(
     }
 }
 
-/// Extract INI-style section IDs (`[repo-id]`) from `.repo` file content.
-fn extract_section_ids(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                Some(trimmed[1..trimmed.len() - 1].to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Normalize `source_repo` short names to full repo IDs.
+/// Attribute each package's recorded `source_repo` to a `.repo` section.
 ///
-/// `populate_source_repos` stores install-time short names like `AppStream`
-/// or `baseos` (from `%{from_repo}`). The `.repo` config files use full IDs
-/// like `rhel-9-for-aarch64-appstream-rpms`. This function maps short names
-/// to full IDs using case-insensitive substring matching so that package
-/// tables and config trees display the same identifier.
+/// `populate_source_repos` stores the install-time value dnf recorded
+/// (`%{from_repo}`): a full repo id, a short name like `AppStream` or
+/// `baseos`, a pseudo repo (`@commandline`, `anaconda`, `@System`), or
+/// empty. The `.repo` config files define the sections actually on the
+/// host. This function classifies each package's recorded value against
+/// those sections per the § 3.2 normalization rule and records the result
+/// as [`RepoAttribution`], updating `source_repo` only where that rule
+/// says to (the resolved id for `Exact`/`Resolved`; left as recorded
+/// otherwise).
 ///
-/// Packages with empty `source_repo` or no matching full ID are left
-/// unchanged.
+/// Resolution order, applied independently per package so the result never
+/// depends on section order:
+/// 1. Exact case-insensitive match against any section, enabled or not,
+///    wins first (`Exact`) -- dnf recorded that id, so the package keeps
+///    the attribution even if the section is now disabled.
+/// 2. Otherwise, case-insensitive substring match against `enabled = true`
+///    sections only: exactly one match is `Resolved`; more than one is
+///    `Ambiguous` and `source_repo` is left as recorded.
+/// 3. Otherwise: `@commandline`, `anaconda`, `@System` are `Pseudo`; empty
+///    is `Unrecorded`; anything else is `Stale`.
 pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoFile]) {
-    // Collect all section IDs from repo file content.
-    let full_ids: Vec<String> = repo_files
+    let sections: Vec<RepoSectionDef> = repo_files
         .iter()
-        .flat_map(|rf| extract_section_ids(&rf.content))
+        .flat_map(|rf| parse_repo_sections(&rf.content))
         .collect();
 
-    if full_ids.is_empty() {
-        return;
+    for pkg in packages.iter_mut() {
+        pkg.repo_attribution = classify_recorded_repo(&pkg.source_repo, &sections);
+        match &pkg.repo_attribution {
+            RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } => {
+                pkg.source_repo = id.as_str().to_string();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Classify one package's recorded `source_repo` value against the host's
+/// parsed `.repo` sections. See [`normalize_source_repos`] for the
+/// resolution order.
+fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAttribution {
+    if let Some(section) = sections.iter().find(|s| s.id == RepoId::new(recorded)) {
+        return RepoAttribution::Exact {
+            id: section.id.clone(),
+        };
     }
 
-    for pkg in packages.iter_mut() {
-        if pkg.source_repo.is_empty() {
-            continue;
-        }
-        let short = pkg.source_repo.to_lowercase();
-        if let Some(full_id) = full_ids
+    // An empty recorded value has no substring to look for -- treat it as
+    // "no match" rather than letting `str::contains("")` match every
+    // enabled section.
+    let substring_matches: Vec<&RepoId> = if recorded.is_empty() {
+        Vec::new()
+    } else {
+        let lower = recorded.to_lowercase();
+        sections
             .iter()
-            .find(|id| id.to_lowercase().contains(&short))
-        {
-            pkg.source_repo = full_id.clone();
-        }
+            .filter(|s| s.enabled && s.id.as_str().to_lowercase().contains(&lower))
+            .map(|s| &s.id)
+            .collect()
+    };
+
+    match substring_matches.len() {
+        1 => RepoAttribution::Resolved {
+            recorded: recorded.to_string(),
+            id: substring_matches[0].clone(),
+        },
+        n if n > 1 => RepoAttribution::Ambiguous {
+            recorded: recorded.to_string(),
+            candidates: substring_matches.into_iter().cloned().collect(),
+        },
+        _ => match recorded {
+            "@commandline" => RepoAttribution::Pseudo {
+                which: PseudoRepo::Commandline,
+                recorded: recorded.to_string(),
+            },
+            "anaconda" => RepoAttribution::Pseudo {
+                which: PseudoRepo::Anaconda,
+                recorded: recorded.to_string(),
+            },
+            "@System" => RepoAttribution::Pseudo {
+                which: PseudoRepo::System,
+                recorded: recorded.to_string(),
+            },
+            "" => RepoAttribution::Unrecorded,
+            _ => RepoAttribution::Stale {
+                recorded: recorded.to_string(),
+            },
+        },
     }
 }
 
@@ -560,11 +606,87 @@ Repository  : baseos
         );
     }
 
+    /// Four repo files matching the host's real layout, used to prove
+    /// `normalize_source_repos` is order-independent (§ 8.4).
+    fn host_repo_files() -> Vec<RepoFile> {
+        vec![
+            repo_file(
+                "[redhat]\nname=Red Hat\nenabled=1\nbaseurl=https://example.invalid/redhat\n",
+            ),
+            repo_file(
+                "[epel-cisco-openh264]\nname=EPEL openh264\nenabled=1\nbaseurl=https://example.invalid/openh264\n",
+            ),
+            repo_file(
+                "[epel-testing]\nname=EPEL Testing\nenabled=0\nbaseurl=https://example.invalid/epel-testing\n",
+            ),
+            repo_file("[epel]\nname=EPEL\nenabled=1\nbaseurl=https://example.invalid/epel\n"),
+        ]
+    }
+
     #[test]
-    fn test_extract_section_ids() {
-        let content =
-            "[rhel-9-baseos]\nname=BaseOS\nenabled=1\n\n[rhel-9-appstream]\nname=AppStream\n";
-        let ids = extract_section_ids(content);
-        assert_eq!(ids, vec!["rhel-9-baseos", "rhel-9-appstream"]);
+    fn normalization_is_order_independent_and_never_relabels() {
+        // § 8.4: the host's four repo files in both orders yield the same answer.
+        let files = host_repo_files(); // redhat.repo, epel-cisco-openh264.repo, epel-testing.repo, epel.repo
+        let mut reversed = files.clone();
+        reversed.reverse();
+        for order in [files, reversed] {
+            let mut pkgs = vec![pkg_with_repo("htop", "epel")];
+            normalize_source_repos(&mut pkgs, &order);
+            assert_eq!(pkgs[0].source_repo, "epel");
+            assert!(
+                matches!(&pkgs[0].repo_attribution, RepoAttribution::Exact { id } if id == &RepoId::new("epel"))
+            );
+        }
+    }
+
+    #[test]
+    fn attribution_table() {
+        // § 8.4, the remaining rows.
+        // exact match on a disabled section -> Exact on that section
+        let disabled_only = vec![repo_file(
+            "[epel-testing]\nname=EPEL Testing\nenabled=0\nbaseurl=https://example.invalid/epel-testing\n",
+        )];
+        let mut pkgs = vec![pkg_with_repo("htop", "epel-testing")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert_eq!(pkgs[0].source_repo, "epel-testing");
+        assert!(
+            matches!(&pkgs[0].repo_attribution, RepoAttribution::Exact { id } if id == &RepoId::new("epel-testing"))
+        );
+
+        // short name whose only substring match is disabled -> Stale
+        let mut pkgs = vec![pkg_with_repo("htop", "testing")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert_eq!(pkgs[0].source_repo, "testing");
+        assert!(
+            matches!(&pkgs[0].repo_attribution, RepoAttribution::Stale { recorded } if recorded == "testing")
+        );
+
+        // short name substring-matching two enabled sections -> Ambiguous, source_repo unchanged
+        let two_enabled = vec![repo_file(
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=BaseOS\nenabled=1\nbaseurl=https://example.invalid/baseos\n[rhel-9-for-x86_64-baseos-debug-rpms]\nname=BaseOS Debug\nenabled=1\nbaseurl=https://example.invalid/baseos-debug\n",
+        )];
+        let mut pkgs = vec![pkg_with_repo("glibc", "baseos")];
+        normalize_source_repos(&mut pkgs, &two_enabled);
+        assert_eq!(pkgs[0].source_repo, "baseos");
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Ambiguous { recorded, candidates }
+                if recorded == "baseos" && candidates.len() == 2
+        ));
+
+        // "anaconda" -> Pseudo(Anaconda); "" -> Unrecorded
+        let mut pkgs = vec![
+            pkg_with_repo("kernel", "anaconda"),
+            pkg_with_repo("custom-tool", ""),
+        ];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Pseudo { which: PseudoRepo::Anaconda, recorded } if recorded == "anaconda"
+        ));
+        assert!(matches!(
+            &pkgs[1].repo_attribution,
+            RepoAttribution::Unrecorded
+        ));
     }
 }

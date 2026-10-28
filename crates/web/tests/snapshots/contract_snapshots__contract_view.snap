@@ -41,6 +41,9 @@ expression: json
         "epoch": "",
         "name": "httpd",
         "release": "11.el9",
+        "repo_attribution": {
+          "kind": "unrecorded"
+        },
         "source_repo": "",
         "state": "added",
         "version": "2.4.57"

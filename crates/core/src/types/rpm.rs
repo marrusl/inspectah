@@ -1,5 +1,6 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
+use super::repo::RepoAttribution;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,12 @@ pub struct PackageEntry {
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
+    /// How `source_repo` relates to the host's `.repo` sections. See
+    /// [`RepoAttribution`]; `source_repo` keeps its historical meaning
+    /// (the resolved id for `Exact`/`Resolved`, the recorded value
+    /// otherwise).
+    #[serde(default)]
+    pub repo_attribution: RepoAttribution,
     /// Triage annotation for repo-less packages.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub repoless_annotation: String,
