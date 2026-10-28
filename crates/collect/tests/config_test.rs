@@ -269,14 +269,26 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
         .with_file(
             "/etc/selinux/targeted/contexts/files/file_contexts.local",
             "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n",
-        );
+        )
+        // Positive control (round 1 review, item 5): an ordinary modified
+        // config with the same rpm -Va flags, so a future change that
+        // empties the whole section fails on this assertion instead of
+        // passing quietly on the absence check alone.
+        .with_file("/etc/ssh/sshd_config", "Port 22\n");
 
     let rpm_state = RpmState {
-        verification_results: vec![RpmVaEntry {
-            path: "/etc/selinux/targeted/contexts/files/file_contexts.local".into(),
-            flags: "S.5....T.".into(),
-            package: Some("policycoreutils".into()),
-        }],
+        verification_results: vec![
+            RpmVaEntry {
+                path: "/etc/selinux/targeted/contexts/files/file_contexts.local".into(),
+                flags: "S.5....T.".into(),
+                package: Some("policycoreutils".into()),
+            },
+            RpmVaEntry {
+                path: "/etc/ssh/sshd_config".into(),
+                flags: "S.5....T.".into(),
+                package: Some("openssh-server".into()),
+            },
+        ],
         ..Default::default()
     };
 
@@ -303,6 +315,10 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
             .iter()
             .any(|f| f.path.contains("file_contexts.local")),
         "file_contexts.local is derived policy-store state, not config"
+    );
+    assert!(
+        section.files.iter().any(|f| f.path.contains("sshd_config")),
+        "an ordinary RPM-modified config must still be collected"
     );
 }
 

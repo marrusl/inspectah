@@ -402,19 +402,34 @@ fn parse_local_flag_token(token: &str) -> Option<FcontextFileType> {
 
 /// Parses one `file_contexts.local` line: `regex [flag] user:role:type[:level]`,
 /// whitespace-separated. `<<none>>` as the context means `Unlabel`; an
-/// absent flag token means [`FcontextFileType::All`]. Lines this shape
-/// cannot place are skipped rather than reported, matching the collector's
-/// prior tolerance of blank/comment lines in this file.
+/// absent flag token means [`FcontextFileType::All`]. A `#`-prefixed line is
+/// a comment and is skipped (`None`); any other line this shape cannot
+/// place becomes `Unparsed` rather than being dropped, so the preferred
+/// source doesn't lose data the fallback `-l -C` source would have kept.
 pub fn parse_file_contexts_local_line(line: &str) -> Option<FcontextRule> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
+    if trimmed.starts_with('#') {
+        return None;
+    }
     let tokens: Vec<&str> = trimmed.split_whitespace().collect();
     let (spec, file_type, context_token) = match tokens.as_slice() {
         [spec, context] => (*spec, FcontextFileType::All, *context),
-        [spec, flag, context] => (*spec, parse_local_flag_token(flag)?, *context),
-        _ => return None,
+        [spec, flag, context] => match parse_local_flag_token(flag) {
+            Some(file_type) => (*spec, file_type, *context),
+            None => {
+                return Some(FcontextRule::Unparsed {
+                    raw: trimmed.to_string(),
+                });
+            }
+        },
+        _ => {
+            return Some(FcontextRule::Unparsed {
+                raw: trimmed.to_string(),
+            });
+        }
     };
 
     if context_token.eq_ignore_ascii_case("<<none>>") {
@@ -425,28 +440,39 @@ pub fn parse_file_contexts_local_line(line: &str) -> Option<FcontextRule> {
         });
     }
 
-    let context = parse_selinux_context(context_token)?;
-    Some(FcontextRule::Label {
-        spec: spec.to_string(),
-        file_type,
-        context,
-        disposition: FindingKind::included(),
-    })
+    match parse_selinux_context(context_token) {
+        Some(context) => Some(FcontextRule::Label {
+            spec: spec.to_string(),
+            file_type,
+            context,
+            disposition: FindingKind::included(),
+        }),
+        None => Some(FcontextRule::Unparsed {
+            raw: trimmed.to_string(),
+        }),
+    }
 }
 
 /// Parses one `file_contexts.subs` line: `subject labeled_like`,
-/// whitespace-separated, exactly two tokens.
+/// whitespace-separated, exactly two tokens. A `#`-prefixed line is a
+/// comment and is skipped (`None`); any other line this shape cannot place
+/// becomes `Unparsed` rather than being dropped (see
+/// `parse_file_contexts_local_line`).
 pub fn parse_file_contexts_subs_line(line: &str) -> Option<FcontextRule> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let mut tokens = trimmed.split_whitespace();
-    let subject = tokens.next()?.to_string();
-    let labeled_like = tokens.next()?.to_string();
-    if tokens.next().is_some() {
+    if trimmed.starts_with('#') {
         return None;
     }
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    let [subject, labeled_like] = tokens.as_slice() else {
+        return Some(FcontextRule::Unparsed {
+            raw: trimmed.to_string(),
+        });
+    };
+    let (subject, labeled_like) = (subject.to_string(), labeled_like.to_string());
     Some(FcontextRule::Equivalence {
         subject,
         labeled_like,

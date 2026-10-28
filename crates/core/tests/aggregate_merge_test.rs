@@ -1623,6 +1623,38 @@ fn test_merge_selinux_fcontext_order_and_disposition() {
 }
 
 #[test]
+fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
+    // h1 labels a spec; h2 unlabels the *same* spec/file_type. These are
+    // the same local-database entry (round 1 review, item 3) -- a replay
+    // that ran both in sequence would have the second silently overwrite
+    // the first, so the merge must treat them as one key, not two rules.
+    let s1 = SelinuxSection {
+        fcontext_rules: vec![fcontext_label("/opt/x")],
+        ..Default::default()
+    };
+    let s2 = SelinuxSection {
+        fcontext_rules: vec![FcontextRule::Unlabel {
+            spec: "/opt/x".into(),
+            file_type: FcontextFileType::All,
+            disposition: FindingKind::included(),
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // One key, not two -- would be 2 if Label/Unlabel used different
+    // discriminants.
+    assert_eq!(result.fcontext_rules.len(), 1);
+    // First host in hostname order wins the representative, same as any
+    // other content disagreement on a shared key.
+    match &result.fcontext_rules[0] {
+        FcontextRule::Label { spec, .. } => assert_eq!(spec, "/opt/x"),
+        other => panic!("expected h1's Label to survive, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_merge_selinux_most_prevalent_mode() {
     // 3 hosts: 2 enforcing, 1 permissive — enforcing wins by prevalence
     let make = |mode: &str, fips: bool| SelinuxSection {

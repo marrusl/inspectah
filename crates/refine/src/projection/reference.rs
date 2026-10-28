@@ -3,6 +3,7 @@ use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::VersionChangeDirection;
+use inspectah_core::types::selinux::FcontextRule;
 use inspectah_pipeline::render::service_intent::render_service_intent;
 
 use super::types::{
@@ -770,8 +771,8 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
 /// - **boolean_overrides**: key = boolean name, summary = value/state, tags = `["boolean"]`
 /// - **custom_modules**: key = module name, tags = `["module"]`
-/// - **fcontext_rules**: key = rule debug text (placeholder pending the
-///   real per-variant renderer), tags = `["fcontext"]`
+/// - **fcontext_rules**: key = rule identity (spec, or `subject = labeled_like`
+///   for an equivalence, or the raw text for an unparsed line), tags = `["fcontext"]`
 /// - **audit_rules** (CarryForwardFile): key = file basename, content = file content, tags = `["audit-rule"]`
 /// - **pam_configs** (CarryForwardFile): key = file basename, content = file content, tags = `["pam"]`
 fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
@@ -849,10 +850,19 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
         });
     }
 
-    // Fcontext rules. Placeholder key text: `FcontextRule` is now a typed
-    // enum (task 10); the real per-variant display text is a renderer task.
+    // Fcontext rules. The rule's own identity (spec, equivalence pair, or
+    // raw unparsed text) -- not a Debug dump, which would leak Rust struct
+    // syntax into a user-visible row title (round 1 review, item 1).
     for rule in &se.fcontext_rules {
-        let text = format!("{rule:?}");
+        let text = match rule {
+            FcontextRule::Label { spec, .. } | FcontextRule::Unlabel { spec, .. } => spec.clone(),
+            FcontextRule::Equivalence {
+                subject,
+                labeled_like,
+                ..
+            } => format!("{subject} = {labeled_like}"),
+            FcontextRule::Unparsed { raw } => raw.clone(),
+        };
         items.push(GenericRefItem {
             id: text.clone(),
             key: text,
@@ -931,7 +941,9 @@ mod tests {
     use inspectah_core::types::scheduled::{
         AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
-    use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+    use inspectah_core::types::selinux::{
+        CarryForwardFile, FcontextFileType, SelinuxContext, SelinuxPortLabel, SelinuxSection,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -2733,6 +2745,69 @@ mod tests {
         let module = result.iter().find(|i| i.id == "myapp").unwrap();
         assert_eq!(module.summary, Some("custom module".into()));
         assert_eq!(module.tags, vec!["module"]);
+    }
+
+    #[test]
+    fn test_selinux_fcontext_rules_key_is_not_debug_syntax() {
+        // `GenericRefItem.key` becomes a user-visible row title (round 1
+        // review, item 1) -- it must be the rule's own identity, not a
+        // `{:?}` dump of the Rust struct.
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection {
+                fcontext_rules: vec![
+                    FcontextRule::Label {
+                        spec: "/opt/app(/.*)?".into(),
+                        file_type: FcontextFileType::All,
+                        context: SelinuxContext {
+                            user: "system_u".into(),
+                            role: "object_r".into(),
+                            type_: "httpd_sys_content_t".into(),
+                            level: Some("s0".into()),
+                        },
+                        disposition: FindingKind::included(),
+                    },
+                    FcontextRule::Unlabel {
+                        spec: "/opt/private".into(),
+                        file_type: FcontextFileType::RegularFile,
+                        disposition: FindingKind::included(),
+                    },
+                    FcontextRule::Equivalence {
+                        subject: "/home1".into(),
+                        labeled_like: "/home".into(),
+                        disposition: FindingKind::included(),
+                    },
+                    FcontextRule::Unparsed {
+                        raw: "garbage line".into(),
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+        let fcontext_items: Vec<&GenericRefItem> = result
+            .iter()
+            .filter(|i| i.tags == vec!["fcontext".to_string()])
+            .collect();
+        assert_eq!(fcontext_items.len(), 4);
+
+        let keys: Vec<&str> = fcontext_items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "/opt/app(/.*)?",
+                "/opt/private",
+                "/home1 = /home",
+                "garbage line",
+            ]
+        );
+        for key in &keys {
+            assert!(
+                !key.contains('{') && !key.contains("spec:") && !key.contains("disposition:"),
+                "key leaked Debug struct syntax: {key}"
+            );
+        }
     }
 
     #[test]

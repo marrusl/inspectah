@@ -730,18 +730,21 @@ pub fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
 }
 
 /// Semantic identity for an [`FcontextRule`], used to dedup across hosts:
-/// `Label`/`Unlabel` key on `(spec, file_type)`, `Equivalence` on `subject`,
-/// `Unparsed` on `raw`.
+/// `Label` and `Unlabel` share one key on `(spec, file_type)` -- they are
+/// the same local-database entry (policycoreutils' `fcontextRecords`
+/// addresses both by this pair), mutually exclusive, and a host replaying
+/// both in sequence would silently let the second overwrite the first with
+/// no record. `Equivalence` keys on `subject`, `Unparsed` on `raw`.
 fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
     match rule {
         FcontextRule::Label {
             spec, file_type, ..
-        } => (0, spec.clone(), format!("{file_type:?}")),
-        FcontextRule::Unlabel {
+        }
+        | FcontextRule::Unlabel {
             spec, file_type, ..
-        } => (1, spec.clone(), format!("{file_type:?}")),
-        FcontextRule::Equivalence { subject, .. } => (2, subject.clone(), String::new()),
-        FcontextRule::Unparsed { raw } => (3, raw.clone(), String::new()),
+        } => (0, spec.clone(), format!("{file_type:?}")),
+        FcontextRule::Equivalence { subject, .. } => (1, subject.clone(), String::new()),
+        FcontextRule::Unparsed { raw } => (2, raw.clone(), String::new()),
     }
 }
 

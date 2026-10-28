@@ -515,6 +515,52 @@ fn policy_store_forms_and_order() {
         }),
     );
 
+    // A `#`-comment line is skipped (None), in both store files.
+    assert_eq!(
+        parse_file_contexts_local_line("#/srv/x  -d  system_u:object_r:foo_t:s0"),
+        None,
+    );
+    assert_eq!(parse_file_contexts_subs_line("# myalias"), None);
+
+    // Anything else this shape cannot place becomes Unparsed, not a
+    // silent drop -- the preferred source must not lose data the `-l -C`
+    // fallback would have kept as Unparsed.
+    assert_eq!(
+        parse_file_contexts_local_line("a b c d"),
+        Some(FcontextRule::Unparsed {
+            raw: "a b c d".into(),
+        }),
+        "too many tokens",
+    );
+    assert_eq!(
+        parse_file_contexts_local_line("/srv/x -z system_u:object_r:foo_t:s0"),
+        Some(FcontextRule::Unparsed {
+            raw: "/srv/x -z system_u:object_r:foo_t:s0".into(),
+        }),
+        "unrecognized flag token",
+    );
+    assert_eq!(
+        parse_file_contexts_local_line("/srv/x -d a:b"),
+        Some(FcontextRule::Unparsed {
+            raw: "/srv/x -d a:b".into(),
+        }),
+        "context missing the type field",
+    );
+    assert_eq!(
+        parse_file_contexts_subs_line("/home1"),
+        Some(FcontextRule::Unparsed {
+            raw: "/home1".into(),
+        }),
+        "missing labeled_like token",
+    );
+    assert_eq!(
+        parse_file_contexts_subs_line("/home1 /home extra"),
+        Some(FcontextRule::Unparsed {
+            raw: "/home1 /home extra".into(),
+        }),
+        "extra token",
+    );
+
     // With file_contexts.local readable the collector runs no `semanage`
     // and sets PolicyStore, and two rules written in the order
     // "/srv/www(/.*)?", "/srv/.*" come out in that order.
@@ -617,5 +663,117 @@ fn policy_store_forms_and_order() {
             .iter()
             .any(|c| c == "chroot / semanage fcontext -l -C"),
         "neither store file readable -- collector must fall back to semanage"
+    );
+
+    // With both file_contexts.local and file_contexts.subs readable, local
+    // rules come first and subs rules after -- order is the point of this
+    // task and spans both files, not just one (round 1 review, item 4).
+    let exec3 = MockExecutor::new()
+        .with_command(
+            "getenforce",
+            ExecResult {
+                stdout: GETENFORCE_ENFORCING.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_file("/etc/selinux/config", SELINUX_CONFIG)
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.local",
+            "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n",
+        )
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.subs",
+            "/home1 /home\n",
+        )
+        .with_dir("/etc/pam.d", vec![])
+        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+    let ctx3 = InspectionContext {
+        source_system: &source,
+        executor: &exec3,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output3 = SelinuxInspector::new()
+        .inspect(&ctx3, &NullProgress)
+        .expect("inspector should succeed with both store files present");
+    let section3 = match &output3.section {
+        SectionData::Selinux(s) => s,
+        other => panic!("expected Selinux, got {:?}", other),
+    };
+    assert_eq!(section3.fcontext_source, FcontextSource::PolicyStore);
+    assert!(
+        matches!(
+            section3.fcontext_rules.as_slice(),
+            [FcontextRule::Label { .. }, FcontextRule::Equivalence { .. }]
+        ),
+        "local rules must precede subs rules, got {:?}",
+        section3.fcontext_rules
+    );
+    assert!(
+        !exec3
+            .command_log()
+            .iter()
+            .any(|c| c.contains("semanage fcontext")),
+        "both store files present -- collector must not shell out to semanage"
+    );
+
+    // With only file_contexts.subs readable (local unreadable), the
+    // collector still takes PolicyStore and does not fall back to
+    // semanage. file_contexts.subs_dist is registered with a different
+    // equivalence to prove it is never read -- if the collector read it
+    // instead of (or in addition to) subs, this assertion would see a
+    // second rule or the wrong one.
+    let exec4 = MockExecutor::new()
+        .with_command(
+            "getenforce",
+            ExecResult {
+                stdout: GETENFORCE_ENFORCING.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_file("/etc/selinux/config", SELINUX_CONFIG)
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.subs",
+            "/home1 /home\n",
+        )
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.subs_dist",
+            "/distro1 /distro\n",
+        )
+        .with_dir("/etc/pam.d", vec![])
+        .with_dir("/sys/fs/selinux/booleans", vec![])
+        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+    let ctx4 = InspectionContext {
+        source_system: &source,
+        executor: &exec4,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output4 = SelinuxInspector::new()
+        .inspect(&ctx4, &NullProgress)
+        .expect("inspector should succeed with only file_contexts.subs present");
+    let section4 = match &output4.section {
+        SectionData::Selinux(s) => s,
+        other => panic!("expected Selinux, got {:?}", other),
+    };
+    assert_eq!(section4.fcontext_source, FcontextSource::PolicyStore);
+    assert_eq!(
+        section4.fcontext_rules,
+        vec![FcontextRule::Equivalence {
+            subject: "/home1".into(),
+            labeled_like: "/home".into(),
+            disposition: FindingKind::included(),
+        }],
+        "subs_dist must never be read, only subs"
+    );
+    assert!(
+        !exec4
+            .command_log()
+            .iter()
+            .any(|c| c.contains("semanage fcontext")),
+        "subs alone readable -- collector must not shell out to semanage"
     );
 }
