@@ -2997,7 +2997,16 @@ async fn first_upload_for_a_dnf_cached_package_keeps_the_host_rpm() {
 /// it), and `epel-release` is the one an upload named for the first will
 /// match, because the matcher shortens `epel-release-extras` to
 /// `epel-release` before it gives up.
-fn colliding_nevra_state(tmp: &tempfile::TempDir, dnf_cache: &std::path::Path) -> Arc<AppState> {
+///
+/// `extras_rpm` is where `epel-release-extras` keeps its RPM, and
+/// `extras_uploaded` says whether that is a staged upload rather than the
+/// host's dnf cache. An uploaded package's export name is its staged
+/// basename, so it no longer owns its NEVRA and the collision is gone.
+fn colliding_nevra_state(
+    tmp: &tempfile::TempDir,
+    extras_rpm: &std::path::Path,
+    extras_uploaded: bool,
+) -> Arc<AppState> {
     let snap: InspectionSnapshot = serde_json::from_value(serde_json::json!({
         "schema_version": inspectah_core::snapshot::SCHEMA_VERSION,
         "rpm": { "packages_added": [
@@ -3007,7 +3016,8 @@ fn colliding_nevra_state(tmp: &tempfile::TempDir, dnf_cache: &std::path::Path) -
                 "release": "11.el9",
                 "arch": "noarch",
                 "repoless_cached": true,
-                "cache_path": dnf_cache.to_string_lossy(),
+                "uploaded": extras_uploaded,
+                "cache_path": extras_rpm.to_string_lossy(),
             },
             {
                 "name": "epel-release",
@@ -3041,7 +3051,7 @@ async fn upload_refuses_a_filename_a_cached_package_already_owns() {
     let dir = tmp.path().join(UPLOAD_SUBDIR);
     let dnf_cache = tmp.path().join("epel-release-extras-9-11.el9.noarch.rpm");
     std::fs::write(&dnf_cache, b"the host's cached rpm").unwrap();
-    let app = app(colliding_nevra_state(&tmp, &dnf_cache));
+    let app = app(colliding_nevra_state(&tmp, &dnf_cache, false));
     let before = view(&app).await;
 
     let (status, body) = post_upload(
@@ -3082,6 +3092,147 @@ async fn upload_refuses_a_filename_a_cached_package_already_owns() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["matched"], "epel-release.noarch");
+}
+
+#[tokio::test]
+async fn a_nevra_whose_owner_is_itself_an_upload_is_not_a_collision() {
+    // The reaching input for `CachedNevra`'s `!pkg.uploaded`. Once
+    // `epel-release-extras` is an upload, the export writes it under its
+    // staged basename and stops writing its NEVRA, so the name is free.
+    // Without the condition this upload is refused for a collision that
+    // no longer exists.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    let staged = dir.join("epel-release-extras-latest-9.noarch.rpm");
+    std::fs::write(&staged, b"the extras upload").unwrap();
+    let app = app(colliding_nevra_state(&tmp, &staged, true));
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-extras-9-11.el9.noarch.rpm",
+            b"an rpm",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(
+        dir_entries(&dir),
+        vec![
+            "epel-release-extras-9-11.el9.noarch.rpm".to_string(),
+            "epel-release-extras-latest-9.noarch.rpm".to_string(),
+        ],
+        "and the extras package's own upload is still there"
+    );
+}
+
+/// An upload directory the session reaches by a different spelling from
+/// the canonical one: `<tmp>/link` is a symlink to `<tmp>/real`.
+///
+/// `prepare_upload_dir` refuses a symlink at the final component, so the
+/// link is one level up -- which is where a real one would be, in a home
+/// directory or a `/var` reached through one. Every `cache_path` the
+/// handler records goes in under the `link` spelling while every
+/// confinement check resolves to the `real` one.
+fn symlinked_upload_dir(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+    let given = tmp.path().join("link").join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&given).unwrap();
+    assert_ne!(
+        given,
+        real.canonicalize().unwrap().join(UPLOAD_SUBDIR),
+        "the fixture is only a fixture if the two spellings differ"
+    );
+    given
+}
+
+/// A session over `upload_dir` holding `epel-release` and `custom-tool`,
+/// both repo-less.
+fn state_over_upload_dir(upload_dir: &std::path::Path) -> Arc<AppState> {
+    let (state, _tmp) = upload_state();
+    state
+        .session
+        .lock()
+        .unwrap()
+        .set_upload_dir(upload_dir.to_path_buf());
+    state
+}
+
+#[tokio::test]
+async fn upload_refuses_a_contested_name_through_a_symlinked_directory() {
+    // The 409's `Staged` arm, with the two spellings that defeat a text
+    // comparison. `custom-tool` holds the file under the `link`
+    // spelling; the destination this upload builds is the same spelling,
+    // but nothing in the code may rely on that -- a snapshot carries
+    // whichever spelling the session that wrote it was given.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = symlinked_upload_dir(&tmp);
+    let contested = dir.join("epel-release-9-12.el9.noarch.rpm");
+    std::fs::write(&contested, b"custom-tool's file").unwrap();
+    let state = state_over_upload_dir(&dir);
+    {
+        let mut session = state.session.lock().unwrap();
+        let canonical = contested.canonicalize().unwrap();
+        session.set_uploaded("custom-tool.x86_64", canonical, Some("9-12.el9".into()));
+    }
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            b"epel's file",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-9-12.el9.noarch.rpm is already staged for custom-tool.x86_64"
+    );
+    assert_eq!(
+        std::fs::read(&contested).unwrap(),
+        b"custom-tool's file".as_slice(),
+        "and the file it names is untouched"
+    );
+}
+
+#[tokio::test]
+async fn replacing_an_upload_recorded_under_another_spelling_keeps_the_file() {
+    // The worse half of the same mistake. `superseded_upload` compares
+    // `cache_path` to the destination; `resolve_staged_file`, which runs
+    // next, resolves. When the comparison said "different file" and the
+    // resolution said "this one", the handler staged the upload and then
+    // deleted it, answering 200 with `uploaded: true` and nothing on
+    // disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = symlinked_upload_dir(&tmp);
+    const FILENAME: &str = "epel-release-9-12.el9.noarch.rpm";
+    let staged = dir.join(FILENAME);
+    std::fs::write(&staged, b"the first upload").unwrap();
+    let state = state_over_upload_dir(&dir);
+    {
+        let mut session = state.session.lock().unwrap();
+        let canonical = staged.canonicalize().unwrap();
+        session.set_uploaded("epel-release.noarch", canonical, Some("9-12.el9".into()));
+    }
+    let app = app(state);
+
+    let (status, body) = post_upload(&app, &[file_part(FILENAME, b"the replacement")]).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(
+        std::fs::read(&staged).expect("the file the response says is staged exists"),
+        b"the replacement".as_slice()
+    );
+    assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
 }
 
 #[tokio::test]

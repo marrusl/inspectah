@@ -1,5 +1,5 @@
 use inspectah_core::types::FindingKind;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::aggregate::classify_zone;
@@ -874,13 +874,22 @@ impl RefineSession {
     /// The part files of a process that died mid-transfer are gone by the
     /// time this runs -- `ensure_upload_dir` sweeps before it rescans --
     /// so they are removed rather than reported. One that survives the
-    /// sweep is not a regular file, and is warned about like any other.
+    /// sweep is a directory or a symlink, and the allowlist is what
+    /// rejects it -- the leading dot and the `.part` suffix both fail
+    /// before the regular-file check is reached, so the warning names the
+    /// suffix.
     ///
     /// Entries are listed and proved through `canon`, and recorded as
     /// `staged_dir.join(name)`, which is the spelling the upload handler
-    /// records: a session must not end up holding two spellings of one
-    /// directory, because the 409 that stops two packages claiming one
-    /// staged file compares `cache_path` as text.
+    /// records: one session holding two spellings of one directory is
+    /// what [`RefineSession::packages_staged_in`] exists to survive, and
+    /// not creating the condition is cheaper than surviving it.
+    ///
+    /// One cache invalidation for the whole pass, not one per file: each
+    /// is a full `recompute_view`, which re-proves every staged upload by
+    /// opening it, so N matched files cost N passes over N files under
+    /// the session lock. A resume is also one state change from the
+    /// client's side, so one generation bump is the honest count.
     fn rescan_upload_dir(
         &mut self,
         canon: &Path,
@@ -889,21 +898,32 @@ impl RefineSession {
         let read_err = |e: std::io::Error| {
             RefineError::TarballError(format!("read upload dir {}: {e}", canon.display()))
         };
-        let mut names: Vec<String> = Vec::new();
+        // A `BTreeSet` rather than a sorted `Vec`: filename order is a
+        // correctness property here -- which of two files matching one
+        // package ends up marked -- and `read_dir` order is the
+        // filesystem's business. A `names.sort()` call can be deleted
+        // and, on a filesystem whose listing is hashed rather than
+        // ordered by creation, no test can tell. Iteration order that
+        // comes from the container's type cannot be deleted.
+        let mut names: BTreeSet<String> = BTreeSet::new();
         for entry in std::fs::read_dir(canon).map_err(read_err)? {
             let entry = entry.map_err(read_err)?;
             match entry.file_name().into_string() {
-                Ok(name) => names.push(name),
+                Ok(name) => {
+                    names.insert(name);
+                }
                 // A non-UTF-8 name cannot pass the allowlist, and naming
                 // it in a warning means lossy-converting it, which would
                 // print a name no `rm` would take.
                 Err(_) => continue,
             }
         }
-        names.sort();
 
-        let spoken_for = self.packages_staged_in(canon);
-        let mut warnings = Vec::new();
+        // The snapshot's own claims come first: they are about what
+        // arrived, not about what the listing below found, and the
+        // per-entry warnings after them stay in filename order.
+        let (spoken_for, mut warnings) = self.packages_staged_in(canon);
+        let mut marked = 0usize;
         let mut claimed: HashMap<String, String> = HashMap::new();
         for name in names {
             let mut skip = |why: String| {
@@ -935,7 +955,12 @@ impl RefineSession {
                         continue;
                     };
                     let canonical = matched.canonical.clone();
-                    self.set_uploaded(&canonical, staged_dir.join(&name), matched.uploaded_version);
+                    self.record_uploaded(
+                        &canonical,
+                        staged_dir.join(&name),
+                        matched.uploaded_version,
+                    );
+                    marked += 1;
                     canonical
                 }
             };
@@ -946,22 +971,45 @@ impl RefineSession {
                 ));
             }
         }
+        if marked > 0 {
+            self.invalidate_caches();
+        }
         Ok(warnings)
     }
 
-    /// The packages whose `cache_path` already names a file directly in
-    /// `canon`, by that file's basename.
+    /// The packages that already claim a file directly in `canon`, by
+    /// that file's basename, and a warning for every basename two of
+    /// them claim.
     ///
     /// The parent is resolved rather than compared as text: `cache_path`
     /// is recorded with whatever spelling of the upload directory the
     /// session was given, which on a path through a symlinked parent is
-    /// not the canonical one.
-    fn packages_staged_in(&self, canon: &Path) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+    /// not the canonical one. Comparing the two as strings loses the
+    /// claim, and the rescan then re-assigns the file by filename.
+    ///
+    /// `uploaded` is required, not just `cache_path`. The pair
+    /// deserializes from the scan, so a snapshot can name a path in this
+    /// directory without claiming to have staged it; honouring that would
+    /// let a crafted entry take a basename out of the rescan's reach, and
+    /// the rescan's skip is silent -- no row, no warning, the real owner
+    /// simply showing no upload.
+    ///
+    /// Two packages claiming one basename is not resolvable here: moving
+    /// a staged file is not the rescan's job. Left alone it surfaces at
+    /// the export, where both verify against the same file and the second
+    /// `create_new` fails the whole export by path rather than by cause,
+    /// which is the lateness the staging-time 409 exists to avoid. So it
+    /// is named here instead.
+    fn packages_staged_in(&self, canon: &Path) -> (HashMap<String, String>, Vec<String>) {
+        let mut out: HashMap<String, String> = HashMap::new();
+        let mut warnings = Vec::new();
         let Some(rpm) = self.original.rpm.as_ref() else {
-            return out;
+            return (out, warnings);
         };
         for pkg in &rpm.packages_added {
+            if !pkg.uploaded {
+                continue;
+            }
             let Some(cache_path) = pkg.cache_path.as_deref().map(Path::new) else {
                 continue;
             };
@@ -969,14 +1017,18 @@ impl RefineSession {
                 continue;
             };
             let parent = cache_path.parent().and_then(|p| p.canonicalize().ok());
-            if parent.as_deref() == Some(canon) {
-                out.insert(
-                    basename.to_string(),
-                    canonical_package_id(&pkg.name, &pkg.arch),
-                );
+            if parent.as_deref() != Some(canon) {
+                continue;
+            }
+            let canonical = canonical_package_id(&pkg.name, &pkg.arch);
+            if let Some(first) = out.insert(basename.to_string(), canonical.clone()) {
+                warnings.push(format!(
+                    "{basename} in the upload directory is claimed by both {first} \
+                     and {canonical}; the export cannot write it for both"
+                ));
             }
         }
-        out
+        (out, warnings)
     }
 
     /// The canonicalized upload directory, once `ensure_upload_dir` has
@@ -1084,6 +1136,25 @@ impl RefineSession {
         staged_path: PathBuf,
         uploaded_version: Option<String>,
     ) {
+        self.record_uploaded(canonical, staged_path, uploaded_version);
+        self.invalidate_caches();
+    }
+
+    /// The mutation half of [`RefineSession::set_uploaded`], without the
+    /// invalidation.
+    ///
+    /// Split out for the rescan, which records a whole directory in one
+    /// pass and pays for a `recompute_view` once at the end rather than
+    /// once per file. Every other caller wants `set_uploaded`: leaving
+    /// the caches stale is only safe while nothing between the calls can
+    /// read the view, which inside one pass of `rescan_upload_dir` is a
+    /// property of a function short enough to read whole.
+    fn record_uploaded(
+        &mut self,
+        canonical: &str,
+        staged_path: PathBuf,
+        uploaded_version: Option<String>,
+    ) {
         let prior_cache = &mut self.prior_cache;
         if let Some(rpm) = self.original.rpm.as_mut() {
             for pkg in &mut rpm.packages_added {
@@ -1107,7 +1178,6 @@ impl RefineSession {
                 break;
             }
         }
-        self.invalidate_caches();
     }
 
     /// The dnf-cache state an upload for `canonical` displaced, if any.

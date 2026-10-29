@@ -203,13 +203,22 @@ pub fn commit(
     })
 }
 
-/// Why a staged name is not this upload's to take, and whose it is.
+/// Why a staged name is not this upload's to take, and which package
+/// holds it.
 ///
 /// Both ways end in the same place -- two packages wanting one path under
 /// `repoless-packages/` in the export -- but they are discovered
 /// differently and the operator undoes them differently, so they are one
-/// list rather than one check: anything that can own the destination has
-/// to be a variant here.
+/// list rather than one check: any *package* that can own the destination
+/// has to be a variant here, and there are exactly two, which are the two
+/// writers of `repoless-packages/<name>` (the export's step 2e extraction
+/// and its step 2f copy).
+///
+/// Non-package writers are deliberately absent. Nothing here can name one
+/// to an operator as "whose it is", and renaming the upload would not
+/// move it; `create_new` in step 2f is their backstop, and failing the
+/// export by path is the right answer when there is no better sentence to
+/// write.
 enum Occupant {
     /// Another package's `cache_path` already names the destination.
     Staged(String),
@@ -256,7 +265,7 @@ fn occupant_of(session: &RefineSession, dest: &Path, exclude: Option<&str>) -> O
         if Some(canonical.as_str()) == exclude {
             continue;
         }
-        if pkg.cache_path.as_deref().map(Path::new) == Some(dest) {
+        if names_one_file(pkg.cache_path.as_deref().map(Path::new), Some(dest)) {
             return Some(Occupant::Staged(canonical));
         }
         let nevra = format!(
@@ -275,7 +284,16 @@ fn occupant_of(session: &RefineSession, dest: &Path, exclude: Option<&str>) -> O
 }
 
 /// The staged file a new upload for `canonical` replaces: its current
-/// `cache_path`, when it holds an upload under a different name.
+/// `cache_path`, when that is a different file from `dest`.
+///
+/// "Different file" is a filesystem question, not a string one, and this
+/// is the site where getting it wrong costs the most. `cache_path`
+/// carries whatever spelling of the upload directory the session was
+/// given; `resolve_staged_file`, which the caller runs next, resolves it
+/// correctly. When the two spellings of one file compared unequal here,
+/// this returned the path, `resolve_staged_file` turned it back into the
+/// file `dest` names, and the caller unlinked the upload it had just
+/// staged -- 200, `uploaded: true`, nothing on disk.
 fn superseded_upload(session: &RefineSession, canonical: &str, dest: &Path) -> Option<PathBuf> {
     let rpm = session.snapshot().rpm.as_ref()?;
     rpm.packages_added
@@ -283,7 +301,38 @@ fn superseded_upload(session: &RefineSession, canonical: &str, dest: &Path) -> O
         .find(|pkg| format!("{}.{}", pkg.name, pkg.arch) == canonical && pkg.uploaded)
         .and_then(|pkg| pkg.cache_path.as_deref())
         .map(PathBuf::from)
-        .filter(|previous| previous != dest)
+        .filter(|previous| !names_one_file(Some(previous), Some(dest)))
+}
+
+/// Whether two paths name one file: the same basename, under parents
+/// that resolve to one directory.
+///
+/// Comparing a recorded `cache_path` to a path this process built is a
+/// comparison of two spellings, not of two files. The session is given
+/// an upload directory and records `upload_dir.join(name)` under that
+/// spelling, while the directory also has a canonical spelling that
+/// differs whenever any parent component is a symlink. Every other
+/// confinement check in the upload path resolves; these two compared
+/// text, and the mismatch between the two habits is the bug.
+///
+/// Only the parent is resolved. Resolving the whole path would follow a
+/// final symlink, which is the thing `resolve_staged_file` is careful
+/// not to do. A parent that cannot be resolved is not the upload
+/// directory by any spelling, so it is not the same file.
+fn names_one_file(a: Option<&Path>, b: Option<&Path>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    if a.file_name().is_none() || a.file_name() != b.file_name() {
+        return false;
+    }
+    match (
+        a.parent().and_then(|p| p.canonicalize().ok()),
+        b.parent().and_then(|p| p.canonicalize().ok()),
+    ) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 /// Accept an uploaded RPM file and stage it for export.

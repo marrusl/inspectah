@@ -223,13 +223,78 @@ fn tarball_message(err: RefineError) -> String {
 /// A fresh session over an upload directory an earlier session left
 /// behind, which is what a resume is.
 fn resume_over(dir: &Path) -> (RefineSession, Vec<String>) {
-    let mut session = RefineSession::new(repoless_snapshot());
+    resume_with(repoless_snapshot(), dir)
+}
+
+/// The same, over a snapshot that already carries staged-upload state.
+fn resume_with(snap: InspectionSnapshot, dir: &Path) -> (RefineSession, Vec<String>) {
+    let mut session = RefineSession::new(snap);
     session.set_upload_dir(dir.to_path_buf());
     let warnings = {
         let (_, warnings) = session.ensure_upload_dir().expect("the directory is ours");
         warnings.to_vec()
     };
     (session, warnings)
+}
+
+/// [`repoless_snapshot`] plus a `custom-tool.x86_64` that names
+/// `cache_path` as its staged file.
+///
+/// The filename the tests give it is one the matcher parses as
+/// `epel-release.noarch`'s, so the two packages disagree about who owns
+/// the file and the rescan has to choose. `uploaded` is a parameter
+/// because `uploaded` and `cache_path` deserialize separately: a
+/// snapshot can name a path without claiming to have staged it.
+fn claimed_by_custom_tool(cache_path: &Path, uploaded: bool) -> InspectionSnapshot {
+    let mut snap = repoless_snapshot();
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .packages_added
+        .push(PackageEntry {
+            name: "custom-tool".into(),
+            version: "1.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            disposition: FindingKind::included(),
+            repoless_annotation: "No repo source".into(),
+            repoless_cached: true,
+            uploaded,
+            cache_path: Some(cache_path.to_string_lossy().into_owned()),
+            ..Default::default()
+        });
+    snap
+}
+
+/// An upload directory reachable by two spellings, which is the
+/// condition every path comparison in the upload path has to survive.
+///
+/// `<tmp>/link` is a symlink to `<tmp>/real`, and the session is given
+/// the directory through `link` while `canonicalize` resolves it through
+/// `real`. The link is one level up from the directory itself because
+/// `prepare_upload_dir` refuses a symlink at the final component --
+/// which is also where a real one would be, in a home directory or a
+/// `/var` reached through one.
+struct SymlinkedUploadDir {
+    _tmp: tempfile::TempDir,
+    /// The spelling the session is given, and the one `cache_path` is
+    /// recorded under.
+    given: PathBuf,
+}
+
+fn symlinked_upload_dir() -> SymlinkedUploadDir {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+    let given = tmp.path().join("link").join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&given).unwrap();
+    assert_ne!(
+        given,
+        real.canonicalize().unwrap().join(UPLOAD_SUBDIR),
+        "the fixture is only a fixture if the two spellings differ"
+    );
+    SymlinkedUploadDir { _tmp: tmp, given }
 }
 
 // -- tarball and Containerfile readers -------------------------------------
@@ -1246,29 +1311,7 @@ fn rescan_leaves_a_file_a_package_already_points_at() {
     let staged = dir.join(FEDORA_RPM);
     std::fs::write(&staged, b"custom-tool's file").unwrap();
 
-    let mut snap = repoless_snapshot();
-    snap.rpm
-        .as_mut()
-        .unwrap()
-        .packages_added
-        .push(PackageEntry {
-            name: "custom-tool".into(),
-            version: "1.0".into(),
-            release: "1.el9".into(),
-            arch: "x86_64".into(),
-            disposition: FindingKind::included(),
-            repoless_annotation: "No repo source".into(),
-            repoless_cached: true,
-            uploaded: true,
-            cache_path: Some(staged.to_string_lossy().into_owned()),
-            ..Default::default()
-        });
-    let mut resumed = RefineSession::new(snap);
-    resumed.set_upload_dir(dir.clone());
-    let warnings = {
-        let (_, warnings) = resumed.ensure_upload_dir().unwrap();
-        warnings.to_vec()
-    };
+    let (resumed, warnings) = resume_with(claimed_by_custom_tool(&staged, true), &dir);
 
     assert_eq!(warnings, Vec::<String>::new());
     let packages = &resumed.snapshot().rpm.as_ref().unwrap().packages_added;
@@ -1285,13 +1328,143 @@ fn rescan_leaves_a_file_a_package_already_points_at() {
 }
 
 #[test]
+fn rescan_resolves_the_directory_before_deciding_who_owns_a_file() {
+    // The same claim, recorded under the spelling the session was given
+    // rather than the canonical one -- which is every claim, because
+    // that is what the upload handler records. Comparing the two as
+    // text loses the claim, and the test above cannot show it: its
+    // harness hands out the canonical path, so both sides already
+    // agree.
+    let dirs = symlinked_upload_dir();
+    let staged = dirs.given.join(FEDORA_RPM);
+    std::fs::write(&staged, b"custom-tool's file").unwrap();
+
+    let (resumed, warnings) = resume_with(claimed_by_custom_tool(&staged, true), &dirs.given);
+
+    assert_eq!(warnings, Vec::<String>::new());
+    let packages = &resumed.snapshot().rpm.as_ref().unwrap().packages_added;
+    assert!(
+        !packages[0].uploaded,
+        "a claim survives the two spellings only if the parent is resolved"
+    );
+    assert_eq!(
+        packages[1].cache_path.as_deref(),
+        Some(staged.to_string_lossy().as_ref()),
+        "and is left under the spelling it was recorded with"
+    );
+}
+
+#[test]
+fn rescan_does_not_honour_a_cache_path_with_no_upload() {
+    // `uploaded` and `cache_path` deserialize separately, so a crafted
+    // snapshot can name a file in the upload directory without claiming
+    // to have staged it. Honouring that takes the basename out of the
+    // matcher's reach invisibly: the already-decided branch writes no
+    // warning, so the package the file really belongs to would just show
+    // no upload, with nothing anywhere saying why.
+    let h = Harness::new();
+    let dir = h.upload_dir.clone();
+    let staged = dir.join(FEDORA_RPM);
+    std::fs::write(&staged, b"an rpm").unwrap();
+
+    let (resumed, warnings) = resume_with(claimed_by_custom_tool(&staged, false), &dir);
+
+    assert_eq!(warnings, Vec::<String>::new());
+    let packages = &resumed.snapshot().rpm.as_ref().unwrap().packages_added;
+    assert!(
+        packages[0].uploaded,
+        "with no upload claimed, the matcher decides and says so"
+    );
+    assert_eq!(
+        packages[0].cache_path.as_deref(),
+        Some(staged.to_string_lossy().as_ref())
+    );
+    assert!(!packages[1].uploaded);
+}
+
+#[test]
+fn rescan_costs_one_generation_whatever_it_marks() {
+    // A resume is one state change from the client's side, and each
+    // invalidation is a full `recompute_view` that re-proves every
+    // staged upload by opening it -- so a per-file bump is both the
+    // wrong count and N passes over N files under the session lock.
+    let h = Harness::new();
+    let empty = Harness::new();
+    let dir = h.upload_dir.clone();
+    std::fs::write(dir.join(FEDORA_RPM), b"one").unwrap();
+    std::fs::write(dir.join("custom-tool-1.0-1.el9.x86_64.rpm"), b"two").unwrap();
+
+    let mut snap = repoless_snapshot();
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .packages_added
+        .push(PackageEntry {
+            name: "custom-tool".into(),
+            version: "1.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            disposition: FindingKind::included(),
+            repoless_annotation: "No repo source".into(),
+            ..Default::default()
+        });
+    let (resumed, _) = resume_with(snap, &dir);
+    let (untouched, _) = resume_over(&empty.upload_dir);
+
+    let marked = resumed.snapshot().rpm.as_ref().unwrap();
+    assert!(
+        marked.packages_added.iter().all(|p| p.uploaded),
+        "both files matched, so both packages are marked"
+    );
+    assert_eq!(
+        resumed.generation(),
+        untouched.generation() + 1,
+        "two files, one invalidation"
+    );
+}
+
+#[test]
+fn rescan_names_two_packages_claiming_one_staged_file() {
+    // Nothing here can fix this -- moving a staged file is not a
+    // rescan's job -- so the alternative to the warning is the export
+    // failing at `create_new`, by path and with no mention of either
+    // package.
+    let h = Harness::new();
+    let dir = h.upload_dir.clone();
+    let staged = dir.join(FEDORA_RPM);
+    std::fs::write(&staged, b"one file, two claims").unwrap();
+
+    let mut snap = claimed_by_custom_tool(&staged, true);
+    let epel = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+    epel.repoless_cached = true;
+    epel.uploaded = true;
+    epel.cache_path = Some(staged.to_string_lossy().into_owned());
+
+    let (_, warnings) = resume_with(snap, &dir);
+
+    assert_eq!(
+        warnings,
+        [format!(
+            "{FEDORA_RPM} in the upload directory is claimed by both {CANONICAL} \
+             and custom-tool.x86_64; the export cannot write it for both"
+        )]
+    );
+}
+
+#[test]
 fn rescan_marks_the_later_of_two_files_for_one_package() {
     // Both filenames match `epel-release.noarch`, so one of them has to
     // lose. `9-11` sorts before `9-12`, so the warning names the first.
+    //
+    // They are written in the opposite order deliberately, though no
+    // test can hold that line: on a filesystem whose listing is hashed,
+    // the write order does not reach the read order. What holds it is
+    // that the rescan collects into a `BTreeSet`, so there is no sort
+    // call to delete.
     let h = Harness::new();
     let dir = h.upload_dir.clone();
-    std::fs::write(dir.join(EXACT_RPM), b"the earlier").unwrap();
     std::fs::write(dir.join(NEWER_RPM), b"the later").unwrap();
+    std::fs::write(dir.join(EXACT_RPM), b"the earlier").unwrap();
 
     let (resumed, warnings) = resume_over(&dir);
 
