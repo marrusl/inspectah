@@ -570,8 +570,17 @@ fn detect_var_dir_backing(
 
     // Check RPM ownership. A path rpm owns but will not name the owner of
     // falls through to Unbacked rather than carrying an empty package:
-    // over-provisioning is the safe direction, and it is what a failed
-    // rpm query already produced through an empty owned set.
+    // over-provisioning is the safe direction here, and it is what a
+    // failed rpm query already produced through an empty owned set.
+    //
+    // "Here" is load-bearing, because the fleet case inverts it. This is
+    // one host's verdict, where losing the proof costs a `d` line that is
+    // free if the directory already exists and necessary if it does not.
+    // One image serves a whole fleet, so any host's carried fragment
+    // creates the directory on every host: once the aggregate merges, a
+    // lost proof means a duplicate `d` line with order-dependent mode
+    // resolution, and preferring the backed verdict is the safe
+    // direction. See the var_directories dedup in `aggregate::merge`.
     if rpm_owned.contains(path)
         && let Some(package) = query_owning_package(exec, path)
     {
@@ -901,6 +910,61 @@ mod tests {
             result,
             VarDirBacking::RpmOwned {
                 package: "rpm".into()
+            }
+        );
+    }
+
+    /// A directory can be claimed by more than one mechanism at once —
+    /// a `d` line and a `StateDirectory=` for the same path is ordinary.
+    /// The order the three checks run in picks which payload the
+    /// snapshot carries, and Task 19 branches on that payload, so the
+    /// order is part of the contract rather than an implementation
+    /// detail. Each case leaves the earlier mechanisms live, so the
+    /// assertion fails if any of the three moves.
+    #[test]
+    fn a_tmpfiles_entry_outranks_both_a_directive_and_rpm_ownership() {
+        let path = "/var/lib/myapp";
+        let exec = MockExecutor::new()
+            .with_command(
+                r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
+                grep_success("/usr/lib/systemd/system/myapp.service\n"),
+            )
+            .with_command(&owning_package_key(path), grep_success("myapp\n"));
+        let rpm_owned = HashSet::from([path.to_string()]);
+        let mut tmpfiles = TmpfilesIndex::new();
+        index_tmpfiles_fragment(
+            "/etc/tmpfiles.d/myapp.conf",
+            "d /var/lib/myapp 0750 myapp myapp -\n",
+            &mut tmpfiles,
+        );
+
+        assert_eq!(
+            detect_var_dir_backing(&exec, path, &rpm_owned, &tmpfiles),
+            VarDirBacking::Tmpfiles {
+                conf: "/etc/tmpfiles.d/myapp.conf".into(),
+                line: "d /var/lib/myapp 0750 myapp myapp -".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_directive_outranks_rpm_ownership() {
+        let path = "/var/lib/myapp";
+        let exec = MockExecutor::new()
+            .with_command(
+                r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
+                grep_success("/usr/lib/systemd/system/myapp.service\n"),
+            )
+            .with_command(&owning_package_key(path), grep_success("myapp\n"));
+        let rpm_owned = HashSet::from([path.to_string()]);
+
+        // Empty by construction, so the tmpfiles branch misses for a
+        // reason a reader can see rather than by a fixture that happens
+        // not to name this path.
+        assert_eq!(
+            detect_var_dir_backing(&exec, path, &rpm_owned, &TmpfilesIndex::new()),
+            VarDirBacking::StateDirectory {
+                unit: "myapp.service".into()
             }
         );
     }

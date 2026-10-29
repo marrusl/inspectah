@@ -313,6 +313,19 @@ fn build_repo_bar_line(session: &RefineSession) -> Option<String> {
     Some(format!("Repos: {}", parts.join("  ")))
 }
 
+/// The detail line for a `/var` directory row: its mode and ownership,
+/// or nothing when the stat that would have supplied them failed.
+///
+/// The row used to lead with a size estimate and a recommendation that
+/// the collector never filled, so it read `" — "` with nothing on either
+/// side of the dash.
+fn var_dir_detail(d: &inspectah_refine::projection::RefVarDirectory) -> String {
+    match (&d.mode, &d.owner_name, &d.group_name) {
+        (Some(mode), Some(owner), Some(group)) => format!("{mode} {owner}:{group}"),
+        _ => String::new(),
+    }
+}
+
 /// Build `ListItem`s for the active section from session data.
 ///
 /// Decision sections (Packages, Configs, Services, Containers, Sysctls,
@@ -1022,19 +1035,9 @@ pub fn build_list_items(
                 ));
             }
             for d in &st.var_directories {
-                // Ownership and mode are all the row has to say. The two
-                // fields that used to lead it were never collected, so the
-                // row read " — " with nothing on either side of the dash.
-                let detail = if let (Some(mode), Some(owner), Some(group)) =
-                    (&d.mode, &d.owner_name, &d.group_name)
-                {
-                    format!("{} {}:{}", mode, owner, group)
-                } else {
-                    String::new()
-                };
                 items.push(RawItem::new(
                     d.path.clone(),
-                    detail,
+                    var_dir_detail(d),
                     TriageGroup::Site,
                     None,
                     None,
@@ -1460,6 +1463,35 @@ pub fn build_user_entries(session: &RefineSession) -> Vec<UserEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod var_dir_detail_line {
+        use super::*;
+        use inspectah_refine::projection::RefVarDirectory;
+
+        #[test]
+        fn ownership_and_mode_are_the_whole_line() {
+            let d = RefVarDirectory {
+                path: "/var/lib/appone/cache".into(),
+                mode: Some("0750".into()),
+                owner_name: Some("appone".into()),
+                group_name: Some("appone".into()),
+            };
+            assert_eq!(var_dir_detail(&d), "0750 appone:appone");
+        }
+
+        /// `discover_var_directories` leaves all four fields `None` when
+        /// `stat` fails, and the row then has nothing to say.
+        #[test]
+        fn a_directory_without_ownership_has_no_detail() {
+            let d = RefVarDirectory {
+                path: "/var/lib/missing".into(),
+                mode: None,
+                owner_name: None,
+                group_name: None,
+            };
+            assert_eq!(var_dir_detail(&d), "");
+        }
+    }
 
     /// Render the whole screen with the given section active and return
     /// only the status bar row.
