@@ -240,6 +240,18 @@ pub async fn upload_rpm(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, UploadError> {
+    // The guard lives in this block and is dropped before anything below
+    // is awaited. That is not style: a `std::sync::MutexGuard` held
+    // across an `.await` makes this future non-`Send`, and the handler
+    // stops satisfying axum's `Handler` bound, so the compiler is what
+    // keeps the streaming out of the lock hold today. Nothing says so at
+    // the place it would be broken, which is why it says so here:
+    // swapping `session` for a `tokio::sync::Mutex` removes the
+    // objection, and `a_stalled_upload_does_not_block_another_request`
+    // is the test waiting for that day. Neither of those covers blocking
+    // I/O added inside `commit`, which is synchronous and holds the
+    // guard for its whole body; what keeps that honest is that `commit`
+    // is short enough to read whole.
     let upload_dir = {
         let mut session = state.session.lock().unwrap();
         session.ensure_upload_dir()?.to_path_buf()
