@@ -23,6 +23,14 @@ const CATEGORY_RULES: &[CategoryRule] = &[
         prefixes: &["/etc/audit/rules.d/"],
     },
     CategoryRule {
+        category: ConfigCategory::Pam,
+        prefixes: &["/etc/pam.d/"],
+    },
+    CategoryRule {
+        category: ConfigCategory::Tuned,
+        prefixes: &["/etc/tuned/"],
+    },
+    CategoryRule {
         category: ConfigCategory::LibraryPath,
         prefixes: &["/etc/ld.so.conf.d/"],
     },

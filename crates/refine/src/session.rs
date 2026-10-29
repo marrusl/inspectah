@@ -5858,7 +5858,7 @@ mod tests {
     #[test]
     fn export_tarball_includes_promoted_roots() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
-        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 
         let mut snap = test_snapshot();
@@ -5899,7 +5899,6 @@ mod tests {
         });
 
         // Sysctl → sysctl/ root
-        // Tuned → tuned/ root
         snap.kernel_boot = Some(KernelBootSection {
             sysctl_overrides: vec![SysctlOverride {
                 key: "net.ipv4.ip_forward".into(),
@@ -5911,11 +5910,19 @@ mod tests {
             }],
             tuned_disposition: FindingKind::included(),
             tuned_active: "my-profile".into(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".into(),
-                content: "[main]\nsummary=Custom".into(),
-            }],
             ..Default::default()
+        });
+
+        // The custom tuned profile is plain config now (§ 3.5), so it
+        // travels under config/etc/ rather than a tuned/ promoted root.
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![inspectah_core::types::config::ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: inspectah_core::types::config::ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
         });
 
         let tmpdir = tempfile::tempdir().unwrap();
@@ -5953,9 +5960,13 @@ mod tests {
             entries.iter().any(|e| e.starts_with("export/sysctl/")),
             "tarball must contain sysctl/ root. entries: {entries:?}"
         );
+        // The tuned/ promoted root is gone (§ 3.5). The earlier form of
+        // this test asserted both its presence and the absence of
+        // config/etc/tuned/, which was item 1.7's defect: a file the
+        // export carried on a path rule instead of on a decision.
         assert!(
-            entries.iter().any(|e| e.starts_with("export/tuned/")),
-            "tarball must contain tuned/ root. entries: {entries:?}"
+            !entries.iter().any(|e| e.starts_with("export/tuned/")),
+            "the tuned/ promoted root is gone. entries: {entries:?}"
         );
 
         // Verify specific files within promoted roots
@@ -5984,8 +5995,8 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|e| e.contains("tuned/etc/tuned/my-profile/tuned.conf")),
-            "tuned profile must be present. entries: {entries:?}"
+                .any(|e| e == "export/config/etc/tuned/my-profile/tuned.conf"),
+            "the tuned profile travels as plain config. entries: {entries:?}"
         );
 
         // Promoted artifacts must NOT appear under config/
@@ -6000,12 +6011,6 @@ mod tests {
                 .iter()
                 .any(|e| e.starts_with("export/config/etc/containers/systemd/")),
             "quadlets must NOT be under config/. entries: {entries:?}"
-        );
-        assert!(
-            !entries
-                .iter()
-                .any(|e| e.starts_with("export/config/etc/tuned/")),
-            "tuned profiles must NOT be under config/. entries: {entries:?}"
         );
     }
 

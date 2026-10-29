@@ -1,36 +1,18 @@
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
-    InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
+    InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::selinux::{
-    CarryForwardFile, FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
-    SelinuxPortLabel, SelinuxSection,
+    FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
+    SelinuxSection,
 };
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
 use std::path::Path;
 use std::sync::LazyLock;
-
-/// Patterns in audit rule or PAM config content that trigger redaction hints.
-const SENSITIVE_PATTERNS: &[&str] = &["password", "secret", "token", "key", "credential"];
-
-/// System-generated PAM configs to exclude from custom PAM detection.
-/// These are base system files that appear in unowned scans but are not
-/// user customizations.
-const EXCLUDED_PAM_CONFIGS: &[&str] = &[
-    "/etc/pam.d/chfn",
-    "/etc/pam.d/chsh",
-    "/etc/pam.d/login",
-    "/etc/pam.d/remote",
-    "/etc/pam.d/runuser",
-    "/etc/pam.d/runuser-l",
-    "/etc/pam.d/su",
-    "/etc/pam.d/su-l",
-];
 
 /// Regex for parsing `semanage boolean -l` output lines:
 ///   name  (current , default)  description
@@ -51,7 +33,7 @@ static FCONTEXT_EQUIV_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\S+) = (\S+)$").unwrap());
 
 /// Inspects SELinux/security state: mode, custom modules, boolean overrides,
-/// fcontext rules, port labels, audit rules, FIPS mode, PAM configs.
+/// fcontext rules, port labels, FIPS mode.
 pub struct SelinuxInspector;
 
 impl SelinuxInspector {
@@ -80,18 +62,14 @@ impl Inspector for SelinuxInspector {
         ctx: &InspectionContext<'_>,
         _progress: &dyn ProgressSink,
     ) -> Result<InspectorOutput, InspectorError> {
-        let rpm_state = match ctx.rpm_state {
-            None => {
-                return Err(InspectorError::Failed {
-                    reason: "RPM prerequisite unavailable".into(),
-                });
-            }
-            Some(state) => state,
-        };
+        if ctx.rpm_state.is_none() {
+            return Err(InspectorError::Failed {
+                reason: "RPM prerequisite unavailable".into(),
+            });
+        }
 
         let exec = ctx.executor;
         let mut warnings: Vec<Warning> = Vec::new();
-        let mut hints: Vec<RedactionHint> = Vec::new();
         let mut degraded_reasons: Vec<String> = Vec::new();
 
         let mut section = SelinuxSection::default();
@@ -102,26 +80,15 @@ impl Inspector for SelinuxInspector {
         collect_boolean_overrides(exec, &mut section, &mut warnings, &mut degraded_reasons);
         collect_fcontext_rules(exec, &mut section, &policy_type);
         collect_port_labels(exec, &mut section);
-        collect_audit_rules(
-            exec,
-            &mut section,
-            rpm_state,
-            &mut hints,
-            &mut degraded_reasons,
-        );
         collect_fips_mode(exec, &mut section);
-        collect_pam_configs(
-            exec,
-            &mut section,
-            rpm_state,
-            &mut hints,
-            &mut degraded_reasons,
-        );
 
         let output = InspectorOutput {
             section: SectionData::Selinux(section),
             warnings,
-            redaction_hints: hints,
+            // The two collectors that emitted hints (audit rules, PAM
+            // configs) moved to the config walker; nothing this inspector
+            // still reads carries free text.
+            redaction_hints: Vec::new(),
         };
 
         if degraded_reasons.is_empty() {
@@ -592,46 +559,6 @@ fn collect_port_labels(exec: &dyn Executor, section: &mut SelinuxSection) {
 }
 
 // ---------------------------------------------------------------------------
-// Audit rules
-// ---------------------------------------------------------------------------
-
-/// Scans `/etc/audit/rules.d/` for custom audit rule files, skipping files
-/// owned by RPM.
-fn collect_audit_rules(
-    exec: &dyn Executor,
-    section: &mut SelinuxSection,
-    rpm_state: &RpmState,
-    hints: &mut Vec<RedactionHint>,
-    degraded_reasons: &mut Vec<String>,
-) {
-    let audit_dir = "/etc/audit/rules.d";
-    let entries = match exec.read_dir(Path::new(audit_dir)) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons.push("permission denied reading /etc/audit/rules.d".into());
-            return;
-        }
-        Err(_) => return,
-    };
-
-    let mut rules: Vec<CarryForwardFile> = Vec::new();
-    for entry_name in &entries {
-        let abs_path = format!("{audit_dir}/{entry_name}");
-        if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
-            continue;
-        }
-
-        let rel = format!("etc/audit/rules.d/{entry_name}");
-        check_file_redaction(exec, &abs_path, hints);
-        let content = exec.read_file(Path::new(&abs_path)).unwrap_or_default();
-        rules.push(CarryForwardFile { path: rel, content });
-    }
-    rules.sort_by(|a, b| a.path.cmp(&b.path));
-    section.audit_rules = rules;
-}
-
-// ---------------------------------------------------------------------------
 // FIPS mode
 // ---------------------------------------------------------------------------
 
@@ -639,73 +566,6 @@ fn collect_audit_rules(
 fn collect_fips_mode(exec: &dyn Executor, section: &mut SelinuxSection) {
     if let Ok(content) = exec.read_file(Path::new("/proc/sys/crypto/fips_enabled")) {
         section.fips_mode = content.trim() == "1";
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PAM configs
-// ---------------------------------------------------------------------------
-
-/// Scans `/etc/pam.d/` for custom PAM configuration files, skipping files
-/// owned by RPM and system-generated exclusions.
-fn collect_pam_configs(
-    exec: &dyn Executor,
-    section: &mut SelinuxSection,
-    rpm_state: &RpmState,
-    hints: &mut Vec<RedactionHint>,
-    degraded_reasons: &mut Vec<String>,
-) {
-    let pam_dir = "/etc/pam.d";
-    let entries = match exec.read_dir(Path::new(pam_dir)) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons.push("permission denied reading /etc/pam.d".into());
-            return;
-        }
-        Err(_) => return,
-    };
-
-    let mut configs: Vec<CarryForwardFile> = Vec::new();
-    for entry_name in &entries {
-        let abs_path = format!("{pam_dir}/{entry_name}");
-        if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
-            continue;
-        }
-        if EXCLUDED_PAM_CONFIGS.contains(&abs_path.as_str()) {
-            continue;
-        }
-
-        let rel = format!("etc/pam.d/{entry_name}");
-        check_file_redaction(exec, &abs_path, hints);
-        let content = exec.read_file(Path::new(&abs_path)).unwrap_or_default();
-        configs.push(CarryForwardFile { path: rel, content });
-    }
-    configs.sort_by(|a, b| a.path.cmp(&b.path));
-    section.pam_configs = configs;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Checks file content for sensitive patterns and emits redaction hints.
-fn check_file_redaction(exec: &dyn Executor, path: &str, hints: &mut Vec<RedactionHint>) {
-    let content = match exec.read_file(Path::new(path)) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let lower = content.to_lowercase();
-    for pattern in SENSITIVE_PATTERNS {
-        if lower.contains(pattern) {
-            hints.push(RedactionHint {
-                path: path.to_string(),
-                reason: format!("file content may contain credentials (matched '{pattern}')"),
-                confidence: Some(Confidence::Medium),
-            });
-            return; // One hint per file
-        }
     }
 }
 
@@ -718,11 +578,10 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::inspector::RpmState;
     use inspectah_core::traits::progress::NullProgress;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
-    use std::collections::HashSet;
-    use std::path::PathBuf;
 
     fn test_source_system() -> SourceSystem {
         SourceSystem::PackageBased {
@@ -737,17 +596,6 @@ mod tests {
 
     fn empty_rpm_state() -> RpmState {
         RpmState::default()
-    }
-
-    fn rpm_state_with_owned(paths: Vec<&str>) -> RpmState {
-        let mut owned = HashSet::new();
-        for p in &paths {
-            owned.insert(PathBuf::from(p));
-        }
-        RpmState {
-            owned_paths: owned,
-            ..Default::default()
-        }
     }
 
     // ---- Test 1: test_selinux_mode_enforcing ----
@@ -1133,190 +981,6 @@ redis_port_t                    tcp      6380\n";
         assert_eq!(results[3].port, "6380");
     }
 
-    // ---- Test 12: test_audit_rules_rpm_owned_filtered ----
-
-    #[test]
-    fn test_audit_rules_rpm_owned_filtered() {
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_dir(
-                "/etc/audit/rules.d",
-                vec!["audit.rules", "custom-compliance.rules"],
-            )
-            .with_file("/etc/audit/rules.d/audit.rules", "-w /var/log -p wa\n")
-            .with_file(
-                "/etc/audit/rules.d/custom-compliance.rules",
-                "-w /etc/passwd -p wa -k identity\n",
-            );
-
-        // audit.rules is RPM-owned, custom-compliance.rules is not
-        let rpm_state = rpm_state_with_owned(vec!["/etc/audit/rules.d/audit.rules"]);
-        let source = test_source_system();
-        let inspector = SelinuxInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        // Only custom-compliance.rules should be included (audit.rules is RPM-owned)
-        assert_eq!(section.audit_rules.len(), 1);
-        assert!(
-            section.audit_rules[0]
-                .path
-                .contains("custom-compliance.rules")
-        );
-        assert!(
-            section.audit_rules[0]
-                .content
-                .contains("-w /etc/passwd -p wa -k identity")
-        );
-    }
-
-    // ---- Test 13: test_audit_rules_custom_included ----
-
-    #[test]
-    fn test_audit_rules_custom_included() {
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_dir(
-                "/etc/audit/rules.d",
-                vec!["custom-a.rules", "custom-b.rules"],
-            )
-            .with_file(
-                "/etc/audit/rules.d/custom-a.rules",
-                "-w /etc/shadow -p wa\n",
-            )
-            .with_file(
-                "/etc/audit/rules.d/custom-b.rules",
-                "-a always,exit -F arch=b64\n",
-            );
-
-        let rpm_state = empty_rpm_state();
-        let source = test_source_system();
-        let inspector = SelinuxInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        assert_eq!(section.audit_rules.len(), 2);
-        // Sorted by path
-        assert_eq!(
-            section.audit_rules[0].path,
-            "etc/audit/rules.d/custom-a.rules"
-        );
-        assert_eq!(
-            section.audit_rules[1].path,
-            "etc/audit/rules.d/custom-b.rules"
-        );
-        // Content persisted
-        assert!(section.audit_rules[0].content.contains("-w /etc/shadow"));
-        assert!(section.audit_rules[1].content.contains("-a always,exit"));
-    }
-
-    // ---- Test 14: test_pam_configs_rpm_owned_filtered ----
-
-    #[test]
-    fn test_pam_configs_rpm_owned_filtered() {
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_dir("/etc/pam.d", vec!["sshd", "custom-app"])
-            .with_file("/etc/pam.d/sshd", "auth required pam_sepermit.so\n")
-            .with_file("/etc/pam.d/custom-app", "auth required pam_unix.so\n");
-
-        // sshd is RPM-owned
-        let rpm_state = rpm_state_with_owned(vec!["/etc/pam.d/sshd"]);
-        let source = test_source_system();
-        let inspector = SelinuxInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        // Only custom-app should be included (sshd is RPM-owned)
-        assert_eq!(section.pam_configs.len(), 1);
-        assert!(section.pam_configs[0].path.contains("custom-app"));
-        assert!(
-            section.pam_configs[0]
-                .content
-                .contains("auth required pam_unix.so")
-        );
-    }
-
-    // ---- Test 15: test_pam_configs_custom_included ----
-
-    #[test]
-    fn test_pam_configs_custom_included() {
-        let exec = MockExecutor::new()
-            .with_command(
-                "getenforce",
-                ExecResult {
-                    stdout: "Enforcing\n".into(),
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_dir("/etc/pam.d", vec!["custom-sshd", "myapp-auth"])
-            .with_file("/etc/pam.d/custom-sshd", "auth required pam_unix.so\n")
-            .with_file("/etc/pam.d/myapp-auth", "auth required pam_unix.so\n");
-
-        let rpm_state = empty_rpm_state();
-        let source = test_source_system();
-        let inspector = SelinuxInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let section = extract_section(&result);
-        // Both custom PAM configs included (neither RPM-owned nor excluded)
-        assert_eq!(section.pam_configs.len(), 2);
-        assert_eq!(section.pam_configs[0].path, "etc/pam.d/custom-sshd");
-        assert_eq!(section.pam_configs[1].path, "etc/pam.d/myapp-auth");
-        // Content persisted
-        assert!(
-            section.pam_configs[0]
-                .content
-                .contains("auth required pam_unix.so")
-        );
-    }
-
     // ---- Test 16: test_fips_mode_enabled ----
 
     #[test]
@@ -1381,7 +1045,7 @@ redis_port_t                    tcp      6380\n";
 
     #[test]
     fn test_selinux_empty_system() {
-        // No SELinux, no audit, no PAM, no FIPS -> minimal section
+        // No SELinux, no FIPS -> minimal section
         let exec = MockExecutor::new();
 
         let rpm_state = empty_rpm_state();
@@ -1402,9 +1066,7 @@ redis_port_t                    tcp      6380\n";
         assert!(section.custom_modules.is_empty());
         assert!(section.boolean_overrides.is_empty());
         assert!(section.fcontext_rules.is_empty());
-        assert!(section.audit_rules.is_empty());
         assert!(!section.fips_mode);
-        assert!(section.pam_configs.is_empty());
         assert!(section.port_labels.is_empty());
     }
 

@@ -20,8 +20,8 @@ use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
 use inspectah_core::types::selinux::{
-    CarryForwardFile, FcontextFileType, FcontextRule, FcontextSource, SelinuxContext,
-    SelinuxPortLabel, SelinuxSection,
+    FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
+    SelinuxSection,
 };
 use inspectah_core::types::services::{
     ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
@@ -1501,11 +1501,6 @@ fn test_merge_selinux_sections_dedup_and_merge() {
         fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
         fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/custom.rules".into(),
-            content: "-w /etc/passwd".into(),
-        }],
-        pam_configs: vec![],
         fips_mode: false,
     };
     let s2 = SelinuxSection {
@@ -1519,11 +1514,6 @@ fn test_merge_selinux_sections_dedup_and_merge() {
         fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
         fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/custom.rules".into(),
-            content: "-w /etc/passwd".into(),
-        }],
-        pam_configs: vec![],
         fips_mode: false,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
@@ -1562,9 +1552,6 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // JSON deduped
     assert_eq!(result.boolean_overrides.len(), 1);
-
-    // CarryForwardFile deduped by path
-    assert_eq!(result.audit_rules.len(), 1);
 
     // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.mode, "enforcing");

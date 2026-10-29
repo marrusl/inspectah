@@ -927,92 +927,18 @@ fn test_selinux_semanage_unavailable_degraded() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SELinux: PermissionDenied on audit rules → Degraded
+// 6. (removed) SELinux: PermissionDenied on audit rules → Degraded
+//
+// The SELinux inspector no longer reads /etc/audit/rules.d; the config
+// walker owns that tree (§ 3.6). The test that lived here asserted the
+// SELinux section was degraded when the directory was unreadable, and
+// after the move it still passed -- for a different reason, because the
+// same fixture leaves `semanage boolean -l` empty, which case 5 above
+// already covers. A test that passes for a reason its name does not name
+// is worse than no test, so it is gone rather than retargeted: the
+// config walker's own subdirectory PermissionDenied does not degrade the
+// section unless the whole walk is empty, which is its own backlog item.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn test_selinux_audit_permission_denied_degraded() {
-    // Audit rules dir exists but is unreadable → Degraded.
-    let exec = wave2_rpm_mock(MockExecutor::new())
-        // getenforce succeeds so mode detection is fine
-        .with_command(
-            "getenforce",
-            ExecResult {
-                stdout: "Enforcing\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_file(
-            "/etc/selinux/config",
-            "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
-        )
-        // semanage boolean works
-        .with_command(
-            "chroot / semanage boolean -l",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "chroot / semanage fcontext -l -C",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "chroot / semanage port -l -C",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        // Audit rules dir: PermissionDenied
-        .with_dir_error("/etc/audit/rules.d", std::io::ErrorKind::PermissionDenied)
-        // FIPS mode check
-        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
-
-    let source = package_based_source();
-    let inspectors: Vec<Box<dyn Inspector>> = vec![
-        Box::new(RpmInspector::new()),
-        Box::new(SelinuxInspector::new()),
-    ];
-
-    let pipeline = collect(
-        &source,
-        &exec,
-        &inspectors,
-        None,
-        &NullProgress,
-        &AtomicBool::new(false),
-    );
-    let snapshot = &pipeline.state.snapshot;
-
-    match &snapshot.completeness {
-        Completeness::Partial {
-            degraded_sections, ..
-        } => {
-            assert!(
-                degraded_sections.contains(&InspectorId::Selinux),
-                "Selinux should be degraded when audit rules dir is unreadable"
-            );
-        }
-        other => panic!(
-            "Expected Completeness::Partial for audit PermissionDenied, got {:?}",
-            other
-        ),
-    }
-
-    assert!(
-        snapshot.selinux.is_some(),
-        "Selinux section should be present even when degraded"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // 7. NonRPM: readelf unavailable → Complete with warning (not degraded)

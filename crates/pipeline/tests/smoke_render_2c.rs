@@ -17,14 +17,15 @@ use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
 use inspectah_core::types::selinux::{
-    CarryForwardFile, FcontextFileType, FcontextRule, SelinuxContext, SelinuxPortLabel,
-    SelinuxSection,
+    FcontextFileType, FcontextRule, SelinuxContext, SelinuxPortLabel, SelinuxSection,
 };
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, readme, report};
 use tempfile::TempDir;
@@ -773,54 +774,129 @@ fn configtree_cron_spool_not_materialized() {
     );
 }
 
+/// § 8.11: PAM and audit files travel through the config tree as ordinary
+/// entries, so the tree honours their disposition and the audit report
+/// names them under Configuration Files.
+///
+/// This replaces `configtree_audit_rules_materialized` and
+/// `configtree_pam_materialized`, which asserted that the two files were
+/// written "unconditionally" from `SelinuxSection`. That unconditional
+/// write was the defect of item 1.8: a file nobody could decide about.
 #[test]
-fn configtree_audit_rules_materialized() {
-    // Audit rules from SELinux inspector ARE materialized in config tree
-    let mut snap = InspectionSnapshot::new();
-    snap.selinux = Some(SelinuxSection {
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/custom-compliance.rules".into(),
-            content: "-w /etc/shadow -p wa -k shadow_changes".into(),
-        }],
+fn pam_and_audit_travel_through_the_config_tree() {
+    let pam = ConfigFileEntry {
+        path: "/etc/pam.d/custom-sshd".into(),
+        kind: ConfigFileKind::Unowned,
+        category: ConfigCategory::Pam,
+        content: "auth required pam_faillock.so".into(),
+        disposition: FindingKind::excluded(),
         ..Default::default()
+    };
+    let audit_rule = ConfigFileEntry {
+        path: "/etc/audit/rules.d/driftify.rules".into(),
+        kind: ConfigFileKind::Unowned,
+        category: ConfigCategory::Audit,
+        content: "-w /etc/shadow -p wa -k shadow_changes".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![pam.clone(), audit_rule.clone()],
     });
+
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
-    let rule_path = dir
-        .path()
-        .join("config/etc/audit/rules.d/custom-compliance.rules");
     assert!(
-        rule_path.exists(),
-        "audit rules from SELinux must be materialized in config tree"
+        !dir.path().join("config/etc/pam.d/custom-sshd").exists(),
+        "an excluded PAM entry must stay out of the tarball"
     );
-    let content = std::fs::read_to_string(&rule_path).unwrap();
+    let rule_path = dir.path().join("config/etc/audit/rules.d/driftify.rules");
     assert_eq!(
-        content, "-w /etc/shadow -p wa -k shadow_changes",
+        std::fs::read_to_string(&rule_path).expect("included audit rule must be written"),
+        "-w /etc/shadow -p wa -k shadow_changes",
         "audit rule content must be preserved"
+    );
+
+    let report = audit::render_audit(&snap);
+    assert!(
+        report.contains("### Configuration Files"),
+        "the audit report must carry a Configuration Files section:\n{report}"
+    );
+    assert!(
+        report.contains("`/etc/audit/rules.d/driftify.rules` (audit)"),
+        "the included audit rule must be listed under Configuration Files:\n{report}"
+    );
+    assert!(
+        !report.contains("/etc/pam.d/custom-sshd"),
+        "the excluded PAM entry must not be reported as carried:\n{report}"
+    );
+
+    // The same two files with the dispositions swapped: the PAM file is now
+    // the one the export carries and the one the report names.
+    let mut flipped = InspectionSnapshot::new();
+    flipped.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                disposition: FindingKind::included(),
+                ..pam
+            },
+            ConfigFileEntry {
+                disposition: FindingKind::excluded(),
+                ..audit_rule
+            },
+        ],
+    });
+    let flipped_dir = TempDir::new().unwrap();
+    configtree::write_config_tree(&flipped, flipped_dir.path()).unwrap();
+    assert!(
+        flipped_dir
+            .path()
+            .join("config/etc/pam.d/custom-sshd")
+            .exists(),
+        "an included PAM entry must reach the tarball"
+    );
+    assert!(
+        !flipped_dir
+            .path()
+            .join("config/etc/audit/rules.d/driftify.rules")
+            .exists(),
+        "an excluded audit rule must stay out of the tarball"
+    );
+    let flipped_report = audit::render_audit(&flipped);
+    assert!(
+        flipped_report.contains("`/etc/pam.d/custom-sshd` (pam)"),
+        "the included PAM entry must be listed under Configuration Files:\n{flipped_report}"
     );
 }
 
+/// § 3.5's tuned move: a custom profile is a `ConfigCategory::Tuned` entry
+/// copied through `config/etc/` like any other file. The `tuned/` promoted
+/// root and the `TUNED_PREFIX` skip that kept it out of `config/` are gone.
 #[test]
-fn configtree_pam_materialized() {
-    // PAM configs from SELinux inspector ARE materialized in config tree
+fn a_custom_tuned_profile_is_copied_as_plain_config() {
     let mut snap = InspectionSnapshot::new();
-    snap.selinux = Some(SelinuxSection {
-        pam_configs: vec![CarryForwardFile {
-            path: "etc/pam.d/custom-faillock".into(),
-            content: "auth required pam_faillock.so".into(),
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/tuned/myapp/tuned.conf".into(),
+            kind: ConfigFileKind::Unowned,
+            category: ConfigCategory::Tuned,
+            content: "[main]\nsummary=myapp".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
         }],
-        ..Default::default()
     });
+
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
-    let pam_path = dir.path().join("config/etc/pam.d/custom-faillock");
-    assert!(
-        pam_path.exists(),
-        "PAM configs from SELinux must be materialized in config tree"
-    );
-    let content = std::fs::read_to_string(&pam_path).unwrap();
     assert_eq!(
-        content, "auth required pam_faillock.so",
-        "PAM config content must be preserved"
+        std::fs::read_to_string(dir.path().join("config/etc/tuned/myapp/tuned.conf"))
+            .expect("the profile must be written under config/"),
+        "[main]\nsummary=myapp"
+    );
+    assert!(
+        !dir.path().join("tuned").exists(),
+        "the tuned/ promoted root is gone"
     );
 }

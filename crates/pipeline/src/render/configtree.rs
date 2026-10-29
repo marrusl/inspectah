@@ -145,10 +145,6 @@ fn sysctl_source_paths(snap: &InspectionSnapshot) -> HashSet<String> {
     paths
 }
 
-/// Tuned profile directory prefix — paths under this are owned by the
-/// tuned renderer and must NOT be materialized by the config tree.
-const TUNED_PREFIX: &str = "etc/tuned/";
-
 /// Returns the set of NM connection paths that use DHCP (method=auto),
 /// which should be excluded from the config tree copy.
 fn dhcp_connection_paths(snap: &InspectionSnapshot) -> HashSet<String> {
@@ -228,9 +224,6 @@ pub fn write_config_tree(
             if sysctl_paths.contains(rel) {
                 continue;
             }
-            if rel.starts_with(TUNED_PREFIX) {
-                continue;
-            }
             if validate_path(rel).is_err() {
                 continue;
             }
@@ -307,20 +300,6 @@ pub fn write_config_tree(
                 let rel = d.path.trim_start_matches('/');
                 if validate_path(rel).is_ok() {
                     safe_write_file(&config_dir.join(rel), &d.content);
-                }
-            }
-        }
-        // Custom tuned profiles — written to tuned/ (promoted root),
-        // not config/. Gated on include flag (set by collectors / aggregate merge).
-        let tuned_included = kb.tuned_disposition.is_included();
-        if tuned_included {
-            for tp in &kb.tuned_custom_profiles {
-                if !tp.path.is_empty() {
-                    let rel = tp.path.trim_start_matches('/');
-                    if validate_path(rel).is_ok() {
-                        let tuned_dir = output_dir.join("tuned");
-                        safe_write_file(&tuned_dir.join(rel), &tp.content);
-                    }
                 }
             }
         }
@@ -521,27 +500,6 @@ pub fn write_config_tree(
         }
     }
 
-    // SELinux carry-forward files: audit rules and PAM configs.
-    // These are declarative admin customizations — no FIXME wrapping.
-    if let Some(ref sel) = snap.selinux {
-        for rule in &sel.audit_rules {
-            if !rule.path.is_empty() && !rule.content.is_empty() {
-                let rel = rule.path.trim_start_matches('/');
-                if validate_path(rel).is_ok() {
-                    safe_write_file(&config_dir.join(rel), &rule.content);
-                }
-            }
-        }
-        for pam in &sel.pam_configs {
-            if !pam.path.is_empty() && !pam.content.is_empty() {
-                let rel = pam.path.trim_start_matches('/');
-                if validate_path(rel).is_ok() {
-                    safe_write_file(&config_dir.join(rel), &pam.content);
-                }
-            }
-        }
-    }
-
     // Non-RPM env files are NOT written under config/ — they go to a separate
     // env-files/ directory via write_env_files(). See design decision: .env files
     // are high-probability secret carriers requiring operator review.
@@ -689,7 +647,7 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
 mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
     use inspectah_core::types::network::{FirewallZone, NetworkSection};
@@ -698,7 +656,6 @@ mod tests {
     use inspectah_core::types::scheduled::{
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
-    use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
     use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
     use tempfile::TempDir;
 
@@ -791,11 +748,6 @@ mod tests {
                 path: "etc/dracut.conf.d/custom.conf".to_string(),
                 content: "add_drivers+=\" vfio \"".to_string(),
             }],
-            tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".to_string(),
-                content: "[main]\nsummary=Custom profile".to_string(),
-            }],
             cmdline: "quiet crashkernel=auto nosmt=force".to_string(),
             ..Default::default()
         });
@@ -815,11 +767,6 @@ mod tests {
         assert!(
             dir.path()
                 .join("config/etc/dracut.conf.d/custom.conf")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join("tuned/etc/tuned/my-profile/tuned.conf")
                 .exists()
         );
         assert!(
@@ -1131,58 +1078,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_tree_selinux_audit_rules_materialized() {
-        let mut snap = InspectionSnapshot::new();
-        snap.selinux = Some(SelinuxSection {
-            audit_rules: vec![
-                CarryForwardFile {
-                    path: "etc/audit/rules.d/custom.rules".to_string(),
-                    content: "-w /etc/shadow -p wa -k shadow".to_string(),
-                },
-                CarryForwardFile {
-                    path: "etc/audit/rules.d/compliance.rules".to_string(),
-                    content: "-a always,exit -F arch=b64".to_string(),
-                },
-            ],
-            ..Default::default()
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-        let custom = dir.path().join("config/etc/audit/rules.d/custom.rules");
-        assert!(custom.exists());
-        assert_eq!(
-            std::fs::read_to_string(&custom).unwrap(),
-            "-w /etc/shadow -p wa -k shadow"
-        );
-        let compliance = dir.path().join("config/etc/audit/rules.d/compliance.rules");
-        assert!(compliance.exists());
-        assert_eq!(
-            std::fs::read_to_string(&compliance).unwrap(),
-            "-a always,exit -F arch=b64"
-        );
-    }
-
-    #[test]
-    fn test_config_tree_selinux_pam_configs_materialized() {
-        let mut snap = InspectionSnapshot::new();
-        snap.selinux = Some(SelinuxSection {
-            pam_configs: vec![CarryForwardFile {
-                path: "etc/pam.d/custom-sshd".to_string(),
-                content: "auth required pam_unix.so".to_string(),
-            }],
-            ..Default::default()
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-        let pam = dir.path().join("config/etc/pam.d/custom-sshd");
-        assert!(pam.exists());
-        assert_eq!(
-            std::fs::read_to_string(&pam).unwrap(),
-            "auth required pam_unix.so"
-        );
-    }
-
-    #[test]
     fn test_service_dropin_not_in_config_tree() {
         // Service-owned drop-in paths must NOT be materialized under config/
         // — the services renderer owns these paths.
@@ -1378,32 +1273,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_tree_selinux_empty_content_skipped() {
-        let mut snap = InspectionSnapshot::new();
-        snap.selinux = Some(SelinuxSection {
-            audit_rules: vec![CarryForwardFile {
-                path: "etc/audit/rules.d/empty.rules".to_string(),
-                content: String::new(),
-            }],
-            pam_configs: vec![CarryForwardFile {
-                path: String::new(),
-                content: "auth required pam_unix.so".to_string(),
-            }],
-            ..Default::default()
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-        // Empty content should not be materialized
-        assert!(
-            !dir.path()
-                .join("config/etc/audit/rules.d/empty.rules")
-                .exists()
-        );
-        // Empty path should not be materialized
-        assert!(!dir.path().join("config/etc/pam.d").exists());
-    }
-
-    #[test]
     fn test_sysctl_source_files_excluded_from_config_tree() {
         // Sysctl source files (e.g., /etc/sysctl.d/99-custom.conf) must NOT
         // be materialized under config/ — the pipeline synthesizes a merged file.
@@ -1481,127 +1350,53 @@ mod tests {
         );
     }
 
+    /// § 3.5: a custom tuned profile is a `ConfigCategory::Tuned` entry
+    /// copied through `config/etc/` like any other file.
+    ///
+    /// The four tests this replaces asserted the opposite and are the
+    /// defect, not a requirement: `test_tuned_profile_excluded_from_config_tree`
+    /// asserted that a decided `config.files` entry under `/etc/tuned/`
+    /// must NOT be materialized, and the other three asserted the
+    /// `tuned/` promoted root that `TUNED_PREFIX` skip existed to feed.
+    /// A file the export drops on a path rule has no decision.
     #[test]
-    fn test_tuned_profile_excluded_from_config_tree() {
-        // Config entries under /etc/tuned/ must NOT be materialized —
-        // the tuned renderer owns these paths.
+    fn test_tuned_profile_copied_as_plain_config() {
         let mut snap = InspectionSnapshot::new();
         snap.config = Some(ConfigSection {
-            files: vec![ConfigFileEntry {
-                path: "/etc/tuned/my-profile/tuned.conf".to_string(),
-                content: "[main]\nsummary=test".to_string(),
-                disposition: FindingKind::included(),
-                locked: false,
-                ..Default::default()
-            }],
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-
-        assert!(
-            !dir.path()
-                .join("config/etc/tuned/my-profile/tuned.conf")
-                .exists(),
-            "tuned profile path must NOT be materialized under config/"
-        );
-    }
-
-    #[test]
-    fn test_tuned_excluded_skips_custom_profiles() {
-        // When tuned_include is false, custom profiles must NOT be materialized.
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            tuned_active: "my-profile".to_string(),
-            tuned_disposition: FindingKind::excluded(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".to_string(),
-                content: "[main]\nsummary=Custom".to_string(),
-            }],
-            ..Default::default()
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-
-        assert!(
-            !dir.path()
-                .join("config/etc/tuned/my-profile/tuned.conf")
-                .exists(),
-            "tuned custom profile must NOT be materialized when tuned_include=false"
-        );
-    }
-
-    #[test]
-    fn test_tuned_included_materializes_custom_profiles() {
-        // When tuned_include is true, custom profiles are materialized.
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            tuned_active: "my-profile".to_string(),
-            tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".to_string(),
-                content: "[main]\nsummary=Custom".to_string(),
-            }],
-            ..Default::default()
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
-
-        assert!(
-            dir.path()
-                .join("tuned/etc/tuned/my-profile/tuned.conf")
-                .exists(),
-            "tuned custom profile must be materialized when tuned_include=true"
-        );
-    }
-
-    #[test]
-    fn test_tuned_bundled_files_all_materialized() {
-        // A custom tuned profile can have multiple files (tuned.conf + script.sh).
-        // All bundled files must be materialized when tuned_include is true.
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            tuned_active: "my-profile".to_string(),
-            tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![
-                ConfigSnippet {
-                    path: "etc/tuned/my-profile/tuned.conf".to_string(),
-                    content: "[main]\nsummary=Custom perf profile".to_string(),
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/tuned/my-profile/tuned.conf".to_string(),
+                    category: ConfigCategory::Tuned,
+                    content: "[main]\nsummary=test".to_string(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
                 },
-                ConfigSnippet {
-                    path: "etc/tuned/my-profile/script.sh".to_string(),
-                    content: "#!/bin/bash\necho tuned".to_string(),
+                ConfigFileEntry {
+                    path: "/etc/tuned/other-profile/tuned.conf".to_string(),
+                    category: ConfigCategory::Tuned,
+                    content: "[main]\nsummary=other".to_string(),
+                    disposition: FindingKind::excluded(),
+                    ..Default::default()
                 },
             ],
-            ..Default::default()
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
 
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config/etc/tuned/my-profile/tuned.conf"))
+                .expect("an included tuned profile is materialized under config/"),
+            "[main]\nsummary=test"
+        );
         assert!(
-            dir.path()
-                .join("tuned/etc/tuned/my-profile/tuned.conf")
+            !dir.path()
+                .join("config/etc/tuned/other-profile/tuned.conf")
                 .exists(),
-            "tuned.conf must be materialized"
+            "an excluded tuned profile stays out of the export"
         );
         assert!(
-            dir.path()
-                .join("tuned/etc/tuned/my-profile/script.sh")
-                .exists(),
-            "bundled script.sh must be materialized alongside tuned.conf"
-        );
-        let conf =
-            std::fs::read_to_string(dir.path().join("tuned/etc/tuned/my-profile/tuned.conf"))
-                .unwrap();
-        assert!(
-            conf.contains("Custom perf profile"),
-            "tuned.conf content must be preserved"
-        );
-        let script =
-            std::fs::read_to_string(dir.path().join("tuned/etc/tuned/my-profile/script.sh"))
-                .unwrap();
-        assert!(
-            script.contains("#!/bin/bash"),
-            "script.sh content must be preserved"
+            !dir.path().join("tuned").exists(),
+            "the tuned/ promoted root is gone"
         );
     }
 

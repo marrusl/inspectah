@@ -2,9 +2,14 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
 use inspectah_pipeline::render::service_intent::render_service_intent;
+
+/// Summary on a Security & Access Control row that only points at the
+/// Configuration Files row where the file is actually decided.
+const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
 
 use super::types::{
     ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem,
@@ -771,8 +776,10 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **custom_modules**: key = module name, tags = `["module"]`
 /// - **fcontext_rules**: key = rule identity (spec, or `subject = labeled_like`
 ///   for an equivalence, or the raw text for an unparsed line), tags = `["fcontext"]`
-/// - **audit_rules** (CarryForwardFile): key = file basename, content = file content, tags = `["audit-rule"]`
-/// - **pam_configs** (CarryForwardFile): key = file basename, content = file content, tags = `["pam"]`
+/// - **PAM and audit files**: one pointer row per `config.files` entry with
+///   category `Pam` or `Audit`, keyed by its path and carrying no content,
+///   because the decision and the content both live under Configuration
+///   Files (§ 3.6)
 fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
     let se = match &snap.selinux {
         Some(s) => s,
@@ -870,41 +877,23 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
         });
     }
 
-    // Audit rules (CarryForwardFile)
-    for cf in &se.audit_rules {
-        let basename = Path::new(&cf.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cf.path.clone());
+    // PAM and audit files. These are `config.files` entries now, so this
+    // section points at them rather than restating them: the title is the
+    // whole path (item 1.14 -- two profiles named `tuned.conf` read alike
+    // as basenames), and the content is not repeated here because the row
+    // that can be decided holds it.
+    for entry in snap.config.iter().flat_map(|config| &config.files) {
+        let tag = match entry.category {
+            ConfigCategory::Pam => "pam",
+            ConfigCategory::Audit => "audit-rule",
+            _ => continue,
+        };
         items.push(GenericRefItem {
-            id: cf.path.clone(),
-            key: basename,
-            summary: Some("audit rule".into()),
-            content: if cf.content.is_empty() {
-                None
-            } else {
-                Some(cf.content.clone())
-            },
-            tags: vec!["audit-rule".into(), cf.path.clone()],
-        });
-    }
-
-    // PAM configs (CarryForwardFile)
-    for cf in &se.pam_configs {
-        let basename = Path::new(&cf.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cf.path.clone());
-        items.push(GenericRefItem {
-            id: cf.path.clone(),
-            key: basename,
-            summary: Some("PAM config".into()),
-            content: if cf.content.is_empty() {
-                None
-            } else {
-                Some(cf.content.clone())
-            },
-            tags: vec!["pam".into(), cf.path.clone()],
+            id: entry.path.clone(),
+            key: entry.path.clone(),
+            summary: Some(DECIDED_UNDER_CONFIG_FILES.into()),
+            content: None,
+            tags: vec![tag.into()],
         });
     }
 
@@ -933,14 +922,14 @@ mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
     use inspectah_core::types::rpm::{RpmSection, VersionChange};
     use inspectah_core::types::scheduled::{
         AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
     use inspectah_core::types::selinux::{
-        CarryForwardFile, FcontextFileType, SelinuxContext, SelinuxPortLabel, SelinuxSection,
+        FcontextFileType, SelinuxContext, SelinuxPortLabel, SelinuxSection,
     };
     use std::collections::HashMap;
 
@@ -2814,19 +2803,40 @@ mod tests {
         }
     }
 
+    /// § 3.6's reference section: one pointer row per PAM or audit
+    /// `config.files` entry, keyed by the whole path and carrying no
+    /// content.
+    ///
+    /// The earlier form of this test asserted a basename key and a copy
+    /// of the file content on a `SelinuxSection` carry-forward list. Both
+    /// were the defect: the basename collided across directories (item
+    /// 1.14) and the copy was a second place the same bytes lived, on a
+    /// row no one could decide.
     #[test]
-    fn test_selinux_audit_rules_and_pam() {
+    fn test_selinux_pam_and_audit_point_at_configuration_files() {
         let snap = InspectionSnapshot {
-            selinux: Some(SelinuxSection {
-                audit_rules: vec![CarryForwardFile {
-                    path: "etc/audit/rules.d/custom.rules".into(),
-                    content: "-w /etc/shadow -p wa".into(),
-                }],
-                pam_configs: vec![CarryForwardFile {
-                    path: "etc/pam.d/custom-sshd".into(),
-                    content: "auth required pam_unix.so".into(),
-                }],
-                ..Default::default()
+            selinux: Some(SelinuxSection::default()),
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/audit/rules.d/custom.rules".into(),
+                        category: ConfigCategory::Audit,
+                        content: "-w /etc/shadow -p wa".into(),
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/pam.d/custom-sshd".into(),
+                        category: ConfigCategory::Pam,
+                        content: "auth required pam_unix.so".into(),
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/myapp/app.conf".into(),
+                        category: ConfigCategory::Other,
+                        content: "port=8080".into(),
+                        ..Default::default()
+                    },
+                ],
             }),
             ..Default::default()
         };
@@ -2835,24 +2845,32 @@ mod tests {
 
         let audit = result
             .iter()
-            .find(|i| i.id == "etc/audit/rules.d/custom.rules")
-            .unwrap();
-        assert_eq!(audit.key, "custom.rules");
-        assert_eq!(audit.summary, Some("audit rule".into()));
-        assert_eq!(audit.content, Some("-w /etc/shadow -p wa".into()));
+            .find(|i| i.id == "/etc/audit/rules.d/custom.rules")
+            .expect("the audit rule must have a pointer row");
+        assert_eq!(audit.key, "/etc/audit/rules.d/custom.rules");
         assert_eq!(
-            audit.tags,
-            vec!["audit-rule", "etc/audit/rules.d/custom.rules"]
+            audit.summary,
+            Some("decided under Configuration Files".into())
         );
+        assert_eq!(audit.content, None);
+        assert_eq!(audit.tags, vec!["audit-rule"]);
 
         let pam = result
             .iter()
-            .find(|i| i.id == "etc/pam.d/custom-sshd")
-            .unwrap();
-        assert_eq!(pam.key, "custom-sshd");
-        assert_eq!(pam.summary, Some("PAM config".into()));
-        assert_eq!(pam.content, Some("auth required pam_unix.so".into()));
-        assert_eq!(pam.tags, vec!["pam", "etc/pam.d/custom-sshd"]);
+            .find(|i| i.id == "/etc/pam.d/custom-sshd")
+            .expect("the PAM config must have a pointer row");
+        assert_eq!(pam.key, "/etc/pam.d/custom-sshd");
+        assert_eq!(
+            pam.summary,
+            Some("decided under Configuration Files".into())
+        );
+        assert_eq!(pam.content, None);
+        assert_eq!(pam.tags, vec!["pam"]);
+
+        assert!(
+            !result.iter().any(|i| i.id == "/etc/myapp/app.conf"),
+            "an ordinary config file does not belong to this section"
+        );
     }
 
     // ── project_reference orchestrator tests ───────────────────────

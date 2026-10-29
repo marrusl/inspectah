@@ -7,12 +7,11 @@
 use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::scheduled::{
     AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::SelinuxSection;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ===================================================================
@@ -424,13 +423,42 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
 
     // Config file with password
     snap.config = Some(ConfigSection {
-        files: vec![ConfigFileEntry {
-            path: "/etc/myapp/db.conf".into(),
-            content: "host=localhost\npassword=cfg_secret_42\nport=5432\n".into(),
-            disposition: FindingKind::included(),
-            locked: false,
-            ..Default::default()
-        }],
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/myapp/db.conf".into(),
+                content: "host=localhost\npassword=cfg_secret_42\nport=5432\n".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+            // Audit rules and PAM configs are config entries now (§ 3.6),
+            // so the config pass is the one that has to redact them.
+            //
+            // The secret sits on a rule line, not a comment line. The
+            // deleted SELinux redaction loop had its own second pass over
+            // comment lines ("secrets in comments are still secrets in
+            // the file"); the config pass skips comment lines for every
+            // config file, `is_comment_line` in the redaction engine.
+            // Moving these two files onto the config pass therefore takes
+            // the config-wide answer to that question rather than keeping
+            // an audit-only one.
+            ConfigFileEntry {
+                path: "/etc/audit/rules.d/secret-test.rules".into(),
+                category: ConfigCategory::Audit,
+                content: "-w /etc/shadow -p wa -k password=audit_secret_33".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/pam.d/secret-test".into(),
+                category: ConfigCategory::Pam,
+                content: "auth required pam_exec.so password=pam_secret_11".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+        ],
     });
 
     // .env file with database URL
@@ -488,19 +516,6 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
             source: "local".into(),
             path: "/etc/systemd/system/deploy.timer".into(),
             ..Default::default()
-        }],
-        ..Default::default()
-    });
-
-    // SELinux: audit rules and PAM configs with planted secrets
-    snap.selinux = Some(SelinuxSection {
-        audit_rules: vec![inspectah_core::types::selinux::CarryForwardFile {
-            path: "etc/audit/rules.d/secret-test.rules".into(),
-            content: "# audit config password=audit_secret_33 for testing".into(),
-        }],
-        pam_configs: vec![inspectah_core::types::selinux::CarryForwardFile {
-            path: "etc/pam.d/secret-test".into(),
-            content: "auth required pam_exec.so password=pam_secret_11".into(),
         }],
         ..Default::default()
     });

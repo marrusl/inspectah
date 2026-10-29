@@ -8,7 +8,7 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
-use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{ConfigCategory, ConfigFileKind, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::RpmVaEntry;
 use inspectah_core::types::system::SourceSystem;
@@ -416,5 +416,162 @@ fn test_config_inspector_json_roundtrip() {
     assert_eq!(
         json, roundtrip_json,
         "inspector output must round-trip faithfully through ConfigSection"
+    );
+}
+
+/// § 3.6 and § 8.11: the config walker owns `/etc/pam.d/`,
+/// `/etc/audit/rules.d/` and the custom tuned profiles. Each file arrives
+/// as an ordinary `ConfigFileEntry` carrying the category that names it,
+/// which is what gives it a disposition.
+///
+/// The three tuned runtime-state files stay excluded (`walk.rs`'s
+/// `UNOWNED_EXCLUDE_EXACT`) because `tuned_disposition` renders them;
+/// `active_profile` is in the fixture so that a change deleting that
+/// exclusion along with the profile glob fails here.
+#[test]
+fn pam_audit_and_tuned_are_config_entries() {
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["pam.d", "audit", "tuned"])
+        .with_dir("/etc/pam.d", vec!["custom-sshd", "su-l"])
+        .with_dir("/etc/audit", vec!["rules.d"])
+        .with_dir("/etc/audit/rules.d", vec!["driftify.rules"])
+        .with_dir("/etc/tuned", vec!["myapp", "active_profile"])
+        .with_dir("/etc/tuned/myapp", vec!["tuned.conf"])
+        .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n")
+        .with_file("/etc/pam.d/su-l", "auth include su\n")
+        .with_file(
+            "/etc/audit/rules.d/driftify.rules",
+            "-w /etc/shadow -p wa -k shadow_changes\n",
+        )
+        .with_file("/etc/tuned/myapp/tuned.conf", "[main]\nsummary=myapp\n")
+        .with_file("/etc/tuned/active_profile", "myapp\n");
+
+    let rpm_state = RpmState::default();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    let category_of = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} must be a config entry; got {:?}",
+                    section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
+            .category
+            .clone()
+    };
+
+    assert_eq!(
+        category_of("/etc/pam.d/custom-sshd"),
+        ConfigCategory::Pam,
+        "a custom PAM config is categorized Pam"
+    );
+    assert_eq!(
+        category_of("/etc/audit/rules.d/driftify.rules"),
+        ConfigCategory::Audit,
+        "a custom audit rule file is categorized Audit"
+    );
+    assert_eq!(
+        category_of("/etc/tuned/myapp/tuned.conf"),
+        ConfigCategory::Tuned,
+        "a custom tuned profile is categorized Tuned"
+    );
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/tuned/active_profile"),
+        "tuned runtime state stays excluded: tuned_disposition renders it"
+    );
+    assert!(
+        !section.files.iter().any(|f| f.path == "/etc/pam.d/su-l"),
+        "the eight base PAM configs stay excluded by exact match"
+    );
+}
+
+/// § 3.6's authselect rule. `rpm -Va` reports `....L....` on the five
+/// `/etc/pam.d/` files authselect owns: RPM-owned symlinks whose target
+/// changed. The customization lives in `/etc/authselect/`, which the walker
+/// collects on its own, so the symlink must produce no entry of its own.
+///
+/// The custom file in the same fixture is the sibling control: it differs
+/// unaided, so an empty section cannot pass this test.
+#[test]
+fn an_authselect_symlink_is_not_a_local_pam_file() {
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["pam.d", "authselect"])
+        .with_dir("/etc/pam.d", vec!["system-auth", "custom-sshd"])
+        .with_dir("/etc/authselect", vec!["system-auth"])
+        .with_link("/etc/pam.d/system-auth", "/etc/authselect/system-auth")
+        .with_file("/etc/pam.d/system-auth", "# authselect-generated\n")
+        .with_file("/etc/authselect/system-auth", "# authselect-generated\n")
+        .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n");
+
+    let rpm_state = RpmState {
+        verification_results: vec![RpmVaEntry {
+            path: "/etc/pam.d/system-auth".into(),
+            flags: "....L....".into(),
+            package: Some("authselect-libs".into()),
+        }],
+        ..Default::default()
+    };
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/pam.d/system-auth"),
+        "an authselect symlink is not a local PAM file; got {:?}",
+        section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    assert!(
+        section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/pam.d/custom-sshd"),
+        "the sibling custom PAM file must still be collected"
+    );
+    assert!(
+        section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/authselect/system-auth"),
+        "the customization itself is collected from /etc/authselect/"
     );
 }

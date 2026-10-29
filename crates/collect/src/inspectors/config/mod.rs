@@ -134,6 +134,9 @@ impl Inspector for ConfigInspector {
             if is_selinux_fcontext_store_file(path) {
                 continue;
             }
+            if is_authselect_pam_link(exec, path, flags) {
+                continue;
+            }
 
             let content = read_config_content(exec, path, &mut degraded_reasons);
 
@@ -399,6 +402,45 @@ fn is_rpm_owned_via_symlink(exec: &dyn Executor, rpm_state: &RpmState, path: &st
         rpm_state.is_rpm_owned(&resolved)
     } else {
         false
+    }
+}
+
+/// Directory holding the authselect profile files the `/etc/pam.d/` links
+/// point at.
+const AUTHSELECT_PREFIX: &str = "/etc/authselect/";
+
+/// Directory the authselect-managed PAM links live in.
+const PAM_D_PREFIX: &str = "/etc/pam.d/";
+
+/// § 3.6's authselect rule: an `rpm -Va` entry under `/etc/pam.d/` whose
+/// only flag is `L` is an RPM-owned symlink whose target changed. When that
+/// target resolves under `/etc/authselect/` it is not a local PAM
+/// customization: the customization is the authselect profile, which the
+/// unowned walk collects from `/etc/authselect/` on its own. Classifying
+/// the link as a modified config would carry the same content twice, under
+/// a path the target system regenerates.
+///
+/// On a host running authselect this is the state of `system-auth`,
+/// `password-auth`, `fingerprint-auth`, `smartcard-auth` and `postlogin`.
+///
+/// Reachability, measured rather than assumed: `classify_rpm_va_kind` reads
+/// only the size and digest columns, so a flags string whose only flag is
+/// `L` is already `RpmOwnedDefault` and already dropped a few lines below
+/// this call. This rule is therefore a guard on the classification rather
+/// than the filter that does the work today, and deleting it changes no
+/// output. It is kept because the premise it defends -- that the link is
+/// never the subject -- does not depend on which columns
+/// `classify_rpm_va_kind` happens to read.
+fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool {
+    if !path.starts_with(PAM_D_PREFIX) {
+        return false;
+    }
+    if !flags.contains('L') || !flags.chars().all(|c| c == '.' || c == 'L') {
+        return false;
+    }
+    match exec.resolve_final_target(Path::new(path)) {
+        Ok(resolved) => resolved.to_string_lossy().starts_with(AUTHSELECT_PREFIX),
+        Err(_) => false,
     }
 }
 

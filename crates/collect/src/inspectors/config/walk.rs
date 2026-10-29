@@ -152,7 +152,6 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     // NOTE: Drop-in overrides (*.service.d/*.conf, *.timer.d/*.conf,
     // *.socket.d/*.conf) are intentionally NOT excluded — they are
     // user-created config that is migration-relevant.
-    "/etc/tuned/*/tuned.conf",
     "/etc/systemd/sleep.conf.d/*",
     "/etc/lvm/archive/*",
     "/etc/lvm/backup/*",
@@ -177,14 +176,9 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     "/etc/xdg/systemd/",
 ];
 
-/// Cross-inspector ownership exclusions.
-/// These prefixes are skipped during the /etc walk to avoid double-ownership
-/// with the SELinux inspector, which is the sole collector for these paths.
-const CROSS_INSPECTOR_EXCLUDE_PREFIXES: &[&str] = &["/etc/audit/rules.d/", "/etc/pam.d/"];
-
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
-/// Checks: exact match, glob match, and cross-inspector exclusion prefixes.
+/// Checks: exact match, glob match, and subtree prefix exclusion.
 pub fn is_excluded_unowned(path: &str) -> bool {
     // Exact match
     if UNOWNED_EXCLUDE_EXACT.contains(&path) {
@@ -200,13 +194,6 @@ pub fn is_excluded_unowned(path: &str) -> bool {
 
     // Subtree prefix exclusion (system-generated noise)
     for prefix in UNOWNED_EXCLUDE_PREFIX {
-        if path.starts_with(prefix) {
-            return true;
-        }
-    }
-
-    // Cross-inspector ownership exclusion
-    for prefix in CROSS_INSPECTOR_EXCLUDE_PREFIXES {
         if path.starts_with(prefix) {
             return true;
         }
@@ -546,20 +533,31 @@ mod tests {
 
     // ---- Cross-inspector boundary tests ----
 
-    // ---- Test 26: test_config_skips_audit_rules_dir ----
-
+    /// The walker owns `/etc/audit/rules.d/`, `/etc/pam.d/` and the custom
+    /// tuned profiles (§ 3.6).
+    ///
+    /// Tests 26 and 27 asserted the opposite — that `is_excluded_unowned`
+    /// returns true for `/etc/audit/rules.d/custom.rules`,
+    /// `/etc/pam.d/sshd` and `/etc/pam.d/system-auth` — and a third rule
+    /// excluded `/etc/tuned/*/tuned.conf`. That exclusion was item 1.8's
+    /// defect, not a requirement: it handed the three trees to collectors
+    /// that emitted files nobody could decide about.
+    ///
+    /// The three tuned runtime-state files are a different case and stay
+    /// excluded, because `tuned_disposition` renders them.
     #[test]
-    fn test_config_skips_audit_rules_dir() {
-        assert!(is_excluded_unowned("/etc/audit/rules.d/custom.rules"));
-        assert!(is_excluded_unowned("/etc/audit/rules.d/audit.rules"));
-    }
+    fn test_config_walker_owns_pam_audit_and_tuned_profiles() {
+        assert!(!is_excluded_unowned("/etc/audit/rules.d/custom.rules"));
+        assert!(!is_excluded_unowned("/etc/pam.d/sshd"));
+        assert!(!is_excluded_unowned("/etc/pam.d/system-auth"));
+        assert!(!is_excluded_unowned("/etc/tuned/myapp/tuned.conf"));
 
-    // ---- Test 27: test_config_skips_pam_dir ----
-
-    #[test]
-    fn test_config_skips_pam_dir() {
-        assert!(is_excluded_unowned("/etc/pam.d/sshd"));
-        assert!(is_excluded_unowned("/etc/pam.d/system-auth"));
+        assert!(is_excluded_unowned("/etc/tuned/active_profile"));
+        assert!(is_excluded_unowned("/etc/tuned/profile_mode"));
+        assert!(is_excluded_unowned("/etc/tuned/bootcmdline"));
+        // The eight base PAM configs keep their exact-match exclusion.
+        assert!(is_excluded_unowned("/etc/pam.d/su-l"));
+        assert!(is_excluded_unowned("/etc/pam.d/runuser-l"));
     }
 
     // ---- DHCP filtering ----

@@ -1552,9 +1552,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     if tuned_included && !kb.tuned_active.is_empty() {
         if is_valid_tuned_profile(&kb.tuned_active) {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
-            if !kb.tuned_custom_profiles.is_empty() {
-                body.push("COPY tuned/etc/tuned/ /etc/tuned/".into());
-            }
             body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
                 kb.tuned_active
@@ -1657,20 +1654,6 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         );
     }
     body.extend(fcontext.rules);
-
-    if !sel.audit_rules.is_empty() {
-        body.push(format!(
-            "# {} custom audit rule file(s) materialized under config/etc/audit/rules.d/",
-            sel.audit_rules.len()
-        ));
-    }
-
-    if !sel.pam_configs.is_empty() {
-        body.push(format!(
-            "# {} custom PAM config file(s) materialized under config/etc/pam.d/",
-            sel.pam_configs.len()
-        ));
-    }
 
     if !sel.port_labels.is_empty() {
         body.push(format!(
@@ -3984,23 +3967,37 @@ RUN dnf install -y \
         );
     }
 
+    /// § 3.5: the custom profile travels under `config/etc/tuned/` with
+    /// the rest of the config tree, so the Containerfile's tuned block is
+    /// the activation decision and nothing else.
+    ///
+    /// The earlier form of this test asserted the
+    /// `COPY tuned/etc/tuned/ /etc/tuned/` line, which came from the
+    /// `tuned/` promoted root: a second copy path for a file the config
+    /// tree already carries.
     #[test]
-    fn test_containerfile_tuned_included_with_custom_profile() {
-        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+    fn test_containerfile_tuned_activation_without_a_promoted_root() {
+        use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::kernelboot::KernelBootSection;
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".into(),
             tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".into(),
-                content: "[main]\nsummary=Custom".into(),
-            }],
             ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("COPY tuned/etc/tuned/ /etc/tuned/"),
-            "included tuned with custom profile must COPY profile files, got:\n{output}"
+            !output.contains("COPY tuned/"),
+            "the tuned/ promoted root is gone, got:\n{output}"
         );
         assert!(
             output.contains("RUN echo \"my-profile\" > /etc/tuned/active_profile"),

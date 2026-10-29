@@ -12,7 +12,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+use inspectah_core::types::config::{
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit, RunningContainer};
 use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{NMConnection, NetworkSection};
@@ -22,7 +24,7 @@ use inspectah_core::types::rpm::{
     InstalledGroup, PackageEntry, PackageState, RpmSection, VersionChange,
 };
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
-use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
+use inspectah_core::types::selinux::SelinuxSection;
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
@@ -149,15 +151,30 @@ fn contract_snapshot() -> InspectionSnapshot {
             "state": true,
         })],
         custom_modules: vec!["myapp_policy".into()],
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/10-custom.rules".into(),
-            content: "-w /etc/shadow -p wa -k shadow_changes".into(),
-        }],
-        pam_configs: vec![CarryForwardFile {
-            path: "etc/pam.d/sshd-custom".into(),
-            content: "auth required pam_google_authenticator.so".into(),
-        }],
         ..Default::default()
+    });
+
+    // The audit rule and the PAM config are `config.files` entries (§ 3.6);
+    // Security & Access Control carries a pointer row for each.
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/audit/rules.d/10-custom.rules".into(),
+                kind: ConfigFileKind::Unowned,
+                category: ConfigCategory::Audit,
+                content: "-w /etc/shadow -p wa -k shadow_changes".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/pam.d/sshd-custom".into(),
+                kind: ConfigFileKind::Unowned,
+                category: ConfigCategory::Pam,
+                content: "auth required pam_google_authenticator.so".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
     });
 
     snap.network = Some(NetworkSection {

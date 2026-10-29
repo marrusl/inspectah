@@ -20,6 +20,10 @@ pub enum ConfigCategory {
     Tmpfiles,
     Environment,
     Audit,
+    /// `/etc/pam.d/`.
+    Pam,
+    /// `/etc/tuned/`.
+    Tuned,
     LibraryPath,
     Journal,
     Logrotate,

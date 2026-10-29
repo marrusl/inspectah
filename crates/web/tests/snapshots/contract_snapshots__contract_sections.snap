@@ -195,18 +195,18 @@ expression: json
         "title": "myapp_policy"
       },
       {
-        "detail": "-w /etc/shadow -p wa -k shadow_changes",
-        "id": "etc/audit/rules.d/10-custom.rules",
-        "searchable_text": "10-custom.rules audit rule -w /etc/shadow -p wa -k shadow_changes audit-rule etc/audit/rules.d/10-custom.rules",
-        "subtitle": "audit rule",
-        "title": "10-custom.rules"
+        "detail": null,
+        "id": "/etc/audit/rules.d/10-custom.rules",
+        "searchable_text": "/etc/audit/rules.d/10-custom.rules decided under Configuration Files audit-rule",
+        "subtitle": "decided under Configuration Files",
+        "title": "/etc/audit/rules.d/10-custom.rules"
       },
       {
-        "detail": "auth required pam_google_authenticator.so",
-        "id": "etc/pam.d/sshd-custom",
-        "searchable_text": "sshd-custom PAM config auth required pam_google_authenticator.so pam etc/pam.d/sshd-custom",
-        "subtitle": "PAM config",
-        "title": "sshd-custom"
+        "detail": null,
+        "id": "/etc/pam.d/sshd-custom",
+        "searchable_text": "/etc/pam.d/sshd-custom decided under Configuration Files pam",
+        "subtitle": "decided under Configuration Files",
+        "title": "/etc/pam.d/sshd-custom"
       }
     ]
   }

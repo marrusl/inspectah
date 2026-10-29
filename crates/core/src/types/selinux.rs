@@ -120,19 +120,11 @@ pub struct SelinuxPortLabel {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
-/// A file that the security inspector carries forward for materialization
-/// in the config tree (audit rules, PAM configs).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct CarryForwardFile {
-    /// Relative path (e.g. "etc/audit/rules.d/custom.rules").
-    #[serde(default)]
-    pub path: String,
-    /// File content to materialize.
-    #[serde(default)]
-    pub content: String,
-}
-
-/// Security & access control section (SELinux, FIPS, PAM, audit rules).
+/// Security & access control section (SELinux and FIPS).
+///
+/// PAM configs and audit rules are not here: they are `config.files`
+/// entries with category `Pam` and `Audit`, which is what gives them a
+/// disposition (spec § 3.6).
 ///
 /// Display name: "Security & Access Control". The JSON key is `"selinux"`
 /// because that is what the collectors emit.
@@ -149,11 +141,7 @@ pub struct SelinuxSection {
     #[serde(default)]
     pub fcontext_source: FcontextSource,
     #[serde(default)]
-    pub audit_rules: Vec<CarryForwardFile>,
-    #[serde(default)]
     pub fips_mode: bool,
-    #[serde(default)]
-    pub pam_configs: Vec<CarryForwardFile>,
     #[serde(default)]
     pub port_labels: Vec<SelinuxPortLabel>,
 }
@@ -218,15 +206,7 @@ mod tests {
                 aggregate: None,
             }],
             fcontext_source: FcontextSource::PolicyStore,
-            audit_rules: vec![CarryForwardFile {
-                path: "etc/audit/rules.d/custom.rules".to_string(),
-                content: "-w /etc/shadow -p wa".to_string(),
-            }],
             fips_mode: false,
-            pam_configs: vec![CarryForwardFile {
-                path: "etc/pam.d/custom-sshd".to_string(),
-                content: "auth required pam_unix.so".to_string(),
-            }],
             port_labels: vec![SelinuxPortLabel {
                 protocol: "tcp".to_string(),
                 port: "8080".to_string(),

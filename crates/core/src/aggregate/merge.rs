@@ -1795,36 +1795,6 @@ pub fn merge_selinux_sections(
             .collect(),
     );
 
-    // Dedup audit_rules (CarryForwardFile) by path
-    let audit_rules = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for rule in &s.audit_rules {
-                if seen.insert(rule.path.clone()) {
-                    result.push(rule.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| a.path.cmp(&b.path));
-        result
-    };
-
-    // Dedup pam_configs (CarryForwardFile) by path
-    let pam_configs = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for cfg in &s.pam_configs {
-                if seen.insert(cfg.path.clone()) {
-                    result.push(cfg.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| a.path.cmp(&b.path));
-        result
-    };
-
     // Most-prevalent scalar fields
     let mode = most_prevalent_scalar(&sections, |s| &s.mode);
     let fips_mode = most_prevalent_bool(&sections, |s| s.fips_mode);
@@ -1835,9 +1805,7 @@ pub fn merge_selinux_sections(
         boolean_overrides,
         fcontext_rules,
         fcontext_source,
-        audit_rules,
         fips_mode,
-        pam_configs,
         port_labels,
     })
 }
