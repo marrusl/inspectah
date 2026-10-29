@@ -128,26 +128,6 @@ fn container_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
     paths
 }
 
-/// Returns the set of sysctl source file paths owned by the sysctl renderer.
-///
-/// These are the per-file drop-ins (e.g., `/etc/sysctl.d/99-custom.conf`) that
-/// individual `SysctlOverride` entries reference. The pipeline synthesizes a
-/// single merged file instead, so the originals must NOT be materialized.
-fn sysctl_source_paths(snap: &InspectionSnapshot) -> HashSet<String> {
-    let mut paths = HashSet::new();
-    if let Some(ref kb) = snap.kernel_boot {
-        for so in &kb.sysctl_overrides {
-            if !so.source.is_empty() {
-                let rel = so.source.trim_start_matches('/');
-                if !rel.is_empty() {
-                    paths.insert(rel.to_string());
-                }
-            }
-        }
-    }
-    paths
-}
-
 /// Returns the set of NM connection paths that use DHCP (method=auto),
 /// which should be excluded from the config tree copy.
 fn dhcp_connection_paths(snap: &InspectionSnapshot) -> HashSet<String> {
@@ -203,7 +183,6 @@ pub fn write_config_tree(
     let dhcp_paths = dhcp_connection_paths(snap);
     let svc_paths = service_owned_paths(snap);
     let ctr_paths = container_owned_paths(snap);
-    let sysctl_paths = sysctl_source_paths(snap);
 
     // Config files
     if let Some(ref config) = snap.config {
@@ -222,9 +201,6 @@ pub fn write_config_tree(
                 continue;
             }
             if svc_paths.contains(rel) {
-                continue;
-            }
-            if sysctl_paths.contains(rel) {
                 continue;
             }
             if validate_path(rel).is_err() {
@@ -628,7 +604,9 @@ pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(
 mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::config::{
+        ConfigCategory, ConfigFileEntry, ConfigSection, ConfigShadow,
+    };
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
     use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
     use inspectah_core::types::network::{FirewallZone, NetworkSection};
@@ -1281,40 +1259,72 @@ mod tests {
         );
     }
 
+    /// § 5.3: a sysctl source file is materialized on its own disposition
+    /// and on nothing else.
+    ///
+    /// This replaces `test_sysctl_source_files_excluded_from_config_tree`,
+    /// which asserted a second gate: a path rule that dropped an included,
+    /// actionable entry whenever some `SysctlOverride` named the same
+    /// source. That gate is the defect, not a requirement — a file the
+    /// export drops on a path rule has no decision.
+    ///
+    /// Its fixture was also one `finalize_cross_inspector` cannot produce.
+    /// The finalizer shadows exactly the override sources and makes those
+    /// entries `Inventory`, which `is_included()` refuses, so in a
+    /// finalized single-scan snapshot the skip could not reach a file the
+    /// gate would have written. Both shapes are asserted here: the
+    /// shadowed entry the finalizer produces stays out, and an entry that
+    /// is still actionable and included is written.
     #[test]
-    fn test_sysctl_source_files_excluded_from_config_tree() {
-        // Sysctl source files (e.g., /etc/sysctl.d/99-custom.conf) must NOT
-        // be materialized under config/ — the pipeline synthesizes a merged file.
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            sysctl_overrides: vec![SysctlOverride {
-                key: "net.ipv4.ip_forward".to_string(),
-                runtime: "1".to_string(),
-                source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                disposition: FindingKind::included(),
-                locked: false,
+    fn test_sysctl_source_file_follows_its_own_disposition() {
+        let snapshot_with = |disposition: FindingKind, shadowed_by| {
+            let mut snap = InspectionSnapshot::new();
+            snap.kernel_boot = Some(KernelBootSection {
+                sysctl_overrides: vec![SysctlOverride {
+                    key: "net.ipv4.ip_forward".to_string(),
+                    runtime: "1".to_string(),
+                    source: "/etc/sysctl.d/99-custom.conf".to_string(),
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
-        // Add the same path as a config file entry
-        snap.config = Some(ConfigSection {
-            files: vec![ConfigFileEntry {
-                path: "/etc/sysctl.d/99-custom.conf".to_string(),
-                content: "net.ipv4.ip_forward = 1".to_string(),
-                disposition: FindingKind::included(),
-                locked: false,
-                ..Default::default()
-            }],
-        });
-        let dir = TempDir::new().unwrap();
-        write_config_tree(&snap, dir.path()).unwrap();
+            });
+            snap.config = Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/sysctl.d/99-custom.conf".to_string(),
+                    content: "net.ipv4.ip_forward = 1".to_string(),
+                    disposition,
+                    shadowed_by,
+                    locked: false,
+                    ..Default::default()
+                }],
+            });
+            snap
+        };
 
+        // The shape `finalize_cross_inspector` produces for a file that
+        // generated an override.
+        let dir = TempDir::new().unwrap();
+        write_config_tree(
+            &snapshot_with(FindingKind::inventory(), Some(ConfigShadow::Sysctl)),
+            dir.path(),
+        )
+        .unwrap();
         assert!(
             !dir.path()
                 .join("config/etc/sysctl.d/99-custom.conf")
                 .exists(),
-            "sysctl source file must NOT be materialized under config/"
+            "a shadowed sysctl source file is inventory and stays out of config/"
+        );
+
+        // An entry that still carries a decision is written on it.
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snapshot_with(FindingKind::included(), None), dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config/etc/sysctl.d/99-custom.conf"))
+                .expect("an included, unshadowed entry is materialized under config/"),
+            "net.ipv4.ip_forward = 1"
         );
     }
 
