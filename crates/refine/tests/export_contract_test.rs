@@ -1277,8 +1277,12 @@ fn export_allowlist_includes_repoless_packages_root() {
 fn export_includes_uploaded_rpms() {
     // Build a snapshot with repo-less RPM that will be uploaded
     let mut snap = test_snapshot();
-    // After upload, mark_uploaded_rpm sets repoless_cached = true.
-    // The export filter relies on this to include the uploaded RPM.
+    // `set_uploaded` sets `uploaded`, `repoless_cached` and `cache_path`
+    // together, and the export proves the last of those rather than
+    // scanning the directory: the filename matching the snapshot's NEVRA
+    // is no longer what gets it exported.
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path().canonicalize().unwrap();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "uploaded-tool".into(),
@@ -1288,15 +1292,20 @@ fn export_includes_uploaded_rpms() {
             source_repo: String::new(),
             disposition: FindingKind::included(),
             repoless_cached: true,
+            uploaded: true,
+            cache_path: Some(
+                upload_dir
+                    .join("uploaded-tool-2.0.0-1.el9.x86_64.rpm")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
         }],
         ..Default::default()
     });
 
-    // Create upload_dir with an uploaded RPM
-    let upload_tempdir = tempfile::tempdir().unwrap();
-    let upload_dir = upload_tempdir.path();
+    let upload_dir = upload_dir.as_path();
     std::fs::write(
         upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
         b"uploaded rpm data",
@@ -1328,6 +1337,8 @@ fn export_includes_uploaded_rpms() {
 fn export_merges_cached_and_uploaded_rpms() {
     // Build a snapshot with two repo-less RPMs: one cached, one uploaded
     let mut snap = test_snapshot();
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path().canonicalize().unwrap();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -1348,7 +1359,14 @@ fn export_merges_cached_and_uploaded_rpms() {
                 arch: "x86_64".into(),
                 source_repo: String::new(),
                 disposition: FindingKind::included(),
-                repoless_cached: true, // set by mark_uploaded_rpm after upload
+                repoless_cached: true, // set by set_uploaded after upload
+                uploaded: true,
+                cache_path: Some(
+                    upload_dir
+                        .join("uploaded-tool-2.0.0-1.el9.x86_64.rpm")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
                 repoless_annotation: "No repo source — cached RPM bundled".into(),
                 ..Default::default()
             },
@@ -1372,8 +1390,7 @@ fn export_merges_cached_and_uploaded_rpms() {
         .unwrap();
 
     // Upload dir has uploaded-tool.rpm
-    let upload_tempdir = tempfile::tempdir().unwrap();
-    let upload_dir = upload_tempdir.path();
+    let upload_dir = upload_dir.as_path();
     std::fs::write(
         upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
         b"uploaded rpm data",

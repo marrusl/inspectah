@@ -72,7 +72,12 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderName::from_static(handlers::ACK_SENSITIVE_HEADER),
             axum::http::HeaderName::from_static("x-acknowledge-sensitive"), // legacy
-        ]);
+        ])
+        // A response header a browser cannot read is a warning nobody
+        // sees; the export's demotion warnings travel in one.
+        .expose_headers([axum::http::HeaderName::from_static(
+            handlers::EXPORT_WARNINGS_HEADER,
+        )]);
 
     let served = served_origin.to_string();
 

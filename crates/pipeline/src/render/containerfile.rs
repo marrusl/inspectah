@@ -194,7 +194,7 @@ fn render_containerfile_inner(
             "# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into(),
         );
     }
-    lines.extend(non_rpm_section_lines(snap));
+    lines.extend(non_rpm_section_lines(snap, render_ctx));
 
     // 7. Containers
     if is_degraded(&snap.completeness, InspectorId::Containers) {
@@ -1207,7 +1207,10 @@ fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Non-RPM Software section ---
 
-fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+fn non_rpm_section_lines(
+    snap: &InspectionSnapshot,
+    render_ctx: Option<&RenderContext>,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     // Language package sections (executable, not advisory).
@@ -1220,7 +1223,7 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines.extend(super::unmanaged::unmanaged_file_lines(snap));
 
     // Repo-less RPM packages
-    lines.extend(super::repoless::repoless_rpm_lines(snap));
+    lines.extend(super::repoless::repoless_rpm_lines(snap, render_ctx));
 
     // Remaining non-RPM items that aren't language packages
     // (ELF binaries, .env files, git repos — still advisory).

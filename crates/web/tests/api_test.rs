@@ -2572,9 +2572,10 @@ async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
     }
 
     // The control: the same assertions against an accepted name, so the
-    // Containerfile half of this test can fail. (The COPY names the
-    // snapshot's NEVRA rather than the staged filename; wiring the staged
-    // name through the export is Task 14.)
+    // Containerfile half of this test can fail. The `COPY` names the
+    // staged filename, which is what makes the half above mean anything:
+    // before the export verified staged names, no staged name reached a
+    // `COPY` at all and "a rejected one does not" was true for free.
     let (state, tmp) = upload_state();
     let dir = tmp.path().join(UPLOAD_SUBDIR);
     let app = app(state);
@@ -2588,6 +2589,7 @@ async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
         dir_entries(&dir),
         vec!["epel-release-9-12.el9.noarch.rpm".to_string()]
     );
+    include_package(&app, "epel-release", "noarch").await;
     let after = view(&app).await;
     let pkg = view_package(&after, "epel-release");
     assert_eq!(pkg["uploaded"], true);
@@ -2601,8 +2603,129 @@ async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
         after["containerfile_preview"]
             .as_str()
             .unwrap()
-            .contains("COPY repoless-packages/")
+            .contains("COPY repoless-packages/epel-release-9-12.el9.noarch.rpm /tmp/"),
+        "{}",
+        after["containerfile_preview"]
     );
+}
+
+/// Include a repo-less package, which refine pre-excludes.
+async fn include_package(app: &axum::Router, name: &str, arch: &str) {
+    let (status, _) = post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": name, "arch": arch}},
+                "include": true
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn export_copies_a_staged_upload_from_the_canonical_directory() {
+    // The one production reader of `upload_dir_canon()` is the export at
+    // `handlers.rs`, and until this test nothing in the suite exercised
+    // it with a staged upload -- the confinement it passes had no reader
+    // outside an assertion. This drives the real route: upload, include,
+    // export, and read the member out of the tarball the response body
+    // carries.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let name = "epel-release-9-12.el9.noarch.rpm";
+    let (status, _) = post_upload(&app, &[file_part(name, b"staged rpm bytes")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(dir_entries(&dir), vec![name.to_string()]);
+    include_package(&app, "epel-release", "noarch").await;
+
+    let (status, headers, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("x-export-warnings")
+            .and_then(|v| v.to_str().ok()),
+        Some("[]")
+    );
+
+    let member = tarball_member(&body, &format!("repoless-packages/{name}"))
+        .expect("the staged upload must be in the export");
+    assert_eq!(member, b"staged rpm bytes".to_vec());
+}
+
+#[tokio::test]
+async fn export_warns_when_a_staged_upload_cannot_be_verified() {
+    // The same route, with the staged file removed behind the session's
+    // back: the export demotes rather than failing, and says so on the
+    // response. Without this the warnings header is a surface nobody can
+    // tell is working.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let name = "epel-release-9-12.el9.noarch.rpm";
+    let (status, _) = post_upload(&app, &[file_part(name, b"staged rpm bytes")]).await;
+    assert_eq!(status, StatusCode::OK);
+    include_package(&app, "epel-release", "noarch").await;
+    std::fs::remove_file(dir.join(name)).unwrap();
+
+    let (status, headers, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("x-export-warnings")
+            .and_then(|v| v.to_str().ok()),
+        Some(r#"["epel-release.noarch: staged RPM not verified, not exported"]"#)
+    );
+    assert!(tarball_member(&body, &format!("repoless-packages/{name}")).is_none());
+
+    let containerfile = String::from_utf8(tarball_member(&body, "Containerfile").unwrap()).unwrap();
+    assert!(
+        containerfile.lines().any(|l| l
+            == "# FIXME: upload the RPM for epel-release.noarch again in refine; \
+                the staged file could not be verified for export"),
+        "{containerfile}"
+    );
+}
+
+/// `POST /api/tarball` at the current generation: status, headers, body.
+async fn post_tarball(app: &axum::Router) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let generation = view(app).await["generation"].as_u64().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/tarball")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "generation": generation }).to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, body.to_vec())
+}
+
+/// One member's bytes from a gzipped export tarball, by its path below
+/// the top-level directory.
+fn tarball_member(tarball: &[u8], rel: &str) -> Option<Vec<u8>> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let full = entry.path().unwrap().to_string_lossy().into_owned();
+        if full.split_once('/').map(|(_, rest)| rest) == Some(rel) {
+            let mut bytes = Vec::new();
+            std::io::copy(&mut entry, &mut bytes).unwrap();
+            return Some(bytes);
+        }
+    }
+    None
 }
 
 #[tokio::test]

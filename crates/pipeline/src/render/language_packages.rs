@@ -149,7 +149,7 @@ fn contains_unsafe_chars(s: &str) -> bool {
 }
 
 /// Sanitize a path for display in warning comments by replacing unsafe chars.
-fn sanitize_for_comment(s: &str) -> String {
+pub(super) fn sanitize_for_comment(s: &str) -> String {
     s.replace('\'', "''").replace('\n', "\\n")
 }
 

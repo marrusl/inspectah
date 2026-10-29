@@ -2,6 +2,7 @@ pub mod aggregate;
 pub mod baseline;
 pub mod pipeline;
 pub mod redaction;
+pub mod rpm_filename;
 pub mod snapshot;
 pub mod traits;
 pub mod types;

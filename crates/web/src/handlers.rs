@@ -16,6 +16,14 @@ use std::collections::BTreeSet;
 /// Primary header name for acknowledging sensitive data exports.
 /// Both this and the legacy header are accepted for backward compatibility.
 pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
+/// Where `POST /api/tarball` reports what it demoted.
+///
+/// The response body of that route is the tarball itself, so the warnings
+/// § 3.3 puts on the response travel as a JSON array in a header rather
+/// than as a body field. Every warning is printable ASCII by construction
+/// (`sanitize_package_id` in the refine session), which is what makes a
+/// header value a safe place to put a string the scanned snapshot named.
+pub const EXPORT_WARNINGS_HEADER: &str = "x-export-warnings";
 const LEGACY_ACK_SENSITIVE_HEADER: &str = "x-acknowledge-sensitive";
 
 /// Produce a display version that avoids duplicating what's already in pretty_name.
@@ -428,11 +436,11 @@ pub async fn export_tarball(
 
     // Expensive render + tar work happens outside the lock via spawn_blocking.
     let dl_name = export_filename.clone();
-    let bytes = tokio::task::spawn_blocking(
-        move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
+    let (bytes, warnings) = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<u8>, Vec<String>), inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join(&dl_name);
-            inspectah_refine::session::render_refine_export(
+            let warnings = inspectah_refine::session::render_refine_export(
                 &projected,
                 &tarball_path,
                 Some(&original_includes),
@@ -440,7 +448,7 @@ pub async fn export_tarball(
                 source_tarball.as_deref(),
                 upload_dir.as_deref(),
             )?;
-            Ok(std::fs::read(&tarball_path)?)
+            Ok((std::fs::read(&tarball_path)?, warnings))
         },
     )
     .await
@@ -462,6 +470,10 @@ pub async fn export_tarball(
             (
                 axum::http::header::CONTENT_DISPOSITION.as_str(),
                 disposition,
+            ),
+            (
+                EXPORT_WARNINGS_HEADER,
+                serde_json::to_string(&warnings).unwrap_or_else(|_| "[]".into()),
             ),
         ],
         bytes,

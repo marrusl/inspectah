@@ -28,6 +28,7 @@ use crate::types::{
 };
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
@@ -1711,8 +1712,13 @@ impl RefineSession {
             Some(&orig_inc),
             self.cached_render_context.as_ref(),
             self.tarball_path.as_deref(),
-            self.upload_dir.as_deref(),
+            // The canonical path, for the same reason the HTTP export
+            // passes it: what the export proves against must be the
+            // directory `ensure_upload_dir` prepared, not one that can
+            // still resolve somewhere else.
+            self.upload_dir_canon.as_deref(),
         )
+        .map(|_warnings| ())
     }
 
     // --- Private helpers ---
@@ -3214,7 +3220,15 @@ impl RefineSession {
             group_states.insert(group.name.clone(), derive_group_state(&ctx));
         }
 
-        self.cached_render_context = Some(RenderContext { group_states });
+        // The preview runs the same verification the export runs, minus
+        // the copy, so the two cannot disagree about which packages get a
+        // `COPY`. The handles are dropped with `proved` on the next line.
+        let (proved, _warnings) =
+            prove_staged_uploads(self.upload_dir_canon.as_deref(), &projected);
+        self.cached_render_context = Some(RenderContext {
+            group_states,
+            verified_uploads: verified_uploads(&proved),
+        });
 
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer
@@ -3638,6 +3652,22 @@ fn write_language_package_manifests(
     Ok(())
 }
 
+/// The one directory in the export that carries RPM payload, named once
+/// because step 2e, step 2f and the top-level allowlist must agree on it.
+const REPOLESS_DIR: &str = "repoless-packages";
+
+/// The source tarball prefix that routes an entry into [`REPOLESS_DIR`].
+const REPOLESS_PREFIX: &str = "repoless-packages/";
+
+/// True when `rel` is exactly one ordinary path component: no `..`, no
+/// root, no nesting, nothing that changes meaning when joined onto a
+/// directory.
+fn is_single_normal_component(rel: &str) -> bool {
+    let mut components = Path::new(rel).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
 /// Extract `unmanaged/` and `repoless-packages/` from the source scan
 /// tarball into the export directory, filtering by include flags from the
 /// projected snapshot. Only files whose corresponding snapshot entry has
@@ -3667,22 +3697,37 @@ fn extract_payload_dirs_from_tarball(
         .unwrap_or_default();
 
     // Build set of included repo-less RPM filenames.
+    //
+    // `uploaded` is excluded, and that is the ownership rule (position 31):
+    // an uploaded package's `repoless-packages/` entry is written by step
+    // 2f from the staged file, so nothing here may write that path first,
+    // whatever entry type the source tarball holds at it. `set_uploaded`
+    // leaves `repoless_cached` true as well, so the filter has to name
+    // `uploaded` to say this.
+    //
+    // A NEVRA built from four snapshot fields is only a filename when the
+    // allowlist says so; one that is not never reaches the allowlist, and
+    // the renderer refuses it on the same test.
     let included_repoless: HashSet<String> = snap
         .rpm
         .as_ref()
         .map(|r| {
             r.packages_added
                 .iter()
-                .filter(|p| p.disposition.is_included() && p.repoless_cached)
+                .filter(|p| p.disposition.is_included() && p.repoless_cached && !p.uploaded)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
+                .filter(|n| crate::rpm_filename::validate_staged_name(n).is_ok())
                 .collect()
         })
         .unwrap_or_default();
 
-    if included_unmanaged.is_empty() && included_repoless.is_empty() {
-        return Ok(());
-    }
-
+    // No early return when both sets are empty, which this used to have.
+    // The `repoless-packages/` component check below refuses an entry
+    // allowlisted or not, and skipping the scan when nothing is
+    // allowlisted would have made "or not" unreachable: the one snapshot
+    // that names a traversal is also the one whose NEVRA the allowlist
+    // refuses, so it emptied the set and skipped its own check. The cost
+    // is reading a source tarball an export takes nothing from.
     for entry in archive
         .entries()
         .map_err(|e| RefineError::TarballError(e.to_string()))?
@@ -3700,23 +3745,50 @@ fn extract_payload_dirs_from_tarball(
             .map(|i| &path_str[i + 1..])
             .unwrap_or(&path_str);
 
+        let mut in_repoless = false;
         let should_extract = if let Some(file_rel) = rel.strip_prefix("unmanaged/") {
             !file_rel.is_empty() && included_unmanaged.contains(file_rel)
-        } else if let Some(filename) = rel.strip_prefix("repoless-packages/") {
+        } else if let Some(filename) = rel.strip_prefix(REPOLESS_PREFIX) {
+            in_repoless = true;
+            // `tar::Entry::path()` does not clean `..` -- only `unpack_in`
+            // does (tar 0.4.45, `entry.rs:415`) -- so the remainder after
+            // the prefix is checked here, before anything is joined onto
+            // the export directory. Allowlisted or not: an entry that
+            // names more than one ordinary component fails the export
+            // rather than being skipped, because a source tarball holding
+            // one is not a tarball this wrote.
+            if !filename.is_empty() && !is_single_normal_component(filename) {
+                return Err(RefineError::TarballError(format!(
+                    "source tarball entry escapes {REPOLESS_DIR}: {}",
+                    sanitize_path_for_log(&path_str)
+                )));
+            }
             !filename.is_empty() && included_repoless.contains(filename)
         } else {
             false
         };
 
         if should_extract {
+            let entry_type = entry.header().entry_type();
+            // A cached RPM is a regular file. A link at an allowlisted name
+            // would make the export's member a pointer at something the
+            // scan chose, so it fails the export rather than being
+            // followed or silently dropped. `unmanaged/` keeps its link
+            // handling below: an unmanaged file legitimately can be one.
+            if in_repoless
+                && (entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link)
+            {
+                return Err(RefineError::TarballError(format!(
+                    "source tarball entry in {REPOLESS_DIR} is a link, not a regular file: {}",
+                    sanitize_path_for_log(&path_str)
+                )));
+            }
             let dest = out.join(rel);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| RefineError::TarballError(e.to_string()))?;
             }
-            if entry.header().entry_type() == tar::EntryType::Symlink
-                || entry.header().entry_type() == tar::EntryType::Link
-            {
+            if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
                 // Preserve symlinks rather than dereferencing them.
                 if let Ok(Some(target)) = entry.link_name() {
                     #[cfg(unix)]
@@ -3734,47 +3806,246 @@ fn extract_payload_dirs_from_tarball(
     Ok(())
 }
 
-/// Copy uploaded RPMs from the upload staging directory into
-/// `repoless-packages/` in the export directory.
+/// Why a staged upload could not be proved fit to export.
 ///
-/// Only copies RPMs whose corresponding PackageEntry has `include == true`
-/// in the projected snapshot. This prevents excluded uploads from leaking
-/// into the export.
-fn copy_uploaded_rpms(
-    upload_dir: &Path,
-    out: &Path,
-    snap: &InspectionSnapshot,
-) -> Result<(), RefineError> {
-    if !upload_dir.exists() {
-        return Ok(());
+/// Every variant is a refusal to export, never a reason to fall back on
+/// something else: the package demotes, and the export response says so.
+/// None of them carries any part of `cache_path` -- the snapshot supplied
+/// that string and the export does not echo it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    #[error("the entry records no staged path")]
+    NoCachePath,
+    #[error("the staged path names no file, or its name is not UTF-8")]
+    NoBasename,
+    #[error("the staged filename is not one the allowlist admits: {0}")]
+    Name(#[from] crate::rpm_filename::NameError),
+    #[error("the staged path's parent is not the prepared upload directory")]
+    OutsideUploadDir,
+    #[error("nothing is staged under that name")]
+    Missing,
+    #[error("what is staged under that name is not a regular file")]
+    NotRegularFile,
+    #[error("the staged file was replaced between the check and the open")]
+    Replaced,
+    #[error("the staged file could not be read")]
+    Unreadable,
+}
+
+/// A staged upload proved fit to export, with the handle the copy reads.
+///
+/// The handle, not the path, is what makes step 5 of the verification
+/// worth anything: re-opening by name at copy time would reopen whatever
+/// arrived in the gap.
+struct ProvedUpload {
+    upload: VerifiedUpload,
+    file: std::fs::File,
+}
+
+/// Prove that `pkg`'s recorded staged upload is a regular file inside the
+/// prepared upload directory, under a name the allowlist admits.
+///
+/// The order matters and § 3.3 fixes it:
+///
+/// 1. the entry records a staged path at all;
+/// 2. its basename passes the staged-name allowlist, yielding the
+///    [`StagedName`] the renderer and the copy both name;
+/// 3. the *parent* canonicalizes to the prepared upload directory --
+///    the parent only, since canonicalizing the whole path would follow a
+///    final symlink and prove a claim about the wrong file;
+/// 4. the path is rebuilt as `upload_dir_canon/basename`, from two
+///    independently proved pieces rather than from the snapshot's string,
+///    and `symlink_metadata` must report a regular file there;
+/// 5. the file is opened and the *handle* is `fstat`ed: same `(dev, ino)`
+///    as step 4 and still a regular file, which is what closes the
+///    check-to-copy race on the final component.
+///
+/// Steps 4 and 5 overlap, and it is worth saying where they do not: a
+/// symlink at the staged name is caught twice, since step 5's `(dev, ino)`
+/// comparison sees the target's pair rather than the link's (verified by
+/// removing step 4's check and watching the symlink case still refuse).
+/// What step 4 catches alone is a *non-symlink* that is not a regular
+/// file -- a fifo planted under a staged name would make step 5's
+/// `File::open` block, so the refusal has to happen before the open, not
+/// after it.
+fn verify_staged_upload(
+    upload_dir_canon: &Path,
+    pkg: &PackageEntry,
+) -> Result<ProvedUpload, Refusal> {
+    use std::os::unix::fs::MetadataExt;
+
+    let recorded = Path::new(pkg.cache_path.as_deref().ok_or(Refusal::NoCachePath)?);
+
+    let basename = recorded
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(Refusal::NoBasename)?;
+    let basename = crate::rpm_filename::StagedName::parse(basename)?;
+
+    let parent = recorded
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .ok_or(Refusal::OutsideUploadDir)?;
+    if parent != upload_dir_canon {
+        return Err(Refusal::OutsideUploadDir);
     }
 
-    // Build allowlist of included repo-less package NEVRA filenames.
-    let included_nevras: std::collections::HashSet<String> = snap
-        .rpm
-        .as_ref()
-        .map(|rpm| {
-            rpm.packages_added
-                .iter()
-                .filter(|p| p.disposition.is_included() && p.repoless_cached)
-                .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
-                .collect()
-        })
-        .unwrap_or_default();
+    let proved = upload_dir_canon.join(basename.as_str());
+    let before = match std::fs::symlink_metadata(&proved) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Refusal::Missing),
+        Err(_) => return Err(Refusal::Unreadable),
+    };
+    if !before.file_type().is_file() {
+        return Err(Refusal::NotRegularFile);
+    }
 
-    let dest_dir = out.join("repoless-packages");
-    // Create destination once before the loop instead of per-iteration
-    std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
-    for entry in
-        std::fs::read_dir(upload_dir).map_err(|e| RefineError::TarballError(e.to_string()))?
+    let file = std::fs::File::open(&proved).map_err(|_| Refusal::Unreadable)?;
+    let opened = file.metadata().map_err(|_| Refusal::Unreadable)?;
+    if !opened.file_type().is_file() || (opened.dev(), opened.ino()) != (before.dev(), before.ino())
     {
-        let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.ends_with(".rpm") && included_nevras.contains(name_str.as_ref()) {
-            std::fs::copy(entry.path(), dest_dir.join(&name))
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        return Err(Refusal::Replaced);
+    }
+
+    // Re-derived from the proved basename, never read from the snapshot's
+    // `uploaded_version`, which arrives from the scanned host and is not
+    // evidence of what the staged file actually is.
+    let host_version = format!("{}-{}", pkg.version, pkg.release);
+    let uploaded_version = crate::rpm_filename::RpmFilename::parse_untrusted(basename.as_str())
+        .and_then(|parsed| parsed.version_release)
+        .filter(|v| *v != host_version);
+
+    Ok(ProvedUpload {
+        upload: VerifiedUpload {
+            canonical: canonical_package_id(&pkg.name, &pkg.arch),
+            basename,
+            uploaded_version,
+        },
+        file,
+    })
+}
+
+/// The warning an export response carries for a package that claimed a
+/// staged upload the export could not prove.
+fn not_verified_warning(pkg: &PackageEntry) -> String {
+    format!(
+        "{}: staged RPM not verified, not exported",
+        sanitize_package_id(&canonical_package_id(&pkg.name, &pkg.arch))
+    )
+}
+
+/// Reduce a package id to the bytes a staged filename may carry, mapping
+/// everything else to `_`.
+///
+/// The id comes from a scanned snapshot and the warning built from it ends
+/// up in an HTTP response header, where a newline is header injection.
+/// Mapping every other byte makes the result printable ASCII by
+/// construction, rather than leaving the header boundary to check.
+fn sanitize_package_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '~' | '^' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Prove the staged upload of every included package that claims one.
+///
+/// Returns the proved uploads and one warning per package that claimed an
+/// upload this could not prove. The Containerfile preview runs this too
+/// and keeps only the map, which is what stops the preview promising a
+/// `COPY` the export will not write.
+///
+/// `upload_dir_canon` is `None` when no upload directory has been
+/// prepared, and then nothing verifies: a snapshot that arrives with
+/// `uploaded: true` already set gets no `COPY` on that say-so.
+fn prove_staged_uploads(
+    upload_dir_canon: Option<&Path>,
+    snap: &InspectionSnapshot,
+) -> (Vec<ProvedUpload>, Vec<String>) {
+    let mut proved = Vec::new();
+    let mut warnings = Vec::new();
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return (proved, warnings);
+    };
+    for pkg in &rpm.packages_added {
+        if !pkg.uploaded || !pkg.disposition.is_included() {
+            continue;
         }
+        match upload_dir_canon.ok_or(Refusal::OutsideUploadDir) {
+            Ok(canon) => match verify_staged_upload(canon, pkg) {
+                Ok(p) => proved.push(p),
+                Err(_) => warnings.push(not_verified_warning(pkg)),
+            },
+            Err(_) => warnings.push(not_verified_warning(pkg)),
+        }
+    }
+    (proved, warnings)
+}
+
+/// The map the renderer reads, keyed by `name.arch`.
+fn verified_uploads(proved: &[ProvedUpload]) -> VerifiedUploads {
+    proved
+        .iter()
+        .map(|p| (p.upload.canonical.clone(), p.upload.clone()))
+        .collect()
+}
+
+/// Copy the proved uploads into `repoless-packages/` in the export
+/// directory, as the only writer of each of those paths (§ 3.3,
+/// position 31).
+///
+/// Each destination is created with `create_new`, so a path something else
+/// already wrote fails the export rather than being overwritten or
+/// silently demoted. The reaching input is real: step 2e extracts a cached
+/// RPM at its NEVRA for a package that is not uploaded, and nothing stops
+/// a *different* package's staged upload from having been given that same
+/// basename.
+///
+/// The source is the handle [`verify_staged_upload`] proved, not a path,
+/// so there is no second resolution for a rename to win -- which is also
+/// why this does not use `fs::copy`, whose source open follows symlinks
+/// where step 4 refused them.
+fn copy_proved_uploads(proved: Vec<ProvedUpload>, out: &Path) -> Result<(), RefineError> {
+    if proved.is_empty() {
+        return Ok(());
+    }
+    let dest_dir = out.join(REPOLESS_DIR);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
+    // `create_dir_all` succeeds on a symlink that resolves to a directory,
+    // so it is not the check. The reaching input is the `unmanaged/`
+    // extraction branch, which joins snapshot-supplied paths onto the
+    // export directory without a traversal check of its own.
+    let dir_meta = std::fs::symlink_metadata(&dest_dir)
+        .map_err(|e| RefineError::TarballError(format!("{REPOLESS_DIR}: {e}")))?;
+    if !dir_meta.file_type().is_dir() {
+        return Err(RefineError::TarballError(format!(
+            "{REPOLESS_DIR} in the export directory is not a directory"
+        )));
+    }
+
+    for mut p in proved {
+        let dest = dest_dir.join(p.upload.basename.as_str());
+        let mut outfile = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+            .map_err(|e| {
+                RefineError::TarballError(format!(
+                    "{REPOLESS_DIR}/{} already has a writer: {e}",
+                    p.upload.basename.as_str()
+                ))
+            })?;
+        std::io::copy(&mut p.file, &mut outfile).map_err(|e| {
+            RefineError::TarballError(format!(
+                "copy staged upload to {REPOLESS_DIR}/{}: {e}",
+                p.upload.basename.as_str()
+            ))
+        })?;
     }
     Ok(())
 }
@@ -3789,14 +4060,24 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
     matches!(disposition, FindingKind::Actionable { include: true })
 }
 
+/// Render a refine export tarball at `tarball_path`.
+///
+/// `upload_dir_canon` must be the *canonical* upload directory the session
+/// prepared, not a path that can still resolve somewhere else; `None`
+/// means no directory has been prepared and so nothing can be proved.
+///
+/// Returns one warning per package that claimed a staged upload the export
+/// could not prove. Those packages are demoted, not fatal: the export
+/// succeeds, the Containerfile carries a FIXME instead of a `COPY`, and
+/// nothing is written for them under `repoless-packages/`.
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
     render_ctx: Option<&RenderContext>,
     source_tarball: Option<&Path>,
-    upload_dir: Option<&Path>,
-) -> Result<(), RefineError> {
+    upload_dir_canon: Option<&Path>,
+) -> Result<Vec<String>, RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
 
@@ -3838,12 +4119,13 @@ pub fn render_refine_export(
         extract_payload_dirs_from_tarball(source, snap, out)?;
     }
 
-    // 2f. Copy uploaded RPMs (from refine UI upload endpoint) alongside
-    //     cached RPMs from the source tarball. Filtered by include state
-    //     so excluded uploads don't leak into export.
-    if let Some(uploads) = upload_dir {
-        copy_uploaded_rpms(uploads, out, snap)?;
-    }
+    // 2f. Copy staged uploads (from the refine UI upload endpoint)
+    //     alongside cached RPMs from the source tarball. Every one is
+    //     proved first; a package whose upload cannot be proved is demoted
+    //     to a FIXME and a warning rather than exported.
+    let (proved, warnings) = prove_staged_uploads(upload_dir_canon, snap);
+    let verified = verified_uploads(&proved);
+    copy_proved_uploads(proved, out)?;
 
     // 2g. Materialize compose files (conditional — only when compose files
     //     have raw_content populated by the collector).
@@ -3935,10 +4217,20 @@ pub fn render_refine_export(
     //    tree write that populated the tarball's config/ directory.
     //    Preview also materializes to a tempdir for the same roots,
     //    guaranteeing byte-identical output.
+    //
+    //    The render context the renderer sees is the caller's with the
+    //    uploads 2f proved folded in, so the only names a `COPY` can carry
+    //    are the ones 2f actually wrote.
+    let ctx = RenderContext {
+        group_states: render_ctx
+            .map(|c| c.group_states.clone())
+            .unwrap_or_default(),
+        verified_uploads: verified,
+    };
     let containerfile = if let Some(orig) = original_includes {
-        render_containerfile_with_originals(snap, Some(&materialized_roots), orig, render_ctx)
+        render_containerfile_with_originals(snap, Some(&materialized_roots), orig, Some(&ctx))
     } else {
-        render_containerfile(snap, Some(&materialized_roots), render_ctx)
+        render_containerfile(snap, Some(&materialized_roots), Some(&ctx))
     };
     std::fs::write(out.join("Containerfile"), containerfile)?;
 
@@ -3999,7 +4291,7 @@ pub fn render_refine_export(
     inspectah_pipeline::render::tarball::create_tarball(out, tarball_path, prefix)
         .map_err(|e| RefineError::TarballError(e.to_string()))?;
 
-    Ok(())
+    Ok(warnings)
 }
 
 /// Check whether a compose file path is safe for export writes.
@@ -7193,6 +7485,128 @@ mod tests {
     /// The single package of a `snapshot_with_repoless` session.
     fn only_package(session: &RefineSession) -> &PackageEntry {
         &session.original.rpm.as_ref().unwrap().packages_added[0]
+    }
+
+    /// Each refusal [`verify_staged_upload`] can make, paired with an
+    /// input that produces it.
+    ///
+    /// The export tests assert the demotion end to end, which a function
+    /// that refused everything for one reason would also satisfy. This is
+    /// the table that tells those cases apart, and it is what names the
+    /// reaching input for every branch of the verification order.
+    #[test]
+    fn verify_staged_upload_refusal_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let outside = canon.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let sub = canon.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(canon.join("good-1-1.noarch.rpm"), b"ok").unwrap();
+        std::fs::write(outside.join("good-1-1.noarch.rpm"), b"elsewhere").unwrap();
+        std::fs::write(sub.join("good-1-1.noarch.rpm"), b"nested").unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("good-1-1.noarch.rpm"),
+            canon.join("link-1-1.noarch.rpm"),
+        )
+        .unwrap();
+        std::fs::create_dir(canon.join("adir-1-1.noarch.rpm")).unwrap();
+
+        let entry = |cache_path: Option<PathBuf>| PackageEntry {
+            name: "good".into(),
+            version: "1".into(),
+            release: "1".into(),
+            arch: "noarch".into(),
+            disposition: FindingKind::included(),
+            uploaded: true,
+            cache_path: cache_path.map(|p| p.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+
+        let cases: Vec<(&str, Option<PathBuf>, Refusal)> = vec![
+            ("no recorded path", None, Refusal::NoCachePath),
+            (
+                "a path that names no file",
+                Some(PathBuf::from("/")),
+                Refusal::NoBasename,
+            ),
+            (
+                "a basename that would be a hidden file",
+                Some(canon.join(".good-1-1.noarch.rpm")),
+                Refusal::Name(crate::rpm_filename::NameError::BadFirstByte),
+            ),
+            (
+                "a basename carrying a shell metacharacter",
+                Some(canon.join("good-1$(id)-1.noarch.rpm")),
+                Refusal::Name(crate::rpm_filename::NameError::BadByte { at: 6 }),
+            ),
+            // Not `Refusal::Name`: `Path::file_name` of
+            // `<canon>/../x.rpm` is already `x.rpm`, which the allowlist
+            // admits, so a traversal inside `cache_path` is caught by
+            // the parent check rather than the name check.
+            (
+                "a traversal inside the recorded path",
+                Some(canon.join("../x.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a parent that is not the upload directory",
+                Some(outside.join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a subdirectory of the upload directory",
+                Some(sub.join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a parent that does not resolve at all",
+                Some(canon.join("gone").join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "nothing staged under that name",
+                Some(canon.join("absent-1-1.noarch.rpm")),
+                Refusal::Missing,
+            ),
+            (
+                "a symlink at the staged name",
+                Some(canon.join("link-1-1.noarch.rpm")),
+                Refusal::NotRegularFile,
+            ),
+            (
+                "a directory at the staged name",
+                Some(canon.join("adir-1-1.noarch.rpm")),
+                Refusal::NotRegularFile,
+            ),
+        ];
+
+        for (label, cache_path, want) in cases {
+            let mut pkg = entry(cache_path);
+            // The basename drives the lookup, so the refusals that are
+            // about the name need their own package name to match it.
+            if let Some(ref cp) = pkg.cache_path {
+                if cp.ends_with("link-1-1.noarch.rpm") {
+                    pkg.name = "link".into();
+                } else if cp.ends_with("adir-1-1.noarch.rpm") {
+                    pkg.name = "adir".into();
+                } else if cp.ends_with("absent-1-1.noarch.rpm") {
+                    pkg.name = "absent".into();
+                }
+            }
+            let got = verify_staged_upload(&canon, &pkg).err();
+            assert_eq!(got, Some(want), "{label}");
+        }
+
+        // And the one input that is not a refusal, so the table above
+        // cannot be satisfied by a function that refuses everything.
+        let ok = verify_staged_upload(&canon, &entry(Some(canon.join("good-1-1.noarch.rpm"))))
+            .expect("a regular file in the upload directory under a valid name");
+        assert_eq!(ok.upload.basename.as_str(), "good-1-1.noarch.rpm");
+        assert_eq!(ok.upload.canonical, "good.noarch");
+        // The filename's version-release equals the host's, so there is
+        // no difference to report.
+        assert_eq!(ok.upload.uploaded_version, None);
     }
 
     #[test]
