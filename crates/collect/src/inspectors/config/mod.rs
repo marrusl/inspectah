@@ -17,7 +17,10 @@ use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use std::collections::HashSet;
 use std::path::Path;
-use walk::{dhcp_connection_paths, is_dev_artifact, is_excluded_unowned, walk_etc_recursive};
+use walk::{
+    dhcp_connection_paths, is_dev_artifact, is_excluded_unowned, walk_etc_recursive,
+    walk_etc_with_reasons,
+};
 
 use super::modernization;
 
@@ -171,7 +174,7 @@ impl Inspector for ConfigInspector {
             inspector: inspector_id,
             step: StepId::WalkingFilesystem,
         });
-        match walk_etc_recursive(exec, "/etc") {
+        match walk_etc_with_reasons(exec, "/etc", &mut degraded_reasons) {
             Ok(files) => {
                 for rel_path in files {
                     let abs_path = format!("/etc/{rel_path}");
@@ -1406,6 +1409,23 @@ mod tests {
         // .........  — all dots (no changes detected but listed)
         assert_eq!(
             classify_rpm_va_kind("........."),
+            ConfigFileKind::RpmOwnedDefault
+        );
+    }
+
+    /// Tripwire for `is_authselect_pam_link`, which is unreachable while
+    /// this holds.
+    ///
+    /// The authselect skip exists for an `rpm -Va` entry whose only flag
+    /// is `L`. This classifier reads the size and digest columns only, so
+    /// such an entry is already `RpmOwnedDefault` and already dropped
+    /// before the skip can matter. Widening the classifier to read the
+    /// readLink column is the one change that makes the skip live, and it
+    /// fails this assertion at exactly that moment.
+    #[test]
+    fn va_link_only_is_default_which_is_why_the_authselect_skip_is_unreachable() {
+        assert_eq!(
+            classify_rpm_va_kind("....L...."),
             ConfigFileKind::RpmOwnedDefault
         );
     }

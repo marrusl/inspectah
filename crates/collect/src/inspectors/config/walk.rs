@@ -323,22 +323,41 @@ fn glob_match_chars(pat: &[char], txt: &[char]) -> bool {
 ///
 /// Returns relative paths (relative to `root`) of all regular files found.
 /// Prunes dev-artifact directories and VCS trees. Returns an error if the
-/// top-level directory read fails with PermissionDenied.
-pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>, std::io::Error> {
+/// walk found nothing at all, which is what a PermissionDenied on `root`
+/// itself looks like.
+///
+/// A PermissionDenied on a directory *below* `root` is appended to
+/// `degraded_reasons` and the walk continues. Those files are absent from
+/// the result and therefore from the export, so the caller must report the
+/// section degraded rather than complete: the walk earlier discarded these
+/// reasons unless it found no files at all, which reported a partial scan
+/// of `/etc` as a whole one.
+pub fn walk_etc_with_reasons(
+    exec: &dyn Executor,
+    root: &str,
+    degraded_reasons: &mut Vec<String>,
+) -> Result<Vec<String>, std::io::Error> {
     let mut files = Vec::new();
-    let mut degraded_reasons = Vec::new();
-    walk_recursive_inner(exec, root, "", &mut files, &mut degraded_reasons);
+    let before = degraded_reasons.len();
+    walk_recursive_inner(exec, root, "", &mut files, degraded_reasons);
 
-    if files.is_empty() && !degraded_reasons.is_empty() {
-        // If we got no files and had permission errors, the first error
-        // was likely on the root itself
+    if files.is_empty() && degraded_reasons.len() > before {
+        // No files and a permission error: the error was on `root` itself,
+        // so it is the whole result rather than a partial-scan note.
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            degraded_reasons.join("; "),
+            degraded_reasons.split_off(before).join("; "),
         ));
     }
 
     Ok(files)
+}
+
+/// [`walk_etc_with_reasons`] for the secondary scans (orphan detection,
+/// `/usr/etc`, the ostree branch), which do not feed the section's
+/// completeness and so have nowhere to put a partial-scan note.
+pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>, std::io::Error> {
+    walk_etc_with_reasons(exec, root, &mut Vec::new())
 }
 
 fn walk_recursive_inner(

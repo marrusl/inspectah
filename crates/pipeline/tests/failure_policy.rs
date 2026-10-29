@@ -927,18 +927,77 @@ fn test_selinux_semanage_unavailable_degraded() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. (removed) SELinux: PermissionDenied on audit rules → Degraded
-//
-// The SELinux inspector no longer reads /etc/audit/rules.d; the config
-// walker owns that tree (§ 3.6). The test that lived here asserted the
-// SELinux section was degraded when the directory was unreadable, and
-// after the move it still passed -- for a different reason, because the
-// same fixture leaves `semanage boolean -l` empty, which case 5 above
-// already covers. A test that passes for a reason its name does not name
-// is worse than no test, so it is gone rather than retargeted: the
-// config walker's own subdirectory PermissionDenied does not degrade the
-// section unless the whole walk is empty, which is its own backlog item.
+// 6. Config: PermissionDenied on an /etc subtree the walker owns → Degraded
 // ---------------------------------------------------------------------------
+
+/// An unreadable directory below `/etc` degrades the config section even
+/// when the rest of the tree reads fine.
+///
+/// This replaces a SELinux test. Until § 3.6 the SELinux inspector read
+/// `/etc/audit/rules.d` itself and pushed "permission denied reading
+/// /etc/audit/rules.d", and the test here asserted the SELinux section
+/// was degraded. Moving the tree to the config walker moved that signal
+/// to a walker that **discarded** per-directory permission failures
+/// unless the whole walk came back empty, so an unreadable subtree
+/// reported Complete while its files were silently missing from the
+/// export. The old test did not catch the loss: it kept passing, because
+/// the same fixture leaves `semanage boolean -l` empty and case 5 above
+/// degrades on that.
+///
+/// The fixture therefore makes `/etc/audit/rules.d` the only thing wrong:
+/// every file read succeeds, so a degraded verdict can only come from the
+/// directory.
+#[test]
+fn test_config_unreadable_subtree_degrades() {
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        .with_dir("/etc", vec!["audit", "myapp.conf"])
+        .with_dir("/etc/audit", vec!["rules.d"])
+        .with_dir_error("/etc/audit/rules.d", std::io::ErrorKind::PermissionDenied)
+        .with_file("/etc/myapp.conf", "port=8080\n");
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ConfigInspector::new()),
+    ];
+
+    let pipeline = collect(
+        &source,
+        &exec,
+        &inspectors,
+        None,
+        &NullProgress,
+        &AtomicBool::new(false),
+    );
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::Config),
+                "Config must be degraded when a subtree it owns is unreadable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for an unreadable /etc subtree, got {:?}",
+            other
+        ),
+    }
+
+    // The readable part of the walk still lands: a degraded section is a
+    // partial one, not an empty one.
+    let config = snapshot
+        .config
+        .as_ref()
+        .expect("Config section must be present even when degraded");
+    assert!(
+        config.files.iter().any(|f| f.path == "/etc/myapp.conf"),
+        "the readable file must still be collected, got {:?}",
+        config.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+}
 
 // ---------------------------------------------------------------------------
 // 7. NonRPM: readelf unavailable → Complete with warning (not degraded)

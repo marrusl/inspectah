@@ -428,17 +428,24 @@ fn test_config_inspector_json_roundtrip() {
 /// `UNOWNED_EXCLUDE_EXACT`) because `tuned_disposition` renders them;
 /// `active_profile` is in the fixture so that a change deleting that
 /// exclusion along with the profile glob fails here.
+///
+/// `/etc/audit/rules.d/audit.rules` is RPM-owned and unmodified, which is
+/// the filter item 1.2 needs and the reason no `SnippetOrigin` exists. It
+/// is in the fixture because the walker's uniform treatment of these three
+/// trees is new: a tree-specific exclusion re-added inside the ownership
+/// check would otherwise pass unnoticed.
 #[test]
 fn pam_audit_and_tuned_are_config_entries() {
     let exec = MockExecutor::new()
         .with_dir("/etc", vec!["pam.d", "audit", "tuned"])
         .with_dir("/etc/pam.d", vec!["custom-sshd", "su-l"])
         .with_dir("/etc/audit", vec!["rules.d"])
-        .with_dir("/etc/audit/rules.d", vec!["driftify.rules"])
+        .with_dir("/etc/audit/rules.d", vec!["audit.rules", "driftify.rules"])
         .with_dir("/etc/tuned", vec!["myapp", "active_profile"])
         .with_dir("/etc/tuned/myapp", vec!["tuned.conf"])
         .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n")
         .with_file("/etc/pam.d/su-l", "auth include su\n")
+        .with_file("/etc/audit/rules.d/audit.rules", "-D\n-b 8192\n")
         .with_file(
             "/etc/audit/rules.d/driftify.rules",
             "-w /etc/shadow -p wa -k shadow_changes\n",
@@ -446,7 +453,10 @@ fn pam_audit_and_tuned_are_config_entries() {
         .with_file("/etc/tuned/myapp/tuned.conf", "[main]\nsummary=myapp\n")
         .with_file("/etc/tuned/active_profile", "myapp\n");
 
-    let rpm_state = RpmState::default();
+    let rpm_state = RpmState {
+        owned_paths: HashSet::from([PathBuf::from("/etc/audit/rules.d/audit.rules")]),
+        ..Default::default()
+    };
     let source = pkg_source();
     let ctx = InspectionContext {
         source_system: &source,
@@ -505,6 +515,14 @@ fn pam_audit_and_tuned_are_config_entries() {
     assert!(
         !section.files.iter().any(|f| f.path == "/etc/pam.d/su-l"),
         "the eight base PAM configs stay excluded by exact match"
+    );
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/audit/rules.d/audit.rules"),
+        "an RPM-owned unmodified audit rule stays out: the walker's \
+         ownership check is the filter, not a per-tree exclusion"
     );
 }
 
