@@ -3064,6 +3064,13 @@ impl RefineSession {
         // locked item with include=true.
         clamp_locked_items(&mut snap);
 
+        // § 3.3: a repo-enabling package whose serving repo definition
+        // this export no longer carries is demoted to the repo-less
+        // rendering. It runs here because the include decisions it reads
+        // are the projection's, and because the view keys the upload
+        // control off the annotation it sets.
+        inspectah_pipeline::render::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+
         snap
     }
 

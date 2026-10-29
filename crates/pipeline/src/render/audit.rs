@@ -391,6 +391,39 @@ fn render_packages_section(rpm: &inspectah_core::types::rpm::RpmSection, lines: 
         lines.push(String::new());
     }
 
+    // Repo-enabling packages: the sections the scan proved serve each one,
+    // and whether this export still carries a definition for any of them.
+    // A "no" is the § 3.3 demotion — the package renders repo-less and
+    // wants an upload or a re-included repo.
+    let repo_enabling: Vec<_> = rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.disposition.is_included() && !p.repo_enabling_from.is_empty())
+        .collect();
+    if !repo_enabling.is_empty() {
+        lines.push(format!(
+            "### Repo-enabling Packages ({})",
+            repo_enabling.len()
+        ));
+        lines.push(String::new());
+        lines.push("| Package | Serving Repos | Carried by Export |".into());
+        lines.push("|---------|---------------|-------------------|".into());
+        for p in &repo_enabling {
+            let serving = p
+                .repo_enabling_from
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let carried = match super::repo_enabling::repo_enabling_export(rpm, p) {
+                super::repo_enabling::RepoEnablingExport::Served => "yes",
+                _ => "no",
+            };
+            lines.push(format!("| {} | {} | {} |", p.name, serving, carried));
+        }
+        lines.push(String::new());
+    }
+
     // Group overlap annotations
     if let Some(ref groups) = rpm.installed_groups {
         let overlaps = find_package_overlaps(groups);
@@ -1171,6 +1204,57 @@ mod tests {
             ..Default::default()
         });
         snap
+    }
+
+    /// The § 4 row: each repo-enabling package, the sections the scan
+    /// proved serve it, and whether the export still carries one.
+    #[test]
+    fn audit_reports_whether_the_export_still_serves_each_repo_enabling_package() {
+        use inspectah_core::types::repo::RepoId;
+        use inspectah_core::types::rpm::RepoFile;
+
+        let repo_file = |included: bool| RepoFile {
+            path: "/etc/yum.repos.d/epel.repo".into(),
+            content: "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n".into(),
+            is_default_repo: false,
+            disposition: FindingKind::from_bool(included),
+            locked: false,
+            aggregate: None,
+        };
+        let snapshot_with = |included: bool| {
+            let mut snap = InspectionSnapshot::new();
+            snap.rpm = Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "epel-release".into(),
+                    state: PackageState::Added,
+                    source_repo: "@commandline".into(),
+                    disposition: FindingKind::included(),
+                    repo_enabling_from: vec![RepoId::new("epel")],
+                    ..Default::default()
+                }],
+                repo_files: vec![repo_file(included)],
+                ..Default::default()
+            });
+            snap
+        };
+
+        for (included, carried) in [(true, "yes"), (false, "no")] {
+            let md = render_audit(&snapshot_with(included));
+            assert!(
+                md.contains("### Repo-enabling Packages (1)"),
+                "carried={carried}:\n{md}"
+            );
+            assert!(
+                md.contains(&format!("| epel-release | epel | {carried} |")),
+                "carried={carried}:\n{md}"
+            );
+        }
+
+        // No row at all when nothing is repo-enabling.
+        assert!(
+            !render_audit(&test_snapshot()).contains("Repo-enabling Packages"),
+            "an ordinary package gets no row"
+        );
     }
 
     #[test]

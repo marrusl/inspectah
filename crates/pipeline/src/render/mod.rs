@@ -31,6 +31,7 @@ pub mod report_data;
 pub mod language_packages;
 pub mod service_intent;
 
+pub mod repo_enabling;
 pub mod repoless;
 pub mod unmanaged;
 

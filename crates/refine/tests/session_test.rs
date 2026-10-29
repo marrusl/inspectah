@@ -1941,3 +1941,87 @@ fn a_repo_op_with_no_rpm_section_is_refused_on_provenance() {
     }
     assert_eq!(s.timeline_len(), 0);
 }
+
+/// § 3.3's demotion has to run inside `project_snapshot`, not only in the
+/// renderer: the refine view keys the RPM upload control off
+/// `repoless_annotation`, so a package whose serving repo the operator
+/// just dropped has to grow one. A test of the predicate alone would
+/// still pass with the call site deleted.
+#[test]
+fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "vendor-release".into(),
+                arch: "noarch".into(),
+                state: PackageState::Added,
+                source_repo: "@commandline".into(),
+                disposition: FindingKind::included(),
+                repo_enabling_from: vec![inspectah_core::types::repo::RepoId::new("bootstrap")],
+                ..Default::default()
+            },
+            // § 3.2 refuses a repo toggle with no effective member, and a
+            // package the section merely *serves* is attributed to
+            // `@commandline`, not to it. The section needs a member of its
+            // own before the operator can drop it at all.
+            PackageEntry {
+                name: "bootstrap-tool".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "bootstrap".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/bootstrap.repo".into(),
+            content: "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=1\n".into(),
+            is_default_repo: false,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+        }],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: "vendor-release".into(),
+                arch: "noarch".into(),
+            },
+            include: true,
+        })
+        .expect("the package is includable");
+
+    let annotation_of = |s: &RefineSession| {
+        s.snapshot_projected()
+            .rpm
+            .expect("the projection keeps the rpm section")
+            .packages_added
+            .iter()
+            .find(|p| p.name == "vendor-release")
+            .expect("the projection keeps the package")
+            .repoless_annotation
+            .clone()
+    };
+
+    assert_eq!(
+        annotation_of(&session),
+        "",
+        "the carried case must be clean, or the assertion below is free"
+    );
+
+    session
+        .apply(set_include_repo("bootstrap", false))
+        .expect("the section is toggleable");
+
+    assert_eq!(
+        annotation_of(&session),
+        "No repo source: the repo that served vendor-release (bootstrap) \
+         is not carried by this export",
+    );
+}

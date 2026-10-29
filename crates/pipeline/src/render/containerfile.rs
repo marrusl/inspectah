@@ -21,7 +21,8 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
@@ -290,6 +291,194 @@ fn install_name_for_package(
     }
 }
 
+/// Section id prefix of the CodeReady Builder repository, lowercased.
+const CRB_ID_PREFIX: &str = "codeready-builder-";
+
+/// Infixes that mark a CRB section as a debuginfo or source mirror rather
+/// than the binary repo EPEL packages resolve against.
+const CRB_ID_EXCLUDED_INFIXES: [&str; 2] = ["-debug-", "-source-"];
+
+/// Why the CRB flags are there, said once per Containerfile.
+const CRB_BANNER: &str = "# CRB was enabled on the source host; EPEL packages may depend on it.";
+
+/// The CRB section ids this export carries enabled, as the host wrote them.
+///
+/// `--enablerepo` takes an id verbatim: nothing here reconstructs one from
+/// a prefix. That is also why no `$(arch)` can reach a `RUN` line -- an id
+/// containing it fails `sanitize_shell_value`, which rejects `$`, `(` and
+/// `)`, so the property is the filter's rather than a separate check's.
+fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
+    let mut ids: std::collections::BTreeSet<RepoId> = std::collections::BTreeSet::new();
+    for file in rpm
+        .repo_files
+        .iter()
+        .filter(|f| f.disposition.is_included())
+    {
+        for sec in parse_repo_sections(&file.content) {
+            let lower = sec.id.as_str().to_ascii_lowercase();
+            if sec.enabled
+                && lower.starts_with(CRB_ID_PREFIX)
+                && !CRB_ID_EXCLUDED_INFIXES.iter().any(|m| lower.contains(m))
+                && sanitize_shell_value(sec.id.as_str()).is_some()
+            {
+                ids.insert(sec.id);
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+/// The `--enablerepo` flags and one-time banner that CRB adds to the
+/// package, group, module-stream and repo-enabling transactions.
+///
+/// Those four ask for it by name. § 3.1's `RUN dnf install -y
+/// policycoreutils-python-utils` at the head of the SELinux block does
+/// not, and cannot: it is a `const` in `selinux.rs` that nothing here
+/// rewrites. Scoping by call site rather than by sweeping `dnf install`
+/// lines is what keeps that exclusion from regressing when a later
+/// transaction is added.
+struct CrbFlags {
+    /// Appended straight after the `dnf` subcommand; empty when no CRB
+    /// section is carried.
+    flags: String,
+    banner_pending: bool,
+}
+
+impl CrbFlags {
+    fn new(rpm: &RpmSection) -> CrbFlags {
+        let ids = crb_ids(rpm);
+        CrbFlags {
+            flags: ids
+                .iter()
+                .map(|id| format!(" --enablerepo={id}"))
+                .collect::<String>(),
+            banner_pending: !ids.is_empty(),
+        }
+    }
+
+    /// The banner, for the first transaction that asks.
+    fn banner(&mut self) -> Option<String> {
+        if !self.banner_pending {
+            return None;
+        }
+        self.banner_pending = false;
+        Some(CRB_BANNER.to_string())
+    }
+}
+
+/// A `RUN dnf install -y` transaction over `names`, with the cleanup tail
+/// every install block in this file carries.
+fn dnf_install_lines(names: &[&str], crb: &CrbFlags) -> Vec<String> {
+    let mut body = vec![format!("RUN dnf install -y{} \\", crb.flags)];
+    for name in names {
+        body.push(format!("    {} \\", name));
+    }
+    body.push("    && dnf clean all \\".into());
+    body.push("    && rm -rf \\".into());
+    body.push("        /var/cache/dnf \\".into());
+    body.push("        /var/lib/dnf/history* \\".into());
+    body.push("        /var/log/dnf* \\".into());
+    body.push("        /var/log/hawkey.log \\".into());
+    body.push("        /var/log/rhsm".into());
+    body
+}
+
+/// Upstream "latest" RPM URLs for release packages whose project
+/// publishes one. Advice on a `#` line only: it reaches the network,
+/// which installing from the copied definition does not have to.
+const RELEASE_PERMALINKS: &[(&str, &str)] = &[(
+    "epel-release",
+    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{major}.noarch.rpm",
+)];
+
+/// What a permalink substitutes the host's OS major version into.
+const OS_MAJOR_PLACEHOLDER: &str = "{major}";
+
+/// The permalink for `pkg` and the host it points at, when the project
+/// publishes one and the snapshot recorded an OS version to fill in.
+fn release_permalink(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Option<(String, String)> {
+    let (_, template) = RELEASE_PERMALINKS
+        .iter()
+        .find(|(name, _)| *name == pkg.name)?;
+    let version_id = &snap.os_release.as_ref()?.version_id;
+    let major = sanitize_shell_value(version_id.split('.').next()?).filter(|m| !m.is_empty())?;
+    let url = template.replace(OS_MAJOR_PLACEHOLDER, major);
+    let host = url.split_once("://")?.1.split('/').next()?.to_string();
+    Some((url, host))
+}
+
+/// Longest line the repo-enabling narration wraps to, counting the
+/// leading `# `. § 5.2's block text is this wrap over its sentences.
+const NARRATION_WIDTH: usize = 80;
+
+/// Greedy word wrap into `# `-prefixed comment lines.
+fn comment_paragraph(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::from("#");
+    for word in text.split_whitespace() {
+        if current.len() > 1 && current.len() + 1 + word.len() > NARRATION_WIDTH {
+            lines.push(std::mem::replace(&mut current, String::from("#")));
+        }
+        current.push(' ');
+        current.push_str(word);
+    }
+    if current.len() > 1 {
+        lines.push(current);
+    }
+    lines
+}
+
+/// § 5.2's narration for one repo-enabling package: why it installs by
+/// name from the copied definition, and what the build needs for that to
+/// work.
+fn repo_enabling_narration(
+    snap: &InspectionSnapshot,
+    rpm: &RpmSection,
+    pkg: &PackageEntry,
+) -> Vec<String> {
+    let mut text = format!(
+        "{} was installed outside any repo on the source host; the host's enabled repos \
+         served it, and its repo files and key are copied above, so it installs from the \
+         copied definition. The build needs those repo endpoints reachable with any \
+         credentials and CA trust they require.",
+        super::language_packages::sanitize_for_comment(&pkg.name)
+    );
+    if let Some(file) = super::repo_enabling::owned_repo_file_name(rpm, pkg) {
+        text.push_str(&format!(
+            " Installing after the COPY may leave a cosmetic {}.rpmnew.",
+            super::language_packages::sanitize_for_comment(file)
+        ));
+    }
+    let permalink = release_permalink(snap, pkg);
+    if let Some((_, host)) = &permalink {
+        text.push_str(&format!(" Alternative, when {host} is reachable:"));
+    }
+    let mut lines = comment_paragraph(&text);
+    if let Some((url, _)) = &permalink {
+        lines.push(format!("# RUN dnf install -y {url}"));
+    }
+    lines
+}
+
+/// § 3.3's demotion line, printed in place of the active install when no
+/// serving repo definition survives the export.
+fn demotion_fixme(pkg: &PackageEntry, loss: &super::repo_enabling::ServingLoss) -> String {
+    let name = super::language_packages::sanitize_for_comment(&pkg.name);
+    let id = super::language_packages::sanitize_for_comment(loss.id.as_str());
+    let tail =
+        format!("{name} installs from that repo definition, which this export does not carry");
+    match &loss.file {
+        Some(file) => format!(
+            "# FIXME: include {} under Configuration Files, or re-include repo {id}, or \
+             upload the RPM; {tail}",
+            super::language_packages::sanitize_for_comment(file)
+        ),
+        // Nothing captured defines the section, so there is no file to
+        // name; the advice that would name one is dropped, not invented.
+        None => format!("# FIXME: re-include repo {id}, or upload the RPM; {tail}"),
+    }
+}
+
 fn packages_section_lines(
     snap: &InspectionSnapshot,
     base: Option<&str>,
@@ -423,6 +612,8 @@ fn packages_section_lines(
         ));
     }
 
+    let mut crb = CrbFlags::new(rpm);
+
     // Module streams
     let enabled_modules: Vec<_> = rpm
         .module_streams
@@ -460,9 +651,12 @@ fn packages_section_lines(
                 }
                 format!("/{}", safe_profiles.join(","))
             };
+            if let Some(banner) = crb.banner() {
+                mod_body.push(banner);
+            }
             mod_body.push(format!(
-                "RUN dnf module enable -y {}:{}{}",
-                ms.module_name, ms.stream, profiles
+                "RUN dnf module enable -y{} {}:{}{}",
+                crb.flags, ms.module_name, ms.stream, profiles
             ));
         }
         lines.extend(section("Module Streams", mod_body));
@@ -497,7 +691,10 @@ fn packages_section_lines(
 
                 // Emit group install section
                 let mut grp_body: Vec<String> = Vec::new();
-                grp_body.push("RUN dnf group install -y \\".into());
+                if let Some(banner) = crb.banner() {
+                    grp_body.push(banner);
+                }
+                grp_body.push(format!("RUN dnf group install -y{} \\", crb.flags));
                 for g in &renderable {
                     grp_body.push(format!("    \"{}\" \\", g.name));
                 }
@@ -617,84 +814,72 @@ fn packages_section_lines(
             counts
         });
 
+    // Repo-enabling packages (e.g. epel-release) install in an earlier
+    // transaction so their GPG keys and repo configs are present when DNF
+    // verifies signatures of packages from those repos. Which packages
+    // those are is `repo_enabling_from` and nothing else: deciding it by a
+    // name ending in `-release` rendered a package the host's repos never
+    // served as an active install *and* as a MANUAL block.
+    let mut repo_enabling: Vec<(&PackageEntry, String)> = Vec::new();
+    let mut demoted: Vec<(&PackageEntry, super::repo_enabling::ServingLoss)> = Vec::new();
+
     for pkg in installable_packages {
         // Suppress packages whose name is covered by a renderable group
         if group_member_suppressed.contains(&pkg.name) {
             continue;
         }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
-        if sanitize_shell_value(&install_name).is_some() {
-            install_names.push(install_name);
+        if sanitize_shell_value(&install_name).is_none() {
+            continue;
         }
+        match super::repo_enabling::repo_enabling_export(rpm, pkg) {
+            super::repo_enabling::RepoEnablingExport::NotEnabling => {
+                install_names.push(install_name)
+            }
+            super::repo_enabling::RepoEnablingExport::Served => {
+                repo_enabling.push((pkg, install_name))
+            }
+            super::repo_enabling::RepoEnablingExport::Lost(loss) => demoted.push((pkg, loss)),
+        }
+    }
+
+    if !repo_enabling.is_empty() || !demoted.is_empty() {
+        let mut repo_body: Vec<String> = Vec::new();
+        for (pkg, _) in &repo_enabling {
+            repo_body.extend(repo_enabling_narration(snap, rpm, pkg));
+        }
+        for (pkg, loss) in &demoted {
+            repo_body.push(demotion_fixme(pkg, loss));
+        }
+        if !repo_enabling.is_empty() {
+            let mut names: Vec<&str> = repo_enabling.iter().map(|(_, n)| n.as_str()).collect();
+            names.sort();
+            if let Some(banner) = crb.banner() {
+                repo_body.push(banner);
+            }
+            repo_body.extend(dnf_install_lines(&names, &crb));
+        }
+        lines.extend(section(
+            &format!(
+                "Repo-enabling packages ({})",
+                repo_enabling.len() + demoted.len()
+            ),
+            repo_body,
+        ));
     }
 
     if !install_names.is_empty() {
         install_names.sort();
-
-        // Split repo-enabling packages (e.g. epel-release) from the rest.
-        // These must be installed first so their GPG keys and repo configs
-        // are present when DNF verifies signatures of packages from those repos.
-        let (repo_pkgs, other_pkgs): (Vec<_>, Vec<_>) = install_names.iter().partition(|n| {
-            // Strip optional .arch suffix (e.g. "epel-release.noarch" -> "epel-release")
-            let base = n.split('.').next().unwrap_or(n);
-            base.ends_with("-release")
-        });
-
-        if !repo_pkgs.is_empty() && !other_pkgs.is_empty() {
-            // Emit repo-enabling packages first
-            let mut repo_body: Vec<String> = Vec::new();
-            repo_body.push("RUN dnf install -y \\".into());
-            for name in &repo_pkgs {
-                repo_body.push(format!("    {} \\", name));
-            }
-            repo_body.push("    && dnf clean all \\".into());
-            repo_body.push("    && rm -rf \\".into());
-            repo_body.push("        /var/cache/dnf \\".into());
-            repo_body.push("        /var/lib/dnf/history* \\".into());
-            repo_body.push("        /var/log/dnf* \\".into());
-            repo_body.push("        /var/log/hawkey.log \\".into());
-            repo_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Repo-enabling packages ({})", repo_pkgs.len()),
-                repo_body,
-            ));
-
-            // Then emit the remaining packages
-            let mut pkg_body: Vec<String> = Vec::new();
-            pkg_body.push("RUN dnf install -y \\".into());
-            for name in &other_pkgs {
-                pkg_body.push(format!("    {} \\", name));
-            }
-            pkg_body.push("    && dnf clean all \\".into());
-            pkg_body.push("    && rm -rf \\".into());
-            pkg_body.push("        /var/cache/dnf \\".into());
-            pkg_body.push("        /var/lib/dnf/history* \\".into());
-            pkg_body.push("        /var/log/dnf* \\".into());
-            pkg_body.push("        /var/log/hawkey.log \\".into());
-            pkg_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Packages ({})", other_pkgs.len()),
-                pkg_body,
-            ));
-        } else {
-            // All packages are the same kind — single block is fine
-            let mut pkg_body: Vec<String> = Vec::new();
-            pkg_body.push("RUN dnf install -y \\".into());
-            for name in &install_names {
-                pkg_body.push(format!("    {} \\", name));
-            }
-            pkg_body.push("    && dnf clean all \\".into());
-            pkg_body.push("    && rm -rf \\".into());
-            pkg_body.push("        /var/cache/dnf \\".into());
-            pkg_body.push("        /var/lib/dnf/history* \\".into());
-            pkg_body.push("        /var/log/dnf* \\".into());
-            pkg_body.push("        /var/log/hawkey.log \\".into());
-            pkg_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Packages ({})", install_names.len()),
-                pkg_body,
-            ));
+        let names: Vec<&str> = install_names.iter().map(|n| n.as_str()).collect();
+        let mut pkg_body: Vec<String> = Vec::new();
+        if let Some(banner) = crb.banner() {
+            pkg_body.push(banner);
         }
+        pkg_body.extend(dnf_install_lines(&names, &crb));
+        lines.extend(section(
+            &format!("Packages ({})", install_names.len()),
+            pkg_body,
+        ));
     }
 
     if !todo_lines.is_empty() {
@@ -1859,6 +2044,488 @@ mod tests {
             ..Default::default()
         });
         snap
+    }
+
+    // --- Repo-enabling fixtures (Task 17) -------------------------------
+
+    const EPEL_REPO_PATH: &str = "/etc/yum.repos.d/epel.repo";
+    const EPEL_KEY_PATH: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
+    const EPEL_REPO_CONTENT: &str = "[epel]\n\
+         name=EPEL\n\
+         baseurl=https://example.invalid/epel\n\
+         enabled=1\n\
+         gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n";
+
+    fn repo_file(
+        path: &str,
+        content: &str,
+        included: bool,
+    ) -> inspectah_core::types::rpm::RepoFile {
+        inspectah_core::types::rpm::RepoFile {
+            path: path.into(),
+            content: content.into(),
+            is_default_repo: false,
+            disposition: FindingKind::from_bool(included),
+            locked: false,
+            aggregate: None,
+        }
+    }
+
+    fn owns(package: &str, paths: &[&str]) -> inspectah_core::types::rpm::FileOwnershipEntry {
+        inspectah_core::types::rpm::FileOwnershipEntry {
+            package_name: package.into(),
+            paths: paths.iter().map(|p| (*p).to_string()).collect(),
+        }
+    }
+
+    /// Make `name` repo-enabling the way a scan records it: installed
+    /// `@commandline`, served by `[epel]`, owning the `epel.repo` and key
+    /// this export is carrying.
+    fn make_epel_repo_enabling(snap: &mut InspectionSnapshot, name: &str) {
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm.packages_added.iter_mut().filter(|p| p.name == name) {
+            pkg.source_repo = "@commandline".into();
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+        }
+        rpm.repo_files
+            .push(repo_file(EPEL_REPO_PATH, EPEL_REPO_CONTENT, true));
+        rpm.gpg_keys.push(repo_file(EPEL_KEY_PATH, "", true));
+        rpm.file_ownership
+            .push(owns(name, &[EPEL_REPO_PATH, EPEL_KEY_PATH]));
+    }
+
+    /// The other half of the double render: a `@commandline` package the
+    /// scan left repo-less got an active `dnf install` from `source_repo`
+    /// alone, next to its own MANUAL block. `@commandline` is not a repo,
+    /// and nothing proves one serves this package.
+    #[test]
+    fn a_repoless_commandline_package_is_never_an_active_install() {
+        let mut snap = snapshot_with_packages(&["vendor-release", "htop"]);
+        for pkg in snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.source_repo = "@commandline".into();
+            pkg.repoless_annotation = "No repo source \u{2014} manual resolution needed".into();
+        }
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            output.contains("# MANUAL: vendor-release"),
+            "the repo-less block is where it belongs:\n{output}"
+        );
+        assert!(
+            !output.contains("    vendor-release \\"),
+            "and it must not also be installed by name:\n{output}"
+        );
+        assert!(
+            output.contains("    htop \\"),
+            "the control: an ordinary package still installs:\n{output}"
+        );
+    }
+
+    #[test]
+    fn repo_enabling_block_replaces_the_duplicate_manual_block() {
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        snap.os_release = Some(inspectah_core::types::os::OsRelease {
+            version_id: "9.6".into(),
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None, None);
+
+        // § 5.2's block text, hand-transcribed, through the active install.
+        let expected = r"# === Repo-enabling packages (1) ===
+# epel-release was installed outside any repo on the source host; the host's
+# enabled repos served it, and its repo files and key are copied above, so it
+# installs from the copied definition. The build needs those repo endpoints
+# reachable with any credentials and CA trust they require. Installing after the
+# COPY may leave a cosmetic epel.repo.rpmnew. Alternative, when
+# dl.fedoraproject.org is reachable:
+# RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+RUN dnf install -y \
+    epel-release \";
+        assert!(
+            output.contains(expected),
+            "§ 5.2 block text:\nexpected:\n{expected}\ngot:\n{output}"
+        );
+
+        // § 8.3's active lines, in order.
+        let repos_at = output
+            .find("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/")
+            .expect("the repo files are copied");
+        let keys_at = output
+            .find("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/")
+            .expect("the GPG keys are copied");
+        let install_at = output.find(expected).expect("checked above");
+        assert!(
+            repos_at < keys_at && keys_at < install_at,
+            "the COPYs must precede the install:\n{output}"
+        );
+
+        // The permalink is advice, never an instruction.
+        for line in output
+            .lines()
+            .filter(|l| l.contains("dl.fedoraproject.org"))
+        {
+            assert!(
+                line.starts_with('#'),
+                "the permalink reached an active line: {line}"
+            );
+        }
+        assert!(
+            !output.contains("# MANUAL: epel-release"),
+            "the package that used to render twice still does:\n{output}"
+        );
+        assert!(
+            !output.contains("# TODO: 'epel-release"),
+            "a repo-enabling package needs no manual follow-up:\n{output}"
+        );
+    }
+
+    /// `vendor-release` owns `vendor.repo` but is served by `[bootstrap]`
+    /// from a file it does not own -- the two-repository case, where
+    /// losing either half is a demotion.
+    fn two_repository_snapshot() -> InspectionSnapshot {
+        let mut snap = snapshot_with_packages(&["vendor-release", "htop"]);
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.source_repo = "@commandline".into();
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("bootstrap")];
+        }
+        rpm.repo_files.push(repo_file(
+            "/etc/yum.repos.d/vendor.repo",
+            "[vendor]\nbaseurl=https://example.invalid/vendor\nenabled=1\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR\n",
+            true,
+        ));
+        rpm.repo_files.push(repo_file(
+            "/etc/yum.repos.d/bootstrap.repo",
+            "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=1\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP\n",
+            true,
+        ));
+        rpm.gpg_keys
+            .push(repo_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR", "", true));
+        rpm.gpg_keys.push(repo_file(
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP",
+            "",
+            true,
+        ));
+        rpm.file_ownership.push(owns(
+            "vendor-release",
+            &[
+                "/etc/yum.repos.d/vendor.repo",
+                "/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR",
+            ],
+        ));
+        snap
+    }
+
+    fn repo_file_mut<'a>(
+        snap: &'a mut InspectionSnapshot,
+        path: &str,
+    ) -> &'a mut inspectah_core::types::rpm::RepoFile {
+        snap.rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .iter_mut()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("fixture carries {path}"))
+    }
+
+    /// One way the export can lose a repo-enabling package's proof, and
+    /// the section and file the FIXME must then name.
+    struct DemotionCase {
+        label: &'static str,
+        mutate: fn(&mut InspectionSnapshot),
+        id: &'static str,
+        file: &'static str,
+    }
+
+    #[test]
+    fn losing_the_serving_repo_demotes_the_package() {
+        const ACTIVE_INSTALL: &str = "    vendor-release \\";
+        const FIXME_TAIL: &str = "vendor-release installs from that repo definition, \
+                                  which this export does not carry";
+
+        // The control: everything carried, so the demotion half below can
+        // fail. Re-including bootstrap.repo is this same state.
+        let served = render_containerfile(&two_repository_snapshot(), None, None);
+        assert!(
+            served.contains(ACTIVE_INSTALL),
+            "the carried case must install by name, or every case below is vacuous:\n{served}"
+        );
+        assert!(
+            !served.contains("# FIXME:"),
+            "the carried case must not warn:\n{served}"
+        );
+
+        // Each way the export can lose the proof, and the file the FIXME
+        // names for it.
+        let cases = [
+            DemotionCase {
+                label: "bootstrap.repo excluded",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/bootstrap.repo").disposition =
+                        FindingKind::excluded();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "[bootstrap] carried with enabled=0",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/bootstrap.repo").content =
+                        "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=0\n"
+                            .into();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "[bootstrap]'s gpgkey excluded",
+                mutate: |s| {
+                    let rpm = s.rpm.as_mut().expect("fixture has an rpm section");
+                    for key in rpm
+                        .gpg_keys
+                        .iter_mut()
+                        .filter(|k| k.path.ends_with("RPM-GPG-KEY-BOOTSTRAP"))
+                    {
+                        key.disposition = FindingKind::excluded();
+                    }
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "the vendor.repo the package owns is excluded",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/vendor.repo").disposition =
+                        FindingKind::excluded();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/vendor.repo",
+            },
+        ];
+
+        for DemotionCase {
+            label,
+            mutate,
+            id,
+            file,
+        } in cases
+        {
+            let mut snap = two_repository_snapshot();
+            mutate(&mut snap);
+            let output = render_containerfile(&snap, None, None);
+            let expected = format!(
+                "# FIXME: include {file} under Configuration Files, or re-include repo {id}, \
+                 or upload the RPM; {FIXME_TAIL}"
+            );
+            assert!(
+                output.contains(&expected),
+                "{label}:\nexpected:\n{expected}\ngot:\n{output}"
+            );
+            assert!(
+                !output.contains(ACTIVE_INSTALL),
+                "{label}: the renderer kept an active install:\n{output}"
+            );
+
+            // The projection half: the annotation is what returns the
+            // upload control, and what makes the repo-less block render.
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            let demoted = snap
+                .rpm
+                .as_ref()
+                .expect("fixture has an rpm section")
+                .packages_added
+                .iter()
+                .find(|p| p.name == "vendor-release")
+                .expect("fixture has vendor-release");
+            assert_eq!(
+                demoted.repoless_annotation,
+                format!(
+                    "No repo source: the repo that served vendor-release ({id}) \
+                     is not carried by this export"
+                ),
+                "{label}"
+            );
+            let after = render_containerfile(&snap, None, None);
+            assert!(
+                after.contains("# MANUAL: vendor-release"),
+                "{label}: the demoted package must reach the repo-less block:\n{after}"
+            );
+            assert!(
+                !after.contains(ACTIVE_INSTALL),
+                "{label}: still no active install after demotion:\n{after}"
+            );
+        }
+
+        // A serving id no captured file defines: there is no file to name,
+        // so the advice that names one is dropped rather than invented.
+        let mut snap = two_repository_snapshot();
+        for pkg in snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("mirror")];
+        }
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains(&format!(
+                "# FIXME: re-include repo mirror, or upload the RPM; {FIXME_TAIL}"
+            )),
+            "an undefined serving id:\n{output}"
+        );
+        assert!(
+            !output.contains("under Configuration Files"),
+            "no file exists to name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn crb_flags_every_dnf_transaction() {
+        use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
+
+        const CRB_MATCHED: &str = "codeready-builder-for-rhel-9-aarch64-rpms";
+        const CRB_VERBATIM: &str = "codeready-builder-rhel9-internal";
+        const CRB_REPO_PATH: &str = "/etc/yum.repos.d/crb.repo";
+        const CRB_CONTENT: &str = "[codeready-builder-for-rhel-9-aarch64-rpms]\nenabled=1\n\
+             [codeready-builder-rhel9-internal]\nenabled=1\n\
+             [crb-mirror-rhel9]\nenabled=1\n\
+             [codeready-builder-for-rhel-9-aarch64-debug-rpms]\nenabled=1\n\
+             [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n";
+
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.repo_files
+                .push(repo_file(CRB_REPO_PATH, CRB_CONTENT, true));
+            rpm.module_streams
+                .push(inspectah_core::types::rpm::EnabledModuleStream {
+                    module_name: "nodejs".into(),
+                    stream: "18".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                });
+            rpm.installed_groups = Some(vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["make".into()],
+                ..Default::default()
+            }]);
+        }
+        // An SELinux block, so § 3.1's precondition is in the output and
+        // the exclusion below is reachable rather than vacuous.
+        snap.selinux = Some(SelinuxSection {
+            port_labels: vec![SelinuxPortLabel {
+                protocol: "tcp".into(),
+                port: "8443".into(),
+                label_type: "http_port_t".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+            }],
+            ..Default::default()
+        });
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        let precondition = super::super::selinux::INSTALL_PRECONDITION[2];
+        let transactions: Vec<&str> = output
+            .lines()
+            .filter(|l| l.starts_with("RUN dnf ") && *l != precondition)
+            .collect();
+        assert_eq!(
+            transactions.len(),
+            4,
+            "bootstrap, module stream, group and package list:\n{output}"
+        );
+        for line in &transactions {
+            assert!(
+                line.contains(&format!("--enablerepo={CRB_MATCHED}"))
+                    && line.contains(&format!("--enablerepo={CRB_VERBATIM}")),
+                "transaction missing a CRB flag: {line}"
+            );
+        }
+        assert_eq!(
+            output
+                .matches("# CRB was enabled on the source host; EPEL packages may depend on it.")
+                .count(),
+            1,
+            "the comment appears once:\n{output}"
+        );
+        assert!(
+            output.contains(precondition),
+            "the SELinux precondition must render, or the exclusion is vacuous:\n{output}"
+        );
+        assert!(
+            !output
+                .lines()
+                .any(|l| l == precondition && l.contains("--enablerepo")),
+            "§ 3.1's precondition must carry no --enablerepo:\n{output}"
+        );
+        assert!(
+            !output.contains("crb-mirror-rhel9"),
+            "a name that merely contains crb is not a CRB section:\n{output}"
+        );
+        assert!(
+            !output.contains("-debug-rpms") && !output.contains("-source-rpms"),
+            "debug and source mirrors are not enabled:\n{output}"
+        );
+        assert!(
+            !output.contains("$(arch)"),
+            "no id is reconstructed:\n{output}"
+        );
+
+        // The debug and source sections alone emit nothing.
+        let mut only_excluded = snapshot_with_packages(&["htop"]);
+        only_excluded
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .push(repo_file(
+                CRB_REPO_PATH,
+                "[codeready-builder-for-rhel-9-aarch64-debug-rpms]\nenabled=1\n\
+                 [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n",
+                true,
+            ));
+        let output = render_containerfile(&only_excluded, None, None);
+        assert!(
+            !output.contains("--enablerepo") && !output.contains("# CRB was enabled"),
+            "debug and source sections alone emit nothing:\n{output}"
+        );
+
+        // A section the export is not carrying does not reach a RUN line.
+        let mut dropped = snapshot_with_packages(&["htop"]);
+        dropped
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .push(repo_file(CRB_REPO_PATH, CRB_CONTENT, false));
+        let output = render_containerfile(&dropped, None, None);
+        assert!(
+            !output.contains("--enablerepo"),
+            "an excluded repo file enables nothing:\n{output}"
+        );
     }
 
     #[test]
@@ -3370,7 +4037,11 @@ mod tests {
 
     #[test]
     fn test_containerfile_repo_enabling_packages_split() {
-        let snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
+        // The basis is `repo_enabling_from`, not the name: this fixture
+        // used to pass on the `-release` suffix alone, and would pass that
+        // way again if the suffix came back.
+        let mut snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
         let output = render_containerfile(&snap, None, None);
 
         // epel-release must appear in its own install step before the other packages
@@ -3404,22 +4075,32 @@ mod tests {
 
     #[test]
     fn test_containerfile_no_repo_packages_single_block() {
-        let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git"]);
+        // `vendor-release` is the whole point of this fixture: its name
+        // ends in `-release` and nothing records a serving repo for it, so
+        // a single block is correct *because* no package carries
+        // `repo_enabling_from`. Before, the fixture simply had no
+        // `-release` name in it and this assertion was true for a reason
+        // that no longer exists.
+        let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git", "vendor-release"]);
         let output = render_containerfile(&snap, None, None);
 
         // No repo-enabling section should exist
         assert!(
             !output.contains("Repo-enabling packages"),
-            "must not have a repo-enabling section when no -release packages"
+            "a name ending in -release is not the basis; only repo_enabling_from is:\n{output}"
         );
-        // Single packages section with all 3
+        // Single packages section with all 4
         assert!(
-            output.contains("Packages (3)"),
-            "must have a single packages section with all 3 packages"
+            output.contains("Packages (4)"),
+            "must have a single packages section with all 4 packages:\n{output}"
         );
         assert!(output.contains("httpd"), "must contain httpd");
         assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
         assert!(output.contains("git"), "must contain git");
+        assert!(
+            output.contains("vendor-release"),
+            "must contain vendor-release"
+        );
     }
 
     // --- Group install rendering tests ---
