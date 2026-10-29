@@ -5,7 +5,9 @@ use crate::types::{
     RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState, RefinedSysctl,
     RefinedTunedSelection, RepoProvenance, RepoTier,
 };
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::ShadowType;
+use inspectah_core::types::config::{ConfigCategory, ConfigShadow, SYNTHESIZED_SYSCTL_FILE};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
@@ -196,13 +198,38 @@ pub struct RefKernelBoot {
     pub locale: Option<String>,
     pub timezone: Option<String>,
     pub sysctl_overrides: Vec<RefSysctlOverride>,
-    pub non_default_modules: Vec<RefKernelModule>,
-    pub modules_load_d: Vec<RefConfigSnippet>,
-    pub modprobe_d: Vec<RefConfigSnippet>,
-    pub dracut_conf: Vec<RefConfigSnippet>,
-    pub custom_tuned_profiles: Vec<RefConfigSnippet>,
+    /// Pointers at the `config.files` entries this section's subject
+    /// matter lives in. The row mirrors the entry's decision rather than
+    /// restating its content, so there is one decision per file and this
+    /// surface is not a second place to make it.
+    pub customizations_from_config: Vec<RefConfigRef>,
     pub alternatives: Vec<RefAlternativeEntry>,
 }
+
+/// A reference to a `config.files` entry, carried by whichever section
+/// the file's subject matter belongs to.
+#[derive(Debug, Clone)]
+pub struct RefConfigRef {
+    pub path: String,
+    pub category: ConfigCategory,
+    pub disposition: FindingKind,
+    pub shadowed_by: Option<ConfigShadow>,
+}
+
+/// What a pointer row says about where the file's decision lives.
+/// Every surface that renders one reads this, so they cannot diverge.
+pub fn config_ref_summary(entry: &RefConfigRef) -> String {
+    match entry.shadowed_by {
+        Some(ConfigShadow::Sysctl) => {
+            format!("merged into {SYNTHESIZED_SYSCTL_FILE}")
+        }
+        None => DECIDED_UNDER_CONFIG_FILES.to_string(),
+    }
+}
+
+/// Summary on a row that only points at the Configuration Files row
+/// where the file is actually decided.
+pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
 
 #[derive(Debug, Clone)]
 pub struct RefSysctlOverride {
@@ -210,19 +237,6 @@ pub struct RefSysctlOverride {
     pub runtime: String,
     pub default: String,
     pub source: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RefKernelModule {
-    pub name: String,
-    pub size: String,
-    pub used_by: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RefConfigSnippet {
-    pub path: String,
-    pub content: String,
 }
 
 #[derive(Debug, Clone)]

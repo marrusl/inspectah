@@ -1830,18 +1830,6 @@ pub fn merge_kernelboot_sections(
         total_hosts,
         hostnames,
     );
-    let non_default_modules = merge_items(
-        collect_items(&sections, |s| &s.non_default_modules),
-        total_hosts,
-        hostnames,
-    );
-
-    // Dedup ConfigSnippets by path
-    let modules_load_d = dedup_config_snippets(&sections, |s| &s.modules_load_d);
-    let modprobe_d = dedup_config_snippets(&sections, |s| &s.modprobe_d);
-    let dracut_conf = dedup_config_snippets(&sections, |s| &s.dracut_conf);
-    let tuned_custom_profiles = dedup_config_snippets(&sections, |s| &s.tuned_custom_profiles);
-
     // Dedup alternatives by name
     let alternatives = {
         let mut seen = HashSet::new();
@@ -1880,39 +1868,13 @@ pub fn merge_kernelboot_sections(
         cmdline,
         grub_defaults,
         sysctl_overrides,
-        modules_load_d,
-        modprobe_d,
-        dracut_conf,
         loaded_modules,
-        non_default_modules,
         tuned_disposition: FindingKind::from_bool(tuned_include),
         tuned_active,
-        tuned_custom_profiles,
         locale,
         timezone,
         alternatives,
     })
-}
-
-/// Helper: dedup ConfigSnippet lists by path.
-fn dedup_config_snippets<S, F>(
-    sections: &[Option<S>],
-    extractor: F,
-) -> Vec<crate::types::kernelboot::ConfigSnippet>
-where
-    F: Fn(&S) -> &Vec<crate::types::kernelboot::ConfigSnippet>,
-{
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    for s in sections.iter().flatten() {
-        for snippet in extractor(s) {
-            if seen.insert(snippet.path.clone()) {
-                result.push(snippet.clone());
-            }
-        }
-    }
-    result.sort_by(|a, b| a.path.cmp(&b.path));
-    result
 }
 
 /// Merge non-RPM software sections from multiple hosts.

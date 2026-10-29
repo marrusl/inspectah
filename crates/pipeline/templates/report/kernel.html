@@ -31,24 +31,6 @@
 </table>
 {% endif %}
 
-{% if modules_load_d | length > 0 %}
-<h4>Modules (modules-load.d)</h4>
-<ul>
-  {% for m in modules_load_d %}
-  <li><code>{{ m.path }}</code></li>
-  {% endfor %}
-</ul>
-{% endif %}
-
-{% if modprobe_d | length > 0 %}
-<h4>Module Configuration (modprobe.d)</h4>
-<ul>
-  {% for m in modprobe_d %}
-  <li><code>{{ m.path }}</code></li>
-  {% endfor %}
-</ul>
-{% endif %}
-
 {% if kernelboot_count == 0 and not kernel_cmdline %}
 <p class="empty-state">No kernel or boot customizations detected</p>
 {% endif %}

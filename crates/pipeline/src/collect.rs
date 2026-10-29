@@ -8,7 +8,9 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::traits::progress::ProgressSink;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
+use inspectah_core::types::config::ConfigShadow;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
 use inspectah_core::types::system::SourceSystem;
@@ -230,8 +232,52 @@ pub fn collect(
         serde_json::Value::String(env!("CARGO_PKG_VERSION").into()),
     );
 
+    finalize_cross_inspector(&mut snapshot);
+
     Pipeline {
         state: Collected { snapshot },
+    }
+}
+
+/// Reconcile facts that span two inspectors, once, after every inspector
+/// has returned and before the snapshot leaves collection.
+///
+/// This boundary is the one every collection path crosses: the CLI scan
+/// calls `collect()` directly and then `validate` and `redact`, never
+/// `run_pipeline()`, and `run_pipeline()` calls this same `collect()`.
+/// A pass placed in `orchestrate.rs` would be skipped by the production
+/// scan.
+///
+/// The only pass today: a config file whose path appears in
+/// `kernel_boot.sysctl_overrides[].source` had its keys collected into
+/// the synthesized sysctl drop-in, so the file is inventory and its
+/// content reaches the image through those keys alone.
+///
+/// The criterion is the override list, not the kernel/boot inspector's
+/// degraded flag. A failed sysctl collection returns `Err` and leaves
+/// `sysctl_overrides` empty, so a source path can appear in the list
+/// only when that collection succeeded; an inspector degraded for an
+/// unrelated reason changes nothing about which files are shadowed.
+pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
+    let Some(kernel_boot) = snapshot.kernel_boot.as_ref() else {
+        return;
+    };
+    let sources: std::collections::HashSet<&str> = kernel_boot
+        .sysctl_overrides
+        .iter()
+        .map(|o| o.source.as_str())
+        .collect();
+    if sources.is_empty() {
+        return;
+    }
+    let Some(config) = snapshot.config.as_mut() else {
+        return;
+    };
+    for entry in &mut config.files {
+        if sources.contains(entry.path.as_str()) {
+            entry.shadowed_by = Some(ConfigShadow::Sysctl);
+            entry.disposition = FindingKind::inventory();
+        }
     }
 }
 

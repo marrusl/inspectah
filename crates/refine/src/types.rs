@@ -107,9 +107,6 @@ pub enum ItemId {
     },
 
     // Kernel/boot section
-    KernelModule {
-        name: String,
-    },
     Sysctl {
         key: String,
     },

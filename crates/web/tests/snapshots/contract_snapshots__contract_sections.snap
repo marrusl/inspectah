@@ -139,11 +139,11 @@ expression: json
             "title": "net.ipv4.ip_forward"
           },
           {
-            "detail": "br_netfilter",
+            "detail": null,
             "id": "/etc/modules-load.d/br_netfilter.conf",
-            "searchable_text": "/etc/modules-load.d/br_netfilter.conf br_netfilter",
-            "subtitle": "modules-load.d",
-            "title": "br_netfilter.conf"
+            "searchable_text": "/etc/modules-load.d/br_netfilter.conf",
+            "subtitle": "decided under Configuration Files",
+            "title": "/etc/modules-load.d/br_netfilter.conf"
           }
         ]
       },

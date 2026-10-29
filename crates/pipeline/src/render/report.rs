@@ -232,10 +232,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 InspectorId::Config => snap.config.as_ref().map(|c| c.files.len()),
                 InspectorId::Services => snap.services.as_ref().map(|s| s.state_changes.len()),
                 InspectorId::Storage => snap.storage.as_ref().map(|s| s.fstab_entries.len()),
-                InspectorId::KernelBoot => snap
-                    .kernel_boot
-                    .as_ref()
-                    .map(|k| k.sysctl_overrides.len() + k.non_default_modules.len()),
+                InspectorId::KernelBoot => {
+                    snap.kernel_boot.as_ref().map(|k| k.sysctl_overrides.len())
+                }
                 InspectorId::ScheduledTasks => snap.scheduled_tasks.as_ref().map(|s| {
                     s.cron_jobs.len()
                         + s.systemd_timers.len()
@@ -844,35 +843,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let modules_load_d: Vec<Value> = snap
-        .kernel_boot
-        .as_ref()
-        .map(|k| {
-            k.modules_load_d
-                .iter()
-                .map(|m| {
-                    Value::from_serialize(serde_json::json!({
-                        "path": m.path,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let modprobe_d: Vec<Value> = snap
-        .kernel_boot
-        .as_ref()
-        .map(|k| {
-            k.modprobe_d
-                .iter()
-                .map(|m| {
-                    Value::from_serialize(serde_json::json!({
-                        "path": m.path,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let kernelboot_count = sysctl_overrides.len() + modules_load_d.len() + modprobe_d.len();
+    let kernelboot_count = sysctl_overrides.len();
     let kernelboot_state = section_state(InspectorId::KernelBoot, &snap.completeness);
     let kernelboot_state_str = match kernelboot_state {
         SectionState::Normal => "normal",
@@ -1220,8 +1191,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let storage_items_val = Value::from(storage_items);
     let unbacked_var_dirs_val = Value::from(unbacked_var_dirs);
     let sysctl_overrides_val = Value::from(sysctl_overrides);
-    let modules_load_d_val = Value::from(modules_load_d);
-    let modprobe_d_val = Value::from(modprobe_d);
     let selinux_modules_val = Value::from(selinux_modules);
     let selinux_booleans_val = Value::from(selinux_booleans);
     let selinux_fcontexts_val = Value::from(selinux_fcontexts);
@@ -1307,8 +1276,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         has_kernelboot,
         kernel_cmdline,
         sysctl_overrides => sysctl_overrides_val,
-        modules_load_d => modules_load_d_val,
-        modprobe_d => modprobe_d_val,
         kernelboot_count,
         kernelboot_state => kernelboot_state_str,
         // Security & Access Control (conditional)

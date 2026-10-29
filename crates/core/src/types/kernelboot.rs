@@ -4,14 +4,6 @@ use serde::{Deserialize, Serialize};
 use super::aggregate::AggregatePrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConfigSnippet {
-    #[serde(default)]
-    pub path: String,
-    #[serde(default)]
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysctlOverride {
     #[serde(default)]
     pub key: String,
@@ -36,7 +28,10 @@ pub struct KernelModule {
     pub size: String,
     #[serde(default)]
     pub used_by: String,
-    #[serde(default)]
+    // A loaded module is informational: nothing in the Containerfile
+    // mounts a decision on it, so an absent key must not read back as
+    // an actionable, included finding.
+    #[serde(default = "crate::types::finding::default_finding_inventory")]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
@@ -62,15 +57,7 @@ pub struct KernelBootSection {
     #[serde(default)]
     pub sysctl_overrides: Vec<SysctlOverride>,
     #[serde(default)]
-    pub modules_load_d: Vec<ConfigSnippet>,
-    #[serde(default)]
-    pub modprobe_d: Vec<ConfigSnippet>,
-    #[serde(default)]
-    pub dracut_conf: Vec<ConfigSnippet>,
-    #[serde(default)]
     pub loaded_modules: Vec<KernelModule>,
-    #[serde(default)]
-    pub non_default_modules: Vec<KernelModule>,
     #[serde(default)]
     pub tuned_active: String,
     // Field-level `serde(default)` uses `FindingKind::default()` (actionable,
@@ -78,8 +65,6 @@ pub struct KernelBootSection {
     // must not be baked into the Containerfile, so the default is excluded.
     #[serde(default = "crate::types::finding::default_finding_excluded")]
     pub tuned_disposition: FindingKind,
-    #[serde(default)]
-    pub tuned_custom_profiles: Vec<ConfigSnippet>,
     pub locale: Option<String>,
     pub timezone: Option<String>,
     #[serde(default)]
@@ -129,14 +114,9 @@ mod tests {
                 locked: false,
                 aggregate: None,
             }],
-            modules_load_d: vec![],
-            modprobe_d: vec![],
-            dracut_conf: vec![],
             loaded_modules: vec![],
-            non_default_modules: vec![],
             tuned_active: "virtual-guest".to_string(),
             tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![],
             locale: Some("en_US.UTF-8".to_string()),
             timezone: Some("America/New_York".to_string()),
             alternatives: vec![],

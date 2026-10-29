@@ -9,7 +9,7 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
 use inspectah_core::types::kernelboot::{
-    AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
+    AlternativeEntry, KernelBootSection, KernelModule, SysctlOverride,
 };
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
@@ -1845,10 +1845,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
             name: "vfio_pci".into(),
             ..Default::default()
         }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/vfio.conf".into(),
-            content: "vfio_pci".into(),
-        }],
         alternatives: vec![AlternativeEntry {
             name: "python3".into(),
             path: "/usr/bin/python3.11".into(),
@@ -1873,10 +1869,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
                 ..Default::default()
             },
         ],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/vfio.conf".into(),
-            content: "vfio_pci".into(),
-        }],
         alternatives: vec![AlternativeEntry {
             name: "python3".into(),
             path: "/usr/bin/python3.11".into(),
@@ -1896,9 +1888,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);
-
-    // ConfigSnippets deduped by path
-    assert_eq!(result.modules_load_d.len(), 1);
 
     // alternatives deduped by name
     assert_eq!(result.alternatives.len(), 1);

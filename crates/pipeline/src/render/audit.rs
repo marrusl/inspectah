@@ -540,12 +540,7 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
 
     // Kernel & Boot
     if let Some(kb) = &snap.kernel_boot {
-        let has_content = !kb.cmdline.is_empty()
-            || !kb.sysctl_overrides.is_empty()
-            || !kb.modules_load_d.is_empty()
-            || !kb.modprobe_d.is_empty()
-            || !kb.dracut_conf.is_empty()
-            || !kb.non_default_modules.is_empty();
+        let has_content = !kb.cmdline.is_empty() || !kb.sysctl_overrides.is_empty();
 
         if has_content {
             lines.push("### Kernel & Boot".into());
@@ -576,50 +571,6 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                         "| {} | {} | {} | {} |",
                         o.key, o.runtime, o.default, o.source
                     ));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.modules_load_d.is_empty() {
-                lines.push(format!(
-                    "#### Loaded Module Configs ({})",
-                    kb.modules_load_d.len()
-                ));
-                lines.push(String::new());
-                for m in &kb.modules_load_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.modprobe_d.is_empty() {
-                lines.push(format!("#### Modprobe Configs ({})", kb.modprobe_d.len()));
-                lines.push(String::new());
-                for m in &kb.modprobe_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.dracut_conf.is_empty() {
-                lines.push(format!("#### Dracut Configs ({})", kb.dracut_conf.len()));
-                lines.push(String::new());
-                for d in &kb.dracut_conf {
-                    lines.push(format!("- `{}`", d.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.non_default_modules.is_empty() {
-                lines.push(format!(
-                    "#### Non-Default Kernel Modules ({})",
-                    kb.non_default_modules.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Module | Size | Used By |".into());
-                lines.push("|--------|------|---------|".into());
-                for m in &kb.non_default_modules {
-                    lines.push(format!("| {} | {} | {} |", m.name, m.size, m.used_by));
                 }
                 lines.push(String::new());
             }

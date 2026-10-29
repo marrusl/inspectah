@@ -14,6 +14,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
+use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -276,33 +277,11 @@ pub fn write_config_tree(
 
     // Kernel boot files
     if let Some(ref kb) = snap.kernel_boot {
-        // modules-load.d
-        for m in &kb.modules_load_d {
-            if !m.path.is_empty() {
-                let rel = m.path.trim_start_matches('/');
-                if validate_path(rel).is_ok() {
-                    safe_write_file(&config_dir.join(rel), &m.content);
-                }
-            }
-        }
-        // modprobe.d
-        for m in &kb.modprobe_d {
-            if !m.path.is_empty() {
-                let rel = m.path.trim_start_matches('/');
-                if validate_path(rel).is_ok() {
-                    safe_write_file(&config_dir.join(rel), &m.content);
-                }
-            }
-        }
-        // dracut.conf.d
-        for d in &kb.dracut_conf {
-            if !d.path.is_empty() {
-                let rel = d.path.trim_start_matches('/');
-                if validate_path(rel).is_ok() {
-                    safe_write_file(&config_dir.join(rel), &d.content);
-                }
-            }
-        }
+        // The modules-load.d, modprobe.d and dracut.conf.d files are
+        // `config.files` entries, copied through `config/etc/` by the
+        // config loop above on their own decision. Writing them here
+        // too would materialize an excluded file on a path rule.
+
         // Synthesized sysctl conf — only included overrides
         let included_sysctls: Vec<_> = kb
             .sysctl_overrides
@@ -317,7 +296,7 @@ pub fn write_config_tree(
             for s in &included_sysctls {
                 conf.push_str(&format!("{} = {}\n", s.key, s.runtime));
             }
-            let _ = std::fs::write(sysctl_dir.join("99-inspectah-migrated.conf"), &conf);
+            let _ = std::fs::write(sysctl_dir.join(SYNTHESIZED_SYSCTL_FILE), &conf);
         }
 
         // Kernel arguments drop-in
@@ -649,7 +628,7 @@ mod tests {
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
-    use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
     use inspectah_core::types::network::{FirewallZone, NetworkSection};
     use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
     use inspectah_core::types::rpm::{RepoFile, RpmSection};
@@ -732,43 +711,24 @@ mod tests {
         );
     }
 
+    /// The kernel/boot section's own contribution to the config tree is
+    /// the kargs drop-in and nothing else.
+    ///
+    /// The earlier form of this test asserted that the section also wrote
+    /// `modules-load.d`, `modprobe.d` and `dracut.conf.d` files straight
+    /// into `config/etc/`, on no decision at all. Those are `config.files`
+    /// entries now, each copied on its own: a file the export writes on a
+    /// path rule cannot be excluded.
     #[test]
-    fn test_config_tree_kernel_boot_snippets() {
+    fn test_config_tree_kernel_boot_writes_only_kargs() {
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
-            modules_load_d: vec![ConfigSnippet {
-                path: "etc/modules-load.d/custom.conf".to_string(),
-                content: "br_netfilter".to_string(),
-            }],
-            modprobe_d: vec![ConfigSnippet {
-                path: "etc/modprobe.d/blacklist.conf".to_string(),
-                content: "blacklist nouveau".to_string(),
-            }],
-            dracut_conf: vec![ConfigSnippet {
-                path: "etc/dracut.conf.d/custom.conf".to_string(),
-                content: "add_drivers+=\" vfio \"".to_string(),
-            }],
             cmdline: "quiet crashkernel=auto nosmt=force".to_string(),
             ..Default::default()
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
 
-        assert!(
-            dir.path()
-                .join("config/etc/modules-load.d/custom.conf")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join("config/etc/modprobe.d/blacklist.conf")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join("config/etc/dracut.conf.d/custom.conf")
-                .exists()
-        );
         assert!(
             dir.path()
                 .join("config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
@@ -783,6 +743,45 @@ mod tests {
         assert!(kargs.contains("nosmt=force"));
         assert!(!kargs.contains("quiet"));
         assert!(!kargs.contains("crashkernel"));
+    }
+
+    /// Where the kernel directories went: the config loop copies them on
+    /// their own decision, which an exclusion can now refuse.
+    #[test]
+    fn test_kernel_directories_copied_as_plain_config() {
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/modprobe.d/blacklist.conf".to_string(),
+                    category: ConfigCategory::KernelModule,
+                    content: "blacklist nouveau".to_string(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "/etc/dracut.conf.d/custom.conf".to_string(),
+                    category: ConfigCategory::Initramfs,
+                    content: "add_drivers+=\" vfio \"".to_string(),
+                    disposition: FindingKind::excluded(),
+                    ..Default::default()
+                },
+            ],
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config/etc/modprobe.d/blacklist.conf"))
+                .expect("an included modprobe.d file is materialized under config/"),
+            "blacklist nouveau"
+        );
+        assert!(
+            !dir.path()
+                .join("config/etc/dracut.conf.d/custom.conf")
+                .exists(),
+            "an excluded dracut.conf.d file stays out of the export"
+        );
     }
 
     #[test]

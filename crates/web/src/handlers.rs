@@ -874,30 +874,7 @@ pub async fn batch_toggle_group(
             }
             // Kernel boot items
             if include_kernel && let Some(ref kernel) = snap.kernel_boot {
-                // Loaded modules
-                for kmod in &kernel.loaded_modules {
-                    if kmod.disposition.is_advisory() || kmod.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::KernelModule {
-                            name: kmod.name.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
-                // Non-default modules
-                for kmod in &kernel.non_default_modules {
-                    if kmod.disposition.is_advisory() || kmod.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::KernelModule {
-                            name: kmod.name.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
+                // Loaded modules are inventory and carry no op.
                 // Sysctls
                 for sysctl in &kernel.sysctl_overrides {
                     if sysctl.disposition.is_advisory() || sysctl.locked {

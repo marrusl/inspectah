@@ -9,6 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 use inspectah_pipeline::render::advisory::{advisory_type_str, config_advisories};
+use inspectah_refine::projection::config_ref_summary;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, TriageBucket};
 
@@ -807,64 +808,17 @@ pub fn build_list_items(
                     None,
                 ));
             }
-            for m in &kb.non_default_modules {
-                items.push(RawItem::new(
-                    m.name.clone(),
-                    format!("size: {}, used by: {}", m.size, m.used_by),
-                    TriageGroup::Site,
-                    None,
-                    Some(ItemId::KernelModule {
-                        name: m.name.clone(),
-                    }),
-                    false,
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.modules_load_d {
+            // The kernel and boot config files are `config.files`
+            // entries. These rows point at the Configuration Files row
+            // that decides each one rather than restating its content.
+            for c in &kb.customizations_from_config {
                 items.push(RawItem::new(
                     c.path.clone(),
-                    "modules-load.d",
+                    config_ref_summary(c),
                     TriageGroup::Site,
                     None,
                     None,
-                    !c.content.is_empty(),
                     false,
-                    None,
-                ));
-            }
-            for c in &kb.modprobe_d {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "modprobe.d",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.dracut_conf {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "dracut.conf",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.custom_tuned_profiles {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "tuned profile",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
                     false,
                     None,
                 ));

@@ -593,3 +593,90 @@ fn an_authselect_symlink_is_not_a_local_pam_file() {
         "the customization itself is collected from /etc/authselect/"
     );
 }
+
+/// The kernel/boot config directories are the walker's, same as every
+/// other `/etc` tree: it reads them, categorizes them, and gives each
+/// file one decision. The kernel/boot inspector collected them into
+/// `KernelBootSection` lists before, which is how the same file came to
+/// hold two rows and one decision.
+///
+/// `50-nouveau-blacklist.conf` is in the fixture because
+/// `UNOWNED_EXCLUDE_GLOBS` carries `/etc/modprobe.d/*-blacklist.conf`
+/// for the distro-shipped files: a change that widened that glob to the
+/// whole directory would otherwise pass unnoticed.
+#[test]
+fn kernel_module_and_initramfs_directories_are_config_entries() {
+    let exec = MockExecutor::new()
+        .with_dir(
+            "/etc",
+            vec!["modprobe.d", "modules-load.d", "dracut.conf.d"],
+        )
+        .with_dir(
+            "/etc/modprobe.d",
+            vec!["myapp.conf", "50-nouveau-blacklist.conf"],
+        )
+        .with_dir("/etc/modules-load.d", vec!["br_netfilter.conf"])
+        .with_dir("/etc/dracut.conf.d", vec!["50-custom.conf"])
+        .with_file("/etc/modprobe.d/myapp.conf", "options myapp debug=1\n")
+        .with_file(
+            "/etc/modprobe.d/50-nouveau-blacklist.conf",
+            "blacklist nouveau\n",
+        )
+        .with_file("/etc/modules-load.d/br_netfilter.conf", "br_netfilter\n")
+        .with_file(
+            "/etc/dracut.conf.d/50-custom.conf",
+            "add_dracutmodules+=\" lvm \"\n",
+        );
+
+    let source = pkg_source();
+    let rpm_state = RpmState::default();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    let category_of = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} must be a config entry; got {:?}",
+                    section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
+            .category
+            .clone()
+    };
+
+    assert_eq!(
+        category_of("/etc/modprobe.d/myapp.conf"),
+        ConfigCategory::KernelModule
+    );
+    assert_eq!(
+        category_of("/etc/modules-load.d/br_netfilter.conf"),
+        ConfigCategory::KernelModule
+    );
+    assert_eq!(
+        category_of("/etc/dracut.conf.d/50-custom.conf"),
+        ConfigCategory::Initramfs
+    );
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/modprobe.d/50-nouveau-blacklist.conf"),
+        "the distro blacklist glob stays excluded"
+    );
+}

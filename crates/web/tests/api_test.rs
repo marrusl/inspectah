@@ -3,11 +3,13 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
 };
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{
     FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry,
 };
@@ -711,11 +713,20 @@ fn rich_snapshot() -> InspectionSnapshot {
             source: "/etc/sysctl.d/99-custom.conf".into(),
             ..Default::default()
         }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/custom.conf".into(),
-            content: "br_netfilter".into(),
-        }],
         ..Default::default()
+    });
+
+    // The kernel module config is a `config.files` entry; the Kernel &
+    // Boot section points at it.
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/modules-load.d/custom.conf".into(),
+            kind: ConfigFileKind::Unowned,
+            category: ConfigCategory::KernelModule,
+            content: "br_netfilter".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
     });
 
     snap.non_rpm_software = Some(NonRpmSoftwareSection {
@@ -1537,12 +1548,23 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
         .unwrap();
     assert!(sysctl.subtitle.as_ref().unwrap().contains("16"));
 
+    // The modules-load.d row points at the Configuration Files row that
+    // decides the file. Its title is the whole path: two files named
+    // `custom.conf` read alike as basenames.
     let modload = customizations
         .items
         .iter()
         .find(|i| i.id.contains("custom.conf"))
         .unwrap();
-    assert_eq!(modload.subtitle.as_deref(), Some("modules-load.d"));
+    assert_eq!(modload.title, "/etc/modules-load.d/custom.conf");
+    assert_eq!(
+        modload.subtitle.as_deref(),
+        Some("decided under Configuration Files")
+    );
+    assert!(
+        modload.detail.is_none(),
+        "the content belongs to the row that can be decided"
+    );
 }
 
 #[test]

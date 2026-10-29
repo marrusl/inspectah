@@ -16,7 +16,7 @@ use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
 };
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit, RunningContainer};
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
@@ -174,6 +174,14 @@ fn contract_snapshot() -> InspectionSnapshot {
                 disposition: FindingKind::included(),
                 ..Default::default()
             },
+            ConfigFileEntry {
+                path: "/etc/modules-load.d/br_netfilter.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                category: ConfigCategory::KernelModule,
+                content: "br_netfilter".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
         ],
     });
 
@@ -209,10 +217,6 @@ fn contract_snapshot() -> InspectionSnapshot {
             default: "0".into(),
             source: "/etc/sysctl.d/k8s.conf".into(),
             ..Default::default()
-        }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/br_netfilter.conf".into(),
-            content: "br_netfilter".into(),
         }],
         ..Default::default()
     });

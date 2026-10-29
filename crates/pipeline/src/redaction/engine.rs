@@ -1,5 +1,4 @@
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::kernelboot::ConfigSnippet;
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
     RedactionState,
@@ -764,7 +763,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan kernel cmdline and config snippets in kernelboot section
+    // Scan the kernel cmdline in the kernelboot section
     if let Some(ref mut kernelboot) = snapshot.kernel_boot {
         // Scan cmdline for password=, key=, secret= etc.
         let cmdline_findings = scan_content(&kernelboot.cmdline, "/proc/cmdline");
@@ -787,37 +786,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             all_findings.extend(cmdline_findings);
         }
 
-        // Scan dracut, modprobe, modules-load, and tuned config snippets
-        let snippet_chains: Vec<&mut Vec<ConfigSnippet>> = vec![
-            &mut kernelboot.dracut_conf,
-            &mut kernelboot.modprobe_d,
-            &mut kernelboot.modules_load_d,
-            &mut kernelboot.tuned_custom_profiles,
-        ];
-        for snippets in snippet_chains {
-            for snippet in snippets.iter_mut() {
-                let findings = scan_content(&snippet.content, &snippet.path);
-                if !findings.is_empty() {
-                    let mut content = snippet.content.clone();
-                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                    for (idx, pat) in PATTERNS.iter().enumerate() {
-                        for em in collect_eligible_matches(pat, &content, Some(&snippet.path)) {
-                            all_matches.push((idx, em));
-                        }
-                    }
-                    dedup_overlapping_matches(&mut all_matches);
-                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                    for (pat_idx, em) in all_matches {
-                        let kind_label =
-                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                        let token = registry.token_for(&kind_label, &em.text);
-                        content.replace_range(em.start..em.end, &token);
-                    }
-                    snippet.content = content;
-                    all_findings.extend(findings);
-                }
-            }
-        }
+        // The dracut, modprobe, modules-load and tuned files are
+        // `config.files` entries, scanned by the config pass above —
+        // which exempts comment lines, as it does for every config file.
     }
 
     // Scan proxy lines for embedded credentials (dedicated masker, NOT generic pass).

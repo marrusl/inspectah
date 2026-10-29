@@ -8,7 +8,8 @@
 use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 // redaction types used indirectly via the redaction engine in test 8
 use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
@@ -106,18 +107,6 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
             locked: false,
             aggregate: None,
         }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "etc/modules-load.d/br_netfilter.conf".into(),
-            content: "br_netfilter\n".into(),
-        }],
-        modprobe_d: vec![ConfigSnippet {
-            path: "etc/modprobe.d/blacklist-nouveau.conf".into(),
-            content: "blacklist nouveau\n".into(),
-        }],
-        dracut_conf: vec![ConfigSnippet {
-            path: "etc/dracut.conf.d/lvm.conf".into(),
-            content: "add_dracutmodules+=\" lvm \"\n".into(),
-        }],
         ..Default::default()
     });
     snap
@@ -128,6 +117,15 @@ fn snapshot_all_sections() -> InspectionSnapshot {
     snap.services = snapshot_with_services().services;
     snap.storage = snapshot_with_storage().storage;
     snap.kernel_boot = snapshot_with_kernelboot().kernel_boot;
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/modules-load.d/br_netfilter.conf".into(),
+            category: ConfigCategory::KernelModule,
+            content: "br_netfilter\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+    });
     snap
 }
 
@@ -272,13 +270,41 @@ fn kernelboot_sysctl_in_containerfile() {
 
 // ---------------------------------------------------------------------------
 // Test 6: kernelboot_configs_in_config_tree
-// Kernelboot snippets (modules-load.d, modprobe.d, dracut.conf.d) materialize
-// in the config tree.
+// The kernel/boot config files materialize in the config tree on their
+// own decision, and the kernel/boot section contributes the kargs
+// drop-in. The earlier form of this test drove the three directories
+// off `KernelBootSection` lists, which the export wrote on a path rule
+// with no decision behind it.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn kernelboot_configs_in_config_tree() {
-    let snap = snapshot_with_kernelboot();
+    let mut snap = snapshot_with_kernelboot();
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/modules-load.d/br_netfilter.conf".into(),
+                category: ConfigCategory::KernelModule,
+                content: "br_netfilter\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/modprobe.d/blacklist-nouveau.conf".into(),
+                category: ConfigCategory::KernelModule,
+                content: "blacklist nouveau\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/dracut.conf.d/lvm.conf".into(),
+                category: ConfigCategory::Initramfs,
+                content: "add_dracutmodules+=\" lvm \"\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+    });
     let dir = TempDir::new().unwrap();
 
     configtree::write_config_tree(&snap, dir.path()).unwrap();
@@ -289,7 +315,7 @@ fn kernelboot_configs_in_config_tree() {
         .join("config/etc/modules-load.d/br_netfilter.conf");
     assert!(
         modules_path.exists(),
-        "modules-load.d snippet must be materialized in config tree"
+        "modules-load.d file must be materialized in config tree"
     );
     let content = std::fs::read_to_string(&modules_path).unwrap();
     assert!(
@@ -303,7 +329,7 @@ fn kernelboot_configs_in_config_tree() {
         .join("config/etc/modprobe.d/blacklist-nouveau.conf");
     assert!(
         modprobe_path.exists(),
-        "modprobe.d snippet must be materialized in config tree"
+        "modprobe.d file must be materialized in config tree"
     );
     let content = std::fs::read_to_string(&modprobe_path).unwrap();
     assert!(
@@ -315,7 +341,7 @@ fn kernelboot_configs_in_config_tree() {
     let dracut_path = dir.path().join("config/etc/dracut.conf.d/lvm.conf");
     assert!(
         dracut_path.exists(),
-        "dracut.conf.d snippet must be materialized in config tree"
+        "dracut.conf.d file must be materialized in config tree"
     );
 
     // kargs.d (from cmdline with nosmt=force, an operator karg)
@@ -392,17 +418,16 @@ fn all_sections_in_audit_report() {
         md.contains("net.ipv4.ip_forward"),
         "audit report must list the sysctl override key"
     );
+    // The kernel config files are listed by the config section, under
+    // the category the walker gave them, not by a second Kernel & Boot
+    // list of the same files.
     assert!(
-        md.contains("Loaded Module Configs"),
-        "audit report must contain Loaded Module Configs sub-heading"
+        md.contains("Unowned Config Files"),
+        "audit report must contain Unowned Config Files sub-heading"
     );
     assert!(
-        md.contains("br_netfilter"),
-        "audit report must list modules-load.d snippet"
-    );
-    assert!(
-        md.contains("Dracut Configs"),
-        "audit report must contain Dracut Configs sub-heading"
+        md.contains("`/etc/modules-load.d/br_netfilter.conf` (kernel_module)"),
+        "the kernel module config is listed with its category, got:\n{md}"
     );
     assert!(
         md.contains("Kernel Command Line"),

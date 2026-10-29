@@ -5,22 +5,16 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::kernelboot::{
-    ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
-};
+use inspectah_core::types::kernelboot::{KernelBootSection, KernelModule, SysctlOverride};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Secret-like patterns in kernel cmdline and config snippets.
+/// Secret-like patterns in the kernel cmdline.
 const CMDLINE_SECRET_PATTERNS: &[&str] = &["password=", "key=", "secret="];
 
-/// Secret-like patterns in config snippet content.
-const SNIPPET_SECRET_PATTERNS: &[&str] = &["password", "secret", "key", "credential", "token"];
-
-/// Inspects kernel boot configuration: cmdline, loaded modules, sysctl overrides,
-/// locale, timezone, tuned profiles, and config snippets from modprobe.d,
-/// modules-load.d, and dracut.conf.d.
+/// Inspects kernel boot configuration: cmdline, loaded modules, sysctl
+/// overrides, locale, timezone, and the active tuned profile.
 pub struct KernelbootInspector;
 
 impl KernelbootInspector {
@@ -108,40 +102,20 @@ impl Inspector for KernelbootInspector {
 
         // 6. Tuned profile — OPTIONAL (tuned not installed is fine)
         let tuned_active = collect_tuned(exec);
-        let tuned_custom_profiles = collect_custom_tuned_profiles(exec);
 
-        // 7. Config snippets from /etc/modprobe.d/, /etc/modules-load.d/, /etc/dracut.conf.d/
-        let (modprobe_d, modprobe_failures) =
-            collect_config_snippets(exec, "/etc/modprobe.d", &mut redaction_hints);
-        let (modules_load_d, modules_load_failures) =
-            collect_config_snippets(exec, "/etc/modules-load.d", &mut redaction_hints);
-
-        // dracut.conf.d — failure is a degraded condition
-        let dracut_result =
-            collect_config_snippets_strict(exec, "/etc/dracut.conf.d", &mut redaction_hints);
-
-        // Collect read failures from correctness-bearing config directories.
-        // Individual file read failures (e.g., size cap) mean the snapshot
-        // looks complete when collection was actually incomplete.
-        let mut snippet_failures: Vec<String> = Vec::new();
-        snippet_failures.extend(modprobe_failures);
-        snippet_failures.extend(modules_load_failures);
+        // The files under /etc/modprobe.d/, /etc/modules-load.d/,
+        // /etc/dracut.conf.d/ and /etc/tuned/ are the config walker's:
+        // it reads them, decides them, and reports its own read failures
+        // as a degraded /etc walk.
 
         // Build section with what we have
         let section = KernelBootSection {
             cmdline,
             grub_defaults: String::new(),
             sysctl_overrides,
-            modules_load_d,
-            modprobe_d,
-            dracut_conf: dracut_result
-                .as_ref()
-                .map_or_else(|_| Vec::new(), |v| v.clone()),
             loaded_modules,
-            non_default_modules: Vec::new(),
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
             tuned_active,
-            tuned_custom_profiles,
             locale,
             timezone,
             alternatives: Vec::new(),
@@ -149,35 +123,6 @@ impl Inspector for KernelbootInspector {
 
         // Check for primary failure → Degraded
         if let Some(reason) = primary_failure {
-            return Err(InspectorError::Degraded {
-                partial: Box::new(InspectorOutput {
-                    section: SectionData::KernelBoot(section),
-                    warnings: Vec::new(),
-                    redaction_hints,
-                }),
-                reason,
-            });
-        }
-
-        // Check for dracut failure → Degraded (materially reduces section correctness)
-        if let Err(reason) = dracut_result {
-            return Err(InspectorError::Degraded {
-                partial: Box::new(InspectorOutput {
-                    section: SectionData::KernelBoot(section),
-                    warnings: Vec::new(),
-                    redaction_hints,
-                }),
-                reason,
-            });
-        }
-
-        // Config snippet read failures → Degraded (missing data would
-        // make emitted artifacts look complete when collection was incomplete)
-        if !snippet_failures.is_empty() {
-            let reason = format!(
-                "config snippet read failures (possible size cap): {}",
-                snippet_failures.join("; ")
-            );
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::KernelBoot(section),
@@ -234,7 +179,7 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
                 name: parts[0].to_string(),
                 size: parts[1].to_string(),
                 used_by,
-                disposition: FindingKind::included(),
+                disposition: FindingKind::inventory(),
                 locked: false,
                 aggregate: None,
             });
@@ -404,141 +349,6 @@ fn collect_tuned(exec: &dyn Executor) -> String {
     String::new()
 }
 
-/// Collect custom tuned profile directories from /etc/tuned.
-/// Returns ConfigSnippet entries for each custom profile's tuned.conf.
-fn collect_custom_tuned_profiles(exec: &dyn Executor) -> Vec<ConfigSnippet> {
-    let mut profiles = Vec::new();
-
-    // List /etc/tuned subdirectories
-    let entries = match exec.read_dir(Path::new("/etc/tuned")) {
-        Ok(e) => e,
-        Err(_) => return profiles, // /etc/tuned doesn't exist or not readable
-    };
-
-    for entry in entries {
-        // Skip . and .. entries
-        if entry.starts_with('.') {
-            continue;
-        }
-
-        // Check for tuned.conf in this profile directory
-        let conf_path = format!("/etc/tuned/{}/tuned.conf", entry);
-        match exec.read_file(Path::new(&conf_path)) {
-            Ok(content) => {
-                profiles.push(ConfigSnippet {
-                    path: conf_path,
-                    content,
-                });
-            }
-            Err(_) => {
-                // Profile directory exists but no tuned.conf, or entry
-                // is not a directory - skip
-                continue;
-            }
-        }
-    }
-
-    profiles
-}
-
-/// Collect config snippets from a directory. Tolerates unreadable dirs.
-/// Returns (snippets, read_failures) — the caller decides whether failures
-/// are correctness-bearing.
-fn collect_config_snippets(
-    exec: &dyn Executor,
-    dir_path: &str,
-    hints: &mut Vec<RedactionHint>,
-) -> (Vec<ConfigSnippet>, Vec<String>) {
-    let dir = Path::new(dir_path);
-    let entries = match exec.read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return (Vec::new(), Vec::new()),
-    };
-
-    let mut snippets = Vec::new();
-    let mut read_failures = Vec::new();
-    for entry in &entries {
-        let file_path = dir.join(entry);
-        match exec.read_file(&file_path) {
-            Ok(content) => {
-                let path_str = file_path.to_string_lossy().to_string();
-
-                // Check for secret-like content
-                check_snippet_secrets(&path_str, &content, hints);
-
-                snippets.push(ConfigSnippet {
-                    path: path_str,
-                    content,
-                });
-            }
-            Err(e) => {
-                read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
-            }
-        }
-    }
-    (snippets, read_failures)
-}
-
-/// Strict variant: returns Err if the directory is unreadable.
-/// Individual file read failures within the directory also return Err
-/// because dracut config is correctness-bearing — a missing file makes
-/// the snapshot look complete when collection was actually incomplete.
-fn collect_config_snippets_strict(
-    exec: &dyn Executor,
-    dir_path: &str,
-    hints: &mut Vec<RedactionHint>,
-) -> Result<Vec<ConfigSnippet>, String> {
-    let dir = Path::new(dir_path);
-    let entries = exec
-        .read_dir(dir)
-        .map_err(|_| format!("{dir_path} unreadable — dracut config missing"))?;
-
-    let mut snippets = Vec::new();
-    let mut read_failures = Vec::new();
-    for entry in &entries {
-        let file_path = dir.join(entry);
-        match exec.read_file(&file_path) {
-            Ok(content) => {
-                let path_str = file_path.to_string_lossy().to_string();
-
-                check_snippet_secrets(&path_str, &content, hints);
-
-                snippets.push(ConfigSnippet {
-                    path: path_str,
-                    content,
-                });
-            }
-            Err(e) => {
-                read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
-            }
-        }
-    }
-    if !read_failures.is_empty() {
-        return Err(format!(
-            "dracut config file read failures: {}",
-            read_failures.join("; ")
-        ));
-    }
-    Ok(snippets)
-}
-
-/// Check config snippet content for secret-like patterns.
-fn check_snippet_secrets(path: &str, content: &str, hints: &mut Vec<RedactionHint>) {
-    for line in content.lines() {
-        let lower = line.to_lowercase();
-        for pattern in SNIPPET_SECRET_PATTERNS {
-            if lower.contains(&format!("{pattern}=")) {
-                hints.push(RedactionHint {
-                    path: path.to_string(),
-                    reason: format!("config snippet may contain sensitive value ({pattern}=...)"),
-                    confidence: Some(Confidence::Medium),
-                });
-                return; // One hint per file is enough
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,7 +444,6 @@ mod tests {
                     ..Default::default()
                 },
             )
-            .with_dir("/etc/dracut.conf.d", vec![])
     }
 
     #[test]
@@ -643,9 +452,7 @@ mod tests {
         let exec = kb_base_mock()
             .with_dir("/etc/sysctl.d", vec!["99-custom.conf"])
             // NOTE: no .with_file for the .conf → read_file will return NotFound
-            .with_dir("/usr/lib/sysctl.d", vec![])
-            .with_dir("/etc/modprobe.d", vec![])
-            .with_dir("/etc/modules-load.d", vec![]);
+            .with_dir("/usr/lib/sysctl.d", vec![]);
 
         let source = SourceSystem::PackageBased {
             os_release: kb_test_os_release(),
@@ -671,82 +478,12 @@ mod tests {
     }
 
     #[test]
-    fn test_modprobe_snippet_read_failure_triggers_degraded() {
-        // modprobe.d directory readable but a file in it fails to read
-        let exec = kb_base_mock()
-            .with_dir("/etc/sysctl.d", vec![])
-            .with_dir("/usr/lib/sysctl.d", vec![])
-            .with_dir("/etc/modprobe.d", vec!["blacklist-custom.conf"])
-            // no .with_file → read fails
-            .with_dir("/etc/modules-load.d", vec![]);
-
-        let source = SourceSystem::PackageBased {
-            os_release: kb_test_os_release(),
-        };
-        let inspector = KernelbootInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: None,
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        match result {
-            Err(InspectorError::Degraded { reason, .. }) => {
-                assert!(
-                    reason.contains("blacklist-custom.conf"),
-                    "degraded reason must mention the failed snippet: {reason}"
-                );
-            }
-            other => panic!("expected Degraded for unreadable modprobe snippet, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_dracut_file_read_failure_triggers_degraded() {
-        // dracut.conf.d directory is readable, lists a file, but file read fails
-        let exec = kb_base_mock()
-            .with_dir("/etc/sysctl.d", vec![])
-            .with_dir("/usr/lib/sysctl.d", vec![])
-            .with_dir("/etc/modprobe.d", vec![])
-            .with_dir("/etc/modules-load.d", vec![])
-            .with_dir("/etc/dracut.conf.d", vec!["50-custom.conf"]);
-        // NOTE: no .with_file for 50-custom.conf → read_file returns NotFound
-
-        let source = SourceSystem::PackageBased {
-            os_release: kb_test_os_release(),
-        };
-        let inspector = KernelbootInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: None,
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        match result {
-            Err(InspectorError::Degraded { reason, .. }) => {
-                assert!(
-                    reason.contains("dracut") || reason.contains("50-custom.conf"),
-                    "degraded reason must mention the failed dracut config: {reason}"
-                );
-            }
-            other => panic!("expected Degraded for unreadable dracut config file, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_kernelboot_ok_when_all_readable() {
         // All files present and readable — should succeed
         let exec = kb_base_mock()
             .with_dir("/etc/sysctl.d", vec!["99-custom.conf"])
             .with_file("/etc/sysctl.d/99-custom.conf", "kernel.sysrq = 1\n")
-            .with_dir("/usr/lib/sysctl.d", vec![])
-            .with_dir("/etc/modprobe.d", vec!["blacklist.conf"])
-            .with_file("/etc/modprobe.d/blacklist.conf", "blacklist nouveau\n")
-            .with_dir("/etc/modules-load.d", vec![]);
+            .with_dir("/usr/lib/sysctl.d", vec![]);
 
         let source = SourceSystem::PackageBased {
             os_release: kb_test_os_release(),
@@ -764,49 +501,5 @@ mod tests {
             result.is_ok(),
             "all files readable → must succeed, got: {result:?}"
         );
-    }
-
-    #[test]
-    fn test_custom_tuned_profile_detected() {
-        // Acceptance test: custom tuned profile directories are detected
-        // and preserved in the snapshot (spec §3.4 + §7 acceptance matrix)
-        let exec = kb_base_mock()
-            .with_dir("/etc/sysctl.d", vec![])
-            .with_dir("/usr/lib/sysctl.d", vec![])
-            .with_dir("/etc/modprobe.d", vec![])
-            .with_dir("/etc/modules-load.d", vec![])
-            .with_dir("/etc/tuned", vec!["myapp"])
-            .with_file(
-                "/etc/tuned/myapp/tuned.conf",
-                "[main]\nsummary=Custom profile for myapp\n\n[cpu]\ngovernor=performance\n",
-            );
-
-        let source = SourceSystem::PackageBased {
-            os_release: kb_test_os_release(),
-        };
-        let inspector = KernelbootInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: None,
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::KernelBoot(kb) = result.section {
-            // Verify the custom tuned profile was collected
-            assert_eq!(kb.tuned_custom_profiles.len(), 1);
-            assert_eq!(
-                kb.tuned_custom_profiles[0].path,
-                "/etc/tuned/myapp/tuned.conf"
-            );
-            assert!(
-                kb.tuned_custom_profiles[0]
-                    .content
-                    .contains("summary=Custom profile for myapp")
-            );
-        } else {
-            panic!("Expected KernelBoot section, got: {:?}", result.section);
-        }
     }
 }

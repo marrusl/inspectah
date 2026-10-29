@@ -2025,3 +2025,98 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
          is not carried by this export",
     );
 }
+
+// ── A shadowed config file is not a second decision ──────────────────
+//
+// A `/etc/sysctl.d/` file whose keys produced sysctl overrides reaches
+// the image only through those overrides. The file's own row is
+// inventory, so both directions of a toggle on it are refused and
+// neither extends the timeline, while the keys stay operable.
+
+const SHADOWED_SYSCTL_FILE: &str = "/etc/sysctl.d/99-driftify.conf";
+
+fn shadowed_sysctl_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.kernel_boot = Some(KernelBootSection {
+        sysctl_overrides: vec![SysctlOverride {
+            key: "vm.swappiness".into(),
+            runtime: "60".into(),
+            default: "10".into(),
+            source: SHADOWED_SYSCTL_FILE.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: SHADOWED_SYSCTL_FILE.into(),
+            kind: ConfigFileKind::Unowned,
+            category: inspectah_core::types::config::ConfigCategory::Sysctl,
+            content: "vm.swappiness = 10\n".into(),
+            disposition: FindingKind::inventory(),
+            ..Default::default()
+        }],
+    });
+    snap
+}
+
+#[test]
+fn toggling_a_shadowed_config_file_is_refused_in_both_directions() {
+    let mut session = RefineSession::new(shadowed_sysctl_snapshot());
+    let before = session.timeline_len();
+
+    for include in [true, false] {
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: SHADOWED_SYSCTL_FILE.into(),
+            },
+            include,
+        });
+        assert!(
+            matches!(result, Err(RefineError::InventoryNotToggleable(_))),
+            "SetInclude(Config, {include}) on a shadowed file must be refused, got {result:?}"
+        );
+        assert_eq!(
+            session.timeline_len(),
+            before,
+            "a refused op must not extend the timeline"
+        );
+    }
+}
+
+#[test]
+fn the_sysctl_key_behind_a_shadowed_file_stays_operable() {
+    let mut session = RefineSession::new(shadowed_sysctl_snapshot());
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Sysctl {
+                key: "vm.swappiness".into(),
+            },
+            include: false,
+        })
+        .expect("the key is the decision and must stay toggleable");
+
+    let dir = tempfile::tempdir().unwrap();
+    inspectah_pipeline::render::configtree::write_config_tree(
+        &session.snapshot_projected(),
+        dir.path(),
+    )
+    .unwrap();
+
+    assert!(
+        !dir.path()
+            .join("sysctl/etc/sysctl.d/99-inspectah-migrated.conf")
+            .exists(),
+        "excluding the only key must leave no synthesized drop-in"
+    );
+    assert!(
+        !dir.path()
+            .join("config/etc/sysctl.d/99-driftify.conf")
+            .exists(),
+        "the shadowed source file is inventory and never materializes"
+    );
+}

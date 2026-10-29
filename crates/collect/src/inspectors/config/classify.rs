@@ -31,6 +31,14 @@ const CATEGORY_RULES: &[CategoryRule] = &[
         prefixes: &["/etc/tuned/"],
     },
     CategoryRule {
+        category: ConfigCategory::KernelModule,
+        prefixes: &["/etc/modules-load.d/", "/etc/modprobe.d/"],
+    },
+    CategoryRule {
+        category: ConfigCategory::Initramfs,
+        prefixes: &["/etc/dracut.conf.d/"],
+    },
+    CategoryRule {
         category: ConfigCategory::LibraryPath,
         prefixes: &["/etc/ld.so.conf.d/"],
     },
@@ -144,6 +152,24 @@ mod tests {
         assert_eq!(
             classify_config_path("/etc/sysctl.conf"),
             ConfigCategory::Sysctl
+        );
+    }
+
+    // ---- Test 6b: the kernel module and initramfs directories ----
+
+    #[test]
+    fn test_classify_kernel_directories() {
+        assert_eq!(
+            classify_config_path("/etc/modules-load.d/br_netfilter.conf"),
+            ConfigCategory::KernelModule
+        );
+        assert_eq!(
+            classify_config_path("/etc/modprobe.d/blacklist.conf"),
+            ConfigCategory::KernelModule
+        );
+        assert_eq!(
+            classify_config_path("/etc/dracut.conf.d/50-custom.conf"),
+            ConfigCategory::Initramfs
         );
     }
 

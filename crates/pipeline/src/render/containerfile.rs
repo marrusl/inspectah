@@ -18,6 +18,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
+use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
@@ -1494,6 +1495,23 @@ fn non_rpm_section_lines(
 
 // --- Kernel/Boot section ---
 
+/// The `config.files` path of `profile`'s own `tuned.conf`, when that
+/// entry exists and the export is not carrying it.
+///
+/// `None` covers both the stock-profile case (no entry under
+/// `/etc/tuned/<profile>/`, because nothing there was collected) and the
+/// included case, which are the two ways activation is consistent.
+fn excluded_tuned_profile_file(snap: &InspectionSnapshot, profile: &str) -> Option<String> {
+    let path = format!("/etc/tuned/{profile}/tuned.conf");
+    let entry = snap
+        .config
+        .as_ref()?
+        .files
+        .iter()
+        .find(|f| f.path == path)?;
+    (!entry.disposition.is_included()).then(|| entry.path.clone())
+}
+
 fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let kb = match &snap.kernel_boot {
         Some(k) => k,
@@ -1520,19 +1538,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         );
     }
 
-    // Non-default modules
-    let included_mods: usize = kb
-        .non_default_modules
-        .iter()
-        .filter(|m| m.disposition.is_included())
-        .count();
-    if included_mods > 0 {
-        body.push(format!(
-            "# {} non-default kernel module(s) — config files in COPY config/etc/ above",
-            included_mods
-        ));
-    }
-
     // Sysctl overrides — synthesized into a single drop-in
     let included_sysctl: usize = kb
         .sysctl_overrides
@@ -1544,13 +1549,29 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "# {} sysctl override(s) — merged into single drop-in",
             included_sysctl
         ));
-        body.push("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into());
+        body.push(format!(
+            "COPY sysctl/etc/sysctl.d/{SYNTHESIZED_SYSCTL_FILE} /etc/sysctl.d/"
+        ));
     }
 
     // Tuned — gated on include flag (set by collectors / aggregate merge).
+    // The profile's own file is a `config.files` entry with its own
+    // decision, so activation can outlive the file: when the operator
+    // excluded it, naming the profile would point the image at a file it
+    // does not carry.
     let tuned_included = kb.tuned_disposition.is_included();
     if tuned_included && !kb.tuned_active.is_empty() {
-        if is_valid_tuned_profile(&kb.tuned_active) {
+        if !is_valid_tuned_profile(&kb.tuned_active) {
+            body.push(format!(
+                "# FIXME: tuned profile name contains unsafe characters: {:?}",
+                kb.tuned_active
+            ));
+        } else if let Some(excluded) = excluded_tuned_profile_file(snap, &kb.tuned_active) {
+            body.push(format!(
+                "# FIXME: include {excluded} under Configuration Files or activate a stock \
+                 profile; the active profile is custom and its file is excluded"
+            ));
+        } else {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
             body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
@@ -1558,11 +1579,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
             body.push("RUN systemctl enable tuned.service".into());
-        } else {
-            body.push(format!(
-                "# FIXME: tuned profile name contains unsafe characters: {:?}",
-                kb.tuned_active
-            ));
         }
     }
 
@@ -4006,6 +4022,48 @@ RUN dnf install -y \
         assert!(
             output.contains("RUN systemctl enable tuned.service"),
             "must enable tuned.service"
+        );
+    }
+
+    /// § 3.5: activation and the profile file are two decisions on two
+    /// entities, so they can disagree. Activating a profile whose file the
+    /// operator excluded would bake a reference to a file the image does
+    /// not carry, so the renderer names the contradiction instead.
+    #[test]
+    fn test_containerfile_tuned_activation_without_the_profile_file() {
+        use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "my-profile".into(),
+            tuned_disposition: FindingKind::included(),
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::excluded(),
+                ..Default::default()
+            }],
+        });
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains(
+                "# FIXME: include /etc/tuned/my-profile/tuned.conf under Configuration Files \
+                 or activate a stock profile; the active profile is custom and its file is \
+                 excluded"
+            ),
+            "an excluded custom profile with activation included must render the FIXME, got:\n{output}"
+        );
+        assert!(
+            !output.contains("active_profile"),
+            "the activation lines must not render alongside the FIXME, got:\n{output}"
+        );
+        assert!(
+            !output.contains("COPY tuned/"),
+            "the tuned/ promoted root is gone, got:\n{output}"
         );
     }
 

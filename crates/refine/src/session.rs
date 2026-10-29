@@ -437,16 +437,8 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 s.disposition = FindingKind::excluded();
             }
         }
-        for m in &mut kb.loaded_modules {
-            if m.locked {
-                m.disposition = FindingKind::excluded();
-            }
-        }
-        for m in &mut kb.non_default_modules {
-            if m.locked {
-                m.disposition = FindingKind::excluded();
-            }
-        }
+        // Loaded modules are inventory: no surface toggles them, so a
+        // lock has nothing to hold shut.
     }
     if let Some(ref mut net) = snapshot.network {
         for c in &mut net.connections {
@@ -2026,6 +2018,14 @@ impl RefineSession {
                         if entry.disposition.is_advisory() {
                             return Err(RefineError::AdvisoryNotToggleable(path.clone()));
                         }
+                        // A shadowed entry's content travels under another
+                        // section's decision (a sysctl source file reaches
+                        // the image through its keys). `with_include()`
+                        // discards the flag for Inventory, so accepting the
+                        // op would report success and change nothing.
+                        if entry.disposition.is_inventory() {
+                            return Err(RefineError::InventoryNotToggleable(path.clone()));
+                        }
                     }
                     ItemId::Repo { path: section_id } => {
                         if RepoIndex::is_distro_repo(section_id) {
@@ -2149,7 +2149,6 @@ impl RefineSession {
                     }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
-                    | ItemId::KernelModule { .. }
                     | ItemId::CronJob { .. }
                     | ItemId::SystemdTimer { .. }
                     | ItemId::AtJob { .. }

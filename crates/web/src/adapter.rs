@@ -22,7 +22,7 @@ use inspectah_pipeline::render::service_intent::AdvisoryReason;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
     GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
-    RefVersionChanges, ReferenceProjection,
+    RefVersionChanges, ReferenceProjection, config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
 
@@ -985,47 +985,20 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
         });
     }
 
-    // non_default_modules → customizations
-    for km in &data.non_default_modules {
+    // The kernel and boot config files live in `config.files`. These
+    // rows point at the Configuration Files row that decides each one:
+    // the title is the whole path, because two profiles named
+    // `tuned.conf` read alike as basenames, and the content is not
+    // repeated here because the row that can be decided holds it.
+    for entry in &data.customizations_from_config {
         custom_items.push(ContextItem {
-            id: km.name.clone(),
-            title: km.name.clone(),
-            subtitle: Some(format!("size: {}", km.size)),
-            detail: if km.used_by.is_empty() {
-                None
-            } else {
-                Some(km.used_by.clone())
-            },
-            searchable_text: format!("{} {} {}", km.name, km.size, km.used_by),
+            id: entry.path.clone(),
+            title: entry.path.clone(),
+            subtitle: Some(config_ref_summary(entry)),
+            detail: None,
+            searchable_text: entry.path.clone(),
         });
     }
-
-    // Helper for config snippet items
-    let snippet_items = |snippets: &[inspectah_refine::projection::RefConfigSnippet],
-                         label: &str|
-     -> Vec<ContextItem> {
-        snippets
-            .iter()
-            .map(|cs| {
-                let basename = Path::new(&cs.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| cs.path.clone());
-                ContextItem {
-                    id: cs.path.clone(),
-                    title: basename,
-                    subtitle: Some(label.to_string()),
-                    detail: Some(cs.content.clone()),
-                    searchable_text: format!("{} {}", cs.path, cs.content),
-                }
-            })
-            .collect()
-    };
-
-    custom_items.extend(snippet_items(&data.modules_load_d, "modules-load.d"));
-    custom_items.extend(snippet_items(&data.modprobe_d, "modprobe.d"));
-    custom_items.extend(snippet_items(&data.dracut_conf, "dracut.conf.d"));
-    custom_items.extend(snippet_items(&data.custom_tuned_profiles, "tuned profile"));
 
     if !custom_items.is_empty() {
         subsections.push(ContextSubsection {

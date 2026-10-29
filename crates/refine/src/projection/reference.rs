@@ -7,18 +7,15 @@ use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
 use inspectah_pipeline::render::service_intent::render_service_intent;
 
-/// Summary on a Security & Access Control row that only points at the
-/// Configuration Files row where the file is actually decided.
-const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
-
+use super::types::DECIDED_UNDER_CONFIG_FILES;
 use super::types::{
-    ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem,
-    RefConfigSnippet, RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule,
-    RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefKernelModule,
-    RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
-    RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
-    RefServices, RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory,
-    RefVersionChangeItem, RefVersionChanges, ReferenceProjection,
+    ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem, RefConfigRef,
+    RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule, RefFirewallZone,
+    RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefLvmVolume, RefMountPoint, RefNMConnection,
+    RefNetwork, RefOmittedService, RefProxyEnv, RefQuadletItem, RefRunningContainerItem,
+    RefServiceAdvisory, RefServiceItem, RefServiceWarning, RefServices, RefStaticRoute, RefStorage,
+    RefSysctlOverride, RefVarDirectory, RefVersionChangeItem, RefVersionChanges,
+    ReferenceProjection,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -346,18 +343,48 @@ pub fn project_ref_containers(snap: &InspectionSnapshot) -> RefContainers {
     }
 }
 
+/// The config categories whose files are kernel and boot subject matter.
+///
+/// This reads the walker's own classification rather than re-asking the
+/// path: the walker owns `/etc`, and a second path test here would be a
+/// second answer to a question its owner already answered.
+const KERNEL_BOOT_CONFIG_CATEGORIES: &[ConfigCategory] = &[
+    ConfigCategory::KernelModule,
+    ConfigCategory::Initramfs,
+    ConfigCategory::Sysctl,
+    ConfigCategory::Tuned,
+];
+
 /// Project kernel/boot data from snapshot into reference format.
 ///
-/// Extracts kernel command line, GRUB defaults, tuned profile, locale/timezone,
-/// sysctl overrides, non-default modules, and config snippets (modules-load.d,
-/// modprobe.d, dracut.conf.d, custom tuned profiles, alternatives).
+/// Extracts kernel command line, GRUB defaults, tuned profile,
+/// locale/timezone, sysctl overrides, alternatives, and pointers at the
+/// `config.files` entries that carry kernel and boot configuration.
 ///
 /// String fields use `Option<String>` with `None` for empty values so the web
 /// adapter can distinguish "not collected" from "collected but empty".
 pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
+    let customizations_from_config: Vec<RefConfigRef> = snap
+        .config
+        .iter()
+        .flat_map(|config| &config.files)
+        .filter(|entry| KERNEL_BOOT_CONFIG_CATEGORIES.contains(&entry.category))
+        .map(|entry| RefConfigRef {
+            path: entry.path.clone(),
+            category: entry.category.clone(),
+            disposition: entry.disposition.clone(),
+            shadowed_by: entry.shadowed_by.clone(),
+        })
+        .collect();
+
     let kb = match &snap.kernel_boot {
         Some(k) => k,
-        None => return RefKernelBoot::default(),
+        None => {
+            return RefKernelBoot {
+                customizations_from_config,
+                ..Default::default()
+            };
+        }
     };
 
     let non_empty = |s: &str| -> Option<String> {
@@ -379,27 +406,6 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
         })
         .collect();
 
-    let non_default_modules = kb
-        .non_default_modules
-        .iter()
-        .map(|m| RefKernelModule {
-            name: m.name.clone(),
-            size: m.size.clone(),
-            used_by: m.used_by.clone(),
-        })
-        .collect();
-
-    let map_snippets =
-        |snippets: &[inspectah_core::types::kernelboot::ConfigSnippet]| -> Vec<RefConfigSnippet> {
-            snippets
-                .iter()
-                .map(|s| RefConfigSnippet {
-                    path: s.path.clone(),
-                    content: s.content.clone(),
-                })
-                .collect()
-        };
-
     RefKernelBoot {
         cmdline: non_empty(&kb.cmdline),
         grub_defaults: non_empty(&kb.grub_defaults),
@@ -407,11 +413,7 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
         locale: kb.locale.clone(),
         timezone: kb.timezone.clone(),
         sysctl_overrides,
-        non_default_modules,
-        modules_load_d: map_snippets(&kb.modules_load_d),
-        modprobe_d: map_snippets(&kb.modprobe_d),
-        dracut_conf: map_snippets(&kb.dracut_conf),
-        custom_tuned_profiles: map_snippets(&kb.tuned_custom_profiles),
+        customizations_from_config,
         alternatives: kb
             .alternatives
             .iter()
@@ -1571,9 +1573,8 @@ mod tests {
 
     // ── project_ref_kernel_boot tests ───────────────────────────────
 
-    use inspectah_core::types::kernelboot::{
-        AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
-    };
+    use inspectah_core::types::config::ConfigShadow;
+    use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, SysctlOverride};
 
     #[test]
     fn test_no_kernel_boot_returns_default() {
@@ -1590,11 +1591,7 @@ mod tests {
         assert!(result.locale.is_none());
         assert!(result.timezone.is_none());
         assert!(result.sysctl_overrides.is_empty());
-        assert!(result.non_default_modules.is_empty());
-        assert!(result.modules_load_d.is_empty());
-        assert!(result.modprobe_d.is_empty());
-        assert!(result.dracut_conf.is_empty());
-        assert!(result.custom_tuned_profiles.is_empty());
+        assert!(result.customizations_from_config.is_empty());
         assert!(result.alternatives.is_empty());
     }
 
@@ -1667,72 +1664,91 @@ mod tests {
         assert_eq!(result.sysctl_overrides[1].key, "net.ipv4.ip_forward");
     }
 
+    /// The kernel/boot section points at the `config.files` entries
+    /// whose category says they are its subject matter. It reads the
+    /// walker's category rather than re-testing the path, so the set
+    /// cannot drift from what the walker decided.
+    ///
+    /// The two tests this replaces read `non_default_modules` and the
+    /// four `ConfigSnippet` lists, which were the second copies.
     #[test]
-    fn test_non_default_modules_extracted() {
+    fn test_customizations_come_from_config_by_category() {
+        let entry = |path: &str, category: ConfigCategory| ConfigFileEntry {
+            path: path.into(),
+            category,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
         let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                non_default_modules: vec![KernelModule {
-                    name: "overlay".into(),
-                    size: "151552".into(),
-                    used_by: "".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
+            kernel_boot: Some(KernelBootSection::default()),
+            config: Some(ConfigSection {
+                files: vec![
+                    entry(
+                        "/etc/modules-load.d/br_netfilter.conf",
+                        ConfigCategory::KernelModule,
+                    ),
+                    entry(
+                        "/etc/modprobe.d/blacklist.conf",
+                        ConfigCategory::KernelModule,
+                    ),
+                    entry("/etc/dracut.conf.d/custom.conf", ConfigCategory::Initramfs),
+                    entry("/etc/sysctl.d/99-custom.conf", ConfigCategory::Sysctl),
+                    entry("/etc/tuned/myprofile/tuned.conf", ConfigCategory::Tuned),
+                    entry("/etc/pam.d/sshd", ConfigCategory::Pam),
+                    entry("/etc/httpd/conf/httpd.conf", ConfigCategory::Other),
+                ],
             }),
             ..Default::default()
         };
 
         let result = project_ref_kernel_boot(&snap);
 
-        assert_eq!(result.non_default_modules.len(), 1);
-        assert_eq!(result.non_default_modules[0].name, "overlay");
-        assert_eq!(result.non_default_modules[0].size, "151552");
+        let paths: Vec<&str> = result
+            .customizations_from_config
+            .iter()
+            .map(|c| c.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/etc/modules-load.d/br_netfilter.conf",
+                "/etc/modprobe.d/blacklist.conf",
+                "/etc/dracut.conf.d/custom.conf",
+                "/etc/sysctl.d/99-custom.conf",
+                "/etc/tuned/myprofile/tuned.conf",
+            ],
+            "a PAM file and an uncategorized one are not kernel/boot subject matter"
+        );
     }
 
+    /// A shadowed entry carries the shadow onto the pointer row, so the
+    /// row can say where the content went instead of offering a second
+    /// decision on it.
     #[test]
-    fn test_config_snippets_extracted() {
+    fn test_shadowed_entry_is_carried_onto_the_pointer_row() {
         let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                modules_load_d: vec![ConfigSnippet {
-                    path: "/etc/modules-load.d/br_netfilter.conf".into(),
-                    content: "br_netfilter".into(),
+            kernel_boot: Some(KernelBootSection::default()),
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/sysctl.d/99-driftify.conf".into(),
+                    category: ConfigCategory::Sysctl,
+                    disposition: FindingKind::inventory(),
+                    shadowed_by: Some(ConfigShadow::Sysctl),
+                    ..Default::default()
                 }],
-                modprobe_d: vec![ConfigSnippet {
-                    path: "/etc/modprobe.d/blacklist.conf".into(),
-                    content: "blacklist nouveau".into(),
-                }],
-                dracut_conf: vec![ConfigSnippet {
-                    path: "/etc/dracut.conf.d/custom.conf".into(),
-                    content: "add_drivers+=\" iscsi \"".into(),
-                }],
-                tuned_custom_profiles: vec![ConfigSnippet {
-                    path: "/etc/tuned/myprofile/tuned.conf".into(),
-                    content: "[main]\ninclude=throughput-performance".into(),
-                }],
-                ..Default::default()
             }),
             ..Default::default()
         };
 
         let result = project_ref_kernel_boot(&snap);
 
-        assert_eq!(result.modules_load_d.len(), 1);
+        assert_eq!(result.customizations_from_config.len(), 1);
+        let row = &result.customizations_from_config[0];
+        assert_eq!(row.shadowed_by, Some(ConfigShadow::Sysctl));
+        assert!(row.disposition.is_inventory());
         assert_eq!(
-            result.modules_load_d[0].path,
-            "/etc/modules-load.d/br_netfilter.conf"
-        );
-        assert_eq!(result.modules_load_d[0].content, "br_netfilter");
-
-        assert_eq!(result.modprobe_d.len(), 1);
-        assert_eq!(result.modprobe_d[0].content, "blacklist nouveau");
-
-        assert_eq!(result.dracut_conf.len(), 1);
-        assert_eq!(result.dracut_conf[0].content, "add_drivers+=\" iscsi \"");
-
-        assert_eq!(result.custom_tuned_profiles.len(), 1);
-        assert_eq!(
-            result.custom_tuned_profiles[0].path,
-            "/etc/tuned/myprofile/tuned.conf"
+            super::super::types::config_ref_summary(row),
+            "merged into 99-inspectah-migrated.conf"
         );
     }
 
@@ -1778,19 +1794,6 @@ mod tests {
                     source: "/etc/sysctl.d/swap.conf".into(),
                     ..Default::default()
                 }],
-                non_default_modules: vec![KernelModule {
-                    name: "vfio".into(),
-                    size: "32768".into(),
-                    used_by: "vfio-pci".into(),
-                    ..Default::default()
-                }],
-                modules_load_d: vec![ConfigSnippet {
-                    path: "/etc/modules-load.d/vfio.conf".into(),
-                    content: "vfio\nvfio-pci".into(),
-                }],
-                modprobe_d: Vec::new(),
-                dracut_conf: Vec::new(),
-                tuned_custom_profiles: Vec::new(),
                 alternatives: vec![AlternativeEntry {
                     name: "java".into(),
                     path: "/usr/lib/jvm/java-17".into(),
@@ -1809,12 +1812,7 @@ mod tests {
         assert_eq!(result.locale.as_deref(), Some("C.UTF-8"));
         assert_eq!(result.timezone.as_deref(), Some("UTC"));
         assert_eq!(result.sysctl_overrides.len(), 1);
-        assert_eq!(result.non_default_modules.len(), 1);
-        assert_eq!(result.non_default_modules[0].used_by, "vfio-pci");
-        assert_eq!(result.modules_load_d.len(), 1);
-        assert!(result.modprobe_d.is_empty());
-        assert!(result.dracut_conf.is_empty());
-        assert!(result.custom_tuned_profiles.is_empty());
+        assert!(result.customizations_from_config.is_empty());
         assert_eq!(result.alternatives.len(), 1);
         assert_eq!(result.alternatives[0].status, "manual");
     }

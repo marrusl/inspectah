@@ -254,12 +254,8 @@ pub fn build_section_entries(session: &RefineSession) -> Vec<SectionEntry> {
                 SectionId::KernelBoot => {
                     let kb = &reference.kernel_boot;
                     let total = kb.sysctl_overrides.len()
-                        + kb.non_default_modules.len()
-                        + kb.modules_load_d.len()
-                        + kb.modprobe_d.len()
-                        + kb.dracut_conf.len()
-                        + kb.custom_tuned_profiles.len()
-                        + kb.alternatives.len();
+                        + kb.alternatives.len()
+                        + kb.customizations_from_config.len();
                     (total, 0, 0, 0)
                 }
                 SectionId::Network => {
