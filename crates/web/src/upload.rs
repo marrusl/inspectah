@@ -294,6 +294,45 @@ fn occupant_of(session: &RefineSession, dest: &Path, exclude: Option<&str>) -> O
 /// this returned the path, `resolve_staged_file` turned it back into the
 /// file `dest` names, and the caller unlinked the upload it had just
 /// staged -- 200, `uploaded: true`, nothing on disk.
+///
+/// # Who writes `cache_path`
+///
+/// Recorded here because it has been got wrong twice, and both times in
+/// a review file rather than beside the code. **It is not true that
+/// `set_uploaded` is the only writer of `cache_path`** -- that claim is
+/// easy to re-verify as false, and a seat that checks it will find three
+/// writers and reopen a settled question. In production there are
+/// exactly three, and they divide like this:
+///
+/// - `scan_dnf_cache_for_repoless`
+///   (`crates/collect/src/inspectors/rpm/repoless.rs`) writes the path
+///   it found under the host's dnf cache. It runs on the collecting
+///   host, where no upload directory exists.
+/// - `RefineSession::set_uploaded` writes `upload_dir.join(name)`. It is
+///   the only writer that puts a path inside the upload directory **by
+///   construction**.
+/// - `RefineSession::unmark_uploaded_rpm` writes back what `prior_cache`
+///   saved, and that is a copy of `pkg.cache_path` as it stood at
+///   first-upload time. On a crafted snapshot it can therefore hold
+///   anything, an upload-directory path included. **Do not reason about
+///   what it contains.**
+///
+/// The third writer cannot reach this function at all, and the reason is
+/// the gate rather than the contents: `unmark_uploaded_rpm` assigns
+/// `cache_path` and clears `uploaded` in one operation, and the `find`
+/// below requires `pkg.uploaded`. A restored value is never read here
+/// whatever it holds. That is the form of the argument to keep, because
+/// it survives a crafted `prior_cache` and a contents argument does not.
+///
+/// None of this makes `cache_path` trustworthy: it is `#[serde(default)]`
+/// and a deserialized snapshot can carry any path at all, written by no
+/// one. That is what `resolve_staged_file` is for, and why nothing here
+/// unlinks on the strength of a field.
+///
+/// A fourth writer, or any change that lets a `cache_path` the session
+/// did not build reach a package with `uploaded == true`, invalidates
+/// the paragraph above. That is the tripwire, and it is here rather than
+/// in a review because the last one fired unnoticed.
 fn superseded_upload(session: &RefineSession, canonical: &str, dest: &Path) -> Option<PathBuf> {
     let rpm = session.snapshot().rpm.as_ref()?;
     rpm.packages_added
