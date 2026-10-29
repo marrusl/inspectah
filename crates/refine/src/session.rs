@@ -126,12 +126,15 @@ pub const UPLOAD_PART_RAND_BYTES: usize = 16;
 /// Mode the upload directory is created with: nothing for group or other.
 const UPLOAD_DIR_MODE: u32 = 0o700;
 /// Group-write and other-write bits. An existing upload directory carrying
-/// either is not private and is refused.
+/// either lets another local user replace a staged file, and is refused.
+/// A merely readable one (0755) is accepted: staged files are created 0600
+/// and `rename` keeps the mode, so what an onlooker gets is the filenames,
+/// not the contents.
 const SHARED_WRITE_BITS: u32 = 0o022;
 
 /// Create the upload directory with mode 0700, or prove an existing one is
-/// a directory (not a symlink) owned by us with no group or other write
-/// bit, and return its canonical path.
+/// a directory (not a symlink) owned by us that no one else can write to,
+/// and return its canonical path.
 ///
 /// `create_dir_all` accepted whatever was there, including a symlink to a
 /// directory another local user pre-created; refusing is what makes
@@ -953,54 +956,103 @@ impl RefineSession {
         self.recompute_view();
     }
 
+    /// Resolve a `cache_path` to the staged file it names inside this
+    /// session's upload directory, or refuse it.
+    ///
+    /// `cache_path` is a snapshot field: it is `#[serde(default)]` and
+    /// arrives from the scanned host, so it can name any file the
+    /// operator can unlink. Nothing may be deleted on its say-so. A path
+    /// resolves only when its basename passes the staged-name allowlist
+    /// and its parent resolves to the prepared upload directory, and the
+    /// path returned is `<upload_dir_canon>/<basename>` rather than
+    /// `cache_path` itself, so the caller unlinks the proved path and not
+    /// the given one.
+    ///
+    /// `Ok(None)` means there is nothing there to remove, which is not an
+    /// error. `Err` means a confinement check failed, which the caller
+    /// must not treat as nothing to do.
+    pub fn resolve_staged_file(&self, cache_path: &Path) -> Result<Option<PathBuf>, RefineError> {
+        let refuse = |why: &str| {
+            Err(RefineError::TarballError(format!(
+                "refusing to remove a staged file: {why}"
+            )))
+        };
+        let Some(canon) = self.upload_dir_canon.as_deref() else {
+            return refuse("no upload directory has been prepared");
+        };
+        let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
+            return refuse("its path names no file");
+        };
+        if let Err(e) = crate::rpm_filename::validate_staged_name(basename) {
+            return refuse(&format!("{e}"));
+        }
+        let resolved_parent = cache_path
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok());
+        if resolved_parent.as_deref() != Some(canon) {
+            return refuse(&format!("{basename} is not in {}", canon.display()));
+        }
+
+        let target = canon.join(basename);
+        match std::fs::symlink_metadata(&target) {
+            Ok(md) if md.file_type().is_file() => Ok(Some(target)),
+            Ok(_) => refuse(&format!("{basename} is not a regular file")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => refuse(&format!("{basename}: {e}")),
+        }
+    }
+
     /// Reverse the effect of `set_uploaded` for a given `name.arch`.
     ///
-    /// Clears `repoless_cached` and `cache_path` on the matching PackageEntry,
-    /// deletes the staged RPM file from the upload directory, and invalidates
-    /// cached views so subsequent renders and exports reflect the removal.
+    /// Clears `uploaded`, `repoless_cached` and `cache_path` on the
+    /// matching PackageEntry, deletes the staged RPM file, and
+    /// invalidates cached views so subsequent renders and exports reflect
+    /// the removal. The precondition is `uploaded`, not `repoless_cached`:
+    /// a package the collector found in the host's dnf cache was never
+    /// staged here, and its `cache_path` is a host path this has no
+    /// business unlinking.
     ///
     /// Returns `Ok(true)` if a matching upload was found and removed,
-    /// `Ok(false)` if no matching uploaded RPM existed.
+    /// `Ok(false)` if no matching uploaded RPM existed, and `Err` when the
+    /// recorded path fails [`RefineSession::resolve_staged_file`].
     pub fn unmark_uploaded_rpm(&mut self, name: &str, arch: &str) -> Result<bool, RefineError> {
-        let mut found = false;
+        let staged = {
+            let Some(rpm) = self.original.rpm.as_ref() else {
+                return Ok(false);
+            };
+            let found = rpm
+                .packages_added
+                .iter()
+                .find(|pkg| pkg.name == name && pkg.arch == arch && pkg.uploaded);
+            match found {
+                Some(pkg) => pkg.cache_path.clone(),
+                None => return Ok(false),
+            }
+        };
 
-        if let Some(ref mut rpm) = self.original.rpm {
+        // Confine before unlinking, and before the entry is cleared: a
+        // refusal leaves the session exactly as it was.
+        if let Some(cache_path) = staged
+            && let Some(target) = self.resolve_staged_file(Path::new(&cache_path))?
+        {
+            std::fs::remove_file(&target).map_err(|e| {
+                RefineError::TarballError(format!("remove staged file {}: {e}", target.display()))
+            })?;
+        }
+
+        if let Some(rpm) = self.original.rpm.as_mut() {
             for pkg in &mut rpm.packages_added {
-                if pkg.name == name && pkg.arch == arch && pkg.repoless_cached {
-                    // Delete the staged file if it exists
-                    if let Some(ref cache_path) = pkg.cache_path {
-                        let path = std::path::Path::new(cache_path);
-                        if path.exists() {
-                            std::fs::remove_file(path)?;
-                        }
-                    }
-
+                if pkg.name == name && pkg.arch == arch && pkg.uploaded {
                     pkg.repoless_cached = false;
                     pkg.cache_path = None;
-                    // The entry no longer has a staged file, so it is no
-                    // longer an upload either; leaving `uploaded` set would
-                    // tell the row and the export otherwise.
                     pkg.uploaded = false;
-                    found = true;
                     break;
                 }
             }
         }
+        self.invalidate_caches();
 
-        if found {
-            self.cached_view = None;
-            self.cached_render_context = None;
-            self.cached_decisions = None;
-            self.generation += 1;
-            self.recompute_view();
-        }
-
-        Ok(found)
-    }
-
-    /// Returns the upload directory path, if set.
-    pub fn upload_dir_path(&self) -> Option<&Path> {
-        self.upload_dir.as_deref()
+        Ok(true)
     }
 
     pub fn repo_index(&self) -> &RepoIndex {
@@ -7479,6 +7531,37 @@ mod tests {
     }
 
     #[test]
+    fn ensure_upload_dir_sweeps_only_regular_part_files() {
+        // The `is_file()` guard, with an input for each half: a
+        // directory wearing a part file's name turns `remove_file` into
+        // an error that would 500 every upload for the life of the
+        // process, and a symlink wearing one belongs to whoever made it.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        std::fs::create_dir(&dir).unwrap();
+        let link_target = tmp.path().join("target.rpm");
+        std::fs::write(&link_target, b"not ours to remove").unwrap();
+        std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+        std::fs::create_dir(dir.join(".upload-busy.part")).unwrap();
+        std::os::unix::fs::symlink(&link_target, dir.join(".upload-link.part")).unwrap();
+
+        session_over_upload_dir(&dir)
+            .ensure_upload_dir()
+            .expect("the sweep does not fail on entries it will not remove");
+
+        assert!(!dir.join(".upload-dead.part").exists());
+        assert!(
+            dir.join(".upload-busy.part").is_dir(),
+            "a directory is not a part file"
+        );
+        assert!(
+            std::fs::symlink_metadata(dir.join(".upload-link.part")).is_ok(),
+            "a symlink is not a part file"
+        );
+        assert!(link_target.exists(), "and its target is untouched");
+    }
+
+    #[test]
     fn ensure_upload_dir_refuses_a_directory_that_is_not_ours() {
         let tmp = tempfile::tempdir().unwrap();
 
@@ -7524,14 +7607,11 @@ mod tests {
     #[test]
     fn unmark_uploaded_rpm_clears_uploaded() {
         let tmp = tempfile::tempdir().unwrap();
-        let staged = tmp.path().join("epel-release-9-12.el9.noarch.rpm");
+        let dir = tmp.path().join("snap-uploads");
+        let mut session = session_over_upload_dir(&dir);
+        session.ensure_upload_dir().unwrap();
+        let staged = dir.join("epel-release-9-12.el9.noarch.rpm");
         std::fs::write(&staged, b"an rpm").unwrap();
-        let mut session = RefineSession::new(snapshot_with_repoless(
-            "epel-release",
-            "9",
-            "11.el9",
-            "noarch",
-        ));
         session.set_uploaded(
             "epel-release.noarch",
             staged.clone(),
@@ -7549,6 +7629,77 @@ mod tests {
         assert!(!pkg.repoless_cached);
         assert_eq!(pkg.cache_path, None);
         assert!(!staged.exists());
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_leaves_a_dnf_cached_package_alone() {
+        // The precondition is `uploaded`, not `repoless_cached`: a
+        // package the collector found in the host's dnf cache was never
+        // staged here, and `DELETE /api/upload-rpm/<name.arch>` must not
+        // unlink a file under /var/cache/dnf on the strength of it.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let host_cached = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+        std::fs::write(&host_cached, b"the host's cached rpm").unwrap();
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(host_cached.to_string_lossy().into_owned());
+        let mut session = RefineSession::new(snap);
+        session.set_upload_dir(dir);
+
+        assert!(
+            !session
+                .unmark_uploaded_rpm("epel-release", "noarch")
+                .unwrap(),
+            "a package that was never uploaded has no upload to remove"
+        );
+
+        assert!(host_cached.exists(), "the host's cached RPM survives");
+        let pkg = only_package(&session);
+        assert!(pkg.repoless_cached, "and its cache state is untouched");
+        assert_eq!(
+            pkg.cache_path.as_deref(),
+            Some(host_cached.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_refuses_a_path_outside_the_upload_directory() {
+        // `uploaded` and `cache_path` both deserialize from the scan, so
+        // the pair proves nothing about where the file is.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let outside = tmp.path().join("id_ed25519.rpm");
+        std::fs::write(&outside, b"not a staged rpm").unwrap();
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.uploaded = true;
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(outside.to_string_lossy().into_owned());
+        let mut session = RefineSession::new(snap);
+        session.set_upload_dir(dir.clone());
+        session.ensure_upload_dir().unwrap();
+
+        let err = session
+            .unmark_uploaded_rpm("epel-release", "noarch")
+            .expect_err("a cache_path outside the upload directory is refused");
+
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "refusing to remove a staged file: id_ed25519.rpm is not in {}",
+                dir.canonicalize().unwrap().display()
+            )
+        );
+        assert!(outside.exists(), "and nothing is deleted");
+        assert!(
+            only_package(&session).uploaded,
+            "a refusal leaves the entry as it was"
+        );
     }
 
     #[test]

@@ -400,7 +400,10 @@ pub async fn export_tarball(
             orig_inc,
             filename,
             session.source_tarball_path().map(|p| p.to_path_buf()),
-            session.upload_dir_path().map(|p| p.to_path_buf()),
+            // The canonical path, so what the export copies from is the
+            // directory `ensure_upload_dir` proved, not a path that can
+            // still resolve somewhere else.
+            session.upload_dir_canon().map(|p| p.to_path_buf()),
         )
     };
     // Lock is released here.

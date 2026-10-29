@@ -2745,6 +2745,115 @@ async fn upload_replacing_an_upload_removes_the_superseded_file() {
     assert_eq!(pkg["uploaded_version"], "9-13.el9");
 }
 
+/// A session whose package state was **deserialized**, the way refine
+/// loads a scan. `uploaded` and `cache_path` are `#[serde(default)]`
+/// fields that arrive from the scanned host, so "uploaded implies
+/// `set_uploaded` wrote this path" is not something the collector or the
+/// type system enforces.
+fn upload_state_from_scan(tmp: &tempfile::TempDir, package: serde_json::Value) -> Arc<AppState> {
+    let snap: InspectionSnapshot = serde_json::from_value(serde_json::json!({
+        "schema_version": inspectah_core::snapshot::SCHEMA_VERSION,
+        "rpm": { "packages_added": [package] },
+    }))
+    .expect("the scan snapshot deserializes");
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(session)),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+const SNAPSHOT_SUPPLIED_SECRET: &[u8] = b"a private key the operator can unlink";
+
+#[tokio::test]
+async fn upload_does_not_unlink_a_snapshot_supplied_path_outside_the_upload_directory() {
+    // A scanned host sets `uploaded: true` with a `cache_path` pointing
+    // anywhere the operator can write. One ordinary upload for that
+    // package used to make the superseded-file deletion unlink it.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let outside = tmp.path().join("id_ed25519");
+    std::fs::write(&outside, SNAPSHOT_SUPPLIED_SECRET).unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "foo",
+            "version": "1",
+            "release": "1",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "uploaded": true,
+            "cache_path": outside.to_string_lossy(),
+        }),
+    ));
+
+    let (status, body) = post_upload(&app, &[file_part("foo-1-1.noarch.rpm", b"an rpm")]).await;
+
+    assert!(
+        outside.exists(),
+        "an upload must not unlink a file outside the upload directory"
+    );
+    assert_eq!(
+        std::fs::read(&outside).unwrap(),
+        SNAPSHOT_SUPPLIED_SECRET,
+        "the file outside the upload directory is untouched"
+    );
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "foo.noarch records a staged file outside the upload directory; nothing was staged"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "a refused upload places nothing"
+    );
+}
+
+#[tokio::test]
+async fn first_upload_for_a_dnf_cached_package_keeps_the_host_rpm() {
+    // `superseded_upload` filters on `uploaded`, so the first upload for
+    // a package the collector found in the host's dnf cache supersedes
+    // nothing: that file is the one `prior_cache` records for removal to
+    // restore, and deleting it would make the restore name a file that
+    // is gone. epel-release arrives this way on the basis scan.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let host_cached = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+    std::fs::write(&host_cached, b"the host's cached rpm").unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "epel-release",
+            "version": "9",
+            "release": "11.el9",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "cache_path": host_cached.to_string_lossy(),
+        }),
+    ));
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        std::fs::read(&host_cached).unwrap(),
+        b"the host's cached rpm".as_slice(),
+        "the host's cached RPM is not this upload's to delete"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()]
+    );
+}
+
 /// Stage one part file through the real `stage`, without committing it.
 async fn stage_part(
     dir: &std::path::Path,
@@ -2918,39 +3027,53 @@ async fn upload_over_the_route_limit_is_413_and_leaves_no_part_file() {
     );
 }
 
+/// How long a test waits for a concurrent upload to make progress
+/// before it calls the server stuck.
+const UPLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often it looks.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// A body that sends a complete multipart header and the first bytes of
+/// the file, then stops: the client that goes away mid-transfer.
+fn stalled_upload_body(filename: &str) -> Body {
+    let mut first = format!(
+        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; \
+         name=\"file\"; filename=\"{filename}\"\r\n\r\n"
+    )
+    .into_bytes();
+    first.extend_from_slice(b"the first half of an rpm");
+    Body::from_stream(ChunkStream {
+        prologue: Some(axum::body::Bytes::from(first)),
+        chunk: axum::body::Bytes::new(),
+        full: 0,
+        rest: 0,
+        stall: true,
+    })
+}
+
+/// Wait until the stalled upload's part file is on disk, so what follows
+/// is measuring a transfer in flight rather than one that never started.
+async fn await_part_file(dir: &std::path::Path) {
+    tokio::time::timeout(UPLOAD_WAIT, async {
+        while part_files(dir).len() != 1 {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("the upload never reached its part file");
+}
+
 #[tokio::test]
 async fn upload_abandoned_mid_body_leaves_no_part_file() {
     let (state, tmp) = upload_state();
     let dir = tmp.path().join(UPLOAD_SUBDIR);
     let app = app(state);
 
-    let header = format!(
-        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
-         filename=\"epel-release-9-12.el9.noarch.rpm\"\r\n\r\n"
-    );
-    let mut first = Vec::from(header);
-    first.extend_from_slice(b"the first half of an rpm");
-    let stream = ChunkStream {
-        prologue: Some(axum::body::Bytes::from(first)),
-        chunk: axum::body::Bytes::new(),
-        full: 0,
-        rest: 0,
-        stall: true,
-    };
-    let handle =
-        tokio::spawn(async move { app.oneshot(upload_request(Body::from_stream(stream))).await });
+    let body = stalled_upload_body("epel-release-9-12.el9.noarch.rpm");
+    let handle = tokio::spawn(async move { app.oneshot(upload_request(body)).await });
 
     // The part file exists while the transfer is in flight.
-    let staged = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if part_files(&dir).len() == 1 {
-                return true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    assert!(staged.is_ok(), "the upload never reached its part file");
+    await_part_file(&dir).await;
 
     // The client goes away: axum drops the handler future.
     handle.abort();
@@ -2961,6 +3084,46 @@ async fn upload_abandoned_mid_body_leaves_no_part_file() {
         Vec::<String>::new(),
         "an abandoned transfer leaves nothing behind"
     );
+}
+
+// Two workers, so that a `stage` moved inside the lock hold blocks one
+// of them and leaves the other free to fire the timeout. On the
+// single-threaded runtime the other tests use, that mutation would hang
+// the suite instead of failing this test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_upload_does_not_block_another_request() {
+    // What the stage/commit split exists for: the streaming happens
+    // outside the session lock, so a client that stops sending holds its
+    // own part file and nothing else. The interleaving test cannot show
+    // this, because it takes the lock itself.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let stalled = tokio::spawn({
+        let app = app.clone();
+        let body = stalled_upload_body("epel-release-latest-9.noarch.rpm");
+        async move { app.oneshot(upload_request(body)).await }
+    });
+    await_part_file(&dir).await;
+
+    let (status, body) = tokio::time::timeout(
+        UPLOAD_WAIT,
+        post_upload(
+            &app,
+            &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+        ),
+    )
+    .await
+    .expect("a stalled upload must not hold the session lock");
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        dir_entries(&dir).len(),
+        2,
+        "the staged file, and the stalled request's part file beside it"
+    );
+    stalled.abort();
 }
 
 #[tokio::test]

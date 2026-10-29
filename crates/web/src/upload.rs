@@ -128,6 +128,14 @@ pub async fn stage(upload_dir: &Path, field: &mut Field<'_>) -> Result<StagedPar
 /// deletion of a file this upload superseded. Taking a [`StagedName`]
 /// rather than a `&str` is what keeps an unvalidated name out of the
 /// rename: there is no other way into this function.
+///
+/// Two properties worth keeping if this is ever rewritten. `persist` is
+/// `rename(2)`, which replaces a symlink at the destination rather than
+/// following it, so a symlink pre-planted under a valid RPM name cannot
+/// redirect the staged write; a copy-and-unlink would not have that.
+/// And this function is not `async`, so "no I/O wait inside the lock
+/// hold" is a property the compiler keeps rather than one a reader has
+/// to check.
 pub fn commit(
     session: &mut RefineSession,
     part: StagedPart,
@@ -149,8 +157,24 @@ pub fn commit(
         ));
     }
 
-    // Read before the record step rewrites `cache_path`.
-    let superseded = matched_canonical.and_then(|c| superseded_upload(session, c, &dest));
+    // Read before the record step rewrites `cache_path`, and resolved
+    // before the rename so a refusal places nothing. `cache_path` is a
+    // snapshot field: a scan can claim this package's upload is the
+    // operator's private key, and deleting it is not this upload's to do.
+    let mut superseded = None;
+    if let Some(m) = &matched
+        && let Some(previous) = superseded_upload(session, &m.canonical, &dest)
+    {
+        superseded = session.resolve_staged_file(&previous).map_err(|_| {
+            UploadError::Client(
+                StatusCode::CONFLICT,
+                format!(
+                    "{} records a staged file outside the upload directory; nothing was staged",
+                    m.canonical
+                ),
+            )
+        })?;
+    }
 
     part.file.persist(&dest).map_err(|e| {
         RefineError::TarballError(format!("stage upload as {}: {}", dest.display(), e.error))
@@ -161,10 +185,9 @@ pub fn commit(
     }
 
     if let Some(old) = superseded {
-        // The record step has already succeeded and cannot be undone, so a
-        // failed unlink leaves an unreferenced file rather than a wrong
-        // state; the next startup is not going to remove it either, since
-        // it wears a staged name, but nothing reads it.
+        // Proved to be inside the upload directory above. The record step
+        // has already succeeded and cannot be undone, so a failed unlink
+        // here leaves an unreferenced file rather than a wrong state.
         let _ = std::fs::remove_file(old);
     }
 

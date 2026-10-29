@@ -227,9 +227,10 @@ mod tests {
         // directly: the dotted-arch standard NEVRA shape (KNOWN_ARCHES'
         // first entry, x86_64, was otherwise only reached through the
         // underscore branch below) and the underscore-arch branch itself
-        // (vendor filenames like google-chrome), which `mark_uploaded_rpm`'s
-        // own doc comment relies on as its justifying example.
-        let cases: &[(&str, Option<(&str, &str, Option<&str>)>)] = &[
+        // (vendor filenames like google-chrome), which the upload
+        // matcher's own doc comment relies on as its justifying example.
+        type Parsed<'a> = Option<(&'a str, &'a str, Option<&'a str>)>;
+        let cases: &[(&str, Parsed)] = &[
             (
                 "httpd-2.4.57-5.el9.x86_64.rpm",
                 Some(("httpd", "x86_64", Some("2.4.57-5.el9"))),
