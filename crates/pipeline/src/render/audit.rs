@@ -1028,6 +1028,15 @@ fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
             if !var_dir_rows.is_empty() {
                 lines.push(format!("#### /var Directories ({})", var_dir_rows.len()));
                 lines.push(String::new());
+                // Two /var lists reach the operator and they answer
+                // different questions. Say which this one is, so the
+                // difference is visible rather than inferred.
+                lines.push(
+                    "As the export resolves them. The Storage advisory lists them as found \
+                     on the host."
+                        .into(),
+                );
+                lines.push(String::new());
                 lines.push("| Directory | Source verdict | Export outcome |".into());
                 lines.push("|-----------|----------------|----------------|".into());
                 lines.extend(var_dir_rows);

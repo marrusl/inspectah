@@ -108,10 +108,17 @@ struct Evidence<'a> {
     unit_owners: HashMap<&'a str, &'a str>,
     /// The included `packages_added` entries the export installs.
     ///
-    /// Narrower in the Containerfile than here: the install loop also
-    /// applies the leaf filter, `baseline_suppressed`, group-member
-    /// suppression, and the repo-enabling demotion. The spec defines
-    /// this set as the inclusion and installability filters only.
+    /// Deliberately wider than the Containerfile's own install loop,
+    /// which also applies the leaf filter, `baseline_suppressed`, and
+    /// group-member suppression. Each of those three drops a package
+    /// that is in the built image anyway — a transitive dependency dnf
+    /// pulls in, one the base already has, one its group installs — so
+    /// counting them as carried is the correct answer, and the loop's
+    /// set would read a directory backed by a transitively installed
+    /// package as `Provision`.
+    ///
+    /// The repo-enabling demotion is the one filter that removes a
+    /// package the image will not have, so it is applied here.
     install_set: HashSet<&'a str>,
     /// `None` means no base set is known, which is not the same as an
     /// empty one: membership cannot be ruled out either way.
@@ -157,6 +164,14 @@ impl<'a> Evidence<'a> {
                 // too: a staged upload or a cached RPM the payload
                 // extraction carries.
                 .filter(|pkg| is_package_installable(pkg) || pkg.uploaded || pkg.repoless_cached)
+                // A repo-enabling package whose serving repo the export
+                // dropped is demoted to a FIXME and never installed.
+                .filter(|pkg| {
+                    !matches!(
+                        super::repo_enabling::repo_enabling_export(rpm, pkg),
+                        super::repo_enabling::RepoEnablingExport::Lost(_)
+                    )
+                })
                 .map(|pkg| pkg.name.as_str())
                 .collect();
             baseline = rpm

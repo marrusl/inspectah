@@ -381,6 +381,54 @@ fn rpm_owned_absent_from_base_and_install_set_is_provisioned() {
 }
 
 #[test]
+fn a_demoted_repo_enabling_package_is_not_in_the_install_set() {
+    // The Containerfile's install loop narrows the install set four
+    // ways. Three of them drop packages the built image has anyway, so
+    // reading those as carried is right. The repo-enabling demotion is
+    // the one that removes a package the image will not have: its
+    // serving repo is not carried, so it renders as a FIXME and never
+    // installs, and the directory it owns has to be provisioned.
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/epelapp",
+            VarDirBacking::RpmOwned {
+                package: "epel-release".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    let mut epel = package("epel-release", true);
+    epel.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![epel],
+        baseline_package_names: Some(vec!["filesystem".into()]),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/epelapp"),
+        &EffectiveBacking::Provision {
+            lost: Some("epel-release".into())
+        }
+    );
+    assert!(var_conf(&snap).contains("d /var/lib/epelapp 0755 root root -"));
+
+    // The same package with its serving repo carried installs, so the
+    // directory it owns is carried with it.
+    let rpm = snap.rpm.as_mut().expect("rpm");
+    rpm.packages_added[0].repo_enabling_from = Vec::new();
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/epelapp"),
+        &EffectiveBacking::Carried
+    );
+    assert!(!var_conf(&snap).contains("/var/lib/epelapp"));
+}
+
+#[test]
 fn unresolved_renders_a_fixme_and_no_active_line() {
     // (a) a /usr/lib fragment no file_ownership entry names, with a known
     //     baseline -> UnownedFragment
