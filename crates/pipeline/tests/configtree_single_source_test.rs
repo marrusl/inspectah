@@ -12,9 +12,9 @@
 //! of the workspace stays green.
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::configtree::write_config_tree;
 use tempfile::TempDir;
 
@@ -33,13 +33,18 @@ const SNIPPET_DEST: &str = "config/etc/modules-load.d/driftify.conf";
 /// `kernel_boot` is `Some` on purpose: the deleted writer lived inside
 /// `if let Some(ref kb) = snap.kernel_boot`, so a fixture that leaves the
 /// section unset cannot reach it and cannot catch its return.
-fn snapshot_with(disposition: FindingKind) -> InspectionSnapshot {
+///
+/// `content` is a parameter because the advisory case carries none: the
+/// config walker records a cross-tree symlink with `content:
+/// String::new()`, and that empty content is what makes an admitted
+/// advisory worse than an admitted exclusion.
+fn snapshot_with(disposition: FindingKind, content: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
             path: SNIPPET_PATH.to_string(),
             category: ConfigCategory::KernelModule,
-            content: SNIPPET_CONTENT.to_string(),
+            content: content.to_string(),
             disposition,
             ..Default::default()
         }],
@@ -68,7 +73,7 @@ fn snapshot_with(disposition: FindingKind) -> InspectionSnapshot {
 
 #[test]
 fn a_config_exclusion_is_not_overridden_by_a_kernel_list() {
-    let snap = snapshot_with(FindingKind::excluded());
+    let snap = snapshot_with(FindingKind::excluded(), SNIPPET_CONTENT);
     let dir = TempDir::new().unwrap();
     let roots = write_config_tree(&snap, dir.path()).unwrap();
 
@@ -80,9 +85,38 @@ fn a_config_exclusion_is_not_overridden_by_a_kernel_list() {
     );
 }
 
+/// The third disposition `is_included()` refuses, and the one with the
+/// worst consequence if a writer ever admits it.
+///
+/// The config walker gives a cross-tree symlink `content: String::new()`,
+/// so a writer that admitted advisories would lay a zero-byte file at the
+/// real path and `COPY config/etc/ /etc/` would put it over whatever the
+/// base image ships there. An advisory is also a finding the operator
+/// cannot toggle, so such a file is one nobody chose.
+#[test]
+fn an_advisory_config_entry_is_not_written() {
+    let snap = snapshot_with(
+        FindingKind::advisory(
+            AdvisoryType::CrossTreeSymlink,
+            "Symlink crosses /etc → /var: config is stateful via /var persistence, \
+             not subject to /etc 3-way merge",
+        ),
+        "",
+    );
+    let dir = TempDir::new().unwrap();
+    let roots = write_config_tree(&snap, dir.path()).unwrap();
+
+    assert_eq!(
+        (dir.path().join(SNIPPET_DEST).exists(), roots),
+        (false, Vec::<String>::new()),
+        "an advisory config entry carries no decision and must not be \
+         materialized, as a zero-byte file or otherwise"
+    );
+}
+
 #[test]
 fn an_included_config_entry_is_written() {
-    let snap = snapshot_with(FindingKind::included());
+    let snap = snapshot_with(FindingKind::included(), SNIPPET_CONTENT);
     let dir = TempDir::new().unwrap();
     let roots = write_config_tree(&snap, dir.path()).unwrap();
 
