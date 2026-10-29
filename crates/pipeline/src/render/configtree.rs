@@ -5,7 +5,9 @@
 //! - Repo files (snap.rpm.repo_files)
 //! - GPG keys (snap.rpm.gpg_keys)
 //! - Firewall zones (snap.network.firewall_zones)
-//! - Kernel/boot snippets (modules-load.d, modprobe.d, dracut.conf.d, tuned, kargs.d)
+//! - Kernel/boot: the synthesized sysctl drop-in and the kargs.d file
+//!   (the kernel config files themselves are `snap.config.files` entries,
+//!   written by the config loop above on their own decision)
 //! - Systemd drop-ins (both config/ and drop-ins/)
 //! - Generated/local timer units
 //! - Quadlet units
@@ -745,8 +747,16 @@ mod tests {
         assert!(!kargs.contains("crashkernel"));
     }
 
-    /// Where the kernel directories went: the config loop copies them on
-    /// their own decision, which an exclusion can now refuse.
+    /// Where the kernel directories went: the config loop copies them,
+    /// and its `is_included()` gate refuses the excluded one.
+    ///
+    /// This is a guard on that gate, not a demonstration that the second
+    /// writer is gone. The fixture leaves `kernel_boot` unset, and the
+    /// deleted block read fields on that section, so it never ran here
+    /// even before the deletion — this test passes unchanged against the
+    /// parent commit. The contradiction case, an excluded config entry
+    /// against a populated kernel section, is Task 22's
+    /// `a_config_exclusion_is_not_overridden_by_a_kernel_list`.
     #[test]
     fn test_kernel_directories_copied_as_plain_config() {
         let mut snap = InspectionSnapshot::new();

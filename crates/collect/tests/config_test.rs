@@ -601,9 +601,11 @@ fn an_authselect_symlink_is_not_a_local_pam_file() {
 /// hold two rows and one decision.
 ///
 /// `50-nouveau-blacklist.conf` is in the fixture because
-/// `UNOWNED_EXCLUDE_GLOBS` carries `/etc/modprobe.d/*-blacklist.conf`
-/// for the distro-shipped files: a change that widened that glob to the
-/// whole directory would otherwise pass unnoticed.
+/// `UNOWNED_EXCLUDE_GLOBS` used to carry `/etc/modprobe.d/*-blacklist.conf`
+/// "for the distro files". The glob is only ever reached in the unowned
+/// branch, after both ownership checks, so a distro file never saw it and
+/// the only files it could drop were admin-authored. It is gone; this
+/// case is the guard against it coming back.
 #[test]
 fn kernel_module_and_initramfs_directories_are_config_entries() {
     let exec = MockExecutor::new()
@@ -672,11 +674,10 @@ fn kernel_module_and_initramfs_directories_are_config_entries() {
         category_of("/etc/dracut.conf.d/50-custom.conf"),
         ConfigCategory::Initramfs
     );
-    assert!(
-        !section
-            .files
-            .iter()
-            .any(|f| f.path == "/etc/modprobe.d/50-nouveau-blacklist.conf"),
-        "the distro blacklist glob stays excluded"
+    assert_eq!(
+        category_of("/etc/modprobe.d/50-nouveau-blacklist.conf"),
+        ConfigCategory::KernelModule,
+        "an unowned blacklist file is the admin's own: no package owns it, \
+         so nothing else will put it in the image"
     );
 }

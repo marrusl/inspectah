@@ -9,7 +9,7 @@
 //! 6. Non-RPM software
 //! 7. Containers (quadlet COPYs)
 //! 8. Users
-//! 9. Kernel/boot (kargs.d, sysctl, modules)
+//! 9. Kernel/boot (kargs.d, sysctl, tuned activation)
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments

@@ -1595,6 +1595,38 @@ mod tests {
         assert!(result.alternatives.is_empty());
     }
 
+    /// A deliberate consequence of building the pointer rows before the
+    /// `kernel_boot` early return: the files exist in `config.files`
+    /// whether or not the kernel/boot inspector ran, so the section
+    /// still points at them on a source system where it is not
+    /// applicable. The rows are truthful, but it does mean an empty
+    /// Kernel & Boot section is no longer a proxy for "the inspector
+    /// did not run".
+    #[test]
+    fn test_pointer_rows_survive_an_absent_kernel_boot_section() {
+        let snap = InspectionSnapshot {
+            kernel_boot: None,
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/modprobe.d/myapp.conf".into(),
+                    category: ConfigCategory::KernelModule,
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_kernel_boot(&snap);
+
+        assert!(result.cmdline.is_none(), "nothing the inspector owns");
+        assert_eq!(result.customizations_from_config.len(), 1);
+        assert_eq!(
+            result.customizations_from_config[0].path,
+            "/etc/modprobe.d/myapp.conf"
+        );
+    }
+
     #[test]
     fn test_empty_kernel_boot_returns_none_strings() {
         let snap = InspectionSnapshot {
@@ -1669,6 +1701,13 @@ mod tests {
     /// walker's category rather than re-testing the path, so the set
     /// cannot drift from what the walker decided.
     ///
+    /// The last two fixture entries are the whole point: every other
+    /// entry has a path and a category that agree, so a path-prefix
+    /// filter returns the same answer for them and the test proves
+    /// nothing about which question is being asked. Substituting the
+    /// brief's five prefixes for `KERNEL_BOOT_CONFIG_CATEGORIES` must
+    /// fail both of the assertions below.
+    ///
     /// The two tests this replaces read `non_default_modules` and the
     /// four `ConfigSnippet` lists, which were the second copies.
     #[test]
@@ -1696,6 +1735,15 @@ mod tests {
                     entry("/etc/tuned/myprofile/tuned.conf", ConfigCategory::Tuned),
                     entry("/etc/pam.d/sshd", ConfigCategory::Pam),
                     entry("/etc/httpd/conf/httpd.conf", ConfigCategory::Other),
+                    // The two cases where path and category disagree, and
+                    // the only two that can tell the filters apart.
+                    // `/etc/sysctl.conf` is a sysctl source the walker
+                    // matches exactly, not by the `/etc/sysctl.d/` prefix.
+                    entry("/etc/sysctl.conf", ConfigCategory::Sysctl),
+                    // A path under a kernel directory that the walker did
+                    // *not* classify as kernel configuration. Only the
+                    // walker knows why; this surface takes its answer.
+                    entry("/etc/modprobe.d/not-ours.conf", ConfigCategory::Other),
                 ],
             }),
             ..Default::default()
@@ -1716,8 +1764,19 @@ mod tests {
                 "/etc/dracut.conf.d/custom.conf",
                 "/etc/sysctl.d/99-custom.conf",
                 "/etc/tuned/myprofile/tuned.conf",
+                "/etc/sysctl.conf",
             ],
             "a PAM file and an uncategorized one are not kernel/boot subject matter"
+        );
+        assert!(
+            paths.contains(&"/etc/sysctl.conf"),
+            "right category, wrong prefix: a path filter on /etc/sysctl.d/ \
+             would drop a real sysctl source"
+        );
+        assert!(
+            !paths.contains(&"/etc/modprobe.d/not-ours.conf"),
+            "right prefix, wrong category: re-asking the path would \
+             overrule the walker, which is the classification's owner"
         );
     }
 

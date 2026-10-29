@@ -2058,6 +2058,11 @@ fn shadowed_sysctl_snapshot() -> InspectionSnapshot {
             category: inspectah_core::types::config::ConfigCategory::Sysctl,
             content: "vm.swappiness = 10\n".into(),
             disposition: FindingKind::inventory(),
+            // The pair `finalize_cross_inspector` actually writes. The
+            // refusal's predicate is `is_inventory()` alone, but a
+            // fixture that cannot occur is a worse guard than one that
+            // can.
+            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Sysctl),
             ..Default::default()
         }],
     });

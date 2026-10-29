@@ -139,7 +139,13 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/pki/consumer/*",
     "/etc/pki/entitlement/*",
     "/etc/depmod.d/*-dist.conf",
-    "/etc/modprobe.d/*-blacklist.conf",
+    // NOTE: `/etc/modprobe.d/*-blacklist.conf` was here, "for the distro
+    // files". This list is consulted only in the unowned branch of the
+    // walk, after is_rpm_owned() and is_rpm_owned_via_symlink(), and not
+    // at all in the rpm -Va branch — so a distro-shipped blacklist never
+    // reached it and the only files it could drop were ones the admin
+    // wrote. Dropping a module blacklist silently changes which driver
+    // binds in the migrated image, so the pattern is gone.
     "/etc/dconf/db/distro.d/*",
     "/etc/dconf/db/distro.d/locks/*",
     "/etc/dnf/protected.d/*",

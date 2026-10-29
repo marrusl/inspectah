@@ -274,7 +274,12 @@ pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
         return;
     };
     for entry in &mut config.files {
-        if sources.contains(entry.path.as_str()) {
+        // An advisory lives in the same field, and shadowing would erase
+        // it: `config_advisories` matches on `FindingKind::Advisory`, so
+        // the operator would lose the warning that the file points
+        // outside /etc. An advisory entry is already never materialized,
+        // so the shadow would buy nothing in exchange.
+        if sources.contains(entry.path.as_str()) && !entry.disposition.is_advisory() {
             entry.shadowed_by = Some(ConfigShadow::Sysctl);
             entry.disposition = FindingKind::inventory();
         }
@@ -1868,6 +1873,77 @@ mod tests {
                 }
             )),
             "no Interrupted events when not cancelled"
+        );
+    }
+}
+
+#[cfg(test)]
+mod finalize_tests {
+    use super::*;
+    use inspectah_core::types::AdvisoryType;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+
+    const SOURCE: &str = "/etc/sysctl.d/99-driftify.conf";
+
+    fn snapshot_with(disposition: FindingKind) -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl_overrides: vec![SysctlOverride {
+                key: "vm.swappiness".into(),
+                source: SOURCE.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: SOURCE.into(),
+                disposition,
+                ..Default::default()
+            }],
+        });
+        snap
+    }
+
+    fn only_entry(snap: &InspectionSnapshot) -> &ConfigFileEntry {
+        &snap.config.as_ref().expect("config section").files[0]
+    }
+
+    #[test]
+    fn an_actionable_sysctl_source_becomes_inventory() {
+        let mut snap = snapshot_with(FindingKind::included());
+        finalize_cross_inspector(&mut snap);
+        let entry = only_entry(&snap);
+        assert_eq!(entry.shadowed_by, Some(ConfigShadow::Sysctl));
+        assert!(entry.disposition.is_inventory());
+    }
+
+    /// An advisory is the walker's warning that the file points outside
+    /// `/etc`, and it lives in the same field the shadow would overwrite.
+    /// The state is reachable: the walker records the advisory with empty
+    /// content while the kernel/boot inspector's `read_file` follows the
+    /// symlink and records an override naming the same path.
+    ///
+    /// Shadowing it would buy nothing — an advisory entry is already
+    /// never materialized — and would cost the operator the warning that
+    /// matters most for a file about to be synthesized into a drop-in.
+    #[test]
+    fn an_advisory_sysctl_source_keeps_its_advisory() {
+        let mut snap = snapshot_with(FindingKind::advisory(
+            AdvisoryType::CrossTreeSymlink,
+            "symlink crosses into /var",
+        ));
+        finalize_cross_inspector(&mut snap);
+        let entry = only_entry(&snap);
+        assert!(
+            entry.disposition.is_advisory(),
+            "the advisory must survive the shadow pass, got {:?}",
+            entry.disposition
+        );
+        assert_eq!(
+            entry.shadowed_by, None,
+            "an entry that is not shadowed must not claim to be"
         );
     }
 }
