@@ -689,7 +689,7 @@ impl RefineSession {
             name: extracted_name,
             arch: extracted_arch,
             version_release: extracted_ver,
-        } = crate::rpm_filename::RpmFilename::parse(filename)?;
+        } = crate::rpm_filename::RpmFilename::parse_untrusted(filename)?;
 
         // Build candidate names: full extracted name, then progressively
         // shorter prefixes by stripping trailing `-segment` pieces.

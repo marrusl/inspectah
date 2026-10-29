@@ -4,18 +4,19 @@
 //! disagreed with each other. This module is the one place a filename is
 //! proved safe, and it does that with two deliberately separate functions:
 //!
-//! - [`RpmFilename::parse`] matches filename structure to recover a
-//!   package's name, arch, and version-release for lookups. It is matching,
-//!   not a safety check: it accepts untrusted strings and a `Some` result is
-//!   not proof the original string is safe to use as a path or a shell
-//!   argument.
+//! - [`RpmFilename::parse_untrusted`] matches filename structure to recover
+//!   a package's name, arch, and version-release for lookups. It is
+//!   matching, not a safety check: it accepts untrusted strings and a
+//!   `Some` result is not proof the original string is safe to use as a
+//!   path or a shell argument. The name says so at the call site, not just
+//!   in a doc comment someone has to open the file to read.
 //! - [`validate_staged_name`] is the safety check: an allowlist a basename
 //!   must pass before it reaches the filesystem, a `COPY`, or a `RUN`.
 //!   Rejection is always rejection, never stripping -- a name that fails
 //!   this check is refused outright, never sanitized into an accepted one.
 //!
 //! Callers that stage a filename for export must run `validate_staged_name`
-//! before trusting anything `RpmFilename::parse` reports about it.
+//! before trusting anything `RpmFilename::parse_untrusted` reports about it.
 
 use serde::Serialize;
 
@@ -30,7 +31,7 @@ pub const MAX_UPLOAD_FILENAME_LEN: usize = 200;
 /// An RPM filename decomposed into name, architecture, and optional
 /// version-release.
 ///
-/// Produced only by [`RpmFilename::parse`], which matches filename
+/// Produced only by [`RpmFilename::parse_untrusted`], which matches filename
 /// structure -- this is not proof the filename is safe to use as a path or
 /// shell argument. Call [`validate_staged_name`] first for anything that
 /// reaches the filesystem or a rendered Containerfile.
@@ -55,7 +56,9 @@ impl RpmFilename {
     ///
     /// Parsing is matching, not a safety check: a `Some` result says nothing
     /// about whether `filename` is safe to use as a path or shell argument.
-    pub fn parse(filename: &str) -> Option<Self> {
+    /// `_untrusted` in the name is deliberate: call [`validate_staged_name`]
+    /// before using anything this returns for a path or shell argument.
+    pub fn parse_untrusted(filename: &str) -> Option<Self> {
         let stem = strip_rpm_suffix(filename)?;
 
         // Find the arch: last dot- or underscore-separated segment that is a
@@ -153,8 +156,12 @@ pub enum NameError {
 /// Accepts `name` when, and only when: every byte is in
 /// `[A-Za-z0-9._+~^-]`; the first byte is `[A-Za-z0-9]` (no leading dot, no
 /// leading `-`, so no hidden file and no option injection); it ends in
-/// `.rpm` case-insensitively; and its length is 5 to
-/// [`MAX_UPLOAD_FILENAME_LEN`] bytes.
+/// `.rpm` case-insensitively; and it is no more than
+/// [`MAX_UPLOAD_FILENAME_LEN`] bytes. There is no explicit minimum-length
+/// check: the first-byte and `.rpm`-suffix rules together make 5 bytes
+/// (one alphanumeric byte plus `.rpm`) the shortest name that can pass, so
+/// the floor is a consequence of those two rules, not a check of its own --
+/// relaxing either one changes it without this doc comment knowing.
 ///
 /// Rejection is always rejection, never stripping: a name that fails this
 /// check is refused outright. Nothing here sanitizes `name` into an
@@ -189,12 +196,18 @@ mod tests {
 
     #[test]
     fn rpm_filename_parse_table() {
-        // § 8.6, the executed matcher table, plus one case the table does not
-        // cover: the underscore-arch branch (vendor filenames like
-        // google-chrome), which `mark_uploaded_rpm`'s own doc comment relies
-        // on as its justifying example and which the pre-move tests in
-        // session.rs covered directly.
+        // § 8.6, the executed matcher table, plus two cases the table does
+        // not cover that the pre-move tests in session.rs exercised
+        // directly: the dotted-arch standard NEVRA shape (KNOWN_ARCHES'
+        // first entry, x86_64, was otherwise only reached through the
+        // underscore branch below) and the underscore-arch branch itself
+        // (vendor filenames like google-chrome), which `mark_uploaded_rpm`'s
+        // own doc comment relies on as its justifying example.
         let cases: &[(&str, Option<(&str, &str, Option<&str>)>)] = &[
+            (
+                "httpd-2.4.57-5.el9.x86_64.rpm",
+                Some(("httpd", "x86_64", Some("2.4.57-5.el9"))),
+            ),
             (
                 "epel-release-latest-9.noarch.rpm",
                 Some(("epel-release-latest", "noarch", Some("9"))),
@@ -228,7 +241,7 @@ mod tests {
             ),
         ];
         for (input, want) in cases {
-            let got = RpmFilename::parse(input);
+            let got = RpmFilename::parse_untrusted(input);
             let got = got.as_ref().map(|r| {
                 (
                     r.name.as_str(),
@@ -293,6 +306,26 @@ mod tests {
             // case like this, that requirement has no test backing it.
             ("π-1.rpm", NameError::BadFirstByte),
             ("epel-π-9-1.noarch.rpm", NameError::BadByte { at: 5 }),
+            // "a€bc" is 6 bytes ('€' is U+20AC, 3 bytes: 0xE2 0x82 0xAC), so
+            // `strip_rpm_suffix`'s split point (len - 4 = 2) lands on the
+            // second byte of '€' -- not a UTF-8 char boundary. `str::get`
+            // must return `None` there instead of panicking the way a raw
+            // `&s[2..]` slice would. This also happens to be the right
+            // answer on its own terms: the string does not end in `.rpm`.
+            ("a\u{20AC}bc", NameError::NotRpm),
+            // Checked against the real function, not assumed: 'π' is caught
+            // by the general byte scan at its own byte offset (1) before the
+            // space is ever reached, because any non-ASCII byte -- not just
+            // the ones `is_allowed_name_byte` is built to reject -- fails
+            // that check immediately. Byte offset and char count coincide
+            // here (nothing before 'π' is multi-byte), so this string alone
+            // cannot distinguish a byte-indexed scan from a char-indexed one;
+            // that distinction is already pinned by the two 'π' cases above,
+            // since a char-indexed scan that still correctly rejects the
+            // first non-ASCII byte it meets reports the same number a
+            // byte-indexed one does. Kept as a second, differently-shaped
+            // probe of the same general-scan path.
+            ("aπb c.rpm", NameError::BadByte { at: 1 }),
         ];
         for (n, want) in rejected {
             assert_eq!(validate_staged_name(n), Err(*want), "{n}");
