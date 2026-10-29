@@ -56,6 +56,13 @@ pub struct LvmVolume {
     pub lv_size: String,
 }
 
+/// The tmpfiles.d directories a [`VarDirBacking::Tmpfiles`] `conf` is
+/// under. Which one it is decides whether the export can carry the
+/// fragment, so the prefixes are defined once and matched everywhere.
+pub const ETC_TMPFILES_PREFIX: &str = "/etc/tmpfiles.d/";
+pub const RUN_TMPFILES_PREFIX: &str = "/run/tmpfiles.d/";
+pub const USR_TMPFILES_PREFIX: &str = "/usr/lib/tmpfiles.d/";
+
 /// What created a `/var` directory on the source host.
 ///
 /// Each backed variant carries the provenance the export needs to decide
@@ -89,6 +96,27 @@ pub enum VarDirBacking {
         package: String,
     },
     Unbacked,
+}
+
+impl VarDirBacking {
+    /// Whether this verdict names a creator an export can carry into the
+    /// image: an `/etc` fragment, a `/usr/lib` fragment, a unit, or a
+    /// package.
+    ///
+    /// A `Tmpfiles` verdict whose `conf` is under `/run/tmpfiles.d/` is
+    /// not one: the fragment is generated at runtime and reaches no
+    /// image, so a `/run` verdict proves nothing about what the image
+    /// creates.
+    pub fn names_a_carryable_creator(&self) -> bool {
+        match self {
+            Self::Tmpfiles { conf, .. } => !conf.starts_with(RUN_TMPFILES_PREFIX),
+            Self::StateDirectory { .. }
+            | Self::CacheDirectory { .. }
+            | Self::LogsDirectory { .. }
+            | Self::RpmOwned { .. } => true,
+            Self::Unbacked => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

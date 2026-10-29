@@ -1651,14 +1651,42 @@ pub fn merge_storage_sections(
         result
     };
 
-    // Dedup var_directories by path
+    // Dedup var_directories by path, first host in hostname order wins —
+    // except that a backed verdict beats an `Unbacked` one.
+    //
+    // `Unbacked` is the one verdict carrying no provenance, and one
+    // image serves the whole fleet: any host's carried fragment creates
+    // the directory on every host, so keeping `Unbacked` because its
+    // host sorted first makes the export provision a path the merged
+    // config section already creates — a duplicate `d` line with
+    // order-dependent mode resolution. The preference is conditioned on
+    // the backed verdict naming a creator the export can carry; see
+    // `VarDirBacking::names_a_carryable_creator`. The single-host rule
+    // in the storage inspector points the other way for the reason its
+    // comment gives: there, over-provisioning is free.
     let var_directories = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
+        let mut result: Vec<crate::types::storage::VarDirectory> = Vec::new();
         for s in sections.iter().flatten() {
             for dir in &s.var_directories {
-                if seen.insert(dir.path.clone()) {
-                    result.push(dir.clone());
+                match index.get(dir.path.as_str()) {
+                    None => {
+                        index.insert(dir.path.as_str(), result.len());
+                        result.push(dir.clone());
+                    }
+                    Some(&at) => {
+                        let survivor_unbacked = result[at]
+                            .backing
+                            .as_ref()
+                            .is_none_or(|b| !b.names_a_carryable_creator());
+                        let challenger_carries = dir
+                            .backing
+                            .as_ref()
+                            .is_some_and(|b| b.names_a_carryable_creator());
+                        if survivor_unbacked && challenger_carries {
+                            result[at] = dir.clone();
+                        }
+                    }
                 }
             }
         }

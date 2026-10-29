@@ -320,18 +320,11 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| `Containerfile` | Image definition |".into());
     lines.push("| `config/` | Files to COPY into the image |".into());
 
-    // Conditional: tmpfiles.d artifact for /var directory ownership provisioning
+    // Conditional: tmpfiles.d artifact for /var directory ownership provisioning.
+    // The renderer decides which directories produce a line, so the table
+    // asks it rather than re-deriving the condition.
     {
-        use inspectah_core::types::storage::VarDirBacking;
-        let has_tmpfiles = snap
-            .storage
-            .as_ref()
-            .map(|s| {
-                s.var_directories
-                    .iter()
-                    .any(|d| d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_some())
-            })
-            .unwrap_or(false);
+        let has_tmpfiles = super::containerfile::render_tmpfiles_conf(snap).is_some();
         if has_tmpfiles {
             lines.push(
                 "| `config/usr/lib/tmpfiles.d/inspectah-var.conf` | /var directory ownership provisioning |"

@@ -969,9 +969,11 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
 fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     if let Some(storage) = &snap.storage {
+        let var_dir_rows = var_dir_outcome_rows(snap);
         let has_content = !storage.fstab_entries.is_empty()
             || !storage.lvm_info.is_empty()
-            || !storage.credential_refs.is_empty();
+            || !storage.credential_refs.is_empty()
+            || !var_dir_rows.is_empty();
 
         if has_content {
             lines.push("### Storage".into());
@@ -1022,8 +1024,56 @@ fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
                 }
                 lines.push(String::new());
             }
+
+            if !var_dir_rows.is_empty() {
+                lines.push(format!("#### /var Directories ({})", var_dir_rows.len()));
+                lines.push(String::new());
+                lines.push("| Directory | Source verdict | Export outcome |".into());
+                lines.push("|-----------|----------------|----------------|".into());
+                lines.extend(var_dir_rows);
+                lines.push(String::new());
+            }
         }
     }
+}
+
+/// One row per provisioned or unresolved `/var` directory, giving the
+/// source host's verdict beside what the export does about it. A
+/// `Carried` directory needs no action and gets no row.
+fn var_dir_outcome_rows(snap: &InspectionSnapshot) -> Vec<String> {
+    use super::var_dirs::{EffectiveBacking, effective_var_backing};
+    use inspectah_core::types::storage::VarDirBacking;
+
+    effective_var_backing(snap)
+        .into_iter()
+        .filter_map(|o| {
+            let verdict = match &o.source {
+                None | Some(VarDirBacking::Unbacked) => "unbacked on host".to_string(),
+                Some(VarDirBacking::Tmpfiles { conf, .. }) => {
+                    format!("created on host by {conf}")
+                }
+                Some(
+                    VarDirBacking::StateDirectory { unit }
+                    | VarDirBacking::CacheDirectory { unit }
+                    | VarDirBacking::LogsDirectory { unit },
+                ) => format!("created on host by {unit}"),
+                Some(VarDirBacking::RpmOwned { package }) => {
+                    format!("created on host by {package}")
+                }
+            };
+            let outcome = match &o.outcome {
+                EffectiveBacking::Carried => return None,
+                EffectiveBacking::Provision { lost: None } => "provisioned".to_string(),
+                EffectiveBacking::Provision { lost: Some(_) } => {
+                    "not carried, provisioned".to_string()
+                }
+                EffectiveBacking::Unresolved { reason, .. } => {
+                    format!("unresolved: {}", reason.reason_text())
+                }
+            };
+            Some(format!("| `{}` | {verdict} | {outcome} |", o.path))
+        })
+        .collect()
 }
 
 /// Render Software sections (non_rpm_software, unmanaged_files).

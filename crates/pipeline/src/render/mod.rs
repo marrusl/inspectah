@@ -22,6 +22,7 @@ pub mod safety;
 pub mod secrets;
 pub mod selinux;
 pub mod tarball;
+pub mod var_dirs;
 
 pub mod users;
 

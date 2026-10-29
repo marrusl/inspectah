@@ -29,6 +29,7 @@ use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use super::language_packages;
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
+use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
 /// Human-readable label for a `DegradationReason`.
 fn degradation_reason_label(reason: &DegradationReason) -> &'static str {
@@ -1933,39 +1934,113 @@ fn resolve_tmpfiles_ownership(
     (uid.to_string(), gid.to_string(), String::new())
 }
 
-/// Generate tmpfiles.d conf content for unbacked /var directories with
-/// ownership and mode data.
-///
-/// Returns `None` when no directories qualify (no mode data), in which case
-/// all unbacked dirs fall back to `RUN mkdir -p` in the Containerfile.
-///
-/// Directories without mode data are skipped here and handled by
-/// `var_dir_section_lines()` as `RUN mkdir -p` fallback. A single snapshot
-/// can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
-pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
-    use inspectah_core::types::storage::VarDirBacking;
+/// Mode and ownership for the commented `#d` line of an `Unresolved`
+/// directory whose own mode the scan did not capture. The line is inert
+/// until the user uncomments it, and these are tmpfiles.d's own
+/// defaults for a directory.
+const DEFAULT_VAR_DIR_MODE: &str = "0755";
+const DEFAULT_VAR_DIR_OWNER: &str = "root";
 
+/// The comment that precedes a provisioned directory whose source-host
+/// creator this export does not carry.
+fn lost_creator_comment(path: &str, creator: &str) -> String {
+    format!("# {path}: created on the host by {creator}, which this export does not carry")
+}
+
+/// The two-line FIXME an `Unresolved` directory renders: an imperative
+/// instruction naming the cause (§ 5.6), then the `d` line to uncomment.
+///
+/// Both `inspectah-var.conf` and the Containerfile's Storage block carry
+/// it, so the wording is produced in one place.
+fn unresolved_fixme_lines(
+    d: &inspectah_core::types::storage::VarDirectory,
+    creator: &str,
+    reason: UnresolvedReason,
+    materialized_users: &std::collections::HashSet<String>,
+    rpm_accounts: &std::collections::HashMap<String, String>,
+    replicated_rpms: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let (mode, owner, group) = match &d.mode {
+        Some(mode) => {
+            let (owner, group, _) =
+                resolve_tmpfiles_ownership(d, materialized_users, rpm_accounts, replicated_rpms);
+            (mode.as_str(), owner, group)
+        }
+        None => (
+            DEFAULT_VAR_DIR_MODE,
+            DEFAULT_VAR_DIR_OWNER.to_string(),
+            DEFAULT_VAR_DIR_OWNER.to_string(),
+        ),
+    };
+    vec![
+        format!(
+            "# FIXME: confirm the base image creates {}; on the host {creator} created it and {}; \
+             if the base does not, uncomment the next line",
+            d.path,
+            reason.reason_text()
+        ),
+        format!("#d {} {mode} {owner} {group} -", d.path),
+    ]
+}
+
+/// Generate tmpfiles.d conf content for the /var directories this export
+/// has to provision or cannot resolve.
+///
+/// `Provision` with mode data gets an active `d` line, preceded by the
+/// lost-creator comment when the verdict named a creator the export
+/// drops. `Unresolved` gets the two-line FIXME and no active line.
+/// `Carried` gets nothing: a creator the export carries already makes
+/// the directory, and a second `d` line would duplicate it.
+///
+/// Returns `None` when no directory produces a line. `Provision`
+/// directories without mode data are skipped here and handled by
+/// `var_dir_section_lines()` as `RUN mkdir -p` fallback, so a single
+/// snapshot can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
+pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
     let storage = snap.storage.as_ref()?;
     let materialized_users = collect_materialized_usernames(snap);
     let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut lines = Vec::new();
 
-    for d in &storage.var_directories {
-        if d.backing != Some(VarDirBacking::Unbacked) {
-            continue;
+    for (d, outcome) in storage
+        .var_directories
+        .iter()
+        .zip(effective_var_backing(snap))
+    {
+        debug_assert_eq!(d.path, outcome.path);
+        match &outcome.outcome {
+            EffectiveBacking::Carried => {}
+            EffectiveBacking::Provision { lost } => {
+                // Per-directory: skip directories missing mode data.
+                // These get RUN mkdir fallback in var_dir_section_lines().
+                let Some(mode) = d.mode.as_deref() else {
+                    continue;
+                };
+                if let Some(creator) = lost {
+                    lines.push(lost_creator_comment(&d.path, creator));
+                }
+                let (owner, group, comment) = resolve_tmpfiles_ownership(
+                    d,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                );
+                if !comment.is_empty() {
+                    lines.push(format!("# {comment}"));
+                }
+                lines.push(format!("d {} {} {} {} -", d.path, mode, owner, group));
+            }
+            EffectiveBacking::Unresolved { creator, reason } => {
+                lines.extend(unresolved_fixme_lines(
+                    d,
+                    creator,
+                    *reason,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                ));
+            }
         }
-        // Per-directory: skip directories missing mode data.
-        // These get RUN mkdir fallback in var_dir_section_lines().
-        let mode = match &d.mode {
-            Some(m) => m.as_str(),
-            None => continue,
-        };
-        let (owner, group, comment) =
-            resolve_tmpfiles_ownership(d, &materialized_users, &rpm_accounts, &replicated_rpms);
-        if !comment.is_empty() {
-            lines.push(format!("# {comment}"));
-        }
-        lines.push(format!("d {} {} {} {} -", d.path, mode, owner, group));
     }
 
     if lines.is_empty() {
@@ -1976,13 +2051,13 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
 }
 
 fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Vec<String> {
-    use inspectah_core::types::storage::VarDirBacking;
-
     let storage = match &snap.storage {
         Some(s) => s,
         None => return Vec::new(),
     };
 
+    let materialized_users = collect_materialized_usernames(snap);
+    let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut body = Vec::new();
 
     if tmpfiles_staged {
@@ -1993,10 +2068,33 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
         );
     }
 
-    // Fallback: RUN mkdir for unbacked dirs WITHOUT ownership/mode data
-    for d in &storage.var_directories {
-        if d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_none() {
-            body.push(format!("RUN mkdir -p {}", d.path));
+    for (d, outcome) in storage
+        .var_directories
+        .iter()
+        .zip(effective_var_backing(snap))
+    {
+        debug_assert_eq!(d.path, outcome.path);
+        match &outcome.outcome {
+            EffectiveBacking::Carried => {}
+            // Fallback: RUN mkdir for provisioned dirs WITHOUT
+            // ownership/mode data. The rest are in the tmpfiles.d conf.
+            EffectiveBacking::Provision { lost } if d.mode.is_none() => {
+                if let Some(creator) = lost {
+                    body.push(lost_creator_comment(&d.path, creator));
+                }
+                body.push(format!("RUN mkdir -p {}", d.path));
+            }
+            EffectiveBacking::Provision { .. } => {}
+            EffectiveBacking::Unresolved { creator, reason } => {
+                body.extend(unresolved_fixme_lines(
+                    d,
+                    creator,
+                    *reason,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                ));
+            }
         }
     }
 
@@ -5044,8 +5142,13 @@ RUN dnf install -y \
         assert!(render_tmpfiles_conf(&snap).is_none());
     }
 
+    /// A backed directory produces no conf only when the export can
+    /// prove it carries the creator. The same directory with nothing to
+    /// prove it by is unresolved, not carried: an earlier version of
+    /// this test asserted the absence outright, which is the defect
+    /// `effective_var_backing` exists to fix.
     #[test]
-    fn tmpfiles_conf_none_when_no_unbacked_dirs() {
+    fn tmpfiles_conf_none_when_the_owning_package_is_in_the_base() {
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
             var_directories: vec![var_dir(
@@ -5054,6 +5157,18 @@ RUN dnf install -y \
                     package: "filesystem".into(),
                 },
             )],
+            ..Default::default()
+        });
+
+        // No rpm section: the owner can be neither placed nor ruled out.
+        let content = render_tmpfiles_conf(&snap).expect("unresolved produces a FIXME");
+        assert!(content.contains("# FIXME: confirm the base image creates /var/log;"));
+        assert!(content.contains("#d /var/log 0755 root root -"));
+        assert!(!content.lines().any(|l| l.starts_with("d /var/log")));
+
+        // A baseline naming the owner proves the base creates it.
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["filesystem".into()]),
             ..Default::default()
         });
         assert!(render_tmpfiles_conf(&snap).is_none());
@@ -5362,8 +5477,18 @@ RUN dnf install -y \
         assert!(output.contains("RUN mkdir -p /var/lib/b"));
     }
 
+    /// A unit-backed directory is excluded from active provisioning in
+    /// both artifacts, but only when the export carries the unit. With
+    /// no evidence either way it renders a commented line and a FIXME —
+    /// never an active one. An earlier version of this test asserted the
+    /// unconditional exclusion, which is the defect
+    /// `effective_var_backing` exists to fix.
     #[test]
-    fn var_dir_backed_dirs_excluded_from_both() {
+    fn var_dir_unit_backed_dirs_are_never_actively_provisioned() {
+        use inspectah_core::types::config::{
+            ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+        };
+
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
             var_directories: vec![
@@ -5384,13 +5509,38 @@ RUN dnf install -y \
             ..Default::default()
         });
 
+        // Neither unit is a config entry or RPM-owned: unresolved.
         let content = render_tmpfiles_conf(&snap).expect("should produce content");
-        assert!(!content.contains("/var/log"), "backed dir excluded");
-        assert!(!content.contains("/var/cache"), "backed dir excluded");
-
+        for path in ["/var/log", "/var/cache"] {
+            assert!(content.contains(&format!("#d {path} 0755 root root -")));
+            assert!(
+                !content
+                    .lines()
+                    .any(|l| l.starts_with(&format!("d {path} ")))
+            );
+        }
         let output = render_containerfile(&snap, None, None);
         assert!(!output.contains("RUN mkdir -p /var/log"));
         assert!(!output.contains("RUN mkdir -p /var/cache"));
+
+        // Both units carried as included config entries: neither
+        // artifact mentions the directories at all.
+        snap.config = Some(ConfigSection {
+            files: ["rsyslog.service", "dnf-makecache.service"]
+                .iter()
+                .map(|unit| ConfigFileEntry {
+                    path: format!("/etc/systemd/system/{unit}"),
+                    kind: ConfigFileKind::Unowned,
+                    category: ConfigCategory::Other,
+                    content: "[Unit]\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+        });
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(!content.contains("/var/log"), "carried dir excluded");
+        assert!(!content.contains("/var/cache"), "carried dir excluded");
     }
 
     // --- tmpfiles ownership resolution tests ---
