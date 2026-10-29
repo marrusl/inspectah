@@ -17,6 +17,8 @@
 //!
 //! Callers that stage a filename for export must run `validate_staged_name`
 //! before trusting anything `RpmFilename::parse_untrusted` reports about it.
+//! [`StagedName`] is a name that has passed that check, and the staging
+//! boundary takes it rather than a `&str` so the check cannot be skipped.
 
 use serde::Serialize;
 
@@ -188,6 +190,30 @@ pub fn validate_staged_name(name: &str) -> Result<(), NameError> {
         }
     }
     Ok(())
+}
+
+/// A basename that has passed [`validate_staged_name`].
+///
+/// [`StagedName::parse`] is the only constructor, so a function taking a
+/// `&StagedName` cannot be reached with a name the allowlist rejected. The
+/// staging boundary -- the rename that puts a file in the upload directory
+/// under its real name -- takes this type rather than a `&str`, which is
+/// what keeps "validate before you write" from being a convention a new
+/// call site can forget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedName(String);
+
+impl StagedName {
+    /// Validate `name` against [`validate_staged_name`] and keep it.
+    pub fn parse(name: &str) -> Result<Self, NameError> {
+        validate_staged_name(name)?;
+        Ok(Self(name.to_string()))
+    }
+
+    /// The validated basename.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]

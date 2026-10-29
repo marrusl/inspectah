@@ -56,6 +56,11 @@ pub struct PackageEntry {
     /// True if a cached RPM was found in /var/cache/dnf/.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub repoless_cached: bool,
+    /// Set when the refine session staged an upload for this package;
+    /// distinct from `repoless_cached`, which also covers RPMs found in the
+    /// dnf cache.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub uploaded: bool,
     /// Path to the cached RPM file in /var/cache/dnf/.
     /// Survives serialization into the snapshot so the CLI bundler
     /// can read it when creating the tarball.

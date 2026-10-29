@@ -55,6 +55,14 @@ pub struct RefineSession {
     /// endpoint). Export reads from both the source tarball AND this dir,
     /// merging uploads into `repoless-packages/`.
     upload_dir: Option<PathBuf>,
+    /// `upload_dir` canonicalized, computed once by `ensure_upload_dir`
+    /// after it has proved the directory is ours. `Some` means the
+    /// directory has been prepared and swept this process; the staging
+    /// paths and the export's confinement checks compare against this.
+    upload_dir_canon: Option<PathBuf>,
+    /// For a package whose upload replaced a dnf-cache RPM: the cache state
+    /// the upload displaced, keyed by `name.arch`. Removal restores it.
+    prior_cache: HashMap<String, PriorCache>,
     /// Set to true when auto-save encounters a permanent I/O failure
     /// (EROFS, EACCES). Suppresses further save attempts for this session.
     durability_degraded: bool,
@@ -62,6 +70,156 @@ pub struct RefineSession {
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
+}
+
+/// The cache state an upload displaced on a package that was
+/// `repoless_cached` from the host's dnf cache. Removing the upload
+/// restores these three fields rather than clearing them, so a package the
+/// host could already supply does not lose that RPM to an upload and a
+/// removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorCache {
+    pub repoless_cached: bool,
+    pub cache_path: Option<String>,
+    pub uploaded_version: Option<String>,
+}
+
+/// Whether an uploaded filename's version-release matches the host's.
+///
+/// inspectah does not compare RPM versions: `VersionDiffers` says the
+/// uploaded version is not the one the host had, and nothing about which
+/// is newer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadMatchKind {
+    Exact,
+    VersionDiffers,
+}
+
+/// The package an uploaded filename matched, and how.
+///
+/// Produced by [`RefineSession::match_uploaded_rpm`], which mutates
+/// nothing: the caller decides whether to record it with
+/// [`RefineSession::set_uploaded`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UploadMatch {
+    /// `name.arch` of the matched package.
+    pub canonical: String,
+    pub match_kind: UploadMatchKind,
+    /// `version-release` of the entry on the host.
+    pub host_version: String,
+    /// `version-release` parsed out of the uploaded filename, when it
+    /// differs from `host_version`.
+    pub uploaded_version: Option<String>,
+}
+
+/// Filename prefix of an in-flight upload's part file. The staging
+/// tempfile, the startup sweep, and the rescan's skip rule all key on this
+/// pair, and the staged-name allowlist bans a leading dot, so a part file
+/// can never collide with a staged RPM.
+pub const UPLOAD_PART_PREFIX: &str = ".upload-";
+/// Filename suffix of an in-flight upload's part file.
+pub const UPLOAD_PART_SUFFIX: &str = ".part";
+/// Random bytes in a part file's name, enough that two concurrent uploads
+/// of one filename cannot collide.
+pub const UPLOAD_PART_RAND_BYTES: usize = 16;
+/// Mode the upload directory is created with: nothing for group or other.
+const UPLOAD_DIR_MODE: u32 = 0o700;
+/// Group-write and other-write bits. An existing upload directory carrying
+/// either is not private and is refused.
+const SHARED_WRITE_BITS: u32 = 0o022;
+
+/// Create the upload directory with mode 0700, or prove an existing one is
+/// a directory (not a symlink) owned by us with no group or other write
+/// bit, and return its canonical path.
+///
+/// `create_dir_all` accepted whatever was there, including a symlink to a
+/// directory another local user pre-created; refusing is what makes
+/// "staged under this path" mean anything later.
+fn prepare_upload_dir(dir: &Path) -> Result<PathBuf, RefineError> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    match std::fs::symlink_metadata(dir) {
+        Ok(md) => {
+            if md.file_type().is_symlink() {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is a symlink, not a directory",
+                    dir.display()
+                )));
+            }
+            if !md.file_type().is_dir() {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is not a directory",
+                    dir.display()
+                )));
+            }
+            let euid = rustix::process::geteuid().as_raw();
+            if md.uid() != euid {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is owned by uid {}, not {euid}",
+                    dir.display(),
+                    md.uid()
+                )));
+            }
+            if md.mode() & SHARED_WRITE_BITS != 0 {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is writable by group or other (mode {:04o})",
+                    dir.display(),
+                    md.mode() & 0o7777
+                )));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(UPLOAD_DIR_MODE)
+                .create(dir)
+                .map_err(|e| {
+                    RefineError::TarballError(format!("create upload dir {}: {e}", dir.display()))
+                })?;
+        }
+        Err(e) => {
+            return Err(RefineError::TarballError(format!(
+                "stat upload dir {}: {e}",
+                dir.display()
+            )));
+        }
+    }
+
+    dir.canonicalize().map_err(|e| {
+        RefineError::TarballError(format!("resolve upload dir {}: {e}", dir.display()))
+    })
+}
+
+/// Remove the part files a process that died mid-transfer left behind.
+///
+/// Runs once, when this process first prepares the directory. A running
+/// server never removes a part file by name pattern: every in-flight
+/// upload removes only its own, through `Drop`.
+fn sweep_part_files(dir: &Path) -> Result<(), RefineError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        RefineError::TarballError(format!("read upload dir {}: {e}", dir.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            RefineError::TarballError(format!("read upload dir {}: {e}", dir.display()))
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(UPLOAD_PART_PREFIX) || !name.ends_with(UPLOAD_PART_SUFFIX) {
+            continue;
+        }
+        let path = entry.path();
+        // Regular files only, by symlink_metadata: a symlink wearing a part
+        // file's name is not one of ours and is left where it is.
+        match std::fs::symlink_metadata(&path) {
+            Ok(md) if md.file_type().is_file() => std::fs::remove_file(&path).map_err(|e| {
+                RefineError::TarballError(format!("remove part file {}: {e}", path.display()))
+            })?,
+            _ => continue,
+        }
+    }
+    Ok(())
 }
 
 /// Whether a package's `source_repo` resolves to the given repo section's
@@ -485,6 +643,8 @@ impl RefineSession {
             viewed: HashSet::new(),
             tarball_path: None,
             upload_dir: None,
+            upload_dir_canon: None,
+            prior_cache: HashMap::new(),
             durability_degraded: false,
         };
         session.recompute_view();
@@ -615,29 +775,43 @@ impl RefineSession {
         self.upload_dir = Some(path);
     }
 
-    /// Return the upload directory, creating it if necessary.
+    /// Return the upload directory, preparing it on first use.
     /// Derives the path from `tarball_path` when `upload_dir` is not
     /// explicitly set: `<tarball_stem>-uploads/`.
+    ///
+    /// The first call creates the directory with mode 0700 or, when it
+    /// already exists, proves it is ours (see [`prepare_upload_dir`]),
+    /// sweeps the part files a previous process died holding, and keeps the
+    /// canonical path on the session. Later calls return the path without
+    /// touching the filesystem, so a running server never sweeps while a
+    /// request holds a part file.
     pub fn ensure_upload_dir(&mut self) -> Result<&Path, RefineError> {
-        if self.upload_dir.is_none() {
-            let base = self
-                .tarball_path
-                .as_ref()
-                .ok_or_else(|| {
-                    RefineError::TarballError(
-                        "cannot derive upload dir: no tarball path set".into(),
-                    )
-                })?
-                .clone();
-            let mut dir = base;
-            dir.set_extension(""); // strip .gz
-            dir.set_extension(""); // strip .tar
-            let dir = PathBuf::from(format!("{}-uploads", dir.display()));
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| RefineError::TarballError(format!("create upload dir: {e}")))?;
+        if self.upload_dir_canon.is_none() {
+            let dir = match self.upload_dir.clone() {
+                Some(dir) => dir,
+                None => {
+                    let mut dir = self.tarball_path.clone().ok_or_else(|| {
+                        RefineError::TarballError(
+                            "cannot derive upload dir: no tarball path set".into(),
+                        )
+                    })?;
+                    dir.set_extension(""); // strip .gz
+                    dir.set_extension(""); // strip .tar
+                    PathBuf::from(format!("{}-uploads", dir.display()))
+                }
+            };
+            let canon = prepare_upload_dir(&dir)?;
+            sweep_part_files(&canon)?;
             self.upload_dir = Some(dir);
+            self.upload_dir_canon = Some(canon);
         }
         Ok(self.upload_dir.as_ref().unwrap())
+    }
+
+    /// The canonicalized upload directory, once `ensure_upload_dir` has
+    /// prepared it. Export and removal confine themselves to this path.
+    pub fn upload_dir_canon(&self) -> Option<&Path> {
+        self.upload_dir_canon.as_deref()
     }
 
     /// Returns the source tarball path, if set.
@@ -645,11 +819,7 @@ impl RefineSession {
         self.tarball_path.as_deref()
     }
 
-    /// Mark a repo-less PackageEntry as cached after an RPM upload.
-    ///
-    /// Matches the uploaded filename against repo-less packages by name and
-    /// architecture. Returns the canonical `name.arch` of the matched package,
-    /// or `None` if no match was found.
+    /// Find the repo-less PackageEntry an uploaded filename belongs to.
     ///
     /// Matching strategy:
     /// 1. Try exact NEVRA filename (`name-version-release.arch.rpm`)
@@ -657,13 +827,14 @@ impl RefineSession {
     ///    name is everything before the first `-\d` (version start) or before
     ///    the arch suffix.
     ///
-    /// When matched with a different version than installed, populates
-    /// `uploaded_version` on the PackageEntry.
-    pub fn mark_uploaded_rpm(&mut self, filename: &str, staged_path: &str) -> Option<String> {
-        let rpm = self.original.rpm.as_mut()?;
+    /// Mutates nothing: the caller places the file and then records the
+    /// result with [`RefineSession::set_uploaded`], so a match that is never
+    /// placed leaves the session exactly as it was.
+    pub fn match_uploaded_rpm(&self, filename: &str) -> Option<UploadMatch> {
+        let rpm = self.original.rpm.as_ref()?;
 
         // Try exact NEVRA match first (backwards compat)
-        for pkg in &mut rpm.packages_added {
+        for pkg in &rpm.packages_added {
             if pkg.repoless_annotation.is_empty() {
                 continue;
             }
@@ -672,11 +843,12 @@ impl RefineSession {
                 pkg.name, pkg.version, pkg.release, pkg.arch
             );
             if filename == expected {
-                pkg.repoless_cached = true;
-                pkg.cache_path = Some(staged_path.to_string());
-                let canonical = format!("{}.{}", pkg.name, pkg.arch);
-                self.invalidate_caches();
-                return Some(canonical);
+                return Some(UploadMatch {
+                    canonical: canonical_package_id(&pkg.name, &pkg.arch),
+                    match_kind: UploadMatchKind::Exact,
+                    host_version: format!("{}-{}", pkg.version, pkg.release),
+                    uploaded_version: None,
+                });
             }
         }
 
@@ -703,28 +875,73 @@ impl RefineSession {
         }
 
         for candidate in &candidates {
-            for pkg in &mut rpm.packages_added {
+            for pkg in &rpm.packages_added {
                 if pkg.repoless_annotation.is_empty() {
                     continue;
                 }
                 if pkg.name == *candidate && pkg.arch == extracted_arch {
-                    pkg.repoless_cached = true;
-                    pkg.cache_path = Some(staged_path.to_string());
-                    // Track version mismatch if the uploaded version differs
-                    let installed_ver = format!("{}-{}", pkg.version, pkg.release);
-                    if let Some(ref ver) = extracted_ver
-                        && *ver != installed_ver
-                    {
-                        pkg.uploaded_version = Some(ver.clone());
-                    }
-                    let canonical = format!("{}.{}", pkg.name, pkg.arch);
-                    self.invalidate_caches();
-                    return Some(canonical);
+                    let host_version = format!("{}-{}", pkg.version, pkg.release);
+                    let differs = extracted_ver.as_ref().is_some_and(|v| *v != host_version);
+                    return Some(UploadMatch {
+                        canonical: canonical_package_id(&pkg.name, &pkg.arch),
+                        match_kind: if differs {
+                            UploadMatchKind::VersionDiffers
+                        } else {
+                            UploadMatchKind::Exact
+                        },
+                        host_version,
+                        uploaded_version: if differs { extracted_ver.clone() } else { None },
+                    });
                 }
             }
         }
 
         None
+    }
+
+    /// Record a staged upload against the package `match_uploaded_rpm`
+    /// named.
+    ///
+    /// In-memory only, and called after the rename has already put the file
+    /// in place, so the session never reports `uploaded` for a file that is
+    /// not there. When the entry was `repoless_cached` from the host's dnf
+    /// cache and not yet `uploaded`, the cache state the upload displaces is
+    /// kept in `prior_cache` for removal to restore.
+    pub fn set_uploaded(
+        &mut self,
+        canonical: &str,
+        staged_path: PathBuf,
+        uploaded_version: Option<String>,
+    ) {
+        let prior_cache = &mut self.prior_cache;
+        if let Some(rpm) = self.original.rpm.as_mut() {
+            for pkg in &mut rpm.packages_added {
+                if canonical_package_id(&pkg.name, &pkg.arch) != canonical {
+                    continue;
+                }
+                if pkg.repoless_cached && !pkg.uploaded {
+                    prior_cache.insert(
+                        canonical.to_string(),
+                        PriorCache {
+                            repoless_cached: pkg.repoless_cached,
+                            cache_path: pkg.cache_path.clone(),
+                            uploaded_version: pkg.uploaded_version.clone(),
+                        },
+                    );
+                }
+                pkg.uploaded = true;
+                pkg.repoless_cached = true;
+                pkg.cache_path = Some(staged_path.to_string_lossy().into_owned());
+                pkg.uploaded_version = uploaded_version;
+                break;
+            }
+        }
+        self.invalidate_caches();
+    }
+
+    /// The dnf-cache state an upload for `canonical` displaced, if any.
+    pub fn prior_cache(&self, canonical: &str) -> Option<&PriorCache> {
+        self.prior_cache.get(canonical)
     }
 
     /// Invalidate cached views after a mutation.
@@ -736,7 +953,7 @@ impl RefineSession {
         self.recompute_view();
     }
 
-    /// Reverse the effect of `mark_uploaded_rpm` for a given `name.arch`.
+    /// Reverse the effect of `set_uploaded` for a given `name.arch`.
     ///
     /// Clears `repoless_cached` and `cache_path` on the matching PackageEntry,
     /// deletes the staged RPM file from the upload directory, and invalidates
@@ -760,6 +977,10 @@ impl RefineSession {
 
                     pkg.repoless_cached = false;
                     pkg.cache_path = None;
+                    // The entry no longer has a staged file, so it is no
+                    // longer an upload either; leaving `uploaded` set would
+                    // tell the row and the export otherwise.
+                    pkg.uploaded = false;
                     found = true;
                     break;
                 }
@@ -6895,7 +7116,7 @@ mod tests {
         assert!(!is_safe_compose_path("foo\x00bar.yml"));
     }
 
-    // -- mark_uploaded_rpm tests ------------------------------------------------
+    // -- upload matching, recording, and staging directory tests ----------------
 
     /// Helper: build a snapshot with a single repo-less package.
     fn snapshot_with_repoless(name: &str, ver: &str, rel: &str, arch: &str) -> InspectionSnapshot {
@@ -6917,94 +7138,154 @@ mod tests {
         }
     }
 
-    #[test]
-    fn mark_uploaded_rpm_exact_nevra_still_works() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "httpd-2.4.57-5.el9.x86_64.rpm",
-            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
-        );
-        assert_eq!(result, Some("httpd.x86_64".into()));
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
-        assert!(pkg.repoless_cached);
-        assert!(pkg.uploaded_version.is_none()); // exact match, no version mismatch
+    /// The single package of a `snapshot_with_repoless` session.
+    fn only_package(session: &RefineSession) -> &PackageEntry {
+        &session.original.rpm.as_ref().unwrap().packages_added[0]
     }
 
     #[test]
-    fn mark_uploaded_rpm_matches_epel_release_by_name_arch() {
-        // "epel-release-latest-10.noarch.rpm" — heuristic extracts name
-        // "epel-release-latest" which doesn't match "epel-release" directly.
-        // Progressive prefix matching tries shorter prefixes until it finds
-        // "epel-release" which matches the package.
-        let snap = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "epel-release-latest-10.noarch.rpm",
-            "/tmp/epel-release-latest-10.noarch.rpm",
-        );
-        assert_eq!(result, Some("epel-release.noarch".into()));
+    fn match_uploaded_rpm_table() {
+        // (package name, version, release, arch, uploaded filename) against
+        // (canonical, kind, host_version, uploaded_version).
+        type Expected<'a> = Option<(&'a str, UploadMatchKind, &'a str, Option<&'a str>)>;
+        let cases: &[(&str, &str, &str, &str, &str, Expected)] = &[
+            // Exact NEVRA, the first branch.
+            (
+                "httpd",
+                "2.4.57",
+                "5.el9",
+                "x86_64",
+                "httpd-2.4.57-5.el9.x86_64.rpm",
+                Some(("httpd.x86_64", UploadMatchKind::Exact, "2.4.57-5.el9", None)),
+            ),
+            (
+                "google-chrome-stable",
+                "126.0",
+                "1",
+                "x86_64",
+                "google-chrome-stable-126.0-1.x86_64.rpm",
+                Some((
+                    "google-chrome-stable.x86_64",
+                    UploadMatchKind::Exact,
+                    "126.0-1",
+                    None,
+                )),
+            ),
+            // The Fedora permalink filename: the heuristic name
+            // "epel-release-latest" is not the package name, and a
+            // progressively shorter prefix finds it.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release-latest-9.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::VersionDiffers,
+                    "9-11.el9",
+                    Some("9"),
+                )),
+            ),
+            // Relaxed branch with the host's own version-release: the kind
+            // is computed from the comparison, not from which branch
+            // matched.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release-latest-9-11.el9.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::Exact,
+                    "9-11.el9",
+                    None,
+                )),
+            ),
+            // Relaxed branch with no version in the filename at all.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::Exact,
+                    "9-11.el9",
+                    None,
+                )),
+            ),
+            // A different version of the same package.
+            (
+                "custom-tool",
+                "1.0.0",
+                "1.el9",
+                "x86_64",
+                "custom-tool-2.0.0-1.el9.x86_64.rpm",
+                Some((
+                    "custom-tool.x86_64",
+                    UploadMatchKind::VersionDiffers,
+                    "1.0.0-1.el9",
+                    Some("2.0.0-1.el9"),
+                )),
+            ),
+            // Another package's RPM matches nothing.
+            (
+                "httpd",
+                "2.4.57",
+                "5.el9",
+                "x86_64",
+                "nginx-1.0-1.el9.x86_64.rpm",
+                None,
+            ),
+            // Unparseable: no arch, so no relaxed match either.
+            ("httpd", "2.4.57", "5.el9", "x86_64", "(1).rpm", None),
+        ];
 
-        // Standard NEVRA filename also still works:
-        let snap2 = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
-        let mut session2 = RefineSession::new(snap2);
-        let result2 = session2.mark_uploaded_rpm(
-            "epel-release-10-1.el10.noarch.rpm",
-            "/tmp/epel-release-10-1.el10.noarch.rpm",
-        );
-        assert_eq!(result2, Some("epel-release.noarch".into()));
+        for (name, ver, rel, arch, filename, want) in cases {
+            let session = RefineSession::new(snapshot_with_repoless(name, ver, rel, arch));
+            let got = session.match_uploaded_rpm(filename);
+            let got = got.as_ref().map(|m| {
+                (
+                    m.canonical.as_str(),
+                    m.match_kind,
+                    m.host_version.as_str(),
+                    m.uploaded_version.as_deref(),
+                )
+            });
+            assert_eq!(got, *want, "{filename}");
+        }
     }
 
     #[test]
-    fn mark_uploaded_rpm_matches_google_chrome() {
-        let snap = snapshot_with_repoless("google-chrome-stable", "126.0", "1", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "google-chrome-stable-126.0-1.x86_64.rpm",
-            "/tmp/google-chrome-stable-126.0-1.x86_64.rpm",
-        );
-        assert_eq!(result, Some("google-chrome-stable.x86_64".into()));
-    }
+    fn match_uploaded_rpm_mutates_nothing() {
+        // The matcher is the step the handler runs before it has decided to
+        // place anything; a match that is never committed has to leave the
+        // package exactly as it was.
+        let session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        let generation_before = session.generation();
+        let matched = session
+            .match_uploaded_rpm("epel-release-latest-9.noarch.rpm")
+            .expect("the permalink filename matches epel-release");
+        assert_eq!(matched.canonical, "epel-release.noarch");
 
-    #[test]
-    fn mark_uploaded_rpm_populates_uploaded_version_on_mismatch() {
-        let snap = snapshot_with_repoless("custom-tool", "1.0.0", "1.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        // Upload a file with version 2.0.0 instead of 1.0.0
-        let result = session.mark_uploaded_rpm(
-            "custom-tool-2.0.0-1.el9.x86_64.rpm",
-            "/tmp/custom-tool-2.0.0-1.el9.x86_64.rpm",
-        );
-        assert_eq!(result, Some("custom-tool.x86_64".into()));
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
-        assert!(pkg.repoless_cached);
-        assert_eq!(pkg.uploaded_version, Some("2.0.0-1.el9".into()));
-    }
-
-    #[test]
-    fn mark_uploaded_rpm_returns_none_when_no_match() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "nginx-1.0-1.el9.x86_64.rpm",
-            "/tmp/nginx-1.0-1.el9.x86_64.rpm",
-        );
-        assert_eq!(result, None);
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
+        let pkg = only_package(&session);
         assert!(!pkg.repoless_cached);
+        assert!(!pkg.uploaded);
+        assert_eq!(pkg.cache_path, None);
+        assert_eq!(pkg.uploaded_version, None);
+        assert_eq!(session.generation(), generation_before);
     }
 
     #[test]
-    fn mark_uploaded_rpm_unparseable_filename_returns_none() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm("(1).rpm", "/tmp/(1).rpm");
-        assert_eq!(result, None);
-        // No panic, no match
-    }
-
-    #[test]
-    fn mark_uploaded_rpm_skips_non_repoless_packages() {
+    fn match_uploaded_rpm_skips_non_repoless_packages() {
         // Package has a source_repo (not repo-less), should not match
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -7023,12 +7304,251 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "httpd-2.4.57-5.el9.x86_64.rpm",
-            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
+        let session = RefineSession::new(snap);
+        assert_eq!(
+            session.match_uploaded_rpm("httpd-2.4.57-5.el9.x86_64.rpm"),
+            None
         );
-        assert_eq!(result, None);
+    }
+
+    /// A session whose only package is already `repoless_cached` from the
+    /// host's dnf cache.
+    fn session_with_dnf_cached_epel() -> RefineSession {
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(DNF_CACHE_PATH.into());
+        RefineSession::new(snap)
+    }
+
+    const DNF_CACHE_PATH: &str =
+        "/var/cache/dnf/epel-1234/packages/epel-release-9-11.el9.noarch.rpm";
+    const FIRST_UPLOAD_PATH: &str = "/tmp/uploads/epel-release-9-12.el9.noarch.rpm";
+    const SECOND_UPLOAD_PATH: &str = "/tmp/uploads/epel-release-9-13.el9.noarch.rpm";
+
+    #[test]
+    fn set_uploaded_records_the_dnf_cache_it_displaced() {
+        let mut session = session_with_dnf_cached_epel();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+
+        assert_eq!(
+            session.prior_cache("epel-release.noarch"),
+            Some(&PriorCache {
+                repoless_cached: true,
+                cache_path: Some(DNF_CACHE_PATH.into()),
+                uploaded_version: None,
+            })
+        );
+        let pkg = only_package(&session);
+        assert!(pkg.uploaded);
+        assert!(pkg.repoless_cached);
+        assert_eq!(pkg.cache_path.as_deref(), Some(FIRST_UPLOAD_PATH));
+        assert_eq!(pkg.uploaded_version.as_deref(), Some("9-12.el9"));
+    }
+
+    #[test]
+    fn set_uploaded_records_nothing_for_a_package_with_no_cache() {
+        // The first half of the condition: an entry that was never
+        // `repoless_cached` has no cache state to restore, so removal
+        // clears rather than restores.
+        let mut session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+
+        assert_eq!(session.prior_cache("epel-release.noarch"), None);
+        let pkg = only_package(&session);
+        assert!(pkg.uploaded);
+        assert!(pkg.repoless_cached);
+        assert_eq!(pkg.cache_path.as_deref(), Some(FIRST_UPLOAD_PATH));
+    }
+
+    #[test]
+    fn set_uploaded_twice_keeps_the_dnf_cache_it_first_displaced() {
+        // The second half of the condition: a replacing upload must not
+        // overwrite the saved dnf-cache state with the first upload's own
+        // staged path, or removal would restore a file it had deleted.
+        let mut session = session_with_dnf_cached_epel();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(SECOND_UPLOAD_PATH),
+            Some("9-13.el9".into()),
+        );
+
+        assert_eq!(
+            session.prior_cache("epel-release.noarch"),
+            Some(&PriorCache {
+                repoless_cached: true,
+                cache_path: Some(DNF_CACHE_PATH.into()),
+                uploaded_version: None,
+            })
+        );
+        let pkg = only_package(&session);
+        assert_eq!(pkg.cache_path.as_deref(), Some(SECOND_UPLOAD_PATH));
+        assert_eq!(pkg.uploaded_version.as_deref(), Some("9-13.el9"));
+    }
+
+    #[test]
+    fn set_uploaded_bumps_the_generation() {
+        let mut session = session_with_dnf_cached_epel();
+        let generation_before = session.generation();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            None,
+        );
+        assert_eq!(session.generation(), generation_before + 1);
+    }
+
+    /// A session over `dir`, with an epel-release entry to match against.
+    fn session_over_upload_dir(dir: &Path) -> RefineSession {
+        let mut session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        session.set_upload_dir(dir.to_path_buf());
+        session
+    }
+
+    #[test]
+    fn ensure_upload_dir_creates_a_private_directory() {
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let mut session = session_over_upload_dir(&dir);
+
+        session.ensure_upload_dir().expect("fresh directory");
+
+        let md = std::fs::symlink_metadata(&dir).unwrap();
+        assert!(md.file_type().is_dir());
+        assert_eq!(
+            md.mode() & 0o777,
+            0o700,
+            "upload directory must not be readable or writable by anyone else"
+        );
+        assert_eq!(
+            session.upload_dir_canon(),
+            Some(dir.canonicalize().unwrap().as_path())
+        );
+    }
+
+    #[test]
+    fn ensure_upload_dir_sweeps_part_files_once_per_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+        std::fs::write(dir.join("epel-release-9-11.el9.noarch.rpm"), b"an rpm").unwrap();
+        let mut session = session_over_upload_dir(&dir);
+
+        session.ensure_upload_dir().expect("existing directory");
+
+        assert!(
+            !dir.join(".upload-dead.part").exists(),
+            "a part file from a process that died mid-transfer must not survive"
+        );
+        assert!(
+            dir.join("epel-release-9-11.el9.noarch.rpm").exists(),
+            "the sweep removes part files only"
+        );
+
+        // A running server never removes a part file by name pattern: the
+        // sweep belongs to opening the directory, not to serving a request.
+        std::fs::write(dir.join(".upload-live.part"), b"in flight").unwrap();
+        session.ensure_upload_dir().expect("already prepared");
+        assert!(dir.join(".upload-live.part").exists());
+    }
+
+    #[test]
+    fn ensure_upload_dir_refuses_a_directory_that_is_not_ours() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A symlink to a directory another local user pre-created.
+        let target = tmp.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        let linked = tmp.path().join("linked-uploads");
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+        let err = session_over_upload_dir(&linked)
+            .ensure_upload_dir()
+            .expect_err("a symlinked upload directory is refused");
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "upload directory {} is a symlink, not a directory",
+                linked.display()
+            )
+        );
+
+        // A directory anyone in the group can write to.
+        use std::os::unix::fs::PermissionsExt;
+        let shared = tmp.path().join("shared-uploads");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let err = session_over_upload_dir(&shared)
+            .ensure_upload_dir()
+            .expect_err("a group-writable upload directory is refused");
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "upload directory {} is writable by group or other (mode 0770)",
+                shared.display()
+            )
+        );
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_clears_uploaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("epel-release-9-12.el9.noarch.rpm");
+        std::fs::write(&staged, b"an rpm").unwrap();
+        let mut session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        session.set_uploaded(
+            "epel-release.noarch",
+            staged.clone(),
+            Some("9-12.el9".into()),
+        );
+
+        assert!(
+            session
+                .unmark_uploaded_rpm("epel-release", "noarch")
+                .unwrap()
+        );
+
+        let pkg = only_package(&session);
+        assert!(!pkg.uploaded, "a removed upload is no longer an upload");
+        assert!(!pkg.repoless_cached);
+        assert_eq!(pkg.cache_path, None);
+        assert!(!staged.exists());
     }
 
     #[test]

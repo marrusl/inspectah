@@ -2267,3 +2267,720 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
     // Entry now inactive (in redo tail)
     assert_eq!(view_entry["active"], false);
 }
+
+// -- /api/upload-rpm -------------------------------------------------------
+
+const UPLOAD_BOUNDARY: &str = "inspectah-test-boundary";
+
+/// The upload directory's name under the test's temporary directory. It is
+/// a subdirectory so a test can prove nothing escaped into the parent.
+const UPLOAD_SUBDIR: &str = "snap-uploads";
+
+/// One repo-less `epel-release` at 9-11.el9 and one repo-less
+/// `custom-tool`, staging into a directory that does not exist yet.
+fn upload_state() -> (Arc<AppState>, tempfile::TempDir) {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "epel-release".into(),
+                version: "9".into(),
+                release: "11.el9".into(),
+                arch: "noarch".into(),
+                disposition: FindingKind::included(),
+                repoless_annotation: "No repo source".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "custom-tool".into(),
+                version: "1.0".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+                disposition: FindingKind::included(),
+                repoless_annotation: "No repo source".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    (
+        Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        }),
+        tmp,
+    )
+}
+
+/// One multipart part: the `Content-Disposition` value verbatim, and the
+/// body bytes.
+type MultipartPart = (Vec<u8>, Vec<u8>);
+
+fn part(disposition: &str, content: &[u8]) -> MultipartPart {
+    (disposition.as_bytes().to_vec(), content.to_vec())
+}
+
+/// A `file` part whose filename is `name`, quoted as a browser sends it.
+fn file_part(name: &str, content: &[u8]) -> MultipartPart {
+    part(
+        &format!("form-data; name=\"file\"; filename=\"{name}\""),
+        content,
+    )
+}
+
+fn multipart_body(parts: &[MultipartPart]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (disposition, content) in parts {
+        body.extend_from_slice(format!("--{UPLOAD_BOUNDARY}\r\nContent-Disposition: ").as_bytes());
+        body.extend_from_slice(disposition);
+        body.extend_from_slice(b"\r\nContent-Type: application/x-rpm\r\n\r\n");
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{UPLOAD_BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn upload_request(body: Body) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/upload-rpm")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={UPLOAD_BOUNDARY}"),
+        )
+        .body(body)
+        .unwrap()
+}
+
+async fn post_upload_body(app: &axum::Router, body: Body) -> (StatusCode, serde_json::Value) {
+    let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+async fn post_upload(
+    app: &axum::Router,
+    parts: &[MultipartPart],
+) -> (StatusCode, serde_json::Value) {
+    post_upload_body(app, Body::from(multipart_body(parts))).await
+}
+
+/// Every entry in `dir`, sorted. Empty when the directory does not exist.
+fn dir_entries(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+fn part_files(dir: &std::path::Path) -> Vec<String> {
+    dir_entries(dir)
+        .into_iter()
+        .filter(|n| n.starts_with(".upload-") && n.ends_with(".part"))
+        .collect()
+}
+
+async fn view(app: &axum::Router) -> serde_json::Value {
+    let (status, body) = get_json(app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    body
+}
+
+/// The `PackageEntry` the view carries for a package name.
+fn view_package(view: &serde_json::Value, name: &str) -> serde_json::Value {
+    view["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["entry"]["name"] == name)
+        .unwrap_or_else(|| panic!("no package {name} in the view"))["entry"]
+        .clone()
+}
+
+#[tokio::test]
+async fn upload_filename_rule_at_the_handler() {
+    // § 8.2: each name is refused with 400 naming the rule, with nothing
+    // in the upload directory and the view generation unchanged.
+    let over_long = format!("{}.rpm", "a".repeat(197)); // 201 bytes
+    let rejected = [
+        "epel-release-9$(id)-1.noarch.rpm",
+        "epel-release 9-1.noarch.rpm",
+        "epel-release-9-1.noarch (1).rpm",
+        "../x.rpm",
+        "..\\x.rpm",
+        "/etc/x.rpm",
+        ".epel-release-9-1.noarch.rpm",
+        over_long.as_str(),
+    ];
+    for name in rejected {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let generation_before = view(&app).await["generation"].clone();
+
+        let (status, body) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("filename rejected: staged filename "),
+            "{name}: {body}"
+        );
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{name}");
+        assert_eq!(view(&app).await["generation"], generation_before, "{name}");
+    }
+
+    // The header forms a browser can send that carry no usable filename,
+    // and the field-count and field-name rules. Each is 400 with nothing
+    // staged; the reason differs, so only the status and the filesystem
+    // are asserted here.
+    let mut invalid_utf8 = b"form-data; name=\"file\"; filename=\"a".to_vec();
+    invalid_utf8.push(0xFF);
+    invalid_utf8.extend_from_slice(b"-1-1.noarch.rpm\"");
+    let malformed: Vec<(&str, Vec<MultipartPart>)> = vec![
+        (
+            "a percent-encoded newline",
+            vec![part(
+                "form-data; name=\"file\"; filename*=UTF-8''epel-release-9-1%0ARUN%20id.noarch.rpm",
+                b"an rpm",
+            )],
+        ),
+        (
+            "a percent-encoded carriage return",
+            vec![part(
+                "form-data; name=\"file\"; filename*=UTF-8''epel-release-9-1%0D.noarch.rpm",
+                b"an rpm",
+            )],
+        ),
+        (
+            "an invalid UTF-8 filename",
+            vec![(invalid_utf8, b"an rpm".to_vec())],
+        ),
+        (
+            "two fields",
+            vec![
+                file_part("epel-release-9-12.el9.noarch.rpm", b"first"),
+                file_part("epel-release-latest-9.noarch.rpm", b"second"),
+            ],
+        ),
+        (
+            "a field not named file",
+            vec![part(
+                "form-data; name=\"rpm\"; filename=\"epel-release-9-12.el9.noarch.rpm\"",
+                b"an rpm",
+            )],
+        ),
+        (
+            "a file field with no filename",
+            vec![part("form-data; name=\"file\"", b"an rpm")],
+        ),
+        ("no field at all", vec![]),
+    ];
+    for (label, parts) in malformed {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let generation_before = view(&app).await["generation"].clone();
+
+        let (status, body) = post_upload(&app, &parts).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {body}");
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{label}");
+        assert_eq!(view(&app).await["generation"], generation_before, "{label}");
+    }
+
+    // Accepted (200): the seven names of § 8.2, each staged under the name
+    // it was sent with.
+    let accepted = [
+        "epel-release-9-12.el9.noarch.rpm",
+        "epel-release-latest-9.noarch.rpm",
+        "google-chrome-stable_current_x86_64.rpm",
+        "libstdc++-devel-11-1.el9.x86_64.rpm",
+        "foo-1.0~rc1-1.fc40.x86_64.rpm",
+        "foo-1.2^20240101git1-1.fc40.x86_64.rpm",
+        "X-1-1.noarch.RPM",
+    ];
+    for name in accepted {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+
+        let (status, body) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+        assert_eq!(body["staged_as"], name, "{name}");
+        assert_eq!(dir_entries(&dir), vec![name.to_string()], "{name}");
+    }
+}
+
+#[tokio::test]
+async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
+    // The assertion at the staging boundary: a name the allowlist refuses
+    // must not reach disk by any route, and must leave the Containerfile
+    // naming nothing. `commit` takes a `StagedName`, so the rename cannot
+    // be reached with an unvalidated name at all; this proves it through
+    // the one route a real rejected name arrives by.
+    for name in ["epel-release-9$(id)-1.noarch.rpm", "../x.rpm"] {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let before = view(&app).await;
+
+        let (status, _) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+
+        // Nothing staged, no part file, and nothing written beside the
+        // directory either: `../x.rpm` is rejected, never stripped to
+        // `x.rpm` and never placed one level up.
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{name}");
+        assert_eq!(
+            dir_entries(tmp.path()),
+            vec![UPLOAD_SUBDIR.to_string()],
+            "{name}"
+        );
+
+        // Nothing recorded on the package, so nothing can render.
+        let after = view(&app).await;
+        assert_eq!(after["generation"], before["generation"], "{name}");
+        let pkg = view_package(&after, "epel-release");
+        assert_eq!(pkg["uploaded"], serde_json::Value::Null, "{name}");
+        assert_eq!(pkg["cache_path"], serde_json::Value::Null, "{name}");
+
+        let containerfile = after["containerfile_preview"].as_str().unwrap();
+        assert!(
+            !containerfile.contains("COPY repoless-packages/"),
+            "{name}: {containerfile}"
+        );
+        assert!(!containerfile.contains("$("), "{name}");
+        assert!(!containerfile.contains("x.rpm"), "{name}");
+        assert!(
+            containerfile.contains("# MANUAL: epel-release"),
+            "{name}: the package is still waiting for an RPM"
+        );
+    }
+
+    // The control: the same assertions against an accepted name, so the
+    // Containerfile half of this test can fail. (The COPY names the
+    // snapshot's NEVRA rather than the staged filename; wiring the staged
+    // name through the export is Task 14.)
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+    let (status, _) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()]
+    );
+    let after = view(&app).await;
+    let pkg = view_package(&after, "epel-release");
+    assert_eq!(pkg["uploaded"], true);
+    assert_eq!(
+        pkg["cache_path"],
+        dir.join("epel-release-9-12.el9.noarch.rpm")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(
+        after["containerfile_preview"]
+            .as_str()
+            .unwrap()
+            .contains("COPY repoless-packages/")
+    );
+}
+
+#[tokio::test]
+async fn upload_response_carries_the_server_verdict() {
+    // § 8.6 + § 8.13.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-latest-9.noarch.RPM", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "matched");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(body["match_kind"], "version_differs");
+    assert_eq!(body["host_version"], "9-11.el9");
+    assert_eq!(body["uploaded_version"], "9");
+    assert_eq!(body["parsed"]["name"], "epel-release-latest");
+    assert_eq!(body["parsed"]["arch"], "noarch");
+    assert_eq!(body["parsed"]["version_release"], "9");
+    assert_eq!(body["staged_as"], "epel-release-latest-9.noarch.RPM");
+    assert_eq!(body["uploaded"], 1);
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-latest-9.noarch.RPM".to_string()]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("epel-release-latest-9.noarch.RPM")).unwrap(),
+        b"an rpm".as_slice()
+    );
+}
+
+#[tokio::test]
+async fn unmatched_upload_is_staged_and_changes_no_package() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+    let before = view(&app).await;
+
+    let (status, body) =
+        post_upload(&app, &[file_part("nginx-1.0-1.el9.x86_64.rpm", b"an rpm")]).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "unmatched");
+    assert_eq!(body["matched"], serde_json::Value::Null);
+    assert_eq!(body["match_kind"], serde_json::Value::Null);
+    assert_eq!(body["staged_as"], "nginx-1.0-1.el9.x86_64.rpm");
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["nginx-1.0-1.el9.x86_64.rpm".to_string()],
+        "an unmatched file is still staged for the modal's remove-or-retry"
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(after["packages"], before["packages"]);
+}
+
+#[tokio::test]
+async fn upload_refuses_a_filename_another_package_has_staged() {
+    // `cache_path` deserializes from the snapshot, so a resumed session
+    // can hold a staged name for a package the uploaded file does not
+    // match. No rename ever replaces another package's staged file.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    let contested = dir.join("epel-release-9-12.el9.noarch.rpm");
+    std::fs::write(&contested, b"custom-tool's file").unwrap();
+    {
+        let mut session = state.session.lock().unwrap();
+        session.set_uploaded(
+            "custom-tool.x86_64",
+            contested.clone(),
+            Some("9-12.el9".into()),
+        );
+    }
+    let app = app(state);
+    let before = view(&app).await;
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            b"epel's file",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-9-12.el9.noarch.rpm is already staged for custom-tool.x86_64"
+    );
+    assert_eq!(
+        std::fs::read(&contested).unwrap(),
+        b"custom-tool's file".as_slice()
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()],
+        "the refused upload's part file is dropped"
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(
+        view_package(&after, "epel-release")["uploaded"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn upload_replacing_an_upload_removes_the_superseded_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    for name in [
+        "epel-release-9-12.el9.noarch.rpm",
+        "epel-release-9-13.el9.noarch.rpm",
+    ] {
+        let (status, body) = post_upload(&app, &[file_part(name, name.as_bytes())]).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+    }
+
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-13.el9.noarch.rpm".to_string()],
+        "the superseded file is deleted after the record step"
+    );
+    let pkg = view_package(&view(&app).await, "epel-release");
+    assert_eq!(
+        pkg["cache_path"],
+        dir.join("epel-release-9-13.el9.noarch.rpm")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(pkg["uploaded_version"], "9-13.el9");
+}
+
+/// Stage one part file through the real `stage`, without committing it.
+async fn stage_part(
+    dir: &std::path::Path,
+    filename: &str,
+    content: &[u8],
+) -> inspectah_web::upload::StagedPart {
+    use axum::extract::{FromRequest, Multipart};
+    let body = Body::from(multipart_body(&[file_part(filename, content)]));
+    let mut multipart = Multipart::from_request(upload_request(body), &())
+        .await
+        .unwrap();
+    let mut field = multipart.next_field().await.unwrap().unwrap();
+    inspectah_web::upload::stage(dir, &mut field).await.unwrap()
+}
+
+#[tokio::test]
+async fn overlapping_uploads_are_decided_by_the_last_commit() {
+    // § 8.2: `stage` and `commit` are split so two uploads can be
+    // interleaved deterministically. Both are staged before either
+    // commits, which is the state two concurrent requests reach.
+    const FILENAME: &str = "epel-release-9-12.el9.noarch.rpm";
+
+    for (first, second) in [(&b"AAAA"[..], &b"BBBB"[..]), (&b"BBBB"[..], &b"AAAA"[..])] {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        {
+            state.session.lock().unwrap().ensure_upload_dir().unwrap();
+        }
+        let a = stage_part(&dir, FILENAME, first).await;
+        let b = stage_part(&dir, FILENAME, second).await;
+        assert_eq!(
+            part_files(&dir).len(),
+            2,
+            "each request stages its own part file"
+        );
+
+        let name = inspectah_refine::rpm_filename::StagedName::parse(FILENAME).unwrap();
+        {
+            let mut session = state.session.lock().unwrap();
+            inspectah_web::upload::commit(&mut session, a, &name).unwrap();
+            inspectah_web::upload::commit(&mut session, b, &name).unwrap();
+        }
+
+        assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
+        assert_eq!(
+            std::fs::read(dir.join(FILENAME)).unwrap(),
+            second,
+            "the commit that ran last wins"
+        );
+    }
+
+    // A dropped part takes only its own file: the other upload is
+    // untouched and still commits.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    {
+        state.session.lock().unwrap().ensure_upload_dir().unwrap();
+    }
+    let a = stage_part(&dir, FILENAME, b"AAAA").await;
+    let b = stage_part(&dir, FILENAME, b"BBBB").await;
+    drop(a);
+    assert_eq!(part_files(&dir).len(), 1, "only A's part file is gone");
+    let name = inspectah_refine::rpm_filename::StagedName::parse(FILENAME).unwrap();
+    {
+        let mut session = state.session.lock().unwrap();
+        inspectah_web::upload::commit(&mut session, b, &name).unwrap();
+    }
+    assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
+    assert_eq!(
+        std::fs::read(dir.join(FILENAME)).unwrap(),
+        b"BBBB".as_slice()
+    );
+}
+
+/// A request body that yields `prologue`, then `chunk` `full` times, then
+/// a `rest`-byte tail, and then either ends or stalls forever -- the
+/// client that stops sending. Lazy, so a 500 MiB body costs one chunk of
+/// memory.
+struct ChunkStream {
+    prologue: Option<axum::body::Bytes>,
+    chunk: axum::body::Bytes,
+    full: usize,
+    rest: usize,
+    stall: bool,
+}
+
+impl futures_core::Stream for ChunkStream {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if let Some(prologue) = self.prologue.take() {
+            return Poll::Ready(Some(Ok(prologue)));
+        }
+        if self.full > 0 {
+            self.full -= 1;
+            return Poll::Ready(Some(Ok(self.chunk.clone())));
+        }
+        if self.rest > 0 {
+            let rest = self.rest;
+            self.rest = 0;
+            return Poll::Ready(Some(Ok(self.chunk.slice(..rest))));
+        }
+        if self.stall {
+            return Poll::Pending;
+        }
+        Poll::Ready(None)
+    }
+}
+
+/// Chunk size the oversize-body test streams with: large enough that 500
+/// MiB is a few hundred polls, small enough that the test holds one of
+/// them in memory.
+const TEST_CHUNK_BYTES: usize = 1024 * 1024;
+
+#[tokio::test]
+async fn upload_over_the_route_limit_is_413_and_leaves_no_part_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    // A 2 MiB body goes through, which the router's 1 MiB default limit
+    // would refuse: the route's own UPLOAD_LIMIT_BYTES is the one in
+    // force.
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            &vec![b'x'; 2 * TEST_CHUNK_BYTES],
+        )],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    std::fs::remove_file(dir.join("epel-release-9-12.el9.noarch.rpm")).unwrap();
+
+    // One byte over the limit, counting the multipart framing.
+    let header = format!(
+        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
+         filename=\"epel-release-9-12.el9.noarch.rpm\"\r\n\r\n"
+    );
+    let truncated_body = |total: usize| {
+        let filler = total - header.len();
+        Body::from_stream(ChunkStream {
+            prologue: Some(axum::body::Bytes::from(header.clone())),
+            chunk: axum::body::Bytes::from(vec![b'x'; TEST_CHUNK_BYTES]),
+            full: filler / TEST_CHUNK_BYTES,
+            rest: filler % TEST_CHUNK_BYTES,
+            stall: false,
+        })
+    };
+
+    // Exactly at the limit the body is not refused for its size: it runs
+    // out of multipart framing instead, which is the 400 below. Without
+    // this case the 413 above could be any failure on a large body.
+    let (status, body) =
+        post_upload_body(&app, truncated_body(inspectah_web::UPLOAD_LIMIT_BYTES)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(dir_entries(&dir), Vec::<String>::new());
+
+    let (status, body) =
+        post_upload_body(&app, truncated_body(inspectah_web::UPLOAD_LIMIT_BYTES + 1)).await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "the part file of a body that overran the limit does not survive"
+    );
+}
+
+#[tokio::test]
+async fn upload_abandoned_mid_body_leaves_no_part_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let header = format!(
+        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
+         filename=\"epel-release-9-12.el9.noarch.rpm\"\r\n\r\n"
+    );
+    let mut first = Vec::from(header);
+    first.extend_from_slice(b"the first half of an rpm");
+    let stream = ChunkStream {
+        prologue: Some(axum::body::Bytes::from(first)),
+        chunk: axum::body::Bytes::new(),
+        full: 0,
+        rest: 0,
+        stall: true,
+    };
+    let handle =
+        tokio::spawn(async move { app.oneshot(upload_request(Body::from_stream(stream))).await });
+
+    // The part file exists while the transfer is in flight.
+    let staged = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if part_files(&dir).len() == 1 {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(staged.is_ok(), "the upload never reached its part file");
+
+    // The client goes away: axum drops the handler future.
+    handle.abort();
+    let _ = handle.await;
+
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "an abandoned transfer leaves nothing behind"
+    );
+}
+
+#[tokio::test]
+async fn upload_directory_is_swept_of_dead_part_files_on_first_open() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()],
+        "the part file a dead process left is gone, and this upload's is too"
+    );
+}
