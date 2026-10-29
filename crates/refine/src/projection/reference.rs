@@ -547,8 +547,6 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
         .iter()
         .map(|d| RefVarDirectory {
             path: d.path.clone(),
-            size_estimate: d.size_estimate.clone(),
-            recommendation: d.recommendation.clone(),
             mode: d.mode.clone(),
             owner_name: d.owner_name.clone(),
             group_name: d.group_name.clone(),
@@ -2232,9 +2230,10 @@ mod tests {
             storage: Some(StorageSection {
                 var_directories: vec![VarDirectory {
                     path: "/var/lib/pgsql".into(),
-                    size_estimate: "12G".into(),
-                    recommendation: "mount as separate volume".into(),
                     backing: None,
+                    mode: Some("0700".into()),
+                    owner_name: Some("postgres".into()),
+                    group_name: Some("postgres".into()),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2246,10 +2245,14 @@ mod tests {
 
         assert_eq!(result.var_directories.len(), 1);
         assert_eq!(result.var_directories[0].path, "/var/lib/pgsql");
-        assert_eq!(result.var_directories[0].size_estimate, "12G");
+        assert_eq!(result.var_directories[0].mode.as_deref(), Some("0700"));
         assert_eq!(
-            result.var_directories[0].recommendation,
-            "mount as separate volume"
+            result.var_directories[0].owner_name.as_deref(),
+            Some("postgres")
+        );
+        assert_eq!(
+            result.var_directories[0].group_name.as_deref(),
+            Some("postgres")
         );
     }
 
@@ -2311,8 +2314,6 @@ mod tests {
                 }],
                 var_directories: vec![VarDirectory {
                     path: "/var/log".into(),
-                    size_estimate: "2G".into(),
-                    recommendation: "keep on root".into(),
                     backing: None,
                     ..Default::default()
                 }],
@@ -2335,7 +2336,7 @@ mod tests {
         assert_eq!(result.lvm_volumes.len(), 1);
         assert_eq!(result.lvm_volumes[0].lv_name, "swap");
         assert_eq!(result.var_directories.len(), 1);
-        assert_eq!(result.var_directories[0].recommendation, "keep on root");
+        assert_eq!(result.var_directories[0].path, "/var/log");
         assert_eq!(result.credential_refs.len(), 1);
         assert_eq!(result.credential_refs[0].credential_path, "/etc/cifs-creds");
     }

@@ -1343,21 +1343,26 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
         });
     }
 
-    // VarDirectory
+    // VarDirectory. The size estimate and the recommendation were never
+    // collected, so the subtitle read "~" and the detail led with a space;
+    // ownership and mode are what the row actually knows.
     for vd in &data.var_directories {
         let detail = if let (Some(mode), Some(owner), Some(group)) =
             (&vd.mode, &vd.owner_name, &vd.group_name)
         {
-            format!("{} ({} {}:{})", vd.recommendation, mode, owner, group)
+            Some(format!("{} {}:{}", mode, owner, group))
         } else {
-            vd.recommendation.clone()
+            None
         };
         items.push(ContextItem {
             id: vd.path.clone(),
             title: vd.path.clone(),
-            subtitle: Some(format!("~{}", vd.size_estimate)),
-            detail: Some(detail),
-            searchable_text: format!("{} {} {}", vd.path, vd.size_estimate, vd.recommendation),
+            subtitle: None,
+            searchable_text: match &detail {
+                Some(d) => format!("{} {}", vd.path, d),
+                None => vd.path.clone(),
+            },
+            detail,
         });
     }
 
@@ -1482,6 +1487,65 @@ mod tests {
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
+
+    mod var_directory_rows {
+        use super::*;
+        use inspectah_refine::projection::RefVarDirectory;
+
+        fn storage_with(dirs: Vec<RefVarDirectory>) -> RefStorage {
+            RefStorage {
+                fstab_entries: Vec::new(),
+                mount_points: Vec::new(),
+                lvm_volumes: Vec::new(),
+                var_directories: dirs,
+                credential_refs: Vec::new(),
+                unbacked_var_paths: Vec::new(),
+            }
+        }
+
+        /// The row carries ownership and mode and nothing else. It used
+        /// to lead with a size estimate and a recommendation that the
+        /// collector never filled, so the subtitle read `~` and the
+        /// detail read ` (0755 root:root)`.
+        #[test]
+        fn a_directory_with_ownership_shows_only_ownership() {
+            let section = web_storage_section(&storage_with(vec![RefVarDirectory {
+                path: "/var/lib/appone/cache".into(),
+                mode: Some("0750".into()),
+                owner_name: Some("appone".into()),
+                group_name: Some("appone".into()),
+            }]));
+            let item = section
+                .items
+                .iter()
+                .find(|i| i.id == "/var/lib/appone/cache")
+                .expect("the directory should produce a row");
+            assert_eq!(item.subtitle, None);
+            assert_eq!(item.detail.as_deref(), Some("0750 appone:appone"));
+            assert_eq!(
+                item.searchable_text,
+                "/var/lib/appone/cache 0750 appone:appone"
+            );
+        }
+
+        #[test]
+        fn a_directory_without_ownership_shows_no_detail() {
+            let section = web_storage_section(&storage_with(vec![RefVarDirectory {
+                path: "/var/lib/missing".into(),
+                mode: None,
+                owner_name: None,
+                group_name: None,
+            }]));
+            let item = section
+                .items
+                .iter()
+                .find(|i| i.id == "/var/lib/missing")
+                .expect("the directory should produce a row");
+            assert_eq!(item.subtitle, None);
+            assert_eq!(item.detail, None);
+            assert_eq!(item.searchable_text, "/var/lib/missing");
+        }
+    }
 
     mod config_advisory {
         use super::*;

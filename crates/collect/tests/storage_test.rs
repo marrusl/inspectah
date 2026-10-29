@@ -7,6 +7,7 @@ use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorE
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
+use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::system::SourceSystem;
 
 /// Standard fixture: /etc/fstab
@@ -338,7 +339,69 @@ fn empty_fstab() {
     assert!(section.credential_refs.is_empty());
 }
 
-// ── Test 8: Applicability ─────────────────────────────────────────────
+// ── Test 8: The advisory is built from the classifier's verdicts ──────
+
+/// The inspector runs the classifier over discovered directories and
+/// files only the unbacked ones into the advisory.
+///
+/// Asserted through `inspect()` rather than over hand-built
+/// `VarDirectory` values: the two unit tests this replaces re-ran the
+/// filter inside the test body, so they held whether or not the
+/// inspector called it at all.
+#[test]
+fn unbacked_directories_reach_the_advisory_and_backed_ones_do_not() {
+    let exec = full_mock()
+        .with_command(
+            "find /var/lib -mindepth 1 -maxdepth 2 -type d ! -empty",
+            ExecResult {
+                stdout: "/var/lib/appone/cache\n/var/lib/pgsql\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/tmpfiles.d", vec!["appone.conf"])
+        .with_file(
+            "/etc/tmpfiles.d/appone.conf",
+            "d /var/lib/appone/cache 0750 appone appone -\n",
+        );
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = StorageInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
+    let section = match &output.section {
+        SectionData::Storage(s) => s,
+        other => panic!("expected SectionData::Storage, got {:?}", other),
+    };
+
+    let cache = section
+        .var_directories
+        .iter()
+        .find(|d| d.path == "/var/lib/appone/cache")
+        .expect("the discovered cache directory should be classified");
+    assert_eq!(
+        cache.backing,
+        Some(VarDirBacking::Tmpfiles {
+            conf: "/etc/tmpfiles.d/appone.conf".into(),
+            line: "d /var/lib/appone/cache 0750 appone appone -".into(),
+        })
+    );
+
+    let advisory = section
+        .unbacked_var_advisory
+        .as_ref()
+        .expect("an unbacked directory should raise the advisory");
+    assert!(advisory.disposition.is_advisory());
+    assert_eq!(advisory.paths, vec!["/var/lib/pgsql".to_string()]);
+}
+
+// ── Test 9: Applicability ─────────────────────────────────────────────
 
 #[test]
 fn applicability() {
@@ -346,7 +409,7 @@ fn applicability() {
     assert_eq!(inspector.applicable_to(), &[SourceSystemKind::PackageBased]);
 }
 
-// ── Test 9: Insta snapshot ────────────────────────────────────────────
+// ── Test 10: Insta snapshot ───────────────────────────────────────────
 
 #[test]
 fn storage_snapshot() {

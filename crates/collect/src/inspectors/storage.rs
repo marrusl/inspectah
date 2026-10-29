@@ -14,7 +14,7 @@ use inspectah_core::types::storage::{
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Inspects storage configuration: fstab entries, active mount points,
@@ -119,8 +119,11 @@ impl Inspector for StorageInspector {
         // 4. Discover and classify var directories.
         let (mut var_directories, var_warnings) = discover_var_directories(exec);
         let rpm_owned = build_rpm_owned_set(exec);
+        let tmpfiles = load_tmpfiles_index(exec);
         for dir in &mut var_directories {
-            dir.backing = Some(detect_var_dir_backing(exec, &dir.path, &rpm_owned));
+            dir.backing = Some(detect_var_dir_backing(
+                exec, &dir.path, &rpm_owned, &tmpfiles,
+            ));
         }
 
         // Collect unbacked paths for grouped advisory
@@ -365,66 +368,181 @@ fn collect_lvs(exec: &dyn Executor) -> Result<Vec<LvmVolume>, String> {
         .collect())
 }
 
-/// Check if a path (or any parent up to /var) has tmpfiles.d backing.
+/// tmpfiles.d fragment directories, highest systemd precedence first.
 ///
-/// Walks up from the exact path toward /var, checking each ancestor for
-/// a matching tmpfiles.d config entry. This catches cases where a
-/// tmpfiles.d entry creates a parent directory that implicitly covers
-/// subdirectories.
-fn check_tmpfiles_backing(exec: &dyn Executor, path: &str) -> bool {
-    let mut current = path.to_string();
-    loop {
-        let check = exec.run(
-            "grep",
-            &[
-                "-r",
-                "--include=*.conf",
-                "-l",
-                &current,
-                "/etc/tmpfiles.d/",
-                "/usr/lib/tmpfiles.d/",
-            ],
-        );
-        if check.exit_code == 0 && !check.stdout.trim().is_empty() {
-            return true;
-        }
-        match current.rsplit_once('/') {
-            Some((parent, _)) if parent.starts_with("/var") && parent != "/var" => {
-                current = parent.to_string();
+/// A basename in an earlier directory masks the same basename in every
+/// later one (`tmpfiles.d(5)`).
+const TMPFILES_DIRS: [&str; 3] = ["/etc/tmpfiles.d", "/run/tmpfiles.d", "/usr/lib/tmpfiles.d"];
+
+/// The only filename suffix systemd reads in a tmpfiles.d directory.
+/// Anything else there is not a fragment and masks nothing.
+const TMPFILES_SUFFIX: &str = ".conf";
+
+/// Entry types that create a directory at exactly their own path, and so
+/// are the only types that back one.
+///
+/// Everything else creates something other than a directory (`f`, `F`,
+/// `w`, `p`, `c`, `b`, `L`, `C`), adjusts a path that already exists
+/// (`z`, `Z`, `e`, `a`/`A`, `h`/`H`, `t`/`T`), or removes and exempts
+/// (`r`, `R`, `x`, `X`).
+const DIRECTORY_CREATING_TYPES: [char; 5] = ['d', 'D', 'v', 'q', 'Q'];
+
+/// `rpm --query --file` template emitting one bare package name per line.
+///
+/// Bare `%{NAME}`, deliberately not `name.arch`: the export compares this
+/// payload against `rpm.file_ownership[].package_name` and
+/// `rpm.baseline_package_names`, both of which are bare by contract.
+const OWNING_PACKAGE_QUERY_FORMAT: &str = "%{NAME}\\n";
+
+/// A systemd directory directive: the `/var` prefix it provisions under,
+/// the directive name, and the backing a match produces.
+type DirectoryDirective = (&'static str, &'static str, fn(String) -> VarDirBacking);
+
+const DIRECTORY_DIRECTIVES: [DirectoryDirective; 3] = [
+    ("/var/lib/", "StateDirectory", |unit| {
+        VarDirBacking::StateDirectory { unit }
+    }),
+    ("/var/cache/", "CacheDirectory", |unit| {
+        VarDirBacking::CacheDirectory { unit }
+    }),
+    ("/var/log/", "LogsDirectory", |unit| {
+        VarDirBacking::LogsDirectory { unit }
+    }),
+];
+
+/// A tmpfiles.d entry whose type creates a directory: the fragment that
+/// declares it and the line as written.
+struct TmpfilesDirEntry {
+    conf: String,
+    line: String,
+}
+
+/// Directory-creating tmpfiles.d entries, keyed by the exact path each
+/// one creates.
+type TmpfilesIndex = HashMap<String, TmpfilesDirEntry>;
+
+/// Read every tmpfiles.d fragment and index the entries that create a
+/// directory.
+///
+/// Fragments are read in systemd precedence order and the first entry
+/// claiming a path wins, both across fragments and within one.
+fn load_tmpfiles_index(exec: &dyn Executor) -> TmpfilesIndex {
+    let mut index = TmpfilesIndex::new();
+    let mut claimed_basenames = HashSet::new();
+
+    for dir in TMPFILES_DIRS {
+        let Ok(mut basenames) = exec.read_dir(Path::new(dir)) else {
+            continue;
+        };
+        // read_dir order is unspecified; systemd reads fragments in
+        // lexicographic order and the first entry for a path wins.
+        basenames.sort();
+        for basename in basenames {
+            if !basename.ends_with(TMPFILES_SUFFIX) || !claimed_basenames.insert(basename.clone()) {
+                continue;
             }
-            _ => break,
+            let conf = format!("{dir}/{basename}");
+            let Ok(content) = exec.read_file(Path::new(&conf)) else {
+                continue;
+            };
+            index_tmpfiles_fragment(&conf, &content, &mut index);
         }
     }
-    false
+
+    index
+}
+
+/// Index one fragment's directory-creating entries into `index`.
+fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex) {
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(type_token), Some(path)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        // A `%` specifier is expanded by systemd at runtime against state
+        // this parser does not have, so such an entry matches no path.
+        if path.contains('%') {
+            continue;
+        }
+        // The first character is the entry type; the `+ ! - = ~ ^`
+        // modifiers that may follow it do not change which kind it is.
+        let Some(entry_type) = type_token.chars().next() else {
+            continue;
+        };
+        if !DIRECTORY_CREATING_TYPES.contains(&entry_type) {
+            continue;
+        }
+        index
+            .entry(path.to_string())
+            .or_insert_with(|| TmpfilesDirEntry {
+                conf: conf.to_string(),
+                line: line.to_string(),
+            });
+    }
+}
+
+/// `grep -l` prints one matching file path per line; the backing records
+/// the unit's filename, not the directory it was found in.
+fn first_unit_filename(grep_stdout: &str) -> Option<String> {
+    let first = grep_stdout.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Path::new(first)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+}
+
+/// Ask rpm which package owns `path`.
+fn query_owning_package(exec: &dyn Executor, path: &str) -> Option<String> {
+    let result = exec.run(
+        "rpm",
+        &[
+            "--query",
+            "--file",
+            path,
+            "--qf",
+            OWNING_PACKAGE_QUERY_FORMAT,
+        ],
+    );
+    if result.exit_code != 0 {
+        return None;
+    }
+    result
+        .stdout
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 /// Determine the backing mechanism for a /var directory.
 ///
-/// Checks, in order: tmpfiles.d configs (including parent directories),
+/// Checks, in order: a tmpfiles.d entry that creates exactly this path,
 /// systemd directory directives (StateDirectory, CacheDirectory,
 /// LogsDirectory), RPM ownership. Falls back to `Unbacked` if no
 /// backing is found.
+///
+/// A parent's `d` line backs the parent and nothing below it, so there is
+/// no ancestor walk: a directory only an ancestor's entry names is
+/// `Unbacked`.
 fn detect_var_dir_backing(
     exec: &dyn Executor,
     path: &str,
     rpm_owned: &HashSet<String>,
+    tmpfiles: &TmpfilesIndex,
 ) -> VarDirBacking {
-    // Check tmpfiles.d (both /etc and /usr/lib), walking up parents
-    if check_tmpfiles_backing(exec, path) {
-        return VarDirBacking::Tmpfiles;
+    if let Some(entry) = tmpfiles.get(path) {
+        return VarDirBacking::Tmpfiles {
+            conf: entry.conf.clone(),
+            line: entry.line.clone(),
+        };
     }
 
     // Check systemd directory directives using the relative path
     // under each directive's base prefix.
-    for (prefix, directive, backing) in [
-        ("/var/lib/", "StateDirectory", VarDirBacking::StateDirectory),
-        (
-            "/var/cache/",
-            "CacheDirectory",
-            VarDirBacking::CacheDirectory,
-        ),
-        ("/var/log/", "LogsDirectory", VarDirBacking::LogsDirectory),
-    ] {
+    for (prefix, directive, backing) in DIRECTORY_DIRECTIVES {
         if let Some(relative) = path.strip_prefix(prefix) {
             if relative.is_empty() {
                 continue;
@@ -442,15 +560,22 @@ fn detect_var_dir_backing(
                     "/etc/systemd/system/",
                 ],
             );
-            if grep.exit_code == 0 && !grep.stdout.trim().is_empty() {
-                return backing;
+            if grep.exit_code == 0
+                && let Some(unit) = first_unit_filename(&grep.stdout)
+            {
+                return backing(unit);
             }
         }
     }
 
-    // Check RPM ownership
-    if rpm_owned.contains(path) {
-        return VarDirBacking::RpmOwned;
+    // Check RPM ownership. A path rpm owns but will not name the owner of
+    // falls through to Unbacked rather than carrying an empty package:
+    // over-provisioning is the safe direction, and it is what a failed
+    // rpm query already produced through an empty owned set.
+    if rpm_owned.contains(path)
+        && let Some(package) = query_owning_package(exec, path)
+    {
+        return VarDirBacking::RpmOwned { package };
     }
 
     VarDirBacking::Unbacked
@@ -461,7 +586,6 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
-    use inspectah_core::types::storage::VarDirectory;
 
     fn grep_success(stdout: &str) -> ExecResult {
         ExecResult {
@@ -471,41 +595,259 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tmpfiles_direct_match() {
-        let exec = MockExecutor::new().with_command(
-            "grep -r --include=*.conf -l /var/lib/pgsql/data /etc/tmpfiles.d/ /usr/lib/tmpfiles.d/",
-            grep_success("/etc/tmpfiles.d/pgsql.conf\n"),
-        );
-        let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/lib/pgsql/data", &rpm_owned);
-        assert_eq!(result, VarDirBacking::Tmpfiles);
+    fn owning_package_key(path: &str) -> String {
+        format!("rpm --query --file {path} --qf {OWNING_PACKAGE_QUERY_FORMAT}")
+    }
+
+    /// A tmpfiles.d tree in the shape § 3.4's worked example describes:
+    /// systemd's own `var.conf`, a host fragment under `/etc`, a runtime
+    /// fragment under `/run`, label-only and non-directory entries, a
+    /// basename present in both `/etc` and `/usr/lib`, and a file in a
+    /// fragment directory that is not a fragment.
+    fn tmpfiles_host() -> MockExecutor {
+        MockExecutor::new()
+            .with_dir("/etc/tmpfiles.d", vec!["appone.conf", "masked.conf"])
+            .with_dir("/run/tmpfiles.d", vec!["runtime.conf"])
+            .with_dir(
+                "/usr/lib/tmpfiles.d",
+                vec![
+                    "var.conf",
+                    "systemd.conf",
+                    "labels.conf",
+                    "cleanup.conf",
+                    "masked.conf",
+                    "notes.txt",
+                ],
+            )
+            .with_file(
+                "/etc/tmpfiles.d/appone.conf",
+                "# application state\n\nd /var/lib/appone/cache 0750 appone appone -\n",
+            )
+            .with_file(
+                "/etc/tmpfiles.d/masked.conf",
+                "d /var/lib/from-etc 0755 root root -\n",
+            )
+            .with_file(
+                "/run/tmpfiles.d/runtime.conf",
+                "d /var/lib/rt 0755 root root -\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/var.conf",
+                "d /var/lib 0755 root root -\n\
+                 d /var/log 0755 root root -\n\
+                 d /var/cache 0755 root root -\n\
+                 d /var/log/journal/%m 2755 root systemd-journal -\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/systemd.conf",
+                "d /var/lib/systemd/coredump 0755 root root 3d\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/labels.conf",
+                "z /var/lib/zonly 0755 root root -\n\
+                 Z /var/lib/zrec - - - -\n\
+                 e /var/lib/eonly - - - 30d\n\
+                 f /var/lib/afile 0644 root root -\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/cleanup.conf",
+                "D /run/myapp 0755 root root -\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/masked.conf",
+                "d /var/lib/from-usr 0755 root root -\n",
+            )
+            .with_file(
+                "/usr/lib/tmpfiles.d/notes.txt",
+                "d /var/lib/not-a-fragment 0755 root root -\n",
+            )
     }
 
     #[test]
-    fn tmpfiles_parent_directory_fallback() {
-        // Only the parent path has a tmpfiles.d entry, not the exact path.
-        // The walker should find the parent and return Tmpfiles.
-        let exec = MockExecutor::new().with_command(
-            "grep -r --include=*.conf -l /var/lib/pgsql /etc/tmpfiles.d/ /usr/lib/tmpfiles.d/",
-            grep_success("/usr/lib/tmpfiles.d/pgsql.conf\n"),
-        );
+    fn only_an_exact_directory_creator_backs_a_directory() {
+        let exec = tmpfiles_host();
+        let index = load_tmpfiles_index(&exec);
         let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/lib/pgsql/data", &rpm_owned);
-        assert_eq!(result, VarDirBacking::Tmpfiles);
+        let backing = |path: &str| detect_var_dir_backing(&exec, path, &rpm_owned, &index);
+
+        // --- backed: an entry whose type creates exactly this path ---
+        assert_eq!(
+            backing("/var/lib/appone/cache"),
+            VarDirBacking::Tmpfiles {
+                conf: "/etc/tmpfiles.d/appone.conf".into(),
+                line: "d /var/lib/appone/cache 0750 appone appone -".into(),
+            }
+        );
+        assert_eq!(
+            backing("/var/lib/rt"),
+            VarDirBacking::Tmpfiles {
+                conf: "/run/tmpfiles.d/runtime.conf".into(),
+                line: "d /var/lib/rt 0755 root root -".into(),
+            },
+            "a /run fragment backs its own path and is recorded as such"
+        );
+        assert_eq!(
+            backing("/var/lib"),
+            VarDirBacking::Tmpfiles {
+                conf: "/usr/lib/tmpfiles.d/var.conf".into(),
+                line: "d /var/lib 0755 root root -".into(),
+            },
+            "/usr/lib fragments are read"
+        );
+        assert_eq!(
+            backing("/var/lib/systemd/coredump"),
+            VarDirBacking::Tmpfiles {
+                conf: "/usr/lib/tmpfiles.d/systemd.conf".into(),
+                line: "d /var/lib/systemd/coredump 0755 root root 3d".into(),
+            },
+            "a /usr/lib fragment backs a directory the discovery walk reaches"
+        );
+        assert_eq!(
+            backing("/var/lib/from-etc"),
+            VarDirBacking::Tmpfiles {
+                conf: "/etc/tmpfiles.d/masked.conf".into(),
+                line: "d /var/lib/from-etc 0755 root root -".into(),
+            },
+            "the /etc copy of a masked basename is the one that is read"
+        );
+
+        // --- unbacked: everything else ---
+        for path in [
+            // Nothing names it. The ancestor walk called this Tmpfiles
+            // because systemd's `d /var/lib` contains the string.
+            "/var/lib/pgsql",
+            // A parent's `d` line creates the parent and nothing below it.
+            "/var/lib/appone/cache/sub",
+            // z, Z, e adjust a path that already exists; f creates a file.
+            "/var/lib/zonly",
+            "/var/lib/zrec",
+            "/var/lib/eonly",
+            "/var/lib/afile",
+            // No entry anywhere names it.
+            "/var/lib/foo",
+            // Its basename is claimed by the /etc copy of masked.conf.
+            "/var/lib/from-usr",
+            // A % specifier matches neither itself nor any expansion.
+            "/var/log/journal/%m",
+            "/var/log/journal/3f2a1c",
+            // cleanup.conf's D line creates /run/myapp, not this.
+            "/var/myapp",
+            // notes.txt is not a fragment, so its `d` line is not read.
+            "/var/lib/not-a-fragment",
+        ] {
+            assert_eq!(
+                backing(path),
+                VarDirBacking::Unbacked,
+                "{path} should have no tmpfiles backing"
+            );
+        }
+    }
+
+    /// Only `d`, `D`, `v`, `q`, `Q` create a directory at their own path.
+    /// Modifiers after the type character do not change the kind.
+    #[test]
+    fn entry_type_decides_whether_a_line_backs_its_path() {
+        let cases = [
+            ("d", true),
+            ("D", true),
+            ("v", true),
+            ("q", true),
+            ("Q", true),
+            ("d+", true),
+            ("d!", true),
+            ("d-", true),
+            ("v=", true),
+            ("q~", true),
+            ("Q^", true),
+            ("f", false),
+            ("F", false),
+            ("w", false),
+            ("p", false),
+            ("c", false),
+            ("b", false),
+            ("L", false),
+            ("C", false),
+            ("z", false),
+            ("Z", false),
+            ("e", false),
+            ("a", false),
+            ("A", false),
+            ("h", false),
+            ("H", false),
+            ("t", false),
+            ("T", false),
+            ("r", false),
+            ("R", false),
+            ("x", false),
+            ("X", false),
+        ];
+        let path = "/var/lib/typed";
+        for (type_token, creates_directory) in cases {
+            let mut index = TmpfilesIndex::new();
+            index_tmpfiles_fragment(
+                "/etc/tmpfiles.d/types.conf",
+                &format!("{type_token} {path} 0755 root root -\n"),
+                &mut index,
+            );
+            assert_eq!(
+                index.contains_key(path),
+                creates_directory,
+                "type token {type_token:?}"
+            );
+        }
     }
 
     #[test]
-    fn state_directory_uses_relative_path() {
-        // /var/lib/postgresql/data should search for StateDirectory=postgresql/data
-        // (not just "data" which the old rsplit('/').next() code produced).
+    fn first_entry_for_a_path_wins() {
+        let mut index = TmpfilesIndex::new();
+        index_tmpfiles_fragment(
+            "/etc/tmpfiles.d/dup.conf",
+            "d /var/lib/dup 0700 appone appone -\nd /var/lib/dup 0755 root root -\n",
+            &mut index,
+        );
+        assert_eq!(
+            index.get("/var/lib/dup").map(|e| e.line.as_str()),
+            Some("d /var/lib/dup 0700 appone appone -")
+        );
+    }
+
+    #[test]
+    fn state_directory_uses_relative_path_and_records_the_unit() {
+        // /var/lib/postgresql/data searches for StateDirectory=postgresql/data,
+        // not the bare leaf "data" the old rsplit('/').next() code produced.
         let exec = MockExecutor::new().with_command(
             r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*postgresql/data /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/postgresql.service\n"),
         );
-        let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/lib/postgresql/data", &rpm_owned);
-        assert_eq!(result, VarDirBacking::StateDirectory);
+        let result = detect_var_dir_backing(
+            &exec,
+            "/var/lib/postgresql/data",
+            &HashSet::new(),
+            &TmpfilesIndex::new(),
+        );
+        assert_eq!(
+            result,
+            VarDirBacking::StateDirectory {
+                unit: "postgresql.service".into()
+            }
+        );
+    }
+
+    #[test]
+    fn state_directory_ignores_a_bare_leaf_match() {
+        // The negative half of the test above: a unit declaring
+        // StateDirectory=data does not back /var/lib/postgresql/data.
+        let exec = MockExecutor::new().with_command(
+            r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*data /usr/lib/systemd/system/ /etc/systemd/system/",
+            grep_success("/usr/lib/systemd/system/other.service\n"),
+        );
+        let result = detect_var_dir_backing(
+            &exec,
+            "/var/lib/postgresql/data",
+            &HashSet::new(),
+            &TmpfilesIndex::new(),
+        );
+        assert_eq!(result, VarDirBacking::Unbacked);
     }
 
     #[test]
@@ -514,9 +856,18 @@ mod tests {
             r"grep -rE --include=*.service --include=*.socket -l CacheDirectory\s*=\s*httpd /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/httpd.service\n"),
         );
-        let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/cache/httpd", &rpm_owned);
-        assert_eq!(result, VarDirBacking::CacheDirectory);
+        let result = detect_var_dir_backing(
+            &exec,
+            "/var/cache/httpd",
+            &HashSet::new(),
+            &TmpfilesIndex::new(),
+        );
+        assert_eq!(
+            result,
+            VarDirBacking::CacheDirectory {
+                unit: "httpd.service".into()
+            }
+        );
     }
 
     #[test]
@@ -525,54 +876,56 @@ mod tests {
             r"grep -rE --include=*.service --include=*.socket -l LogsDirectory\s*=\s*nginx /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/nginx.service\n"),
         );
-        let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/log/nginx", &rpm_owned);
-        assert_eq!(result, VarDirBacking::LogsDirectory);
+        let result = detect_var_dir_backing(
+            &exec,
+            "/var/log/nginx",
+            &HashSet::new(),
+            &TmpfilesIndex::new(),
+        );
+        assert_eq!(
+            result,
+            VarDirBacking::LogsDirectory {
+                unit: "nginx.service".into()
+            }
+        );
     }
 
     #[test]
-    fn rpm_owned_backing() {
-        let mut rpm_owned = HashSet::new();
-        rpm_owned.insert("/var/lib/rpm".to_string());
+    fn rpm_owned_records_the_owning_package() {
+        let exec = MockExecutor::new()
+            .with_command(&owning_package_key("/var/lib/rpm"), grep_success("rpm\n"));
+        let rpm_owned = HashSet::from(["/var/lib/rpm".to_string()]);
+        let result =
+            detect_var_dir_backing(&exec, "/var/lib/rpm", &rpm_owned, &TmpfilesIndex::new());
+        assert_eq!(
+            result,
+            VarDirBacking::RpmOwned {
+                package: "rpm".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rpm_owned_without_a_named_owner_is_unbacked() {
+        // The negative half: in the owned set, but rpm will not name the
+        // owner. An RpmOwned payload with no package is not a verdict.
         let exec = MockExecutor::new();
-        let result = detect_var_dir_backing(&exec, "/var/lib/rpm", &rpm_owned);
-        assert_eq!(result, VarDirBacking::RpmOwned);
+        let rpm_owned = HashSet::from(["/var/lib/rpm".to_string()]);
+        let result =
+            detect_var_dir_backing(&exec, "/var/lib/rpm", &rpm_owned, &TmpfilesIndex::new());
+        assert_eq!(result, VarDirBacking::Unbacked);
     }
 
     #[test]
     fn unbacked_fallback() {
         let exec = MockExecutor::new();
-        let rpm_owned = HashSet::new();
-        let result = detect_var_dir_backing(&exec, "/var/lib/custom-app/data", &rpm_owned);
+        let result = detect_var_dir_backing(
+            &exec,
+            "/var/lib/custom-app/data",
+            &HashSet::new(),
+            &TmpfilesIndex::new(),
+        );
         assert_eq!(result, VarDirBacking::Unbacked);
-    }
-
-    #[test]
-    fn unbacked_var_dir_in_advisory() {
-        let section = StorageSection {
-            var_directories: vec![VarDirectory {
-                path: "/var/lib/pgsql/data".into(),
-                backing: Some(VarDirBacking::Unbacked),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let unbacked: Vec<String> = section
-            .var_directories
-            .iter()
-            .filter(|d| d.backing == Some(VarDirBacking::Unbacked))
-            .map(|d| d.path.clone())
-            .collect();
-
-        assert!(!unbacked.is_empty());
-        assert!(unbacked.contains(&"/var/lib/pgsql/data".to_string()));
-
-        let advisory = UnbackedVarAdvisory {
-            disposition: FindingKind::advisory(AdvisoryType::UnbackedVarDir, "test rationale"),
-            paths: unbacked,
-        };
-        assert!(advisory.disposition.is_advisory());
     }
 
     #[test]
@@ -624,36 +977,6 @@ mod tests {
             paths.contains(&"/var/log/myapp"),
             "depth-1 entry from another base should be kept"
         );
-    }
-
-    #[test]
-    fn backed_tmpfiles_not_in_advisory() {
-        let section = StorageSection {
-            var_directories: vec![
-                VarDirectory {
-                    path: "/var/lib/backed".into(),
-                    backing: Some(VarDirBacking::Tmpfiles),
-                    ..Default::default()
-                },
-                VarDirectory {
-                    path: "/var/lib/unbacked".into(),
-                    backing: Some(VarDirBacking::Unbacked),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let unbacked: Vec<String> = section
-            .var_directories
-            .iter()
-            .filter(|d| d.backing == Some(VarDirBacking::Unbacked))
-            .map(|d| d.path.clone())
-            .collect();
-
-        assert_eq!(unbacked.len(), 1);
-        assert_eq!(unbacked[0], "/var/lib/unbacked");
-        assert!(!unbacked.contains(&"/var/lib/backed".to_string()));
     }
 
     #[test]

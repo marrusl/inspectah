@@ -5035,7 +5035,6 @@ RUN dnf install -y \
             owner_gid: Some(gid),
             owner_name: owner.map(String::from),
             group_name: group.map(String::from),
-            ..Default::default()
         }
     }
 
@@ -5049,7 +5048,12 @@ RUN dnf install -y \
     fn tmpfiles_conf_none_when_no_unbacked_dirs() {
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
-            var_directories: vec![var_dir("/var/log", VarDirBacking::RpmOwned)],
+            var_directories: vec![var_dir(
+                "/var/log",
+                VarDirBacking::RpmOwned {
+                    package: "filesystem".into(),
+                },
+            )],
             ..Default::default()
         });
         assert!(render_tmpfiles_conf(&snap).is_none());
@@ -5184,7 +5188,6 @@ RUN dnf install -y \
                 owner_gid: Some(999),
                 owner_name: None,
                 group_name: None,
-                ..Default::default()
             }],
             ..Default::default()
         });
@@ -5269,7 +5272,6 @@ RUN dnf install -y \
                     owner_gid: Some(500),
                     owner_name: None,
                     group_name: None,
-                    ..Default::default()
                 },
                 // Dir 3: no mode -> mkdir fallback
                 var_dir("/var/lib/nomode", VarDirBacking::Unbacked),
@@ -5365,8 +5367,18 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
             var_directories: vec![
-                var_dir("/var/log", VarDirBacking::LogsDirectory),
-                var_dir("/var/cache", VarDirBacking::CacheDirectory),
+                var_dir(
+                    "/var/log",
+                    VarDirBacking::LogsDirectory {
+                        unit: "rsyslog.service".into(),
+                    },
+                ),
+                var_dir(
+                    "/var/cache",
+                    VarDirBacking::CacheDirectory {
+                        unit: "dnf-makecache.service".into(),
+                    },
+                ),
                 var_dir_with_mode("/var/lib/app", "0755", 0, 0, Some("root"), Some("root")),
             ],
             ..Default::default()

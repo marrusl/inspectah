@@ -1022,15 +1022,15 @@ pub fn build_list_items(
                 ));
             }
             for d in &st.var_directories {
+                // Ownership and mode are all the row has to say. The two
+                // fields that used to lead it were never collected, so the
+                // row read " — " with nothing on either side of the dash.
                 let detail = if let (Some(mode), Some(owner), Some(group)) =
                     (&d.mode, &d.owner_name, &d.group_name)
                 {
-                    format!(
-                        "{} \u{2014} {} ({} {}:{})",
-                        d.size_estimate, d.recommendation, mode, owner, group
-                    )
+                    format!("{} {}:{}", mode, owner, group)
                 } else {
-                    format!("{} \u{2014} {}", d.size_estimate, d.recommendation)
+                    String::new()
                 };
                 items.push(RawItem::new(
                     d.path.clone(),
