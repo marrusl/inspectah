@@ -19,6 +19,21 @@
 //! before trusting anything `RpmFilename::parse_untrusted` reports about it.
 //! [`StagedName`] is a name that has passed that check, and the staging
 //! boundary takes it rather than a `&str` so the check cannot be skipped.
+//!
+//! This lives in `core` rather than next to either of its users, and that
+//! is forced rather than chosen: the two boundaries that must agree are
+//! the staging rename in `refine` and the Containerfile `COPY`/`RUN` in
+//! `pipeline`, and `refine` depends on `pipeline`. A type that carries an
+//! invariant across that edge has to sit below both, or each crate gets
+//! its own allowlist -- which is the exact defect this module was created
+//! to end.
+//!
+//! Three properties of [`StagedName`] are load-bearing and easy to undo
+//! by accident. Its field is private, so the defining module is the only
+//! place one can be made. Its derive list has no `Deserialize`, so a
+//! snapshot cannot hand the renderer a `StagedName` and make the whole
+//! structure decorative. And it has no `Default` and no `From<String>`,
+//! so there is no constructor that skips [`validate_staged_name`].
 
 use serde::Serialize;
 

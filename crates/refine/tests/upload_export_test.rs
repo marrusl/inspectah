@@ -626,7 +626,16 @@ fn a_fifo_at_the_staged_name_is_refused_before_anything_opens_it() {
     // export is reached at all -- which is the larger half of what this
     // guard is worth: a fifo under a staged name would wedge the running
     // server, not only one download.
-    let (tx, rx) = std::sync::mpsc::channel();
+    //
+    // Two channels, so the `mkfifo` subprocess spawn -- the slowest and
+    // most variable thing here, and not what is being measured -- is
+    // waited for without a deadline and only the verification is timed.
+    // On a failing run the worker stays blocked on the fifo forever and
+    // its `TempDir` is never dropped, so a failure leaves one directory
+    // behind under the system temp root. That is the cost of catching a
+    // hang at all.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut h = Harness::new();
         let fifo = h.upload_dir.join(EXACT_RPM);
@@ -638,13 +647,54 @@ fn a_fifo_at_the_staged_name_is_refused_before_anything_opens_it() {
                 .success()
         );
         h.claim_upload(&fifo, None);
+        ready_tx.send(()).unwrap();
         h.include_all();
-        let _ = tx.send(h.export(None).1);
+        let _ = done_tx.send(h.export(None).1);
     });
-    let warnings = rx
+    ready_rx.recv().expect("the fifo setup must finish");
+    let warnings = done_rx
         .recv_timeout(std::time::Duration::from_secs(20))
         .expect("the export must refuse the fifo rather than block opening it");
     assert_eq!(warnings, vec![demotion_warning()]);
+}
+
+#[test]
+fn an_upload_claimed_with_no_prepared_directory_is_demoted() {
+    // `upload_dir_canon` is `None` whenever nothing has prepared a
+    // directory this session -- a CLI export, or a snapshot that simply
+    // arrived with `uploaded: true` set. There is nothing to verify
+    // against, so the package demotes, and this is the branch of
+    // `prove_staged_uploads` that reaches that conclusion without
+    // calling the verifier at all.
+    let mut h = Harness::new();
+    h.upload(EXACT_RPM, b"exact").unwrap();
+    h.include_all();
+
+    let out = h.tmp.path().join("no-dir-export.tar.gz");
+    let warnings = render_refine_export(
+        &h.session.snapshot_projected(),
+        &out,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(warnings, vec![demotion_warning()]);
+    assert_eq!(repoless_members(&out), BTreeMap::new());
+    let cf = containerfile(&out);
+    assert!(cf.lines().any(|l| l == demotion_fixme()), "{cf}");
+
+    // The control: the same session with the directory passed exports
+    // the file, so the demotion above is about the missing directory and
+    // not about the fixture.
+    let (with_dir, warnings) = h.export(None);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(
+        repoless_members(&with_dir).keys().collect::<Vec<_>>(),
+        vec![EXACT_RPM]
+    );
 }
 
 #[test]

@@ -2599,13 +2599,16 @@ async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
             .to_string_lossy()
             .as_ref()
     );
+    // Full-line equality, not `contains`: the pre-excluded form of this
+    // same package renders `# COPY repoless-packages/... /tmp/`, which
+    // contains the substring, so a substring search cannot tell a build
+    // step from advice about one.
+    let preview = after["containerfile_preview"].as_str().unwrap();
     assert!(
-        after["containerfile_preview"]
-            .as_str()
-            .unwrap()
-            .contains("COPY repoless-packages/epel-release-9-12.el9.noarch.rpm /tmp/"),
-        "{}",
-        after["containerfile_preview"]
+        preview
+            .lines()
+            .any(|l| l == "COPY repoless-packages/epel-release-9-12.el9.noarch.rpm /tmp/"),
+        "{preview}"
     );
 }
 
@@ -2657,6 +2660,17 @@ async fn export_copies_a_staged_upload_from_the_canonical_directory() {
     let member = tarball_member(&body, &format!("repoless-packages/{name}"))
         .expect("the staged upload must be in the export");
     assert_eq!(member, b"staged rpm bytes".to_vec());
+
+    // And the Containerfile in the same tarball names it as a build
+    // step, by full line: the pre-excluded form of this package renders
+    // the same text behind a `#`.
+    let containerfile = String::from_utf8(tarball_member(&body, "Containerfile").unwrap()).unwrap();
+    assert!(
+        containerfile
+            .lines()
+            .any(|l| l == format!("COPY repoless-packages/{name} /tmp/")),
+        "{containerfile}"
+    );
 }
 
 #[tokio::test]
@@ -3013,7 +3027,7 @@ async fn overlapping_uploads_are_decided_by_the_last_commit() {
             "each request stages its own part file"
         );
 
-        let name = inspectah_refine::rpm_filename::StagedName::parse(FILENAME).unwrap();
+        let name = inspectah_core::rpm_filename::StagedName::parse(FILENAME).unwrap();
         {
             let mut session = state.session.lock().unwrap();
             inspectah_web::upload::commit(&mut session, a, &name).unwrap();
@@ -3039,7 +3053,7 @@ async fn overlapping_uploads_are_decided_by_the_last_commit() {
     let b = stage_part(&dir, FILENAME, b"BBBB").await;
     drop(a);
     assert_eq!(part_files(&dir).len(), 1, "only A's part file is gone");
-    let name = inspectah_refine::rpm_filename::StagedName::parse(FILENAME).unwrap();
+    let name = inspectah_core::rpm_filename::StagedName::parse(FILENAME).unwrap();
     {
         let mut session = state.session.lock().unwrap();
         inspectah_web::upload::commit(&mut session, b, &name).unwrap();

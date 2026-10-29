@@ -2,7 +2,7 @@ use axum::extract::multipart::{Field, MultipartError};
 use axum::extract::{Multipart, Path as UrlPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use inspectah_refine::rpm_filename::{RpmFilename, StagedName};
+use inspectah_core::rpm_filename::{RpmFilename, StagedName};
 use inspectah_refine::session::{
     RefineSession, UPLOAD_PART_PREFIX, UPLOAD_PART_RAND_BYTES, UPLOAD_PART_SUFFIX, UploadMatch,
 };

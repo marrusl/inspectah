@@ -861,11 +861,11 @@ impl RefineSession {
         // filenames like "epel-release-latest-10.noarch.rpm" where the
         // heuristic name ("epel-release-latest") doesn't match the real
         // package name ("epel-release").
-        let crate::rpm_filename::RpmFilename {
+        let inspectah_core::rpm_filename::RpmFilename {
             name: extracted_name,
             arch: extracted_arch,
             version_release: extracted_ver,
-        } = crate::rpm_filename::RpmFilename::parse_untrusted(filename)?;
+        } = inspectah_core::rpm_filename::RpmFilename::parse_untrusted(filename)?;
 
         // Build candidate names: full extracted name, then progressively
         // shorter prefixes by stripping trailing `-segment` pieces.
@@ -984,7 +984,7 @@ impl RefineSession {
         let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
             return refuse("its path names no file");
         };
-        if let Err(e) = crate::rpm_filename::validate_staged_name(basename) {
+        if let Err(e) = inspectah_core::rpm_filename::validate_staged_name(basename) {
             return refuse(&format!("{e}"));
         }
         let resolved_parent = cache_path
@@ -3716,7 +3716,7 @@ fn extract_payload_dirs_from_tarball(
                 .iter()
                 .filter(|p| p.disposition.is_included() && p.repoless_cached && !p.uploaded)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
-                .filter(|n| crate::rpm_filename::validate_staged_name(n).is_ok())
+                .filter(|n| inspectah_core::rpm_filename::validate_staged_name(n).is_ok())
                 .collect()
         })
         .unwrap_or_default();
@@ -3819,7 +3819,7 @@ pub enum Refusal {
     #[error("the staged path names no file, or its name is not UTF-8")]
     NoBasename,
     #[error("the staged filename is not one the allowlist admits: {0}")]
-    Name(#[from] crate::rpm_filename::NameError),
+    Name(#[from] inspectah_core::rpm_filename::NameError),
     #[error("the staged path's parent is not the prepared upload directory")]
     OutsideUploadDir,
     #[error("nothing is staged under that name")]
@@ -3842,6 +3842,20 @@ struct ProvedUpload {
     file: std::fs::File,
 }
 
+/// Whether `opened` is a regular file and the same one `before`
+/// described, by `(dev, ino)`.
+///
+/// Step 5 of [`verify_staged_upload`] is the only caller, and the input
+/// that makes it say `false` -- a rename landing between the
+/// `symlink_metadata` and the `open` -- cannot be staged by a test. The
+/// predicate is extracted so that the comparison itself can be: a branch
+/// no test reaches is a branch nobody can tell is working, and deleting
+/// this check used to leave the whole suite green.
+fn is_same_regular_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.file_type().is_file() && (opened.dev(), opened.ino()) == (before.dev(), before.ino())
+}
+
 /// Prove that `pkg`'s recorded staged upload is a regular file inside the
 /// prepared upload directory, under a name the allowlist admits.
 ///
@@ -3860,6 +3874,16 @@ struct ProvedUpload {
 ///    as step 4 and still a regular file, which is what closes the
 ///    check-to-copy race on the final component.
 ///
+/// **Step 3's `canonicalize` result is never used as a path.** It is a
+/// predicate and nothing else: the path steps 4 and 5 act on is rebuilt
+/// from `upload_dir_canon`, which the session proved, and `basename`,
+/// which the allowlist proved. That is what makes the 3-to-4 window a
+/// non-issue -- whatever the recorded parent resolves to between the two,
+/// no part of it reaches the rebuilt path, so the only thing a race there
+/// can change is whether the entry is refused, never which file is
+/// copied. The 4-to-5 window is the one that needed closing, and step 5
+/// is what closes it.
+///
 /// Steps 4 and 5 overlap, and it is worth saying where they do not: a
 /// symlink at the staged name is caught twice, since step 5's `(dev, ino)`
 /// comparison sees the target's pair rather than the link's (verified by
@@ -3867,21 +3891,30 @@ struct ProvedUpload {
 /// What step 4 catches alone is a *non-symlink* that is not a regular
 /// file -- a fifo planted under a staged name would make step 5's
 /// `File::open` block, so the refusal has to happen before the open, not
-/// after it.
+/// after it. Step 5's own unique input is a replacement inside the
+/// 4-to-5 window, which no test can stage; [`is_same_regular_file`] is
+/// extracted so that the logic is testable even though the race is not.
 fn verify_staged_upload(
     upload_dir_canon: &Path,
     pkg: &PackageEntry,
 ) -> Result<ProvedUpload, Refusal> {
-    use std::os::unix::fs::MetadataExt;
-
     let recorded = Path::new(pkg.cache_path.as_deref().ok_or(Refusal::NoCachePath)?);
 
     let basename = recorded
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or(Refusal::NoBasename)?;
-    let basename = crate::rpm_filename::StagedName::parse(basename)?;
+    let basename = inspectah_core::rpm_filename::StagedName::parse(basename)?;
 
+    // FIXME: this `canonicalize` runs on the path the *snapshot* chose,
+    // so a `cache_path` under a hung network mount blocks here and step
+    // 4 never runs -- the same class of defect as a fifo at the staged
+    // name, reachable without needing anywhere writable. The small fix
+    // (compare the recorded parent lexically against the two spellings
+    // the session itself writes) changes what § 3.3 fixed as a
+    // "resolves to" test into an "is spelled as" one and makes the
+    // refusal depend on `upload_dir` never being reassigned, so it is
+    // filed rather than taken here. See the Task 14 fix round.
     let parent = recorded
         .parent()
         .and_then(|p| p.canonicalize().ok())
@@ -3902,8 +3935,7 @@ fn verify_staged_upload(
 
     let file = std::fs::File::open(&proved).map_err(|_| Refusal::Unreadable)?;
     let opened = file.metadata().map_err(|_| Refusal::Unreadable)?;
-    if !opened.file_type().is_file() || (opened.dev(), opened.ino()) != (before.dev(), before.ino())
-    {
+    if !is_same_regular_file(&before, &opened) {
         return Err(Refusal::Replaced);
     }
 
@@ -3911,9 +3943,10 @@ fn verify_staged_upload(
     // `uploaded_version`, which arrives from the scanned host and is not
     // evidence of what the staged file actually is.
     let host_version = format!("{}-{}", pkg.version, pkg.release);
-    let uploaded_version = crate::rpm_filename::RpmFilename::parse_untrusted(basename.as_str())
-        .and_then(|parsed| parsed.version_release)
-        .filter(|v| *v != host_version);
+    let uploaded_version =
+        inspectah_core::rpm_filename::RpmFilename::parse_untrusted(basename.as_str())
+            .and_then(|parsed| parsed.version_release)
+            .filter(|v| *v != host_version);
 
     Ok(ProvedUpload {
         upload: VerifiedUpload {
@@ -7487,6 +7520,81 @@ mod tests {
         &session.original.rpm.as_ref().unwrap().packages_added[0]
     }
 
+    /// Step 5's predicate, against real files.
+    ///
+    /// The window it guards -- a rename between the `symlink_metadata`
+    /// and the `open` -- cannot be staged by a test, so before this the
+    /// whole check could be deleted with all 39 tests still passing:
+    /// every input the suite had was refused by step 4 first. The race
+    /// stays untestable; the comparison does not have to.
+    #[test]
+    fn is_same_regular_file_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one");
+        let two = dir.path().join("two");
+        std::fs::write(&one, b"same bytes").unwrap();
+        // Identical contents, so a comparison that read the file instead
+        // of its identity would call these the same.
+        std::fs::write(&two, b"same bytes").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&one, &link).unwrap();
+
+        let one_md = std::fs::metadata(&one).unwrap();
+        let one_again = std::fs::File::open(&one).unwrap().metadata().unwrap();
+        let two_md = std::fs::metadata(&two).unwrap();
+        let dir_md = std::fs::metadata(dir.path()).unwrap();
+        // What step 4 saw for a symlink, against what the open returns:
+        // the link's own identity versus its target's. This is the pair
+        // step 5 compares when a symlink is planted at the staged name.
+        let link_md = std::fs::symlink_metadata(&link).unwrap();
+        let link_opened = std::fs::File::open(&link).unwrap().metadata().unwrap();
+
+        let cases: &[(&str, &std::fs::Metadata, &std::fs::Metadata, bool)] = &[
+            ("one file, stat then fstat", &one_md, &one_again, true),
+            ("two files with equal bytes", &one_md, &two_md, false),
+            ("a file replaced by another", &two_md, &one_md, false),
+            ("a directory at the open", &one_md, &dir_md, false),
+            ("a symlink and its target", &link_md, &link_opened, false),
+        ];
+        for (label, before, opened, want) in cases {
+            assert_eq!(is_same_regular_file(before, opened), *want, "{label}");
+        }
+    }
+
+    /// Every byte class the export's warnings can carry.
+    ///
+    /// The id comes from a scanned snapshot and the warning built from
+    /// it ends up in an HTTP response header.
+    #[test]
+    fn sanitize_package_id_table() {
+        let cases: &[(&str, &str)] = &[
+            ("epel-release.noarch", "epel-release.noarch"),
+            ("libstdc++-devel.x86_64", "libstdc++-devel.x86_64"),
+            ("foo~rc1^git1.noarch", "foo~rc1^git1.noarch"),
+            // The header-injection shape, and the two bytes that carry it.
+            ("evil\r\nX-Evil: 1.noarch", "evil__X-Evil__1.noarch"),
+            // DEL is the one `serde_json::to_string` does not escape on
+            // the way into the response header, so this row is not
+            // redundant with that layer -- it is the only thing keeping
+            // a byte `HeaderValue` rejects out of the value.
+            ("evil\u{7f}.noarch", "evil_.noarch"),
+            // Non-ASCII: serde_json emits these raw, and a header value
+            // may not hold them. One `_` per *char*, not per byte:
+            // '\u{20ac}' is three bytes and becomes one underscore.
+            // `validate_staged_name` next door scans bytes, so the two
+            // do not agree on granularity -- which does not matter for
+            // either one's purpose, but is worth a reader knowing before
+            // they assume it does.
+            ("\u{03c0}kg.noarch", "_kg.noarch"),
+            ("a\u{20ac}b.noarch", "a_b.noarch"),
+            ("evil$(id).noarch", "evil__id_.noarch"),
+            ("", ""),
+        ];
+        for (input, want) in cases {
+            assert_eq!(sanitize_package_id(input), *want, "{input:?}");
+        }
+    }
+
     /// Each refusal [`verify_staged_upload`] can make, paired with an
     /// input that produces it.
     ///
@@ -7533,12 +7641,12 @@ mod tests {
             (
                 "a basename that would be a hidden file",
                 Some(canon.join(".good-1-1.noarch.rpm")),
-                Refusal::Name(crate::rpm_filename::NameError::BadFirstByte),
+                Refusal::Name(inspectah_core::rpm_filename::NameError::BadFirstByte),
             ),
             (
                 "a basename carrying a shell metacharacter",
                 Some(canon.join("good-1$(id)-1.noarch.rpm")),
-                Refusal::Name(crate::rpm_filename::NameError::BadByte { at: 6 }),
+                Refusal::Name(inspectah_core::rpm_filename::NameError::BadByte { at: 6 }),
             ),
             // Not `Refusal::Name`: `Path::file_name` of
             // `<canon>/../x.rpm` is already `x.rpm`, which the allowlist

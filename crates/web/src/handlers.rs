@@ -18,12 +18,43 @@ use std::collections::BTreeSet;
 pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
 /// Where `POST /api/tarball` reports what it demoted.
 ///
-/// The response body of that route is the tarball itself, so the warnings
-/// § 3.3 puts on the response travel as a JSON array in a header rather
-/// than as a body field. Every warning is printable ASCII by construction
-/// (`sanitize_package_id` in the refine session), which is what makes a
-/// header value a safe place to put a string the scanned snapshot named.
+/// **This is a UI affordance, not the record.** Every demotion is already
+/// in the artifact, as a per-package `# FIXME` line in the exported
+/// Containerfile, which every consumer of the tarball gets whatever route
+/// produced it. That is why the CLI and TUI exports not surfacing this
+/// header costs them nothing, and why truncating the list below loses a
+/// convenience rather than a fact.
+///
+/// The body of this route is the tarball itself, so the list travels as a
+/// JSON array in a header, and two layers make that safe for a string a
+/// scanned snapshot named. `serde_json::to_string` escapes the C0 range,
+/// so header injection is closed before `sanitize_package_id` is
+/// consulted. It does *not* escape DEL or anything non-ASCII, both of
+/// which `HeaderValue` rejects -- an unsanitized one would turn this
+/// export into a 500 -- so the sanitizer is load-bearing for those
+/// rather than a second opinion. `warnings_header_value_escapes_c0_and_\
+/// leaves_the_rest_to_the_sanitizer` pins which layer owns what.
 pub const EXPORT_WARNINGS_HEADER: &str = "x-export-warnings";
+
+/// How many warnings the header carries before it summarizes the rest.
+///
+/// One warning per unprovable uploaded package, and a snapshot chooses
+/// how many of those there are, so the array is attacker-sized. Browsers
+/// and proxies drop headers at 8-16 KB, which would make the export
+/// undownloadable or strip the warnings silently; twenty of these is
+/// about a kilobyte.
+const MAX_HEADER_WARNINGS: usize = 20;
+
+/// Render the export warnings as a JSON array small enough for a header.
+fn warnings_header_value(warnings: &[String]) -> String {
+    let shown: Vec<&String> = warnings.iter().take(MAX_HEADER_WARNINGS).collect();
+    let rest = warnings.len().saturating_sub(shown.len());
+    let mut values: Vec<String> = shown.into_iter().cloned().collect();
+    if rest > 0 {
+        values.push(format!("...and {rest} more"));
+    }
+    serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
+}
 const LEGACY_ACK_SENSITIVE_HEADER: &str = "x-acknowledge-sensitive";
 
 /// Produce a display version that avoids duplicating what's already in pretty_name.
@@ -471,10 +502,7 @@ pub async fn export_tarball(
                 axum::http::header::CONTENT_DISPOSITION.as_str(),
                 disposition,
             ),
-            (
-                EXPORT_WARNINGS_HEADER,
-                serde_json::to_string(&warnings).unwrap_or_else(|_| "[]".into()),
-            ),
+            (EXPORT_WARNINGS_HEADER, warnings_header_value(&warnings)),
         ],
         bytes,
     )
@@ -1592,6 +1620,91 @@ mod tests {
             deduplicate_version("Bluefin LTS 10 (FROM CentOS Stream 10)", "10"),
             ""
         );
+    }
+
+    /// The export warnings header stays inside what a browser or proxy
+    /// will carry, however many packages a snapshot demotes.
+    #[test]
+    fn warnings_header_value_caps_an_attacker_sized_list() {
+        assert_eq!(warnings_header_value(&[]), "[]");
+        assert_eq!(
+            warnings_header_value(&["a.noarch: x".into()]),
+            r#"["a.noarch: x"]"#
+        );
+
+        // Exactly at the cap: no summary element.
+        let at_cap: Vec<String> = (0..MAX_HEADER_WARNINGS)
+            .map(|i| format!("p{i}.noarch"))
+            .collect();
+        let rendered = warnings_header_value(&at_cap);
+        assert!(!rendered.contains("more"), "{rendered}");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered)
+                .unwrap()
+                .len(),
+            MAX_HEADER_WARNINGS
+        );
+
+        // One over, and a thousand over: the cap plus one summary either
+        // way, and the summary counts what it dropped.
+        for total in [MAX_HEADER_WARNINGS + 1, MAX_HEADER_WARNINGS + 1000] {
+            let many: Vec<String> = (0..total).map(|i| format!("p{i}.noarch")).collect();
+            let rendered = warnings_header_value(&many);
+            let parsed: Vec<String> = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(parsed.len(), MAX_HEADER_WARNINGS + 1, "{total}");
+            assert_eq!(
+                parsed.last().unwrap(),
+                &format!("...and {} more", total - MAX_HEADER_WARNINGS),
+                "{total}"
+            );
+            // Comfortably under the 8 KB a proxy may drop at.
+            assert!(rendered.len() < 4096, "{total}: {} bytes", rendered.len());
+        }
+    }
+
+    /// Exactly which layer closes which byte.
+    ///
+    /// The doc on [`EXPORT_WARNINGS_HEADER`] first credited
+    /// `sanitize_package_id` for all of it, which was too much. The
+    /// correction offered -- that `serde_json::to_string` escapes every
+    /// control character -- is too little: it escapes the C0 range, so
+    /// CR and LF are closed before the sanitizer is consulted, but it
+    /// passes DEL and every non-ASCII char through raw, and
+    /// `HeaderValue` rejects both. So the sanitizer is load-bearing for
+    /// those two, not merely a second layer. Pinned here because the
+    /// division is the reason a snapshot-named string is allowed into a
+    /// header at all.
+    #[test]
+    fn warnings_header_value_escapes_c0_and_leaves_the_rest_to_the_sanitizer() {
+        // The half serde_json owns: header injection.
+        let rendered = warnings_header_value(&["a\r\nX-Evil: 1".into()]);
+        assert!(
+            !rendered.contains('\r') && !rendered.contains('\n'),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\\r\\n"), "{rendered}");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered).unwrap()[0],
+            "a\r\nX-Evil: 1"
+        );
+
+        // The half it does not own. If this ever starts failing,
+        // serde_json got stricter and the note above needs revising --
+        // it does not mean the sanitizer became unnecessary.
+        let raw = warnings_header_value(&["b\u{7f}c".into(), "d\u{20ac}e".into()]);
+        assert!(raw.contains('\u{7f}'), "serde_json passes DEL through");
+        assert!(
+            raw.contains('\u{20ac}'),
+            "serde_json passes non-ASCII through"
+        );
+        assert!(
+            axum::http::HeaderValue::from_str(&raw).is_err(),
+            "a header value may not carry either, so the sanitizer must"
+        );
+
+        // What the export actually produces, having been through it.
+        let real = warnings_header_value(&["epel-release.noarch: staged RPM not verified".into()]);
+        assert!(axum::http::HeaderValue::from_str(&real).is_ok(), "{real}");
     }
 
     /// Structural test: ensure the ACK_SENSITIVE_HEADER constant stays in sync
