@@ -2404,11 +2404,16 @@ RUN dnf install -y \
         const CRB_MATCHED: &str = "codeready-builder-for-rhel-9-aarch64-rpms";
         const CRB_VERBATIM: &str = "codeready-builder-rhel9-internal";
         const CRB_REPO_PATH: &str = "/etc/yum.repos.d/crb.repo";
+        // The last section is the input the `$(arch)` assertion needs: an
+        // id carrying a command substitution reaches the filter and has
+        // to be refused there, or "no line contains $(arch)" is satisfied
+        // by the fixture rather than by the code.
         const CRB_CONTENT: &str = "[codeready-builder-for-rhel-9-aarch64-rpms]\nenabled=1\n\
              [codeready-builder-rhel9-internal]\nenabled=1\n\
              [crb-mirror-rhel9]\nenabled=1\n\
              [codeready-builder-for-rhel-9-aarch64-debug-rpms]\nenabled=1\n\
-             [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n";
+             [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n\
+             [codeready-builder-$(arch)-rpms]\nenabled=1\n";
 
         let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
         make_epel_repo_enabling(&mut snap, "epel-release");
@@ -2447,10 +2452,14 @@ RUN dnf install -y \
             .insert("Development Tools".into(), GroupRenderState::Renderable);
         let output = render_containerfile(&snap, None, Some(&ctx));
 
-        let precondition = super::super::selinux::INSTALL_PRECONDITION[2];
+        // Identify the precondition by the package it installs, not by
+        // equality with the const: a line that gained a flag stops being
+        // equal to the const, which would take an equality-based filter
+        // or guard out of the picture exactly when it should fire.
+        const PRECONDITION_PACKAGE: &str = "policycoreutils-python-utils";
         let transactions: Vec<&str> = output
             .lines()
-            .filter(|l| l.starts_with("RUN dnf ") && *l != precondition)
+            .filter(|l| l.starts_with("RUN dnf ") && !l.contains(PRECONDITION_PACKAGE))
             .collect();
         assert_eq!(
             transactions.len(),
@@ -2471,15 +2480,20 @@ RUN dnf install -y \
             1,
             "the comment appears once:\n{output}"
         );
-        assert!(
-            output.contains(precondition),
-            "the SELinux precondition must render, or the exclusion is vacuous:\n{output}"
-        );
-        assert!(
-            !output
-                .lines()
-                .any(|l| l == precondition && l.contains("--enablerepo")),
-            "§ 3.1's precondition must carry no --enablerepo:\n{output}"
+        // § 3.1's exclusion, in one assertion: the precondition renders,
+        // and it renders verbatim -- so any flag it acquired shows up as
+        // the difference rather than as an unsatisfiable predicate that
+        // passes.
+        let precondition_line = output
+            .lines()
+            .find(|l| l.starts_with("RUN dnf ") && l.contains(PRECONDITION_PACKAGE))
+            .unwrap_or_else(|| {
+                panic!("the precondition must render, or the exclusion is vacuous:\n{output}")
+            });
+        assert_eq!(
+            precondition_line,
+            super::super::selinux::INSTALL_PRECONDITION[2],
+            "§ 3.1's precondition must carry no --enablerepo"
         );
         assert!(
             !output.contains("crb-mirror-rhel9"),

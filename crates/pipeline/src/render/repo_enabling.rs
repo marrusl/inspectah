@@ -2,10 +2,10 @@
 //!
 //! A repo-enabling package carries the repository definition that an
 //! enabled repo on the source host served it from. The scan records those
-//! sections in `repo_enabling_from`, and **non-empty means repo-enabling**
-//! -- that is the whole serialized contract. Nothing here re-derives the
-//! classification from a name suffix, from `repoless_annotation`'s text,
-//! or from anything else.
+//! sections in `repo_enabling_from`: **non-empty means the host's repos
+//! proved they serve it by name**, and that is the one source for that
+//! fact. Nothing here re-derives it from a name suffix, from
+//! `repoless_annotation`'s text, or from anything else.
 //!
 //! What this module adds is the half the scan could not know. Includes are
 //! a refine decision made after the scan, so between classification and
@@ -14,6 +14,13 @@
 //! repo files can be dropped out from under it. When no proof survives,
 //! the package is demoted to the repo-less rendering rather than installed
 //! by name from a definition the export does not carry.
+//!
+//! **Non-empty is therefore no longer the same as "will install by
+//! name".** A demoted package keeps `repo_enabling_from` -- what the host
+//! proved did not stop being true -- and gains a `repoless_annotation`
+//! beside it. The two fields answer different questions and the pair is
+//! the state the renderer and the refine view both read:
+//! [`repo_enabling_export`] is the only thing that decides which.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::repo::{RepoId, parse_repo_sections};
