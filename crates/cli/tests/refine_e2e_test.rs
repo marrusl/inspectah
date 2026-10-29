@@ -34,7 +34,6 @@ fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
             "module_stream_conflicts": [],
             "multiarch_packages": [],
             "duplicate_packages": [],
-            "repo_providing_packages": [],
             "ostree_overrides": [],
             "ostree_removals": [],
             "file_ownership": []

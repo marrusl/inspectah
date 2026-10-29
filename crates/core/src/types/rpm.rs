@@ -1,6 +1,6 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
-use super::repo::RepoAttribution;
+use super::repo::{RepoAttribution, RepoId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +50,12 @@ pub struct PackageEntry {
     /// otherwise).
     #[serde(default)]
     pub repo_attribution: RepoAttribution,
+    /// The repo sections that serve this package by name, when it also
+    /// provides the repository configuration those sections come from.
+    /// Non-empty means repo-enabling, which is never repo-less: the
+    /// export installs it by name from the repo files it carries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repo_enabling_from: Vec<RepoId>,
     /// Triage annotation for repo-less packages.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub repoless_annotation: String,
@@ -240,8 +246,6 @@ pub struct RpmSection {
     pub multiarch_packages: Vec<String>,
     #[serde(default)]
     pub duplicate_packages: Vec<String>,
-    #[serde(default)]
-    pub repo_providing_packages: Vec<String>,
     #[serde(default)]
     pub ostree_overrides: Vec<OstreePackageOverride>,
     #[serde(default)]

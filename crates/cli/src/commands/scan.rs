@@ -735,7 +735,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // Annotate repo-less RPMs with dnf cache paths so they can be bundled.
     if let Some(ref mut rpm) = snapshot.rpm {
-        scan_dnf_cache_for_repoless(&executor, &mut rpm.packages_added);
+        scan_dnf_cache_for_repoless(&executor, rpm);
     }
 
     // Prompt for unmanaged file bundling if --include-unmanaged was used.

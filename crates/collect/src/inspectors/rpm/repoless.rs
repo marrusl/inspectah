@@ -2,11 +2,30 @@
 //!
 //! Identifies packages with no source repository (empty `source_repo`) or
 //! whose `source_repo` names a repo not in `dnf repolist --enabled`.
-//! For each repo-less package, scans `/var/cache/dnf/` for cached `.rpm`
-//! files matching the package NEVRA.
+//! Candidates that provide repository configuration the export carries
+//! and that an enabled repo serves by name are repo-enabling instead,
+//! and leave the repo-less set before the cache scan.
+//! For each remaining repo-less package, scans `/var/cache/dnf/` for
+//! cached `.rpm` files matching the package NEVRA.
 
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::repo::RepoId;
+use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, RepoFile, RpmSection};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// The `dnf repoquery` format that answers both "is this name available"
+/// and "from which section". `%{reponame}` prints the section id in dnf 4.
+const AVAILABILITY_QUERY_FORMAT: &str = "%{name} %{reponame}\n";
+
+/// Directories whose files make a package a provider of repository
+/// configuration (the first of the two classification tests).
+const REPO_CONFIG_DIRS: [&str; 2] = ["/etc/yum.repos.d/", "/etc/pki/rpm-gpg/"];
+
+/// The recorded source repo of a package installed by local RPM path.
+const COMMANDLINE_REPO: &str = "@commandline";
+
+/// A package that carries a repository definition is named for it.
+const RELEASE_NAME_SUFFIX: &str = "-release";
 
 /// Fetch the list of enabled repo IDs from `dnf repolist --enabled`.
 ///
@@ -52,31 +71,141 @@ fn repo_matches_enabled(source_repo: &str, enabled_repos: &[String]) -> bool {
         .any(|full_id| full_id.to_lowercase().contains(&short))
 }
 
-/// Query `dnf repoquery --available` to get the set of package names
-/// available from any enabled repository. Returns `None` if the command
-/// fails, so callers can fall back gracefully.
-fn get_available_packages(exec: &dyn Executor) -> Option<std::collections::HashSet<String>> {
+/// Query `dnf repoquery --available` for every package name the host's
+/// enabled repositories serve, and the sections that serve it.
+///
+/// Returns `None` if the command fails, so callers can tell "no enabled
+/// repo serves this name" from "we could not ask". A line that does not
+/// split into exactly two whitespace tokens is dropped: a host whose dnf
+/// does not print `%{reponame}` answers nothing rather than answering
+/// wrongly.
+///
+/// Every value is non-empty by construction — an entry exists only
+/// because some line named a section — and the serving ids are collected
+/// into a `BTreeSet` so the recorded order is a property of the container
+/// rather than of the order the host happened to print.
+fn get_available_packages(exec: &dyn Executor) -> Option<HashMap<String, BTreeSet<RepoId>>> {
     let result = exec.run(
         "dnf",
         &[
             "repoquery",
             "--available",
             "--queryformat",
-            "%{name}\n",
+            AVAILABILITY_QUERY_FORMAT,
             "-q",
         ],
     );
     if result.exit_code != 0 {
         return None;
     }
-    Some(
-        result
-            .stdout
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-    )
+    let mut by_name: HashMap<String, BTreeSet<RepoId>> = HashMap::new();
+    for line in result.stdout.lines() {
+        let mut tokens = line.split_whitespace();
+        let (Some(name), Some(repo), None) = (tokens.next(), tokens.next(), tokens.next()) else {
+            continue;
+        };
+        by_name
+            .entry(name.to_string())
+            .or_default()
+            .insert(RepoId::new(repo));
+    }
+    Some(by_name)
+}
+
+/// What the two classification tests concluded about one repo-less
+/// candidate.
+///
+/// This stays private deliberately. The serialized contract is
+/// `repo_enabling_from`: non-empty means repo-enabling, and a second
+/// field carrying the same fact would be a second source of truth for
+/// it. Promote this onto `PackageEntry` the moment anything needs to
+/// *branch* on `ConfigOnly` rather than display it — that distinction
+/// currently survives only inside a rendered sentence, and deriving
+/// structure by parsing rendered text is not an option.
+enum RepoEnablingVerdict {
+    /// The candidate provides repository configuration the export carries
+    /// and these sections serve it by name: it is repo-enabling.
+    Enabling(Vec<RepoId>),
+    /// The candidate provides repository configuration the export carries,
+    /// but no enabled repo serves it by name. It stays repo-less, with a
+    /// note that says which half it failed. Carries the number of captured
+    /// repo files it owns.
+    ConfigOnly { captured_repo_files: usize },
+    /// Not a repo-enabling candidate, or availability could not be
+    /// determined. The ordinary repo-less path applies.
+    Repoless,
+}
+
+/// Whether a path is one the first classification test looks at.
+fn is_repo_config_path(path: &str) -> bool {
+    REPO_CONFIG_DIRS.iter().any(|dir| path.starts_with(dir))
+}
+
+/// Run the two classification tests against one repo-less candidate.
+///
+/// *Provides repository configuration:* installed `@commandline`, named
+/// `*-release`, and every path it owns under the repo configuration
+/// directories is one the snapshot captured, with at least one `.repo`
+/// file among them. Owning a repo file the export is not carrying fails
+/// the test: the Containerfile could not reproduce the definition.
+///
+/// *Installable by name from a repository the export can carry:* the
+/// name is a key of the availability map. `available` being `None` means
+/// the question could not be asked, and the recovery path is suppressed
+/// unless availability is proven.
+fn classify_repo_enabling(
+    pkg: &PackageEntry,
+    repo_files: &[RepoFile],
+    gpg_keys: &[RepoFile],
+    file_ownership: &[FileOwnershipEntry],
+    available: Option<&HashMap<String, BTreeSet<RepoId>>>,
+) -> RepoEnablingVerdict {
+    let Some(available) = available else {
+        return RepoEnablingVerdict::Repoless;
+    };
+    if pkg.source_repo != COMMANDLINE_REPO || !pkg.name.ends_with(RELEASE_NAME_SUFFIX) {
+        return RepoEnablingVerdict::Repoless;
+    }
+    // A degraded scan collects no ownership data. The repo-file count
+    // below refuses the same input, so this is an early return rather
+    // than an independent guard.
+    let Some(owned) = file_ownership
+        .iter()
+        .find(|entry| entry.package_name == pkg.name)
+    else {
+        return RepoEnablingVerdict::Repoless;
+    };
+
+    let captured_repo_files: HashSet<&str> = repo_files.iter().map(|f| f.path.as_str()).collect();
+    let captured_keys: HashSet<&str> = gpg_keys.iter().map(|f| f.path.as_str()).collect();
+
+    let mut owned_repo_files = 0usize;
+    for path in owned.paths.iter().filter(|path| is_repo_config_path(path)) {
+        if captured_repo_files.contains(path.as_str()) {
+            owned_repo_files += 1;
+        } else if !captured_keys.contains(path.as_str()) {
+            return RepoEnablingVerdict::Repoless;
+        }
+    }
+    if owned_repo_files == 0 {
+        return RepoEnablingVerdict::Repoless;
+    }
+
+    match available.get(&pkg.name) {
+        Some(serving) => RepoEnablingVerdict::Enabling(serving.iter().cloned().collect()),
+        None => RepoEnablingVerdict::ConfigOnly {
+            captured_repo_files: owned_repo_files,
+        },
+    }
+}
+
+/// A package the scan is about to annotate.
+struct RepolessTarget {
+    /// Index into `packages_added`.
+    index: usize,
+    /// `Some(n)` when the package owns `n` captured repo files but no
+    /// enabled repo serves it by name; the note says so.
+    captured_repo_files: Option<usize>,
 }
 
 /// Identify repo-less packages and scan `/var/cache/dnf/` for cached RPMs.
@@ -88,21 +217,34 @@ fn get_available_packages(exec: &dyn Executor) -> Option<std::collections::HashS
 /// Packages from the `anaconda` pseudo-repo (OS installer) get a
 /// secondary availability check: if `dnf repoquery --available` confirms
 /// the package exists in an enabled repo, it is NOT repo-less.
-/// `@commandline` packages (installed via `rpm -i`) are always repo-less
-/// regardless of availability — the user explicitly bypassed the repo
-/// system and the installed version may differ from the repo version.
+/// `@commandline` packages (installed via `rpm -i`) are repo-less unless
+/// [`classify_repo_enabling`] proves they are repo-enabling: otherwise
+/// the user explicitly bypassed the repo system and the installed version
+/// may differ from the repo version.
 ///
 /// For each truly repo-less package, checks whether a matching `.rpm`
 /// file exists in the dnf cache. Found RPMs get `repoless_cached = true`
 /// and `cache_path` set; missing RPMs get an annotation directing the
 /// user toward manual resolution.
-pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageEntry]) {
+///
+/// Only `packages_added` is annotated. The rest of the section is read
+/// for classification: `repo_files`, `gpg_keys`, and `file_ownership`
+/// say what repository configuration the export can carry and who owns
+/// it.
+pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, rpm: &mut RpmSection) {
     let enabled_repos = get_enabled_repos(exec);
+    let RpmSection {
+        packages_added,
+        repo_files,
+        gpg_keys,
+        file_ownership,
+        ..
+    } = rpm;
 
     // Phase 1: identify candidates whose source_repo doesn't match an
     // enabled repo. These are candidates, not confirmed repo-less —
-    // the availability check in phase 2 may clear them.
-    let candidate_indices: Vec<usize> = packages
+    // the checks in phase 2 may clear them.
+    let candidate_indices: Vec<usize> = packages_added
         .iter()
         .enumerate()
         .filter(|(_, p)| {
@@ -122,28 +264,53 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
         return;
     }
 
-    // Phase 2: secondary availability check for anaconda packages.
-    // @commandline packages are always repo-less (user bypassed repos).
+    // Phase 2: repo-enabling classification, then the secondary
+    // availability check for anaconda packages.
+    // @commandline packages are repo-less unless they are repo-enabling.
     // Empty source_repo packages are always repo-less (no info at all).
     // Only anaconda (and similar installer pseudo-repos) get the check.
     let available = get_available_packages(exec);
-    let repoless_indices: Vec<usize> = candidate_indices
-        .into_iter()
-        .filter(|&i| {
-            let pkg = &packages[i];
-            // @commandline = explicitly installed outside repos, always repo-less
-            if pkg.source_repo.starts_with('@') || pkg.source_repo.is_empty() {
-                return true;
+    let mut repoless_targets: Vec<RepolessTarget> = Vec::new();
+    for i in candidate_indices {
+        let captured_repo_files = match classify_repo_enabling(
+            &packages_added[i],
+            repo_files,
+            gpg_keys,
+            file_ownership,
+            available.as_ref(),
+        ) {
+            RepoEnablingVerdict::Enabling(serving) => {
+                // Repo-enabling: leaves the repo-less set before the
+                // cache scan, so it never gets a note or an upload.
+                packages_added[i].repo_enabling_from = serving;
+                continue;
             }
+            RepoEnablingVerdict::ConfigOnly {
+                captured_repo_files,
+            } => Some(captured_repo_files),
+            RepoEnablingVerdict::Repoless => None,
+        };
+
+        let pkg = &packages_added[i];
+        // @commandline = explicitly installed outside repos, always repo-less
+        let is_repoless = if pkg.source_repo.starts_with('@') || pkg.source_repo.is_empty() {
+            true
+        } else {
             // For other pseudo-repos (anaconda, etc.), check availability
             match &available {
-                Some(avail) => !avail.contains(&pkg.name),
+                Some(avail) => !avail.contains_key(&pkg.name),
                 None => true, // repoquery failed -- keep candidate as repo-less
             }
-        })
-        .collect();
+        };
+        if is_repoless {
+            repoless_targets.push(RepolessTarget {
+                index: i,
+                captured_repo_files,
+            });
+        }
+    }
 
-    if repoless_indices.is_empty() {
+    if repoless_targets.is_empty() {
         return;
     }
 
@@ -159,8 +326,8 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
         _ => Vec::new(),
     };
 
-    for idx in repoless_indices {
-        let pkg = &mut packages[idx];
+    for target in repoless_targets {
+        let pkg = &mut packages_added[target.index];
         let expected_filename = format!(
             "{}-{}-{}.{}.rpm",
             pkg.name, pkg.version, pkg.release, pkg.arch
@@ -169,13 +336,15 @@ pub fn scan_dnf_cache_for_repoless(exec: &dyn Executor, packages: &mut [PackageE
         let cache_match = cache_files.iter().find(|f| f.ends_with(&expected_filename));
 
         let is_disabled_repo = !pkg.source_repo.is_empty();
-        let reason = if is_disabled_repo {
-            format!(
+        let reason = match target.captured_repo_files {
+            Some(n) => format!(
+                "No repo source: owns {n} captured repo file(s) but is not available from them"
+            ),
+            None if is_disabled_repo => format!(
                 "No repo source \u{2014} repo '{}' not in enabled repos",
                 pkg.source_repo
-            )
-        } else {
-            "No repo source".to_string()
+            ),
+            None => "No repo source".to_string(),
         };
 
         if let Some(path) = cache_match {
@@ -217,6 +386,18 @@ mod tests {
         }
     }
 
+    /// Run the scan over a bare package list, with nothing captured in
+    /// `repo_files`, `gpg_keys`, or `file_ownership` — which is what every
+    /// fixture predating repo-enabling classification meant.
+    fn scan_packages(exec: &MockExecutor, packages: Vec<PackageEntry>) -> Vec<PackageEntry> {
+        let mut rpm = RpmSection {
+            packages_added: packages,
+            ..Default::default()
+        };
+        scan_dnf_cache_for_repoless(exec, &mut rpm);
+        rpm.packages_added
+    }
+
     /// Build a MockExecutor with enabled repos, available packages, and cache listing.
     fn build_repoless_executor(
         enabled_repos_stdout: &str,
@@ -225,7 +406,8 @@ mod tests {
         build_repoless_executor_with_available(enabled_repos_stdout, "", cache_listing_stdout)
     }
 
-    /// Build a MockExecutor with enabled repos, available package names, and cache listing.
+    /// Build a MockExecutor with enabled repos, `%{name} %{reponame}`
+    /// availability lines, and cache listing.
     fn build_repoless_executor_with_available(
         enabled_repos_stdout: &str,
         available_stdout: &str,
@@ -241,7 +423,7 @@ mod tests {
                 },
             )
             .with_command(
-                "dnf repoquery --available --queryformat %{name}\n -q",
+                "dnf repoquery --available --queryformat %{name} %{reponame}\n -q",
                 ExecResult {
                     stdout: available_stdout.into(),
                     exit_code: 0,
@@ -265,8 +447,10 @@ mod tests {
             "/var/cache/dnf/custom-repo/packages/custom-tool-1.2.3-1.el9.x86_64.rpm\n",
         );
 
-        let mut packages = vec![pkg("custom-tool", "1.2.3", "1.el9", "x86_64", "")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("custom-tool", "1.2.3", "1.el9", "x86_64", "")],
+        );
 
         assert!(packages[0].repoless_cached);
         assert_eq!(
@@ -287,8 +471,10 @@ mod tests {
             "", // empty cache
         );
 
-        let mut packages = vec![pkg("custom-tool", "1.2.3", "1.el9", "x86_64", "")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("custom-tool", "1.2.3", "1.el9", "x86_64", "")],
+        );
 
         assert!(!packages[0].repoless_cached);
         assert!(packages[0].cache_path.is_none());
@@ -306,8 +492,10 @@ mod tests {
             "",
         );
 
-        let mut packages = vec![pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream")],
+        );
 
         // Should not be touched — source_repo matches an enabled repo.
         assert!(!packages[0].repoless_cached);
@@ -324,12 +512,14 @@ mod tests {
             "",
         );
 
-        let mut packages = vec![
-            pkg("httpd", "2.4.57", "5.el9", "aarch64", "AppStream"),
-            pkg("bash", "5.2.26", "3.el9", "aarch64", "baseos"),
-            pkg("glibc", "2.34", "60.el9", "aarch64", "BaseOS"),
-        ];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![
+                pkg("httpd", "2.4.57", "5.el9", "aarch64", "AppStream"),
+                pkg("bash", "5.2.26", "3.el9", "aarch64", "baseos"),
+                pkg("glibc", "2.34", "60.el9", "aarch64", "BaseOS"),
+            ],
+        );
 
         // All should match via case-insensitive substring.
         assert!(
@@ -353,12 +543,14 @@ mod tests {
         // for base OS packages), it should NOT be flagged as repo-less.
         let exec = build_repoless_executor_with_available(
             "repo id                       repo name\nrhel-9-for-x86_64-appstream-rpms  RHEL 9 AppStream\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
-            "kernel\nbash\nglibc\naudit\n",
+            "kernel rhel-9-for-x86_64-baseos-rpms\nbash rhel-9-for-x86_64-baseos-rpms\nglibc rhel-9-for-x86_64-baseos-rpms\naudit rhel-9-for-x86_64-appstream-rpms\n",
             "",
         );
 
-        let mut packages = vec![pkg("kernel", "5.14.0", "362.el9", "x86_64", "anaconda")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("kernel", "5.14.0", "362.el9", "x86_64", "anaconda")],
+        );
 
         assert!(
             packages[0].repoless_annotation.is_empty(),
@@ -372,18 +564,20 @@ mod tests {
         // (e.g., a custom installer-only package) should still be flagged.
         let exec = build_repoless_executor_with_available(
             "repo id                       repo name\nrhel-9-for-x86_64-appstream-rpms  RHEL 9 AppStream\n",
-            "bash\nhttpd\n",
+            "bash rhel-9-for-x86_64-baseos-rpms\nhttpd rhel-9-for-x86_64-appstream-rpms\n",
             "",
         );
 
-        let mut packages = vec![pkg(
-            "custom-installer-pkg",
-            "1.0",
-            "1.el9",
-            "x86_64",
-            "anaconda",
-        )];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg(
+                "custom-installer-pkg",
+                "1.0",
+                "1.el9",
+                "x86_64",
+                "anaconda",
+            )],
+        );
 
         assert!(
             !packages[0].repoless_annotation.is_empty(),
@@ -393,16 +587,20 @@ mod tests {
 
     #[test]
     fn commandline_package_always_flagged() {
-        // @commandline packages (installed via rpm -i) are always repo-less
-        // regardless of availability — the user bypassed the repo system.
+        // @commandline packages (installed via rpm -i) are repo-less unless
+        // they also provide the repository configuration they are served
+        // from. This one owns no captured repo file, so availability alone
+        // does not clear it.
         let exec = build_repoless_executor_with_available(
             "repo id                       repo name\nrhel-9-for-x86_64-baseos-rpms     RHEL 9 BaseOS\n",
-            "epel-release\nbash\n",
+            "epel-release epel\nbash rhel-9-for-x86_64-baseos-rpms\n",
             "",
         );
 
-        let mut packages = vec![pkg("epel-release", "9", "7.el9", "noarch", "@commandline")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("epel-release", "9", "7.el9", "noarch", "@commandline")],
+        );
 
         assert!(
             !packages[0].repoless_annotation.is_empty(),
@@ -434,14 +632,16 @@ mod tests {
             "/var/cache/dnf/internal-tools/packages/internal-agent-2.0-1.el9.x86_64.rpm\n",
         );
 
-        let mut packages = vec![pkg(
-            "internal-agent",
-            "2.0",
-            "1.el9",
-            "x86_64",
-            "internal-tools",
-        )];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg(
+                "internal-agent",
+                "2.0",
+                "1.el9",
+                "x86_64",
+                "internal-tools",
+            )],
+        );
 
         // internal-tools is not in enabled repos → treated as repo-less.
         assert!(packages[0].repoless_cached);
@@ -531,11 +731,13 @@ mod tests {
                 },
             );
 
-        let mut packages = vec![
-            pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"),
-            pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),
-        ];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![
+                pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"),
+                pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),
+            ],
+        );
 
         // httpd has a named source_repo -- must NOT be flagged when dnf fails
         assert!(
@@ -557,12 +759,14 @@ mod tests {
             "/var/cache/dnf/local/packages/custom-tool-1.0-1.el9.x86_64.rpm\n",
         );
 
-        let mut packages = vec![
-            pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"), // has enabled repo
-            pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),       // empty source_repo
-            pkg("bash", "5.2.26", "3.el9", "x86_64", "baseos"),     // has enabled repo
-        ];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![
+                pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream"), // has enabled repo
+                pkg("custom-tool", "1.0", "1.el9", "x86_64", ""),       // empty source_repo
+                pkg("bash", "5.2.26", "3.el9", "x86_64", "baseos"),     // has enabled repo
+            ],
+        );
 
         // httpd: not repo-less
         assert!(packages[0].repoless_annotation.is_empty());
@@ -580,9 +784,9 @@ mod tests {
     #[test]
     fn no_packages_is_noop() {
         let exec = MockExecutor::new();
-        let mut packages: Vec<PackageEntry> = vec![];
         // Should not panic or make any executor calls.
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(&exec, vec![]);
+        assert!(packages.is_empty());
     }
 
     #[test]
@@ -598,8 +802,10 @@ mod tests {
             },
         );
 
-        let mut packages = vec![pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream")];
-        scan_dnf_cache_for_repoless(&exec, &mut packages);
+        let packages = scan_packages(
+            &exec,
+            vec![pkg("httpd", "2.4.57", "5.el9", "x86_64", "appstream")],
+        );
 
         // No annotation should be set.
         assert!(packages[0].repoless_annotation.is_empty());

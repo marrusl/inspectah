@@ -1092,9 +1092,6 @@ pub fn merge_rpm_sections(
         dedup_strings(collect_string_lists(&sections, |s| &s.multiarch_packages));
     let duplicate_packages =
         dedup_strings(collect_string_lists(&sections, |s| &s.duplicate_packages));
-    let repo_providing_packages = dedup_strings(collect_string_lists(&sections, |s| {
-        &s.repo_providing_packages
-    }));
     let ostree_removals = dedup_strings(collect_string_lists(&sections, |s| &s.ostree_removals));
 
     // Dedup version_changes by name.arch
@@ -1409,7 +1406,6 @@ pub fn merge_rpm_sections(
             versionlock_command_output,
             multiarch_packages,
             duplicate_packages,
-            repo_providing_packages,
             ostree_overrides,
             ostree_removals,
             base_image,
@@ -2159,6 +2155,107 @@ mod tests {
         assert_eq!(conflict[0].host_count, 2);
         assert_eq!(conflict[1].repo, "appstream");
         assert_eq!(conflict[1].host_count, 1);
+    }
+
+    /// Build a one-package section whose only variable is which repo
+    /// serves `epel-release`. Every host agrees the package is
+    /// repo-enabling and leaves the annotation empty, so
+    /// `repo_enabling_from` is the *only* difference between payloads:
+    /// a fleet behind different mirrors, which is the case this field
+    /// newly splits.
+    #[cfg(test)]
+    fn repo_enabling_section(serving: &str) -> crate::types::rpm::RpmSection {
+        use crate::types::repo::RepoId;
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "epel-release".into(),
+                arch: "noarch".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                source_repo: "@commandline".into(),
+                repo_enabling_from: vec![RepoId::new(serving)],
+                repoless_annotation: String::new(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_merge_votes_on_repo_enabling_from_alone() {
+        use crate::types::repo::RepoId;
+
+        let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+        let merge_serving = |a: &str, b: &str, c: &str| {
+            merge_rpm_sections(
+                vec![
+                    Some(repo_enabling_section(a)),
+                    Some(repo_enabling_section(b)),
+                    Some(repo_enabling_section(c)),
+                ],
+                3,
+                &hostnames,
+                None,
+            )
+            .expect("merge should succeed")
+            .0
+        };
+
+        let merged = merge_serving("epel", "epel-mirror", "epel");
+        assert_eq!(
+            merged.packages_added[0].repo_enabling_from,
+            vec![RepoId::new("epel")],
+            "the majority's serving repo should land in the aggregate"
+        );
+
+        // Inverting the majority inverts the result: the vote really is
+        // reading this field, not something that happens to vary with it.
+        let merged_inverted = merge_serving("epel-mirror", "epel", "epel-mirror");
+        assert_eq!(
+            merged_inverted.packages_added[0].repo_enabling_from,
+            vec![RepoId::new("epel-mirror")]
+        );
+
+        // Only *which value* lands changes. Prevalence is counted over
+        // the whole identity group, not the winning payload, so the
+        // split costs the package none of its host count.
+        let prevalence = merged.packages_added[0]
+            .aggregate
+            .as_ref()
+            .expect("aggregated package should carry prevalence");
+        assert_eq!(prevalence.count, 3, "every host has the package");
+        assert_eq!(prevalence.total, 3);
+        assert_eq!(prevalence.hosts, hostnames);
+    }
+
+    #[test]
+    fn test_merge_drops_repo_providing_packages() {
+        let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into()];
+        let (merged, _) = merge_rpm_sections(
+            vec![
+                Some(repo_enabling_section("epel")),
+                Some(repo_enabling_section("epel")),
+            ],
+            2,
+            &hostnames,
+            None,
+        )
+        .expect("merge should succeed");
+
+        // The aggregate no longer emits the dead key at all, rather than
+        // emitting the union of empty lists every host reported.
+        let json = serde_json::to_value(&merged).expect("aggregate should serialize");
+        assert!(
+            json.get("repo_providing_packages").is_none(),
+            "repo_providing_packages must not appear in the aggregate"
+        );
+        // The new field does survive the merge into the aggregate JSON.
+        assert_eq!(
+            json["packages_added"][0]["repo_enabling_from"],
+            serde_json::json!(["epel"])
+        );
     }
 
     #[test]
