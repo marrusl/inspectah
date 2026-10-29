@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_refine::session::{RefineSession, UploadMatchKind, render_refine_export};
+use inspectah_refine::session::{
+    RefineSession, RemovalOutcome, UploadMatchKind, render_refine_export,
+};
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
 /// The filename an upload of exactly the host's version (9-11.el9)
@@ -22,6 +24,14 @@ use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 const EXACT_RPM: &str = "epel-release-9-11.el9.noarch.rpm";
 /// A newer upload for the same package.
 const NEWER_RPM: &str = "epel-release-9-12.el9.noarch.rpm";
+/// A Fedora-style upload filename: not a NEVRA, matched by name and arch
+/// after the matcher shortens the extracted name.
+const FEDORA_RPM: &str = "epel-release-latest-9.noarch.rpm";
+/// A filename the matcher parses and no fixture package claims: its
+/// shortened candidates are `epel-next-release-latest`,
+/// `epel-next-release`, `epel-next`, `epel`, and none of them is
+/// `epel-release`.
+const UNMATCHED_RPM: &str = "epel-next-release-latest-9.noarch.rpm";
 /// The `name.arch` both of those belong to.
 const CANONICAL: &str = "epel-release.noarch";
 /// The upload directory's name, a subdirectory so a test can prove nothing
@@ -45,6 +55,18 @@ fn repoless_snapshot() -> InspectionSnapshot {
         }],
         ..Default::default()
     });
+    snap
+}
+
+/// [`repoless_snapshot`] as the collector reports a package the host's dnf
+/// cache already supplies: `repoless_cached` with `cache_path` naming a
+/// file outside the upload directory, and no upload. This is the state
+/// `prior_cache` exists to restore.
+fn dnf_cached_snapshot(cache_path: &Path) -> InspectionSnapshot {
+    let mut snap = repoless_snapshot();
+    let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+    pkg.repoless_cached = true;
+    pkg.cache_path = Some(cache_path.to_string_lossy().into_owned());
     snap
 }
 
@@ -175,6 +197,39 @@ impl Harness {
     fn preview(&self) -> &str {
         &self.session.view().containerfile_preview
     }
+
+    /// The fixture package named `name`, as the session holds it.
+    fn entry(&self, name: &str) -> &PackageEntry {
+        self.session
+            .snapshot()
+            .rpm
+            .as_ref()
+            .unwrap()
+            .packages_added
+            .iter()
+            .find(|p| p.name == name)
+            .expect("the fixture carries this package")
+    }
+}
+
+/// The text of a `TarballError`, which is a refusal's whole message.
+fn tarball_message(err: RefineError) -> String {
+    match err {
+        RefineError::TarballError(message) => message,
+        other => panic!("expected TarballError, got {other:?}"),
+    }
+}
+
+/// A fresh session over an upload directory an earlier session left
+/// behind, which is what a resume is.
+fn resume_over(dir: &Path) -> (RefineSession, Vec<String>) {
+    let mut session = RefineSession::new(repoless_snapshot());
+    session.set_upload_dir(dir.to_path_buf());
+    let warnings = {
+        let (_, warnings) = session.ensure_upload_dir().expect("the directory is ours");
+        warnings.to_vec()
+    };
+    (session, warnings)
 }
 
 // -- tarball and Containerfile readers -------------------------------------
@@ -957,5 +1012,304 @@ fn a_destination_another_step_already_wrote_fails_the_export() {
         matches!(&err, RefineError::TarballError(m)
             if m.contains(EXACT_RPM) && m.contains("already has a writer")),
         "{err}"
+    );
+}
+
+// -- removal and the rescan (§ 3.3, § 8.2) ---------------------------------
+
+#[test]
+fn removal_requires_an_upload_and_restores_the_prior_cache() {
+    // An upload with nothing behind it: every field the upload set is
+    // cleared. `uploaded_version` included -- the row renders it, and a
+    // version string on a package with no RPM names an upload that is
+    // gone.
+    let mut h = Harness::new();
+    h.upload(NEWER_RPM, b"newer").unwrap();
+    let staged = h.upload_dir.join(NEWER_RPM);
+    assert_eq!(
+        h.entry("epel-release").uploaded_version.as_deref(),
+        Some("9-12.el9"),
+        "the upload is what sets the field this removal has to clear"
+    );
+
+    assert_eq!(
+        h.session
+            .unmark_uploaded_rpm("epel-release", "noarch")
+            .expect("the removal is not refused"),
+        RemovalOutcome::Removed
+    );
+
+    assert!(!staged.exists(), "the staged file is deleted");
+    let pkg = h.entry("epel-release");
+    assert!(!pkg.uploaded);
+    assert!(!pkg.repoless_cached);
+    assert_eq!(pkg.cache_path, None);
+    assert_eq!(pkg.uploaded_version, None);
+
+    // A package the collector found in the host's dnf cache. Nothing was
+    // staged for it, so there is nothing here to remove and the file is
+    // not this session's to unlink.
+    let host_cache = tempfile::tempdir().unwrap();
+    let cached = host_cache.path().join(EXACT_RPM);
+    std::fs::write(&cached, b"the host's cached rpm").unwrap();
+    let mut h = Harness::with_snapshot(dnf_cached_snapshot(&cached));
+
+    assert_eq!(
+        h.session
+            .unmark_uploaded_rpm("epel-release", "noarch")
+            .expect("the removal is not refused"),
+        RemovalOutcome::CachedOnly
+    );
+
+    assert!(cached.exists(), "the host's cached RPM survives");
+    let pkg = h.entry("epel-release");
+    assert!(pkg.repoless_cached, "and its cache state is untouched");
+    assert_eq!(
+        pkg.cache_path.as_deref(),
+        Some(cached.to_string_lossy().as_ref())
+    );
+
+    // The same package once an upload has displaced the cached RPM:
+    // removing the upload hands the package back to the dnf cache rather
+    // than leaving it with no RPM at all.
+    h.upload(NEWER_RPM, b"newer").unwrap();
+    let staged = h.upload_dir.join(NEWER_RPM);
+    assert_eq!(
+        h.entry("epel-release").cache_path.as_deref(),
+        Some(staged.to_string_lossy().as_ref()),
+        "the upload is what displaces the cache path this removal restores"
+    );
+
+    assert_eq!(
+        h.session
+            .unmark_uploaded_rpm("epel-release", "noarch")
+            .expect("the removal is not refused"),
+        RemovalOutcome::Removed
+    );
+
+    assert!(!staged.exists(), "the staged file is deleted");
+    assert!(cached.exists(), "and the cached RPM it displaced is not");
+    let pkg = h.entry("epel-release");
+    assert!(!pkg.uploaded);
+    assert!(pkg.repoless_cached, "the dnf cache supplies it again");
+    assert_eq!(
+        pkg.cache_path.as_deref(),
+        Some(cached.to_string_lossy().as_ref())
+    );
+    assert_eq!(pkg.uploaded_version, None);
+}
+
+#[test]
+fn removal_is_confined_to_the_staging_directory() {
+    // `uploaded` and `cache_path` both deserialize from the scan, so the
+    // pair proves nothing about where the file is. `claim_upload` sets
+    // them the way a snapshot arrives with them: no rename put any of
+    // these files where it is.
+
+    // A path outside the upload directory.
+    let mut h = Harness::new();
+    let outside = h.tmp.path().join("id_ed25519.rpm");
+    std::fs::write(&outside, b"not a staged rpm").unwrap();
+    h.claim_upload(&outside, None);
+
+    let err = h
+        .session
+        .unmark_uploaded_rpm("epel-release", "noarch")
+        .expect_err("a cache_path outside the upload directory is refused");
+
+    assert_eq!(
+        tarball_message(err),
+        format!(
+            "refusing to remove a staged file: id_ed25519.rpm is not in {}",
+            h.upload_dir.display()
+        )
+    );
+    assert!(outside.exists(), "and nothing is deleted");
+    assert!(
+        h.entry("epel-release").uploaded,
+        "a refusal leaves the entry as it was"
+    );
+
+    // A symlink inside the directory, wearing a name the rule accepts.
+    let mut h = Harness::new();
+    let sentinel = h.tmp.path().join("sentinel");
+    std::fs::write(&sentinel, b"not a staged rpm").unwrap();
+    let link = h.upload_dir.join(EXACT_RPM);
+    std::os::unix::fs::symlink(&sentinel, &link).unwrap();
+    h.claim_upload(&link, None);
+
+    let err = h
+        .session
+        .unmark_uploaded_rpm("epel-release", "noarch")
+        .expect_err("a symlink in the upload directory is refused");
+
+    assert_eq!(
+        tarball_message(err),
+        format!("refusing to remove a staged file: {EXACT_RPM} is not a regular file")
+    );
+    assert!(sentinel.exists(), "the symlink's target is not followed");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "and the symlink itself stays"
+    );
+    assert!(h.entry("epel-release").uploaded);
+
+    // A basename the staged-name rule rejects, on a real file in the
+    // directory: the name is checked before the location, so this is
+    // refused even though it is where staged files live.
+    let mut h = Harness::new();
+    let bad = h.upload_dir.join("bad name.rpm");
+    std::fs::write(&bad, b"not a staged rpm").unwrap();
+    h.claim_upload(&bad, None);
+
+    let err = h
+        .session
+        .unmark_uploaded_rpm("epel-release", "noarch")
+        .expect_err("a basename outside the rule is refused");
+
+    assert_eq!(
+        tarball_message(err),
+        "refusing to remove a staged file: \
+         staged filename has a disallowed byte at position 3"
+    );
+    assert!(bad.exists(), "and nothing is deleted");
+    assert!(h.entry("epel-release").uploaded);
+}
+
+#[test]
+fn rescan_remarks_through_the_matcher_and_warns_on_the_rest() {
+    let h = Harness::new();
+    let dir = h.upload_dir.clone();
+    let sentinel = h.tmp.path().join("sentinel");
+    std::fs::write(&sentinel, b"not a staged rpm").unwrap();
+
+    std::fs::write(dir.join(FEDORA_RPM), b"the resumed upload").unwrap();
+    std::fs::write(dir.join(UNMATCHED_RPM), b"nothing claims this").unwrap();
+    std::fs::write(dir.join("bad name.rpm"), b"outside the rule").unwrap();
+    std::fs::write(dir.join(".upload-1234.part"), b"half an rpm").unwrap();
+    std::os::unix::fs::symlink(&sentinel, dir.join("x.rpm")).unwrap();
+
+    let (resumed, warnings) = resume_over(&dir);
+
+    // In filename order: `bad name.rpm` (the space sorts first), then
+    // `x.rpm`. The two valid staged names in between produce none.
+    assert_eq!(
+        warnings,
+        [
+            "skipped bad name.rpm in the upload directory: \
+             staged filename has a disallowed byte at position 3",
+            "skipped x.rpm in the upload directory: not a regular file",
+        ]
+    );
+
+    let pkg = &resumed.snapshot().rpm.as_ref().unwrap().packages_added[0];
+    assert!(
+        pkg.uploaded,
+        "a staged file the matcher claims is an upload"
+    );
+    assert!(pkg.repoless_cached);
+    assert_eq!(
+        pkg.cache_path.as_deref(),
+        Some(dir.join(FEDORA_RPM).to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        pkg.uploaded_version.as_deref(),
+        Some("9"),
+        "the version re-derived from the filename, as the upload handler derived it"
+    );
+
+    assert!(
+        dir.join(UNMATCHED_RPM).exists(),
+        "an unmatched file stays staged"
+    );
+    assert!(
+        dir.join("bad name.rpm").exists() && std::fs::symlink_metadata(dir.join("x.rpm")).is_ok(),
+        "a skipped entry is skipped, not deleted"
+    );
+    assert!(
+        !dir.join(".upload-1234.part").exists(),
+        "a regular part file is swept before the rescan lists the directory, \
+         so it is removed rather than warned about"
+    );
+}
+
+#[test]
+fn rescan_leaves_a_file_a_package_already_points_at() {
+    // The input that reaches the already-decided branch: a snapshot that
+    // deserialized with `uploaded` and a `cache_path` in the upload
+    // directory, under a filename the matcher parses as a *different*
+    // package's. Without the branch the rescan hands the file to
+    // `epel-release.noarch`, and the operator's own assignment is gone
+    // with no warning that it happened.
+    let h = Harness::new();
+    let dir = h.upload_dir.clone();
+    let staged = dir.join(FEDORA_RPM);
+    std::fs::write(&staged, b"custom-tool's file").unwrap();
+
+    let mut snap = repoless_snapshot();
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .packages_added
+        .push(PackageEntry {
+            name: "custom-tool".into(),
+            version: "1.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            disposition: FindingKind::included(),
+            repoless_annotation: "No repo source".into(),
+            repoless_cached: true,
+            uploaded: true,
+            cache_path: Some(staged.to_string_lossy().into_owned()),
+            ..Default::default()
+        });
+    let mut resumed = RefineSession::new(snap);
+    resumed.set_upload_dir(dir.clone());
+    let warnings = {
+        let (_, warnings) = resumed.ensure_upload_dir().unwrap();
+        warnings.to_vec()
+    };
+
+    assert_eq!(warnings, Vec::<String>::new());
+    let packages = &resumed.snapshot().rpm.as_ref().unwrap().packages_added;
+    assert!(
+        !packages[0].uploaded,
+        "the matcher never gets a say about a file that is already spoken for"
+    );
+    assert_eq!(packages[0].cache_path, None);
+    assert_eq!(
+        packages[1].cache_path.as_deref(),
+        Some(staged.to_string_lossy().as_ref()),
+        "and the package that had it keeps it"
+    );
+}
+
+#[test]
+fn rescan_marks_the_later_of_two_files_for_one_package() {
+    // Both filenames match `epel-release.noarch`, so one of them has to
+    // lose. `9-11` sorts before `9-12`, so the warning names the first.
+    let h = Harness::new();
+    let dir = h.upload_dir.clone();
+    std::fs::write(dir.join(EXACT_RPM), b"the earlier").unwrap();
+    std::fs::write(dir.join(NEWER_RPM), b"the later").unwrap();
+
+    let (resumed, warnings) = resume_over(&dir);
+
+    assert_eq!(
+        warnings,
+        [format!(
+            "{EXACT_RPM} in the upload directory also matches {CANONICAL}, \
+             which {NEWER_RPM} now holds; it stays staged and unmarked"
+        )]
+    );
+    let pkg = &resumed.snapshot().rpm.as_ref().unwrap().packages_added[0];
+    assert_eq!(
+        pkg.cache_path.as_deref(),
+        Some(dir.join(NEWER_RPM).to_string_lossy().as_ref())
+    );
+    assert_eq!(pkg.uploaded_version.as_deref(), Some("9-12.el9"));
+    assert!(
+        dir.join(EXACT_RPM).exists(),
+        "the file that lost stays staged for the operator to remove"
     );
 }

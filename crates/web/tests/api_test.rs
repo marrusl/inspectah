@@ -2991,6 +2991,162 @@ async fn first_upload_for_a_dnf_cached_package_keeps_the_host_rpm() {
     );
 }
 
+/// Two repo-less packages whose NEVRA filenames overlap the matcher:
+/// `epel-release-extras` is cached from the host's dnf cache and
+/// classified (empty `repoless_annotation`, so the matcher never offers
+/// it), and `epel-release` is the one an upload named for the first will
+/// match, because the matcher shortens `epel-release-extras` to
+/// `epel-release` before it gives up.
+fn colliding_nevra_state(tmp: &tempfile::TempDir, dnf_cache: &std::path::Path) -> Arc<AppState> {
+    let snap: InspectionSnapshot = serde_json::from_value(serde_json::json!({
+        "schema_version": inspectah_core::snapshot::SCHEMA_VERSION,
+        "rpm": { "packages_added": [
+            {
+                "name": "epel-release-extras",
+                "version": "9",
+                "release": "11.el9",
+                "arch": "noarch",
+                "repoless_cached": true,
+                "cache_path": dnf_cache.to_string_lossy(),
+            },
+            {
+                "name": "epel-release",
+                "version": "9",
+                "release": "11.el9",
+                "arch": "noarch",
+                "repoless_annotation": "No repo source",
+            },
+        ] },
+    }))
+    .expect("the scan snapshot deserializes");
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(session)),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+#[tokio::test]
+async fn upload_refuses_a_filename_a_cached_package_already_owns() {
+    // The collision the export discovers at `create_new`, refused where
+    // the operator can still act on it. The cached package's `cache_path`
+    // is its dnf-cache path, not this destination, so the staged-file
+    // check sees nothing; what collides is the NEVRA filename the export
+    // extracts for it from the source tarball.
+    //
+    // `a_destination_another_step_already_wrote_fails_the_export` in the
+    // refine crate is the other end: that is what this prevents.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let dnf_cache = tmp.path().join("epel-release-extras-9-11.el9.noarch.rpm");
+    std::fs::write(&dnf_cache, b"the host's cached rpm").unwrap();
+    let app = app(colliding_nevra_state(&tmp, &dnf_cache));
+    let before = view(&app).await;
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-extras-9-11.el9.noarch.rpm",
+            b"an rpm",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-extras-9-11.el9.noarch.rpm is the cached RPM filename of \
+         epel-release-extras.noarch; upload it under a different name or remove \
+         epel-release-extras.noarch from the export"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "a refused upload places nothing"
+    );
+    assert_eq!(
+        std::fs::read(&dnf_cache).unwrap(),
+        b"the host's cached rpm".as_slice()
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(after["packages"], before["packages"]);
+
+    // The same bytes under a name nothing else owns are accepted, so the
+    // refusal is about the name and not about the pair of packages.
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+}
+
+#[tokio::test]
+async fn deleting_a_dnf_cached_package_is_refused_not_reported_missing() {
+    // § 3.3: the precondition is `uploaded`, and a package whose RPM the
+    // host's dnf cache supplies has one -- the row shows it. 404 would
+    // read as "that package is not here"; 409 says the file is not
+    // refine's to unlink.
+    let tmp = tempfile::tempdir().unwrap();
+    let dnf_cache = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+    std::fs::write(&dnf_cache, b"the host's cached rpm").unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "epel-release",
+            "version": "9",
+            "release": "11.el9",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "cache_path": dnf_cache.to_string_lossy(),
+        }),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/upload-rpm/epel-release.noarch")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "only uploads can be removed; epel-release.noarch is cached from the host's dnf cache"
+    );
+    assert!(dnf_cache.exists(), "and nothing is deleted");
+    assert_eq!(
+        view_package(&view(&app).await, "epel-release")["repoless_cached"],
+        true
+    );
+
+    // A package with no RPM at all is still 404: there is nothing to
+    // refuse, which is a different answer from refusing.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/upload-rpm/nothing.noarch")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// Stage one part file through the real `stage`, without committing it.
 async fn stage_part(
     dir: &std::path::Path,

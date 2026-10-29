@@ -64,6 +64,11 @@ pub struct RefineSession {
     /// For a package whose upload replaced a dnf-cache RPM: the cache state
     /// the upload displaced, keyed by `name.arch`. Removal restores it.
     prior_cache: HashMap<String, PriorCache>,
+    /// What the upload-directory rescan skipped, in filename order, from
+    /// the one pass `ensure_upload_dir` runs when it first prepares the
+    /// directory. Kept on the session so every later caller is told the
+    /// same thing as the one that triggered the rescan.
+    rescan_warnings: Vec<String>,
     /// Set to true when auto-save encounters a permanent I/O failure
     /// (EROFS, EACCES). Suppresses further save attempts for this session.
     durability_degraded: bool,
@@ -83,6 +88,24 @@ pub struct PriorCache {
     pub repoless_cached: bool,
     pub cache_path: Option<String>,
     pub uploaded_version: Option<String>,
+}
+
+/// What a removal request for one `name.arch` found.
+///
+/// The three cases carry different HTTP statuses, and the enum is what
+/// keeps them apart: the `bool` this replaces collapsed "there is no such
+/// upload" and "that RPM is the host's, not yours" into one `false` that
+/// the handler could only report as 404.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemovalOutcome {
+    /// The staged file was deleted and the entry's prior cache state
+    /// restored or cleared.
+    Removed,
+    /// The package's RPM came from the host's dnf cache, not from an
+    /// upload here. Nothing changed.
+    CachedOnly,
+    /// No package of that `name.arch`, or one with no RPM at all.
+    NotFound,
 }
 
 /// Whether an uploaded filename's version-release matches the host's.
@@ -649,6 +672,7 @@ impl RefineSession {
             upload_dir: None,
             upload_dir_canon: None,
             prior_cache: HashMap::new(),
+            rescan_warnings: Vec::new(),
             durability_degraded: false,
         };
         session.recompute_view();
@@ -785,11 +809,17 @@ impl RefineSession {
     ///
     /// The first call creates the directory with mode 0700 or, when it
     /// already exists, proves it is ours (see [`prepare_upload_dir`]),
-    /// sweeps the part files a previous process died holding, and keeps the
-    /// canonical path on the session. Later calls return the path without
-    /// touching the filesystem, so a running server never sweeps while a
-    /// request holds a part file.
-    pub fn ensure_upload_dir(&mut self) -> Result<&Path, RefineError> {
+    /// sweeps the part files a previous process died holding, re-marks the
+    /// staged files an earlier session left there (see
+    /// [`RefineSession::rescan_upload_dir`]), and keeps the canonical path
+    /// on the session. Later calls return the path without touching the
+    /// filesystem, so a running server never sweeps while a request holds
+    /// a part file.
+    ///
+    /// The second return value is what the rescan skipped, which is the
+    /// same list on every call: a caller that did not trigger the rescan
+    /// is told what it found rather than an empty list.
+    pub fn ensure_upload_dir(&mut self) -> Result<(&Path, &[String]), RefineError> {
         if self.upload_dir_canon.is_none() {
             let dir = match self.upload_dir.clone() {
                 Some(dir) => dir,
@@ -806,10 +836,147 @@ impl RefineSession {
             };
             let canon = prepare_upload_dir(&dir)?;
             sweep_part_files(&canon)?;
-            self.upload_dir = Some(dir);
-            self.upload_dir_canon = Some(canon);
+            // Before the rescan, which records staged paths and needs the
+            // session to already know where staged files live.
+            self.upload_dir = Some(dir.clone());
+            self.upload_dir_canon = Some(canon.clone());
+            self.rescan_warnings = self.rescan_upload_dir(&canon, &dir)?;
         }
-        Ok(self.upload_dir.as_ref().unwrap())
+        Ok((self.upload_dir.as_ref().unwrap(), &self.rescan_warnings))
+    }
+
+    /// Re-mark the staged files an earlier session left in the upload
+    /// directory, and report what was skipped.
+    ///
+    /// A session is in-memory: `uploaded` and `cache_path` live on the
+    /// snapshot, but the files outlive the process that staged them, so a
+    /// resumed session over the same tarball starts with a directory full
+    /// of uploads no package points at. This runs steps 2 and 4 of the
+    /// upload lifecycle on each of them -- the match, then the record --
+    /// and never step 3: the files are already in place and nothing here
+    /// renames, copies, or deletes one.
+    ///
+    /// A file some package's `cache_path` already names is left as it is,
+    /// matcher untouched: `uploaded` and `cache_path` deserialize with the
+    /// snapshot, so a resumed session can arrive already knowing who a
+    /// staged file belongs to, and that is a better answer than a guess
+    /// from the filename.
+    ///
+    /// Entries are taken in filename order, so two files matching one
+    /// package resolve the same way on every resume: the later one is
+    /// marked and the earlier stays staged with a warning. An entry that
+    /// is not a regular file, or whose name the staged-name allowlist
+    /// rejects, is skipped with a warning naming it; a regular file whose
+    /// name no package matches is left staged and warned about by nothing,
+    /// because the operator may be about to upload the package it belongs
+    /// to.
+    ///
+    /// The part files of a process that died mid-transfer are gone by the
+    /// time this runs -- `ensure_upload_dir` sweeps before it rescans --
+    /// so they are removed rather than reported. One that survives the
+    /// sweep is not a regular file, and is warned about like any other.
+    ///
+    /// Entries are listed and proved through `canon`, and recorded as
+    /// `staged_dir.join(name)`, which is the spelling the upload handler
+    /// records: a session must not end up holding two spellings of one
+    /// directory, because the 409 that stops two packages claiming one
+    /// staged file compares `cache_path` as text.
+    fn rescan_upload_dir(
+        &mut self,
+        canon: &Path,
+        staged_dir: &Path,
+    ) -> Result<Vec<String>, RefineError> {
+        let read_err = |e: std::io::Error| {
+            RefineError::TarballError(format!("read upload dir {}: {e}", canon.display()))
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(canon).map_err(read_err)? {
+            let entry = entry.map_err(read_err)?;
+            match entry.file_name().into_string() {
+                Ok(name) => names.push(name),
+                // A non-UTF-8 name cannot pass the allowlist, and naming
+                // it in a warning means lossy-converting it, which would
+                // print a name no `rm` would take.
+                Err(_) => continue,
+            }
+        }
+        names.sort();
+
+        let spoken_for = self.packages_staged_in(canon);
+        let mut warnings = Vec::new();
+        let mut claimed: HashMap<String, String> = HashMap::new();
+        for name in names {
+            let mut skip = |why: String| {
+                warnings.push(format!("skipped {name} in the upload directory: {why}"))
+            };
+            if let Err(e) = inspectah_core::rpm_filename::validate_staged_name(&name) {
+                skip(e.to_string());
+                continue;
+            }
+            match std::fs::symlink_metadata(canon.join(&name)) {
+                Ok(md) if md.file_type().is_file() => {}
+                Ok(_) => {
+                    skip("not a regular file".into());
+                    continue;
+                }
+                Err(e) => {
+                    skip(e.to_string());
+                    continue;
+                }
+            }
+            // A file a package already points at is already decided, and a
+            // resume re-derives nothing the snapshot carries: the matcher
+            // would hand it to whichever package its name parses to, which
+            // need not be the one the operator staged it for.
+            let owner = match spoken_for.get(&name) {
+                Some(canonical) => canonical.clone(),
+                None => {
+                    let Some(matched) = self.match_uploaded_rpm(&name) else {
+                        continue;
+                    };
+                    let canonical = matched.canonical.clone();
+                    self.set_uploaded(&canonical, staged_dir.join(&name), matched.uploaded_version);
+                    canonical
+                }
+            };
+            if let Some(earlier) = claimed.insert(owner.clone(), name.clone()) {
+                warnings.push(format!(
+                    "{earlier} in the upload directory also matches {owner}, \
+                     which {name} now holds; it stays staged and unmarked"
+                ));
+            }
+        }
+        Ok(warnings)
+    }
+
+    /// The packages whose `cache_path` already names a file directly in
+    /// `canon`, by that file's basename.
+    ///
+    /// The parent is resolved rather than compared as text: `cache_path`
+    /// is recorded with whatever spelling of the upload directory the
+    /// session was given, which on a path through a symlinked parent is
+    /// not the canonical one.
+    fn packages_staged_in(&self, canon: &Path) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        let Some(rpm) = self.original.rpm.as_ref() else {
+            return out;
+        };
+        for pkg in &rpm.packages_added {
+            let Some(cache_path) = pkg.cache_path.as_deref().map(Path::new) else {
+                continue;
+            };
+            let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let parent = cache_path.parent().and_then(|p| p.canonicalize().ok());
+            if parent.as_deref() == Some(canon) {
+                out.insert(
+                    basename.to_string(),
+                    canonical_package_id(&pkg.name, &pkg.arch),
+                );
+            }
+        }
+        out
     }
 
     /// The canonicalized upload directory, once `ensure_upload_dir` has
@@ -1005,30 +1172,42 @@ impl RefineSession {
 
     /// Reverse the effect of `set_uploaded` for a given `name.arch`.
     ///
-    /// Clears `uploaded`, `repoless_cached` and `cache_path` on the
-    /// matching PackageEntry, deletes the staged RPM file, and
+    /// Deletes the staged RPM file, hands `(repoless_cached, cache_path,
+    /// uploaded_version)` back to whatever the upload displaced, and
     /// invalidates cached views so subsequent renders and exports reflect
     /// the removal. The precondition is `uploaded`, not `repoless_cached`:
     /// a package the collector found in the host's dnf cache was never
     /// staged here, and its `cache_path` is a host path this has no
-    /// business unlinking.
+    /// business unlinking, so that case is
+    /// [`RemovalOutcome::CachedOnly`] and nothing changes.
     ///
-    /// Returns `Ok(true)` if a matching upload was found and removed,
-    /// `Ok(false)` if no matching uploaded RPM existed, and `Err` when the
-    /// recorded path fails [`RefineSession::resolve_staged_file`].
-    pub fn unmark_uploaded_rpm(&mut self, name: &str, arch: &str) -> Result<bool, RefineError> {
+    /// `Err` means the recorded path failed
+    /// [`RefineSession::resolve_staged_file`], and the session is exactly
+    /// as it was.
+    pub fn unmark_uploaded_rpm(
+        &mut self,
+        name: &str,
+        arch: &str,
+    ) -> Result<RemovalOutcome, RefineError> {
         let staged = {
             let Some(rpm) = self.original.rpm.as_ref() else {
-                return Ok(false);
+                return Ok(RemovalOutcome::NotFound);
             };
-            let found = rpm
+            let Some(pkg) = rpm
                 .packages_added
                 .iter()
-                .find(|pkg| pkg.name == name && pkg.arch == arch && pkg.uploaded);
-            match found {
-                Some(pkg) => pkg.cache_path.clone(),
-                None => return Ok(false),
+                .find(|pkg| pkg.name == name && pkg.arch == arch)
+            else {
+                return Ok(RemovalOutcome::NotFound);
+            };
+            if !pkg.uploaded {
+                return Ok(if pkg.repoless_cached {
+                    RemovalOutcome::CachedOnly
+                } else {
+                    RemovalOutcome::NotFound
+                });
             }
+            pkg.cache_path.clone()
         };
 
         // Confine before unlinking, and before the entry is cleared: a
@@ -1041,11 +1220,29 @@ impl RefineSession {
             })?;
         }
 
+        // Taken, not read: the displacement is over, and a second removal
+        // must not restore a cache path this one already handed back.
+        let prior = self.prior_cache.remove(&canonical_package_id(name, arch));
         if let Some(rpm) = self.original.rpm.as_mut() {
             for pkg in &mut rpm.packages_added {
                 if pkg.name == name && pkg.arch == arch && pkg.uploaded {
-                    pkg.repoless_cached = false;
-                    pkg.cache_path = None;
+                    // `set_uploaded` records `prior` only for an entry the
+                    // host's dnf cache already supplied, so `None` here is
+                    // a package that had no RPM before the upload and has
+                    // none after it. Clearing `uploaded_version` is part
+                    // of that: the row renders it, and the version of an
+                    // upload that is gone is not a fact about anything.
+                    let (repoless_cached, cache_path, uploaded_version) = match prior {
+                        Some(prior) => (
+                            prior.repoless_cached,
+                            prior.cache_path,
+                            prior.uploaded_version,
+                        ),
+                        None => (false, None, None),
+                    };
+                    pkg.repoless_cached = repoless_cached;
+                    pkg.cache_path = cache_path;
+                    pkg.uploaded_version = uploaded_version;
                     pkg.uploaded = false;
                     break;
                 }
@@ -1053,7 +1250,7 @@ impl RefineSession {
         }
         self.invalidate_caches();
 
-        Ok(true)
+        Ok(RemovalOutcome::Removed)
     }
 
     pub fn repo_index(&self) -> &RepoIndex {
@@ -8044,6 +8241,10 @@ mod tests {
             dir.join("epel-release-9-11.el9.noarch.rpm").exists(),
             "the sweep removes part files only"
         );
+        assert!(
+            only_package(&session).uploaded,
+            "and the rescan behind it takes the file the sweep left as an upload"
+        );
 
         // A running server never removes a part file by name pattern: the
         // sweep belongs to opening the directory, not to serving a request.
@@ -8067,10 +8268,25 @@ mod tests {
         std::fs::create_dir(dir.join(".upload-busy.part")).unwrap();
         std::os::unix::fs::symlink(&link_target, dir.join(".upload-link.part")).unwrap();
 
-        session_over_upload_dir(&dir)
+        let mut session = session_over_upload_dir(&dir);
+        let (_, warnings) = session
             .ensure_upload_dir()
             .expect("the sweep does not fail on entries it will not remove");
 
+        // The two the sweep leaves behind are the two the rescan then
+        // refuses to treat as staged RPMs, which is what it reports. The
+        // suffix is what they fail on, not the leading dot: the allowlist
+        // checks `.rpm` first, and a part file is outside the rule twice
+        // over.
+        assert_eq!(
+            warnings,
+            [
+                "skipped .upload-busy.part in the upload directory: \
+                 staged filename does not end in .rpm",
+                "skipped .upload-link.part in the upload directory: \
+                 staged filename does not end in .rpm",
+            ]
+        );
         assert!(!dir.join(".upload-dead.part").exists());
         assert!(
             dir.join(".upload-busy.part").is_dir(),
@@ -8140,10 +8356,11 @@ mod tests {
             Some("9-12.el9".into()),
         );
 
-        assert!(
+        assert_eq!(
             session
                 .unmark_uploaded_rpm("epel-release", "noarch")
-                .unwrap()
+                .unwrap(),
+            RemovalOutcome::Removed
         );
 
         let pkg = only_package(&session);
@@ -8170,10 +8387,11 @@ mod tests {
         let mut session = RefineSession::new(snap);
         session.set_upload_dir(dir);
 
-        assert!(
-            !session
+        assert_eq!(
+            session
                 .unmark_uploaded_rpm("epel-release", "noarch")
                 .unwrap(),
+            RemovalOutcome::CachedOnly,
             "a package that was never uploaded has no upload to remove"
         );
 

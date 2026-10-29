@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use inspectah_core::rpm_filename::{RpmFilename, StagedName};
 use inspectah_refine::session::{
-    RefineSession, UPLOAD_PART_PREFIX, UPLOAD_PART_RAND_BYTES, UPLOAD_PART_SUFFIX, UploadMatch,
+    RefineSession, RemovalOutcome, UPLOAD_PART_PREFIX, UPLOAD_PART_RAND_BYTES, UPLOAD_PART_SUFFIX,
+    UploadMatch,
 };
 use inspectah_refine::types::RefineError;
 use std::io::Write;
@@ -141,7 +142,10 @@ pub fn commit(
     part: StagedPart,
     name: &StagedName,
 ) -> Result<UploadOutcome, UploadError> {
-    let dest = session.ensure_upload_dir()?.join(name.as_str());
+    let dest = {
+        let (upload_dir, _) = session.ensure_upload_dir()?;
+        upload_dir.join(name.as_str())
+    };
 
     // Under the same hold as the rename below, so the match cannot go
     // stale between deciding and placing.
@@ -149,11 +153,12 @@ pub fn commit(
     let matched_canonical = matched.as_ref().map(|m| m.canonical.as_str());
 
     // No rename ever replaces a file that is another package's
-    // `cache_path`, matched or unmatched.
-    if let Some(owner) = other_package_staged_at(session, &dest, matched_canonical) {
+    // `cache_path`, and no upload takes a name the export will write for
+    // another package, matched or unmatched.
+    if let Some(occupant) = occupant_of(session, &dest, matched_canonical) {
         return Err(UploadError::Client(
             StatusCode::CONFLICT,
-            format!("{} is already staged for {owner}", name.as_str()),
+            occupant.refusal(name.as_str()),
         ));
     }
 
@@ -198,19 +203,75 @@ pub fn commit(
     })
 }
 
-/// The `name.arch` of a package other than `exclude` whose `cache_path` is
-/// already `dest`.
-fn other_package_staged_at(
-    session: &RefineSession,
-    dest: &Path,
-    exclude: Option<&str>,
-) -> Option<String> {
+/// Why a staged name is not this upload's to take, and whose it is.
+///
+/// Both ways end in the same place -- two packages wanting one path under
+/// `repoless-packages/` in the export -- but they are discovered
+/// differently and the operator undoes them differently, so they are one
+/// list rather than one check: anything that can own the destination has
+/// to be a variant here.
+enum Occupant {
+    /// Another package's `cache_path` already names the destination.
+    Staged(String),
+    /// The destination's basename is another cached package's NEVRA
+    /// filename, which is the name the export extracts for it from the
+    /// source tarball.
+    CachedNevra(String),
+}
+
+impl Occupant {
+    /// The 409 body, naming the file the client sent.
+    fn refusal(&self, filename: &str) -> String {
+        match self {
+            Occupant::Staged(owner) => format!("{filename} is already staged for {owner}"),
+            Occupant::CachedNevra(owner) => format!(
+                "{filename} is the cached RPM filename of {owner}; \
+                 upload it under a different name or remove {owner} from the export"
+            ),
+        }
+    }
+}
+
+/// Whoever owns `dest` already, other than `exclude`.
+///
+/// The NEVRA arm is the one a staging-time check is easy to leave out,
+/// because the colliding package's `cache_path` points into the host's
+/// dnf cache and so matches nothing here. Without it the collision
+/// surfaces at `create_new` in the export's step 2f, which fails every
+/// export from that point on and names a path, not the upload that caused
+/// it; the only way out is a removal the operator has to work out for
+/// themselves.
+///
+/// Disposition is deliberately not consulted. An excluded cached package
+/// writes nothing today, so the check is stricter than the export needs,
+/// but the alternative is a refusal that appears and disappears as the
+/// operator toggles a row, and a name that is safe to upload only until
+/// someone re-includes the package that owns it.
+fn occupant_of(session: &RefineSession, dest: &Path, exclude: Option<&str>) -> Option<Occupant> {
     let rpm = session.snapshot().rpm.as_ref()?;
-    rpm.packages_added
-        .iter()
-        .filter(|pkg| pkg.cache_path.as_deref().map(Path::new) == Some(dest))
-        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
-        .find(|canonical| Some(canonical.as_str()) != exclude)
+    let basename = dest.file_name().and_then(|n| n.to_str());
+    let mut cached_nevra = None;
+    for pkg in &rpm.packages_added {
+        let canonical = format!("{}.{}", pkg.name, pkg.arch);
+        if Some(canonical.as_str()) == exclude {
+            continue;
+        }
+        if pkg.cache_path.as_deref().map(Path::new) == Some(dest) {
+            return Some(Occupant::Staged(canonical));
+        }
+        let nevra = format!(
+            "{}-{}-{}.{}.rpm",
+            pkg.name, pkg.version, pkg.release, pkg.arch
+        );
+        if cached_nevra.is_none()
+            && pkg.repoless_cached
+            && !pkg.uploaded
+            && Some(nevra.as_str()) == basename
+        {
+            cached_nevra = Some(Occupant::CachedNevra(canonical));
+        }
+    }
+    cached_nevra
 }
 
 /// The staged file a new upload for `canonical` replaces: its current
@@ -254,7 +315,7 @@ pub async fn upload_rpm(
     // is short enough to read whole.
     let upload_dir = {
         let mut session = state.session.lock().unwrap();
-        session.ensure_upload_dir()?.to_path_buf()
+        session.ensure_upload_dir()?.0.to_path_buf()
     };
 
     let mut field = multipart.next_field().await?.ok_or_else(|| {
@@ -309,26 +370,43 @@ pub async fn upload_rpm(
 /// Remove a previously uploaded RPM file.
 ///
 /// Accepts `name_arch` in canonical `name.arch` format (e.g. `nginx.x86_64`).
-/// Reverses the effect of `upload_rpm`: deletes the staged file and clears
-/// the `repoless_cached` / `cache_path` fields on the matching PackageEntry.
+/// Reverses the effect of `upload_rpm`: deletes the staged file and hands
+/// the matching PackageEntry back to whatever the upload displaced.
+///
+/// A package whose RPM came from the host's dnf cache is 409, not 404: it
+/// has an RPM and the row shows one, so "no uploaded RPM" would read as a
+/// mistake on the client's part rather than a refusal to unlink a file
+/// under `/var/cache/dnf`.
 pub async fn delete_uploaded_rpm(
     State(state): State<Arc<AppState>>,
     UrlPath(name_arch): UrlPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<serde_json::Value>, UploadError> {
     // Split "name.arch" on the last dot to handle package names containing dots
     let (name, arch) = name_arch.rsplit_once('.').ok_or_else(|| {
-        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+        UploadError::Session(inspectah_refine::types::RefineError::BadRequest(format!(
             "invalid name.arch format: {name_arch}"
         )))
     })?;
 
     let mut session = state.session.lock().unwrap();
-    let found = session.unmark_uploaded_rpm(name, arch).map_err(AppError)?;
-
-    if !found {
-        return Err(AppError(inspectah_refine::types::RefineError::NotFound(
-            format!("no uploaded RPM for {name_arch}"),
-        )));
+    match session.unmark_uploaded_rpm(name, arch)? {
+        RemovalOutcome::Removed => {}
+        RemovalOutcome::CachedOnly => {
+            return Err(UploadError::Client(
+                StatusCode::CONFLICT,
+                format!(
+                    "only uploads can be removed; \
+                     {name_arch} is cached from the host's dnf cache"
+                ),
+            ));
+        }
+        RemovalOutcome::NotFound => {
+            return Err(UploadError::Session(
+                inspectah_refine::types::RefineError::NotFound(format!(
+                    "no uploaded RPM for {name_arch}"
+                )),
+            ));
+        }
     }
 
     Ok(Json(serde_json::json!({
