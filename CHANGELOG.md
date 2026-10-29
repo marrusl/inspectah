@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A failed RPM upload no longer reports success** — the refine web UI branched on the response status alone and never read the server's `{"error": "…"}` body, and the upload modal caught the resulting error and discarded it. Every refusal left the green "`foo.rpm` matches nginx" checkmark on screen with the Upload button live again, so an operator whose upload was rejected for its filename, its size, or a staging conflict saw nothing at all go wrong. Both upload routes now surface the server's reason: the modal replaces the checkmark with the refusal text and offers no retry, and the status code rides along in the message because two of the reasons ("internal error", and axum's "failed to read stream" for a body over the 500 MiB route limit) say nothing on their own. The DELETE route had the same defect and the same fix, so removing a package whose RPM came from the host's dnf cache now reports why instead of logging "Conflict".
+
 ## [0.9.0-beta.3] - 2026-08-16
 
 ### Fixed

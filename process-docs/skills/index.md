@@ -26,3 +26,4 @@ development or review.
 | [rpm-repo-name-mismatch](rpm-repo-name-mismatch.md) | Install-time short names vs full repo IDs require case-insensitive substring matching; method constant registry in `util.rs` |
 | [containerfile-value-quoting](containerfile-value-quoting.md) | Quote vs. sanitize vs. reject per interpolation context in the Containerfile renderer; quoting must land before any predicate narrowing |
 | [el8-platform-compatibility](el8-platform-compatibility.md) | EL8 platform considerations: no bootc image exists, map up to EL9 floor tag (9.6); defaults must stay version-pinned or migration-kind detection breaks |
+| [patternfly-fileupload-async-tests](patternfly-fileupload-async-tests.md) | PatternFly `FileUpload` delivers the file on a microtask; `fireEvent.change` needs an awaited `findBy*`, and a negative assertion after it passes vacuously |

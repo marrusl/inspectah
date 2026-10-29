@@ -76,6 +76,7 @@ export function RpmUploadModal({
   const [matchResult, setMatchResult] = useState<UploadMatchResult | null>(
     null,
   );
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const uploadAreaRef = useRef<HTMLDivElement>(null);
 
   // Focus the upload area on open
@@ -93,6 +94,7 @@ export function RpmUploadModal({
     (_event: unknown, selectedFile: File) => {
       setFile(selectedFile);
       setFilename(selectedFile.name);
+      setUploadError(null);
       setValidation(
         validateRpmFile(packageName, packageArch, selectedFile.name),
       );
@@ -105,11 +107,13 @@ export function RpmUploadModal({
     setFilename("");
     setValidation(null);
     setMatchResult(null);
+    setUploadError(null);
   }, []);
 
   const handleConfirm = useCallback(async () => {
     if (file && validation?.valid) {
       setUploading(true);
+      setUploadError(null);
       try {
         const result = await onUpload(packageName, file);
         if (result) {
@@ -120,8 +124,9 @@ export function RpmUploadModal({
           onClose();
           triggerRef.current?.focus();
         }
-      } catch {
+      } catch (err: unknown) {
         setMatchResult(null);
+        setUploadError(err instanceof Error ? err.message : String(err));
       } finally {
         setUploading(false);
       }
@@ -175,7 +180,7 @@ export function RpmUploadModal({
             aria-label={`Upload RPM for ${packageName}`}
           />
         </div>
-        {validation && !matchResult && (
+        {validation && !matchResult && !uploadError && (
           <HelperText>
             <HelperTextItem
               variant={validation.valid ? "success" : "error"}
@@ -190,6 +195,13 @@ export function RpmUploadModal({
               {validation.valid
                 ? `${filename} matches ${packageName}`
                 : validation.error}
+            </HelperTextItem>
+          </HelperText>
+        )}
+        {uploadError && (
+          <HelperText data-testid="upload-error">
+            <HelperTextItem variant="error" icon={<ExclamationCircleIcon />}>
+              {uploadError}
             </HelperTextItem>
           </HelperText>
         )}

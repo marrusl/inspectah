@@ -86,6 +86,9 @@ describe("RpmUploadModal", () => {
         screen.getByText(/Matched to custom-agent\.x86_64/),
       ).toBeInTheDocument();
     });
+    // The failure cases below assert this is absent; a success has to
+    // prove it can be absent for that assertion to mean anything.
+    expect(screen.queryByTestId("upload-error")).not.toBeInTheDocument();
   });
 
   it("shows warning for unmatched upload", async () => {
@@ -113,6 +116,82 @@ describe("RpmUploadModal", () => {
         screen.getByText(/no matching package found/),
       ).toBeInTheDocument();
     });
+  });
+
+  /**
+   * Select an RPM for custom-agent. PatternFly's dropzone hands the file
+   * over on a microtask, so the validation HelperText is not on screen
+   * when this returns and callers must await it before the Upload button
+   * is live.
+   */
+  function chooseRpm(filename: string) {
+    const input = document.querySelector('input[type="file"]')!;
+    fireEvent.change(input, {
+      target: {
+        files: [new File(["rpm"], filename, { type: "application/x-rpm" })],
+      },
+    });
+  }
+
+  it("replaces the success checkmark with the server's refusal", async () => {
+    const user = userEvent.setup();
+    const onUpload = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "Upload failed (409): custom-agent-1.0-1.el9.x86_64.rpm is " +
+            "already staged for custom-agent.x86_64",
+        ),
+      );
+    render(<RpmUploadModal {...defaultProps} onUpload={onUpload} />);
+    chooseRpm("custom-agent-1.0-1.el9.x86_64.rpm");
+
+    // Picking a valid file puts the green checkmark on screen. Proving it
+    // is here first is what stops the assertion after the upload from
+    // passing against an element that was never rendered.
+    await screen.findByText(
+      /custom-agent-1\.0-1\.el9\.x86_64\.rpm matches custom-agent/,
+    );
+
+    await user.click(screen.getByRole("button", { name: /confirm|upload/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-error")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/already staged for custom-agent\.x86_64/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/custom-agent-1\.0-1\.el9\.x86_64\.rpm matches/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /retry/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears the refusal when a different file is chosen", async () => {
+    const user = userEvent.setup();
+    const onUpload = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("Upload failed (413): failed to read stream"),
+      );
+    render(<RpmUploadModal {...defaultProps} onUpload={onUpload} />);
+    chooseRpm("custom-agent-1.0-1.el9.x86_64.rpm");
+    await screen.findByText(
+      /custom-agent-1\.0-1\.el9\.x86_64\.rpm matches custom-agent/,
+    );
+    await user.click(screen.getByRole("button", { name: /confirm|upload/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-error")).toBeInTheDocument();
+    });
+
+    chooseRpm("custom-agent-2.0-1.el9.x86_64.rpm");
+
+    await screen.findByText(
+      /custom-agent-2\.0-1\.el9\.x86_64\.rpm matches custom-agent/,
+    );
+    expect(screen.queryByTestId("upload-error")).not.toBeInTheDocument();
   });
 });
 

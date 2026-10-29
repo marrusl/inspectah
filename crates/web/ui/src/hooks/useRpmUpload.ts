@@ -73,6 +73,39 @@ function extractPackageName(filename: string): string | null {
   return match ? match[1] : null;
 }
 
+/**
+ * Build the error for a refused upload-rpm request.
+ *
+ * Both routes answer every refusal with `{"error": "<reason>"}`, and the
+ * reason is the whole point of the status they pick: 409 alone cannot
+ * tell an operator whether a file is already staged or came from their
+ * own dnf cache. The status rides along in the message because one of
+ * the reasons is the generic "internal error" and another is axum's
+ * "failed to read stream" for a body over the route limit, neither of
+ * which says anything on its own.
+ */
+async function refusal(response: Response, what: string): Promise<Error> {
+  let reason = "";
+  try {
+    const body: unknown = await response.json();
+    if (
+      typeof body === "object" &&
+      body !== null &&
+      "error" in body &&
+      typeof body.error === "string"
+    ) {
+      reason = body.error;
+    }
+  } catch {
+    // Not JSON: a proxy's own 413 page, or a connection cut mid-body.
+    // The status line below is all there is, and losing the failure
+    // entirely would be worse.
+  }
+  return new Error(
+    `${what} (${response.status}): ${reason || response.statusText}`,
+  );
+}
+
 export function useRpmUpload(): UseRpmUploadResult {
   const [repolessMap, setRepolessMap] = useState<Map<string, RepolessEntry>>(
     () => new Map(),
@@ -118,7 +151,7 @@ export function useRpmUpload(): UseRpmUploadResult {
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
+        throw await refusal(response, "Upload failed");
       }
 
       const result: UploadMatchResult = await response.json();
@@ -156,7 +189,7 @@ export function useRpmUpload(): UseRpmUploadResult {
     });
 
     if (!response.ok) {
-      throw new Error(`Remove upload failed: ${response.statusText}`);
+      throw await refusal(response, "Remove upload failed");
     }
 
     setUploadedSet((prev) => {
