@@ -374,6 +374,7 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
             path: entry.path.clone(),
             category: entry.category.clone(),
             disposition: entry.disposition.clone(),
+            locked: entry.locked,
             shadowed_by: entry.shadowed_by.clone(),
         })
         .collect();
@@ -404,7 +405,7 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
             runtime: s.runtime.clone(),
             default: s.default.clone(),
             source: s.source.clone(),
-            include: s.disposition.is_included(),
+            disposition: s.disposition.clone(),
             locked: s.locked,
         })
         .collect();
@@ -555,11 +556,21 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
 
     // `effective_var_backing` answers in `storage.var_directories`
     // order, so the outcome is zipped onto the directory it belongs to
-    // rather than looked up by path.
+    // rather than looked up by path. `zip` truncates to the shorter
+    // side in silence, so the lengths are checked first and in release
+    // too: the first filter anyone adds to `effective_var_backing`
+    // would otherwise drop the tail of this projection, in the web view
+    // and the TUI both, with nothing saying so.
+    let outcomes = effective_var_backing(snap);
+    assert_eq!(
+        st.var_directories.len(),
+        outcomes.len(),
+        "effective_var_backing must answer once per /var directory, in order"
+    );
     let var_directories = st
         .var_directories
         .iter()
-        .zip(effective_var_backing(snap))
+        .zip(outcomes)
         .map(|(d, outcome)| {
             debug_assert_eq!(d.path, outcome.path);
             RefVarDirectory {

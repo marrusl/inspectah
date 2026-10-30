@@ -236,6 +236,10 @@ pub struct RefConfigRef {
     pub path: String,
     pub category: ConfigCategory,
     pub disposition: FindingKind,
+    /// A locked entry's `SetInclude` is refused as a silent no-op, so a
+    /// pointer row that dropped this would render a live control whose
+    /// activation does nothing and says nothing.
+    pub locked: bool,
     pub shadowed_by: Option<ConfigShadow>,
 }
 
@@ -260,7 +264,10 @@ pub struct RefSysctlOverride {
     pub runtime: String,
     pub default: String,
     pub source: String,
-    pub include: bool,
+    /// The whole finding, not an `is_included()` bool: flattening it
+    /// would discard the Advisory and Inventory cases that decide
+    /// whether this row offers a control at all.
+    pub disposition: FindingKind,
     pub locked: bool,
 }
 

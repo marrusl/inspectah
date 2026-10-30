@@ -823,9 +823,12 @@ pub fn web_version_changes_section(data: &RefVersionChanges) -> ReferenceSection
 
     // Three-state empty reason
     if data.downgrades.is_empty() && data.upgrades.is_empty() {
-        let reason = data.empty_reason.as_ref().map(|r| match r {
-            EmptyReason::DataUnavailable => "data_unavailable".to_string(),
-            EmptyReason::ZeroDrift => "zero_drift".to_string(),
+        let reason = data.empty_reason.as_ref().map(|r| {
+            match r {
+                EmptyReason::DataUnavailable => EMPTY_DATA_UNAVAILABLE,
+                EmptyReason::ZeroDrift => EMPTY_ZERO_DRIFT,
+            }
+            .to_string()
         });
         return ReferenceSection {
             id: "version_changes".to_string(),
@@ -1029,13 +1032,13 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(format!("\"{}\" (default: \"{}\")", so.runtime, so.default)),
             detail: Some(so.source.clone()),
             searchable_text: format!("{} {} {} {}", so.key, so.runtime, so.default, so.source),
-            decision: Some(ContextDecision {
-                item_id: ItemId::Sysctl {
+            decision: context_decision(
+                ItemId::Sysctl {
                     key: so.key.clone(),
                 },
-                include: so.include,
-                locked: so.locked,
-            }),
+                &so.disposition,
+                so.locked,
+            ),
             ..Default::default()
         });
     }
@@ -1060,7 +1063,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
                     path: entry.path.clone(),
                 },
                 &entry.disposition,
-                false,
+                entry.locked,
             ),
             ..Default::default()
         });
@@ -1424,10 +1427,31 @@ pub const VAR_SUMMARY_ID: &str = "var_directories";
 const DEFAULT_VAR_DIR_MODE: &str = "0755";
 const DEFAULT_VAR_DIR_OWNER: &str = "root";
 
-/// Rationale on a `Provision` directory the host never had a creator
-/// for. `Provision { lost: Some(_) }` names the creator instead.
-const NO_HOST_CREATOR_RATIONALE: &str =
-    "no creator on the host; this export provisions the directory itself";
+/// Rationale on a `Provision` directory nothing on the host declares.
+/// `Provision { lost: Some(_) }` names the creator it lost instead.
+///
+/// The directory exists on the host, so something made it. What is
+/// absent is a declarative creator, and saying "no creator" instead
+/// reads to an admin as a tool error.
+const NO_DECLARED_CREATOR_RATIONALE: &str = "nothing on the host declares this directory: no tmpfiles.d entry, unit directive, \
+     or package owns it. This export provisions it.";
+
+/// State text on a `Provision` row whose ownership the scan could not
+/// read. The export cannot write a tmpfiles.d line without a mode, so
+/// it falls back to `RUN mkdir -p`, which lands the directory in the
+/// image rather than re-asserting it on every boot.
+const MKDIR_FALLBACK_STATE: &str =
+    "ownership not recorded: created in the image, not by tmpfiles.d";
+
+/// State text on an `Unresolved` row. The advisory badge reads
+/// "Unbacked /var directory", which is a stronger claim than this
+/// outcome supports, so the row says what is actually known.
+const UNCONFIRMED_STATE: &str = "backing unconfirmed";
+
+/// What the summary's third column says when the scan recorded no
+/// mode, owner, or group. Not tmpfiles.d's `-`, which means "leave the
+/// default" in the Containerfile the same operator is reading.
+const OWNERSHIP_NOT_RECORDED: &str = "ownership not recorded";
 
 /// The `/var` rows of the Storage section (§ 6.6): one collapsed
 /// summary over every directory, one advisory row per directory the
@@ -1444,8 +1468,10 @@ fn var_directory_rows(dirs: &[RefVarDirectory]) -> Vec<ContextItem> {
 
     let mut advisory_rows = Vec::new();
     let mut inventory_rows = Vec::new();
-    let mut unbacked_lines = Vec::new();
+    let mut attention_lines = Vec::new();
     let mut carried_lines = Vec::new();
+    let mut provisioned = 0usize;
+    let mut unconfirmed = 0usize;
 
     for vd in dirs {
         let line = summary_line(vd);
@@ -1467,43 +1493,59 @@ fn var_directory_rows(dirs: &[RefVarDirectory]) -> Vec<ContextItem> {
                 }
             }
             EffectiveBacking::Provision { lost } => {
-                unbacked_lines.push(line);
+                attention_lines.push(line);
+                provisioned += 1;
                 let rationale = match lost {
                     Some(creator) => format!(
                         "created on the host by {creator}, which this export does not carry"
                     ),
-                    None => NO_HOST_CREATOR_RATIONALE.to_string(),
+                    None => NO_DECLARED_CREATOR_RATIONALE.to_string(),
                 };
-                advisory_rows.push(unbacked_var_row(vd, rationale));
+                // No mode means no tmpfiles.d line: the export falls
+                // back to `RUN mkdir -p`, which is image content rather
+                // than a per-boot creator, and the row has to say so.
+                let state = ownership_detail(vd)
+                    .is_none()
+                    .then(|| MKDIR_FALLBACK_STATE.to_string());
+                advisory_rows.push(unbacked_var_row(vd, rationale, state));
             }
             EffectiveBacking::Unresolved { creator, reason } => {
-                unbacked_lines.push(line);
+                attention_lines.push(line);
+                unconfirmed += 1;
                 let rationale = format!(
                     "created on the host by {creator}; this export cannot tell whether the \
                      base image carries it ({})",
                     reason.reason_text()
                 );
-                advisory_rows.push(unbacked_var_row(vd, rationale));
+                advisory_rows.push(unbacked_var_row(
+                    vd,
+                    rationale,
+                    Some(UNCONFIRMED_STATE.to_string()),
+                ));
             }
         }
     }
 
-    let unbacked = unbacked_lines.len();
-    let state_text = if unbacked == 0 {
-        "all backed by tmpfiles.d, unit directives, or package ownership".to_string()
-    } else {
-        format!("{unbacked} unbacked")
+    // `Provision` and `Unresolved` are counted apart. One says the
+    // export makes the directory; the other says the export does not
+    // know whether anything will. Calling both "unbacked" asserts of
+    // the second exactly what its own rationale says is unknown.
+    let state_text = match (provisioned, unconfirmed) {
+        (0, 0) => "all backed by tmpfiles.d, unit directives, or package ownership".to_string(),
+        (u, 0) => format!("{u} unbacked"),
+        (0, n) => format!("{n} unconfirmed"),
+        (u, n) => format!("{u} unbacked, {n} unconfirmed"),
     };
-    // Unbacked directories list first: they are what the reader opened
-    // the summary for (§ 6.6).
-    unbacked_lines.extend(carried_lines);
+    // The directories needing attention list first: they are what the
+    // reader opened the summary for (§ 6.6).
+    attention_lines.extend(carried_lines);
 
     let mut rows = vec![ContextItem {
         id: VAR_SUMMARY_ID.to_string(),
         title: format!("{} /var directories", dirs.len()),
         subtitle: Some(state_text),
-        detail: Some(unbacked_lines.join("\n")),
-        searchable_text: format!("/var directories {}", unbacked_lines.join(" ")),
+        detail: Some(attention_lines.join("\n")),
+        searchable_text: format!("/var directories {}", attention_lines.join(" ")),
         ..Default::default()
     }];
     rows.append(&mut advisory_rows);
@@ -1512,21 +1554,46 @@ fn var_directory_rows(dirs: &[RefVarDirectory]) -> Vec<ContextItem> {
 }
 
 /// One line of the summary's directory list:
-/// `<path>  <mode> <owner>:<group>  <backing kind>` (§ 6.6).
+/// `<path>  <mode> <owner>:<group>  <creator>  <outcome>` (§ 6.6).
+///
+/// The fourth column is the point. § 6.6 wrote this list for backed
+/// directories only, and once the unbacked ones join it the creator
+/// column alone reads as the explanation of the summary's count, which
+/// it is not: the count comes from the outcome and the creator is a
+/// fact about the host.
 fn summary_line(vd: &RefVarDirectory) -> String {
-    let ownership = ownership_detail(vd).unwrap_or_else(|| "-".to_string());
-    format!("{}  {}  {}", vd.path, ownership, backing_kind(vd))
+    let ownership = ownership_detail(vd).unwrap_or_else(|| OWNERSHIP_NOT_RECORDED.to_string());
+    format!(
+        "{}  {}  {}  {}",
+        vd.path,
+        ownership,
+        host_creator(vd),
+        export_outcome(vd)
+    )
 }
 
-/// The collected verdict's kind, as the summary list names it.
-fn backing_kind(vd: &RefVarDirectory) -> &'static str {
+/// What made the directory on the source host, named so the operator
+/// can act on it: the answer to "which fragment do I keep including".
+fn host_creator(vd: &RefVarDirectory) -> String {
     match &vd.source {
-        Some(VarDirBacking::Tmpfiles { .. }) => "tmpfiles.d",
-        Some(VarDirBacking::StateDirectory { .. }) => "StateDirectory=",
-        Some(VarDirBacking::CacheDirectory { .. }) => "CacheDirectory=",
-        Some(VarDirBacking::LogsDirectory { .. }) => "LogsDirectory=",
-        Some(VarDirBacking::RpmOwned { .. }) => "package-owned",
-        Some(VarDirBacking::Unbacked) | None => "unbacked",
+        Some(VarDirBacking::Tmpfiles { conf, .. }) => format!("tmpfiles.d ({conf})"),
+        Some(VarDirBacking::StateDirectory { unit }) => format!("StateDirectory= ({unit})"),
+        Some(VarDirBacking::CacheDirectory { unit }) => format!("CacheDirectory= ({unit})"),
+        Some(VarDirBacking::LogsDirectory { unit }) => format!("LogsDirectory= ({unit})"),
+        Some(VarDirBacking::RpmOwned { package }) => format!("package-owned ({package})"),
+        // Not "unbacked": that word names an outcome, and this column
+        // names a mechanism. The two do not denote the same set.
+        Some(VarDirBacking::Unbacked) | None => "nothing declares it".to_string(),
+    }
+}
+
+/// What the export does about that creator (§ 3.4), which is where the
+/// summary's count comes from.
+fn export_outcome(vd: &RefVarDirectory) -> &'static str {
+    match &vd.outcome {
+        EffectiveBacking::Carried => "carried",
+        EffectiveBacking::Provision { .. } => "provisioned by this export",
+        EffectiveBacking::Unresolved { .. } => "backing unconfirmed",
     }
 }
 
@@ -1558,11 +1625,11 @@ fn departs_from_default_ownership(vd: &RefVarDirectory) -> bool {
 }
 
 /// An advisory row for a directory the export cannot report as backed.
-fn unbacked_var_row(vd: &RefVarDirectory, rationale: String) -> ContextItem {
+fn unbacked_var_row(vd: &RefVarDirectory, rationale: String, state: Option<String>) -> ContextItem {
     ContextItem {
         id: vd.path.clone(),
         title: vd.path.clone(),
-        subtitle: None,
+        subtitle: state,
         detail: ownership_detail(vd),
         searchable_text: format!("{} {}", vd.path, rationale),
         advisory: Some(ContextAdvisory {
@@ -1762,8 +1829,9 @@ mod tests {
             assert_eq!(
                 summary.detail.as_deref(),
                 Some(
-                    "/var/lib/missing  -  package-owned\n\
-                     /var/log/plain  0755 root:root  package-owned"
+                    "/var/lib/missing  ownership not recorded  \
+                     package-owned (appone)  carried\n\
+                     /var/log/plain  0755 root:root  package-owned (appone)  carried"
                 )
             );
         }
@@ -2542,7 +2610,7 @@ mod tests {
                 runtime: "10".into(),
                 default: "60".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
-                include: true,
+                disposition: FindingKind::included(),
                 locked: false,
             }],
             cmdline: Some("BOOT_IMAGE=/vmlinuz-5.14.0 root=/dev/mapper/rhel-root".into()),
