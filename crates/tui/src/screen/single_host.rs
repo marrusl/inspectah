@@ -1420,6 +1420,7 @@ mod tests {
 
     mod var_dir_detail_line {
         use super::*;
+        use inspectah_pipeline::render::var_dirs::EffectiveBacking;
         use inspectah_refine::projection::RefVarDirectory;
 
         #[test]
@@ -1429,6 +1430,8 @@ mod tests {
                 mode: Some("0750".into()),
                 owner_name: Some("appone".into()),
                 group_name: Some("appone".into()),
+                source: None,
+                outcome: EffectiveBacking::Carried,
             };
             assert_eq!(var_dir_detail(&d), "0750 appone:appone");
         }
@@ -1442,6 +1445,8 @@ mod tests {
                 mode: None,
                 owner_name: None,
                 group_name: None,
+                source: None,
+                outcome: EffectiveBacking::Carried,
             };
             assert_eq!(var_dir_detail(&d), "");
         }

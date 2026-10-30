@@ -11,8 +11,10 @@ use inspectah_core::types::config::{ConfigCategory, ConfigShadow, SYNTHESIZED_SY
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 // ── Decision projection ──────────────────────────────────────────
 
@@ -54,6 +56,24 @@ pub struct ReferenceProjection {
     pub scheduled_tasks: Vec<GenericRefItem>,
     pub non_rpm_software: Vec<GenericRefItem>,
     pub selinux: Vec<GenericRefItem>,
+    pub collected: CollectedSections,
+}
+
+/// Which snapshot sections the scan collected at all. An empty
+/// reference section means one of two different things, and only the
+/// snapshot can tell them apart: the inspector collected nothing
+/// (`data_unavailable`) or it collected a section that projects to no
+/// rows (`zero_drift`) (§ 3.8).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CollectedSections {
+    pub services: bool,
+    pub containers: bool,
+    pub network: bool,
+    pub storage: bool,
+    pub scheduled_tasks: bool,
+    pub non_rpm_software: bool,
+    pub kernel_boot: bool,
+    pub selinux: bool,
 }
 
 // ── Services ─────────────────────────────────────────────────────
@@ -195,6 +215,9 @@ pub struct RefKernelBoot {
     pub cmdline: Option<String>,
     pub grub_defaults: Option<String>,
     pub tuned_active: Option<String>,
+    /// The decision the active tuned profile travels under, so the row
+    /// that shows it is the row that decides it (§ 3.8).
+    pub tuned_disposition: FindingKind,
     pub locale: Option<String>,
     pub timezone: Option<String>,
     pub sysctl_overrides: Vec<RefSysctlOverride>,
@@ -237,6 +260,8 @@ pub struct RefSysctlOverride {
     pub runtime: String,
     pub default: String,
     pub source: String,
+    pub include: bool,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +373,12 @@ pub struct RefVarDirectory {
     pub mode: Option<String>,
     pub owner_name: Option<String>,
     pub group_name: Option<String>,
+    /// What created the directory on the source host, as collected.
+    pub source: Option<VarDirBacking>,
+    /// What the export can say about that creator reaching the image
+    /// (§ 3.4). The view follows this, not `source`: a verdict the
+    /// export cannot honour is not a backing.
+    pub outcome: EffectiveBacking,
 }
 
 #[derive(Debug, Clone)]

@@ -10,28 +10,31 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use inspectah_core::types::FindingKind;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+use inspectah_core::types::storage::VarDirBacking;
+use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::advisory::config_advisories;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
     GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
-    RefVersionChanges, ReferenceProjection, config_ref_summary,
+    RefVarDirectory, RefVersionChanges, ReferenceProjection, config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::ItemId;
 
 use crate::web_types::{
-    ContextItem, ContextSubsection, DropInDecisionDto, FlatpakDecisionDto, GroupInfo,
-    GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto, PackageProvenance,
-    ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto,
-    SysctlDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
-    VersionChangeEntry, ViewResponse,
+    ContextAdvisory, ContextDecision, ContextItem, ContextSubsection, DropInDecisionDto,
+    FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto,
+    PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
+    ServiceDecisionDto, SysctlDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto,
+    UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -538,6 +541,29 @@ fn file_type_str(ft: &FileType) -> String {
     }
 }
 
+// -- Decision helper -------------------------------------------------------
+
+/// The decision a reference row carries, or `None` when the row is not
+/// where the decision is made.
+///
+/// Only an `Actionable` finding is decided on its row. `Advisory` and
+/// `Inventory` findings are non-toggleable (§ 3.5), and a row that
+/// rendered a decision for one would offer a control the server refuses.
+fn context_decision(
+    item_id: ItemId,
+    disposition: &FindingKind,
+    locked: bool,
+) -> Option<ContextDecision> {
+    match disposition {
+        FindingKind::Actionable { include } => Some(ContextDecision {
+            item_id,
+            include: *include,
+            locked,
+        }),
+        FindingKind::Advisory { .. } | FindingKind::Inventory => None,
+    }
+}
+
 // -- Services --------------------------------------------------------------
 
 /// Map a (current_state, default_state) pair to a human-readable subtitle.
@@ -603,6 +629,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             subtitle: Some(subtitle),
             detail: dropin_detail,
             searchable_text: search,
+            ..Default::default()
         });
     }
 
@@ -620,6 +647,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             subtitle: Some(format!("{} (matches preset, has drop-in override)", state)),
             detail,
             searchable_text: format!("{} {} drop-in override", svc.unit, state),
+            ..Default::default()
         });
     }
 
@@ -636,6 +664,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             subtitle: Some("enabled (no preset rule)".into()),
             detail: dropin_detail,
             searchable_text: format!("{} enabled no preset rule", svc.unit),
+            ..Default::default()
         });
     }
 
@@ -647,6 +676,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             subtitle: Some("disabled (no preset rule)".into()),
             detail: None,
             searchable_text: format!("{} disabled no preset rule", svc.unit),
+            ..Default::default()
         });
     }
 
@@ -658,6 +688,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             subtitle: Some("drop-in override".into()),
             detail: Some(d.content.clone()),
             searchable_text: format!("{} drop-in", d.unit),
+            ..Default::default()
         });
     }
 
@@ -674,6 +705,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
                 subtitle: Some(format!("package '{}' not in target image", o.package)),
                 detail: None,
                 searchable_text: format!("{} omitted {}", o.unit, o.package),
+                ..Default::default()
             })
             .collect();
         subsections.push(ContextSubsection {
@@ -713,6 +745,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
                         a.owning_package,
                         reasons_str.join(" ")
                     ),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -734,6 +767,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
                 subtitle: Some(w.message.clone()),
                 detail: None,
                 searchable_text: format!("warning {}", w.message),
+                ..Default::default()
             })
             .collect();
         subsections.push(ContextSubsection {
@@ -830,6 +864,7 @@ pub fn web_version_changes_section(data: &RefVersionChanges) -> ReferenceSection
             subtitle: Some(subtitle),
             detail: None,
             searchable_text: searchable,
+            ..Default::default()
         });
     }
 
@@ -866,6 +901,7 @@ pub fn web_containers_section(data: &RefContainers) -> ReferenceSection {
             subtitle: Some(q.image.clone()),
             detail: Some(q.content.clone()),
             searchable_text: search,
+            ..Default::default()
         });
     }
 
@@ -891,6 +927,7 @@ pub fn web_containers_section(data: &RefContainers) -> ReferenceSection {
             subtitle: Some(subtitle),
             detail: None,
             searchable_text: search,
+            ..Default::default()
         });
     }
 
@@ -925,6 +962,7 @@ pub fn web_containers_section(data: &RefContainers) -> ReferenceSection {
             subtitle: Some(subtitle),
             detail,
             searchable_text: search,
+            ..Default::default()
         });
     }
 
@@ -949,6 +987,7 @@ pub fn web_containers_section(data: &RefContainers) -> ReferenceSection {
             subtitle: Some(format!("{}/{}", fa.origin, fa.branch)),
             detail: None,
             searchable_text: search,
+            ..Default::default()
         });
     }
 
@@ -971,6 +1010,14 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(tuned.clone()),
             detail: None,
             searchable_text: tuned.clone(),
+            decision: context_decision(
+                ItemId::TunedSelection {
+                    profile: tuned.clone(),
+                },
+                &data.tuned_disposition,
+                false,
+            ),
+            ..Default::default()
         });
     }
 
@@ -982,6 +1029,14 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(format!("\"{}\" (default: \"{}\")", so.runtime, so.default)),
             detail: Some(so.source.clone()),
             searchable_text: format!("{} {} {} {}", so.key, so.runtime, so.default, so.source),
+            decision: Some(ContextDecision {
+                item_id: ItemId::Sysctl {
+                    key: so.key.clone(),
+                },
+                include: so.include,
+                locked: so.locked,
+            }),
+            ..Default::default()
         });
     }
 
@@ -997,6 +1052,17 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(config_ref_summary(entry)),
             detail: None,
             searchable_text: entry.path.clone(),
+            // A shadowed entry is `Inventory` (§ 3.5): its content
+            // reaches the image through the keys that absorbed it, so
+            // the row explains where the decision went and offers none.
+            decision: context_decision(
+                ItemId::Config {
+                    path: entry.path.clone(),
+                },
+                &entry.disposition,
+                false,
+            ),
+            ..Default::default()
         });
     }
 
@@ -1024,6 +1090,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle,
             detail: Some(cmdline.clone()),
             searchable_text: cmdline.clone(),
+            ..Default::default()
         });
     }
 
@@ -1035,6 +1102,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: None,
             detail: Some(grub.clone()),
             searchable_text: grub.clone(),
+            ..Default::default()
         });
     }
 
@@ -1046,6 +1114,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(locale.clone()),
             detail: None,
             searchable_text: locale.clone(),
+            ..Default::default()
         });
     }
 
@@ -1057,6 +1126,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(tz.clone()),
             detail: None,
             searchable_text: tz.clone(),
+            ..Default::default()
         });
     }
 
@@ -1068,6 +1138,7 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(format!("{} ({})", ae.path, ae.status)),
             detail: None,
             searchable_text: format!("{} {} {}", ae.name, ae.path, ae.status),
+            ..Default::default()
         });
     }
 
@@ -1107,6 +1178,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
                 "{} {} {} {}",
                 conn.name, conn.conn_type, conn.method, conn.path
             ),
+            ..Default::default()
         });
     }
     if !connections_items.is_empty() {
@@ -1144,6 +1216,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
                 zone.ports.join(" "),
                 zone.rich_rules.join(" ")
             ),
+            ..Default::default()
         });
     }
     for rule in &data.firewall_direct_rules {
@@ -1157,6 +1230,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
                 "{} {} {} {} {}",
                 rule.ipv, rule.table, rule.chain, rule.priority, rule.args
             ),
+            ..Default::default()
         });
     }
     if !firewall_items.is_empty() {
@@ -1176,6 +1250,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some(sr.path.clone()),
             detail: None,
             searchable_text: format!("{} {}", sr.path, sr.name),
+            ..Default::default()
         });
     }
     for route in &data.ip_routes {
@@ -1185,6 +1260,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some("ip route".to_string()),
             detail: None,
             searchable_text: route.clone(),
+            ..Default::default()
         });
     }
     for rule in &data.ip_rules {
@@ -1194,6 +1270,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some("ip rule".to_string()),
             detail: None,
             searchable_text: rule.clone(),
+            ..Default::default()
         });
     }
     if !routes_rules_items.is_empty() {
@@ -1213,6 +1290,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some(data.resolv_provenance.clone()),
             detail: None,
             searchable_text: data.resolv_provenance.clone(),
+            ..Default::default()
         });
     }
     for line in &data.hosts_additions {
@@ -1222,6 +1300,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some("hosts".to_string()),
             detail: None,
             searchable_text: line.clone(),
+            ..Default::default()
         });
     }
     if !dns_hosts_items.is_empty() {
@@ -1242,6 +1321,7 @@ pub fn web_network_section(data: &RefNetwork) -> ReferenceSection {
             subtitle: Some(proxy.line.clone()),
             detail: None,
             searchable_text: format!("{} {}", proxy.source, proxy.line),
+            ..Default::default()
         });
     }
     if !proxy_items.is_empty() {
@@ -1290,6 +1370,7 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
                 "{} {} {} {}",
                 entry.device, entry.mount_point, entry.fstype, entry.options
             ),
+            ..Default::default()
         });
     }
 
@@ -1301,6 +1382,7 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
             subtitle: Some(format!("{} ({})", mp.source, mp.fstype)),
             detail: Some(mp.options.clone()),
             searchable_text: format!("{} {} {}", mp.target, mp.source, mp.fstype),
+            ..Default::default()
         });
     }
 
@@ -1313,31 +1395,11 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
             subtitle: Some(format!("VG: {}, size: {}", lv.vg_name, lv.lv_size)),
             detail: None,
             searchable_text: format!("{} {} {}", lv.lv_name, lv.vg_name, lv.lv_size),
+            ..Default::default()
         });
     }
 
-    // VarDirectory. The size estimate and the recommendation were never
-    // collected, so the subtitle read "~" and the detail led with a space;
-    // ownership and mode are what the row actually knows.
-    for vd in &data.var_directories {
-        let detail = if let (Some(mode), Some(owner), Some(group)) =
-            (&vd.mode, &vd.owner_name, &vd.group_name)
-        {
-            Some(format!("{} {}:{}", mode, owner, group))
-        } else {
-            None
-        };
-        items.push(ContextItem {
-            id: vd.path.clone(),
-            title: vd.path.clone(),
-            subtitle: None,
-            searchable_text: match &detail {
-                Some(d) => format!("{} {}", vd.path, d),
-                None => vd.path.clone(),
-            },
-            detail,
-        });
-    }
+    items.extend(var_directory_rows(&data.var_directories));
 
     // CredentialRef
     for cr in &data.credential_refs {
@@ -1347,49 +1409,168 @@ pub fn web_storage_section(data: &RefStorage) -> ReferenceSection {
             subtitle: Some(format!("mount: {}", cr.mount_point)),
             detail: Some(cr.source.clone()),
             searchable_text: format!("{} {} {}", cr.credential_path, cr.mount_point, cr.source),
-        });
-    }
-
-    // Unbacked /var paths — advisory items for directories with no
-    // declarative backing (tmpfiles.d, StateDirectory=, etc.)
-    // Enrich with ownership/mode from var_directories when available.
-    for path in &data.unbacked_var_paths {
-        // Find matching var_directory entry to get ownership/mode
-        let var_dir = data.var_directories.iter().find(|vd| vd.path == *path);
-
-        let detail_text = if let Some(vd) = var_dir {
-            if let (Some(mode), Some(owner), Some(group)) =
-                (&vd.mode, &vd.owner_name, &vd.group_name)
-            {
-                format!(
-                    "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
-                     LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
-                     provisioning. Current ownership: {} {}:{}",
-                    mode, owner, group
-                )
-            } else {
-                "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
-                 LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
-                 provisioning."
-                    .to_string()
-            }
-        } else {
-            "No declarative backing (tmpfiles.d, StateDirectory=, CacheDirectory=, \
-             LogsDirectory=). Consider adding tmpfiles.d entries for reproducible \
-             provisioning."
-                .to_string()
-        };
-
-        items.push(ContextItem {
-            id: format!("unbacked:{}", path),
-            title: path.clone(),
-            subtitle: Some("advisory: unbacked /var directory".to_string()),
-            detail: Some(detail_text),
-            searchable_text: format!("{} unbacked var advisory", path),
+            ..Default::default()
         });
     }
 
     crate::web_types::reference_section("storage", "Storage", items)
+}
+
+/// Id of the collapsed `/var` summary row (§ 6.6).
+pub const VAR_SUMMARY_ID: &str = "var_directories";
+
+/// Ownership a carried directory has to depart from to earn a row of
+/// its own (§ 6.6); anything else collapses into the summary.
+const DEFAULT_VAR_DIR_MODE: &str = "0755";
+const DEFAULT_VAR_DIR_OWNER: &str = "root";
+
+/// Rationale on a `Provision` directory the host never had a creator
+/// for. `Provision { lost: Some(_) }` names the creator instead.
+const NO_HOST_CREATOR_RATIONALE: &str =
+    "no creator on the host; this export provisions the directory itself";
+
+/// The `/var` rows of the Storage section (§ 6.6): one collapsed
+/// summary over every directory, one advisory row per directory the
+/// export must provision or cannot place, and an inventory row for a
+/// carried directory whose ownership or mode departs from the default.
+///
+/// The rows follow `EffectiveBacking`, not the collected verdict: a
+/// creator the export drops is not a backing, however the source host
+/// made the directory (§ 3.4).
+fn var_directory_rows(dirs: &[RefVarDirectory]) -> Vec<ContextItem> {
+    if dirs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut advisory_rows = Vec::new();
+    let mut inventory_rows = Vec::new();
+    let mut unbacked_lines = Vec::new();
+    let mut carried_lines = Vec::new();
+
+    for vd in dirs {
+        let line = summary_line(vd);
+        match &vd.outcome {
+            EffectiveBacking::Carried => {
+                carried_lines.push(line);
+                if departs_from_default_ownership(vd) {
+                    inventory_rows.push(ContextItem {
+                        id: vd.path.clone(),
+                        title: vd.path.clone(),
+                        subtitle: None,
+                        detail: ownership_detail(vd),
+                        searchable_text: match ownership_detail(vd) {
+                            Some(d) => format!("{} {}", vd.path, d),
+                            None => vd.path.clone(),
+                        },
+                        ..Default::default()
+                    });
+                }
+            }
+            EffectiveBacking::Provision { lost } => {
+                unbacked_lines.push(line);
+                let rationale = match lost {
+                    Some(creator) => format!(
+                        "created on the host by {creator}, which this export does not carry"
+                    ),
+                    None => NO_HOST_CREATOR_RATIONALE.to_string(),
+                };
+                advisory_rows.push(unbacked_var_row(vd, rationale));
+            }
+            EffectiveBacking::Unresolved { creator, reason } => {
+                unbacked_lines.push(line);
+                let rationale = format!(
+                    "created on the host by {creator}; this export cannot tell whether the \
+                     base image carries it ({})",
+                    reason.reason_text()
+                );
+                advisory_rows.push(unbacked_var_row(vd, rationale));
+            }
+        }
+    }
+
+    let unbacked = unbacked_lines.len();
+    let state_text = if unbacked == 0 {
+        "all backed by tmpfiles.d, unit directives, or package ownership".to_string()
+    } else {
+        format!("{unbacked} unbacked")
+    };
+    // Unbacked directories list first: they are what the reader opened
+    // the summary for (§ 6.6).
+    unbacked_lines.extend(carried_lines);
+
+    let mut rows = vec![ContextItem {
+        id: VAR_SUMMARY_ID.to_string(),
+        title: format!("{} /var directories", dirs.len()),
+        subtitle: Some(state_text),
+        detail: Some(unbacked_lines.join("\n")),
+        searchable_text: format!("/var directories {}", unbacked_lines.join(" ")),
+        ..Default::default()
+    }];
+    rows.append(&mut advisory_rows);
+    rows.append(&mut inventory_rows);
+    rows
+}
+
+/// One line of the summary's directory list:
+/// `<path>  <mode> <owner>:<group>  <backing kind>` (§ 6.6).
+fn summary_line(vd: &RefVarDirectory) -> String {
+    let ownership = ownership_detail(vd).unwrap_or_else(|| "-".to_string());
+    format!("{}  {}  {}", vd.path, ownership, backing_kind(vd))
+}
+
+/// The collected verdict's kind, as the summary list names it.
+fn backing_kind(vd: &RefVarDirectory) -> &'static str {
+    match &vd.source {
+        Some(VarDirBacking::Tmpfiles { .. }) => "tmpfiles.d",
+        Some(VarDirBacking::StateDirectory { .. }) => "StateDirectory=",
+        Some(VarDirBacking::CacheDirectory { .. }) => "CacheDirectory=",
+        Some(VarDirBacking::LogsDirectory { .. }) => "LogsDirectory=",
+        Some(VarDirBacking::RpmOwned { .. }) => "package-owned",
+        Some(VarDirBacking::Unbacked) | None => "unbacked",
+    }
+}
+
+/// `<mode> <owner>:<group>`, or `None` when the collector recorded none
+/// of the three.
+fn ownership_detail(vd: &RefVarDirectory) -> Option<String> {
+    match (&vd.mode, &vd.owner_name, &vd.group_name) {
+        (Some(mode), Some(owner), Some(group)) => Some(format!("{mode} {owner}:{group}")),
+        _ => None,
+    }
+}
+
+/// Whether a carried directory's ownership or mode is worth a row of
+/// its own: the image will not reproduce it from the default (§ 6.6).
+fn departs_from_default_ownership(vd: &RefVarDirectory) -> bool {
+    let non_default_mode = vd
+        .mode
+        .as_deref()
+        .is_some_and(|m| m != DEFAULT_VAR_DIR_MODE);
+    let non_root_owner = vd
+        .owner_name
+        .as_deref()
+        .is_some_and(|o| o != DEFAULT_VAR_DIR_OWNER)
+        || vd
+            .group_name
+            .as_deref()
+            .is_some_and(|g| g != DEFAULT_VAR_DIR_OWNER);
+    non_default_mode || non_root_owner
+}
+
+/// An advisory row for a directory the export cannot report as backed.
+fn unbacked_var_row(vd: &RefVarDirectory, rationale: String) -> ContextItem {
+    ContextItem {
+        id: vd.path.clone(),
+        title: vd.path.clone(),
+        subtitle: None,
+        detail: ownership_detail(vd),
+        searchable_text: format!("{} {}", vd.path, rationale),
+        advisory: Some(ContextAdvisory {
+            advisory_type: AdvisoryType::UnbackedVarDir,
+            rationale,
+        }),
+        ..Default::default()
+    }
 }
 
 // -- Generic sections (scheduled_tasks, non_rpm_software, selinux) ---------
@@ -1422,6 +1603,7 @@ pub fn web_generic_section(
                 }
                 search
             },
+            ..Default::default()
         })
         .collect();
     crate::web_types::reference_section(id, display_name, context_items)
@@ -1435,25 +1617,65 @@ pub fn web_generic_section(
 /// services, containers, network, storage,
 /// scheduled_tasks, non_rpm_software, kernel_boot, selinux.
 pub fn build_web_sections(ref_proj: &ReferenceProjection) -> Vec<ReferenceSection> {
+    let collected = &ref_proj.collected;
     vec![
-        web_services_section(&ref_proj.services),
-        web_containers_section(&ref_proj.containers),
-        web_network_section(&ref_proj.network),
-        web_storage_section(&ref_proj.storage),
-        web_generic_section(
-            "scheduled_tasks",
-            "Scheduled Tasks",
-            &ref_proj.scheduled_tasks,
+        with_empty_reason(web_services_section(&ref_proj.services), collected.services),
+        with_empty_reason(
+            web_containers_section(&ref_proj.containers),
+            collected.containers,
         ),
-        web_generic_section(
-            "non_rpm_software",
-            "Non-RPM Software",
-            &ref_proj.non_rpm_software,
+        with_empty_reason(web_network_section(&ref_proj.network), collected.network),
+        with_empty_reason(web_storage_section(&ref_proj.storage), collected.storage),
+        with_empty_reason(
+            web_generic_section(
+                "scheduled_tasks",
+                "Scheduled Tasks",
+                &ref_proj.scheduled_tasks,
+            ),
+            collected.scheduled_tasks,
         ),
-        web_kernel_boot_section(&ref_proj.kernel_boot),
-        web_generic_section("selinux", "Security & Access Control", &ref_proj.selinux),
+        with_empty_reason(
+            web_generic_section(
+                "non_rpm_software",
+                "Non-RPM Software",
+                &ref_proj.non_rpm_software,
+            ),
+            collected.non_rpm_software,
+        ),
+        with_empty_reason(
+            web_kernel_boot_section(&ref_proj.kernel_boot),
+            collected.kernel_boot,
+        ),
+        with_empty_reason(
+            web_generic_section("selinux", "Security & Access Control", &ref_proj.selinux),
+            collected.selinux,
+        ),
     ]
 }
+
+/// An empty section says which of the two emptinesses it is (§ 3.8).
+///
+/// The distinction is not available from the projection: a section the
+/// inspector never collected and one it collected and found nothing in
+/// both project to no rows, and only the snapshot separates them.
+fn with_empty_reason(mut section: ReferenceSection, collected: bool) -> ReferenceSection {
+    if section.items.is_empty() && section.subsections.is_empty() {
+        section.empty_reason = Some(
+            if collected {
+                EMPTY_ZERO_DRIFT
+            } else {
+                EMPTY_DATA_UNAVAILABLE
+            }
+            .to_string(),
+        );
+    }
+    section
+}
+
+/// The inspector collected the section and it projects to no rows.
+const EMPTY_ZERO_DRIFT: &str = "zero_drift";
+/// The inspector collected no section at all.
+const EMPTY_DATA_UNAVAILABLE: &str = "data_unavailable";
 
 #[cfg(test)]
 mod tests {
@@ -1476,18 +1698,31 @@ mod tests {
             }
         }
 
-        /// The row carries ownership and mode and nothing else. It used
-        /// to lead with a size estimate and a recommendation that the
-        /// collector never filled, so the subtitle read `~` and the
-        /// detail read ` (0755 root:root)`.
+        fn carried(path: &str, mode: Option<&str>, owner: Option<&str>) -> RefVarDirectory {
+            RefVarDirectory {
+                path: path.into(),
+                mode: mode.map(Into::into),
+                owner_name: owner.map(Into::into),
+                group_name: owner.map(Into::into),
+                source: Some(VarDirBacking::RpmOwned {
+                    package: "appone".into(),
+                }),
+                outcome: EffectiveBacking::Carried,
+            }
+        }
+
+        /// A carried directory whose ownership departs from the default
+        /// keeps a row of its own, carrying ownership and mode and
+        /// nothing else. The row used to lead with a size estimate and
+        /// a recommendation that the collector never filled, so the
+        /// subtitle read `~` and the detail read ` (0755 root:root)`.
         #[test]
-        fn a_directory_with_ownership_shows_only_ownership() {
-            let section = web_storage_section(&storage_with(vec![RefVarDirectory {
-                path: "/var/lib/appone/cache".into(),
-                mode: Some("0750".into()),
-                owner_name: Some("appone".into()),
-                group_name: Some("appone".into()),
-            }]));
+        fn a_non_default_directory_shows_only_ownership() {
+            let section = web_storage_section(&storage_with(vec![carried(
+                "/var/lib/appone/cache",
+                Some("0750"),
+                Some("appone"),
+            )]));
             let item = section
                 .items
                 .iter()
@@ -1501,22 +1736,36 @@ mod tests {
             );
         }
 
+        /// A carried directory the image reproduces from the default
+        /// has nothing to say on its own and collapses into the summary
+        /// (§ 6.6). The row that used to exist for it is gone.
         #[test]
-        fn a_directory_without_ownership_shows_no_detail() {
-            let section = web_storage_section(&storage_with(vec![RefVarDirectory {
-                path: "/var/lib/missing".into(),
-                mode: None,
-                owner_name: None,
-                group_name: None,
-            }]));
-            let item = section
+        fn a_default_directory_collapses_into_the_summary() {
+            let section = web_storage_section(&storage_with(vec![
+                carried("/var/lib/missing", None, None),
+                carried("/var/log/plain", Some("0755"), Some("root")),
+            ]));
+            assert!(
+                !section
+                    .items
+                    .iter()
+                    .any(|i| i.id == "/var/lib/missing" || i.id == "/var/log/plain"),
+                "neither directory earns a row: {:?}",
+                section.items.iter().map(|i| &i.id).collect::<Vec<_>>()
+            );
+            let summary = section
                 .items
                 .iter()
-                .find(|i| i.id == "/var/lib/missing")
-                .expect("the directory should produce a row");
-            assert_eq!(item.subtitle, None);
-            assert_eq!(item.detail, None);
-            assert_eq!(item.searchable_text, "/var/lib/missing");
+                .find(|i| i.id == VAR_SUMMARY_ID)
+                .expect("the summary row");
+            assert_eq!(summary.title, "2 /var directories");
+            assert_eq!(
+                summary.detail.as_deref(),
+                Some(
+                    "/var/lib/missing  -  package-owned\n\
+                     /var/log/plain  0755 root:root  package-owned"
+                )
+            );
         }
     }
 
@@ -2293,6 +2542,8 @@ mod tests {
                 runtime: "10".into(),
                 default: "60".into(),
                 source: "/etc/sysctl.d/99-custom.conf".into(),
+                include: true,
+                locked: false,
             }],
             cmdline: Some("BOOT_IMAGE=/vmlinuz-5.14.0 root=/dev/mapper/rhel-root".into()),
             locale: Some("en_US.UTF-8".into()),

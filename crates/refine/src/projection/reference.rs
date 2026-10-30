@@ -6,16 +6,17 @@ use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
 use inspectah_pipeline::render::service_intent::render_service_intent;
+use inspectah_pipeline::render::var_dirs::effective_var_backing;
 
 use super::types::DECIDED_UNDER_CONFIG_FILES;
 use super::types::{
-    ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem, RefConfigRef,
-    RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule, RefFirewallZone,
-    RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefLvmVolume, RefMountPoint, RefNMConnection,
-    RefNetwork, RefOmittedService, RefProxyEnv, RefQuadletItem, RefRunningContainerItem,
-    RefServiceAdvisory, RefServiceItem, RefServiceWarning, RefServices, RefStaticRoute, RefStorage,
-    RefSysctlOverride, RefVarDirectory, RefVersionChangeItem, RefVersionChanges,
-    ReferenceProjection,
+    CollectedSections, ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry,
+    RefComposeItem, RefConfigRef, RefContainers, RefCredentialRef, RefDropInItem,
+    RefFirewallDirectRule, RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot,
+    RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
+    RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
+    RefServices, RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory,
+    RefVersionChangeItem, RefVersionChanges, ReferenceProjection,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -403,6 +404,8 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
             runtime: s.runtime.clone(),
             default: s.default.clone(),
             source: s.source.clone(),
+            include: s.disposition.is_included(),
+            locked: s.locked,
         })
         .collect();
 
@@ -410,6 +413,7 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
         cmdline: non_empty(&kb.cmdline),
         grub_defaults: non_empty(&kb.grub_defaults),
         tuned_active: non_empty(&kb.tuned_active),
+        tuned_disposition: kb.tuned_disposition.clone(),
         locale: kb.locale.clone(),
         timezone: kb.timezone.clone(),
         sysctl_overrides,
@@ -549,14 +553,23 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
         })
         .collect();
 
+    // `effective_var_backing` answers in `storage.var_directories`
+    // order, so the outcome is zipped onto the directory it belongs to
+    // rather than looked up by path.
     let var_directories = st
         .var_directories
         .iter()
-        .map(|d| RefVarDirectory {
-            path: d.path.clone(),
-            mode: d.mode.clone(),
-            owner_name: d.owner_name.clone(),
-            group_name: d.group_name.clone(),
+        .zip(effective_var_backing(snap))
+        .map(|(d, outcome)| {
+            debug_assert_eq!(d.path, outcome.path);
+            RefVarDirectory {
+                path: d.path.clone(),
+                mode: d.mode.clone(),
+                owner_name: d.owner_name.clone(),
+                group_name: d.group_name.clone(),
+                source: outcome.source,
+                outcome: outcome.outcome,
+            }
         })
         .collect();
 
@@ -916,6 +929,16 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
         scheduled_tasks: project_ref_scheduled_tasks(snap),
         non_rpm_software: project_ref_non_rpm(snap),
         selinux: project_ref_selinux(snap),
+        collected: CollectedSections {
+            services: snap.services.is_some(),
+            containers: snap.containers.is_some(),
+            network: snap.network.is_some(),
+            storage: snap.storage.is_some(),
+            scheduled_tasks: snap.scheduled_tasks.is_some(),
+            non_rpm_software: snap.non_rpm_software.is_some(),
+            kernel_boot: snap.kernel_boot.is_some(),
+            selinux: snap.selinux.is_some(),
+        },
     }
 }
 

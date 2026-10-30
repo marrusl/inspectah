@@ -6,9 +6,10 @@
 
 use std::collections::HashMap;
 
+use inspectah_core::types::AdvisoryType;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::types::{RefinedView, RepoProvenance, RepoTier, TriageTag};
+use inspectah_refine::types::{ItemId, RefinedView, RepoProvenance, RepoTier, TriageTag};
 use serde::Serialize;
 
 // -- Non-RPM DTOs (language packages + unmanaged files for the frontend) ----
@@ -98,13 +99,39 @@ pub struct ContextSubsection {
     pub items: Vec<ContextItem>,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct ContextItem {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
     pub detail: Option<String>,
     pub searchable_text: String,
+    /// The decision that governs this row, when the row is the place
+    /// the decision is made. Absent on a row that only reports (§ 3.8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<ContextDecision>,
+    /// Present when the row states something the export cannot act on
+    /// and the user cannot decide (§ 3.8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisory: Option<ContextAdvisory>,
+}
+
+/// The decision a reference row carries, keyed by the same [`ItemId`]
+/// an `/api/op` payload names, so the row that shows a decision and the
+/// op that changes it cannot disagree about which entity they mean.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextDecision {
+    pub item_id: ItemId,
+    pub include: bool,
+    pub locked: bool,
+}
+
+/// An advisory on a reference row: a finding the export reports and no
+/// one decides.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextAdvisory {
+    pub advisory_type: AdvisoryType,
+    pub rationale: String,
 }
 
 /// Create a `ReferenceSection` with empty subsections.
