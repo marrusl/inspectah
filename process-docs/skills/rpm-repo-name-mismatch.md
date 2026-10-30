@@ -42,7 +42,7 @@ different things, on purpose, for different questions:
 
    This resolution order is applied independently per package, so the
    result never depends on the order `.repo` files were read in —
-   `classify_recorded_repo`'s doc comment states this and
+   `normalize_source_repos`'s doc comment states this and
    `normalization_is_order_independent_and_never_relabels` proves it by
    running the same input through both file orders.
 
