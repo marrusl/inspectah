@@ -67,6 +67,9 @@ Each module defines the data model for a snapshot section:
 
 **Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`
 
+**Core helper modules:** `crates/core/src/`
+- `rpm_filename.rs` — RPM filename parsing (`RpmFilename::parse_untrusted`) and the staged-upload filename allowlist (`validate_staged_name`)
+
 ## Inspectors
 
 **Location:** `crates/collect/src/inspectors/`
@@ -106,6 +109,8 @@ Artifact generators invoked after triage decisions finalized:
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
 - `readme.rs` — Auto-generated README for output directory
+- `selinux.rs` — SELinux file context rule rendering and the build-time equivalence table (`selinux_equivalences`)
+- `var_dirs.rs` — Effective `/var` directory backing at export time (`VarDirOutcome`, `EffectiveBacking`)
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 

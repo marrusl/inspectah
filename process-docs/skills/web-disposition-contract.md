@@ -33,6 +33,33 @@ chosen to bake into the image, with toggles the session refuses.
 `crates/web/src/error.rs` maps both refusals to 422, so a UI that still
 offers the toggle produces a visible error rather than a silent no-op.
 
+## 1a. `ContextItem` — the reference-row decision path
+
+Reference sections (`ReferenceSection`, `crates/web/src/web_types.rs`)
+render rows as `ContextItem`, which carries two optional fields:
+
+```rust
+pub struct ContextItem {
+    // ... id, title, subtitle, detail, searchable_text ...
+    pub decision: Option<ContextDecision>,
+    pub advisory: Option<ContextAdvisory>,
+}
+```
+
+`decision` (`item_id: ItemId`, `include: bool`, `locked: bool`) is
+present when the row is the place a `SetInclude` op targets; `advisory`
+(`advisory_type`, `rationale`) is present when the row states something
+the export reports and nobody decides. Both are
+`#[serde(skip_serializing_if = "Option::is_none")]`, so a plain
+reference row carrying neither serializes byte-identically to the
+pre-phase-0 shape — this is the only byte-identity guarantee the
+design makes.
+
+`adapter::context_decision()` is the single place that fills `decision`:
+it returns `Some` only for `FindingKind::Actionable`, `None` for
+`Advisory` and `Inventory`, so a row backed by either of the
+non-actionable variants renders with no control to offer.
+
 ## 2. The hand-built decision DTOs — still `include: bool`
 
 `ServiceDecisionDto`, `DropInDecisionDto`, `QuadletDecisionDto`,
@@ -50,6 +77,12 @@ these DTOs can carry a non-actionable disposition today.**
 If you ever make one of those entry types advisory or inventory, the
 collapse becomes the same bug: convert the DTO to carry the disposition
 rather than teaching the frontend to guess.
+
+**`sysctls` and `tuned` stay on `ViewResponse` through phase 0 and phase
+1 of the refine UI fixup; they are retired in phase 3, not phase 0,** and
+removed together with their TypeScript types at that point. Phase 0 adds
+`decision` to the sysctl and tuned `ContextItem` rows (§ 1a) without
+touching these two arrays.
 
 ## 3. The projection preserves finding semantics — `with_include`, not `from_bool`
 
@@ -114,10 +147,32 @@ were mis-bucketed.
 
 **The Inventory caveat:** `FindingKind::Inventory` is counted in the
 `advisory` bucket, on the grounds that it is the other display-only
-disposition. Only network findings are inventory today, and they belong
-to no section counted here, so the bucket is in practice the advisory
-count. If that ever stops being true, the bucket needs splitting and the
-user-facing label needs revisiting with it.
+disposition. That stopped being purely a network-findings caveat with
+phase 0: a config file whose keys are absorbed into the synthesized
+sysctl drop-in is given `shadowed_by: Some(ConfigShadow::Sysctl)` and
+`disposition: FindingKind::Inventory` (`ConfigFileEntry`,
+`crates/core/src/types/config.rs`), and because it is still a member of
+`config.files`, it is counted into the Config section's `advisory`
+bucket through the same `from_dispositions` call network findings never
+reach. `session::validate_target` refuses a `SetInclude` against such an
+entry's `ItemId::Config` with `InventoryNotToggleable`, regardless of
+the requested direction — `entry.disposition.is_inventory()` is checked
+before `*include` is ever read.
+
+`loaded_modules[].disposition` also defaults to `FindingKind::Inventory`
+(`KernelModule`, `crates/core/src/types/kernelboot.rs`), but this is a
+narrower case than it looks: `ItemId::KernelModule` was removed in phase
+0, so there is no `ItemId` a client could even construct to target a
+kernel module, and the web adapter builds no `ContextItem` for
+`loaded_modules` at all. A loaded module's `Inventory` disposition is a
+data-model fact with no reachable view or toggle path, and it is not
+counted in any `SectionStats` bucket — `from_dispositions` is called
+only over `packages` and `config_files` today. So of the two, only the
+sysctl-shadowed config entries actually reach this `advisory` bucket and
+the `InventoryNotToggleable` refusal; `loaded_modules` reaches neither.
+If that ever changes — a view renders loaded modules, or
+`SectionStats` gains a Kernel & Boot section — the bucket needs
+revisiting along with the user-facing label.
 
 On the TypeScript side `advisory` is optional in `SectionStats` **only**
 so the many pre-existing fixtures need not restate a zero. The server
