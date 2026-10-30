@@ -4399,6 +4399,12 @@ pub fn render_refine_export(
     inspectah_pipeline::render::configtree::write_env_files(snap, out)
         .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
+    // 2a. Stage the /var provisioning fragment, before the Containerfile
+    //     is rendered: its Storage block COPYs this member on the same
+    //     condition the writer produces it under.
+    inspectah_pipeline::render::write_tmpfiles_conf(snap, out)
+        .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
+
     // 2b. User artifacts (conditional — only when users_groups has data)
     let users_ks = inspectah_pipeline::render::users::render_kickstart(snap);
     if !users_ks.is_empty() {

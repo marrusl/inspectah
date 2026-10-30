@@ -12,23 +12,31 @@
 //! each side (`before`, then its negation after the op) and pins at
 //! least one concrete value per state.
 //!
-//! Two gaps found while writing this and left as found: both predate it
-//! and belong to the refine export's file set rather than to any
-//! surface.
+//! Two gaps were found while writing this, both older than it and both
+//! in the export's file set rather than in any surface.
 //!
-//! 1. `render_refine_export` emits the Containerfile's
-//!    `COPY config/usr/lib/tmpfiles.d/inspectah-var.conf` line but never
-//!    writes that member. `render::render_all` stages it; the refine
-//!    file set does not. A downloaded export whose snapshot has a
-//!    provisioned `/var` directory fails at that COPY.
-//! 2. `render_refine_export` takes no `RenderContext`, and the export
-//!    handler passes none, so the downloaded Containerfile carries no
-//!    `dnf group install` for any group. A renderable group's members
-//!    are installed individually instead, which puts the same packages
-//!    in the image by a different mechanism than the preview shows.
+//! 1. **Fixed.** The Containerfile's Storage block emitted
+//!    `COPY config/usr/lib/tmpfiles.d/inspectah-var.conf` and the refine
+//!    export never wrote that member, so a download whose snapshot has a
+//!    provisioned `/var` directory failed at that line under
+//!    `podman build`. Both render paths now stage it through
+//!    `render::write_tmpfiles_conf`, and
+//!    `export_contract_test::every_copy_source_is_in_the_archive` holds
+//!    the general property: every active `COPY` names something the
+//!    archive carries.
+//! 2. **Open**, backlogged as
+//!    `inspectah-downloaded-export-drops-every-dnf-group-install`. The
+//!    `POST /api/tarball` handler passes `None` for the `RenderContext`,
+//!    so the *downloaded* Containerfile carries no `dnf group install`
+//!    and installs a renderable group's members individually. The
+//!    session's own `export_tarball` passes
+//!    `self.cached_render_context`, so the CLI and TUI are unaffected
+//!    and only the web download diverges from the preview.
 //!
-//! The Storage and group cases below read what the export does render,
-//! and say at each probe why that is the comparable value.
+//! The group cases below therefore compare `render_state` against which
+//! packages reach the install list, and say so at the probe. They are
+//! written against what the download does today; the `pin_after` of the
+//! include case marks what changes when gap 2 closes.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -88,10 +96,11 @@ const APPONE_EXPORT_PATH: &str = "config/etc/tmpfiles.d/appone.conf";
 /// directory, and the fragment's own line on the host.
 const APPONE_D_LINE: &str = "d /var/lib/appone 0750 root root -";
 /// `var_dir_section_lines`' header and staging line. The Storage case
-/// reads these rather than the staged file's own text: the file is
-/// `render_all`'s, and `render_refine_export` does not write it (see the
-/// module note below), so the Containerfile is where the refine export
-/// states what it will do with the directory.
+/// reads the Containerfile rather than the staged fragment's own text:
+/// the Containerfile is where the export states what it will do with the
+/// directory, and it is the half that was answering while the member was
+/// missing (module note, gap 1). The member's presence is held by
+/// `export_contract_test::every_copy_source_is_in_the_archive`.
 const VAR_PROVISIONING_HEADER: &str = "# === /var directory provisioning ===";
 const VAR_PROVISIONING_COPY: &str =
     "COPY config/usr/lib/tmpfiles.d/inspectah-var.conf /usr/lib/tmpfiles.d/inspectah-var.conf";
@@ -346,11 +355,11 @@ fn group_is_renderable(view: &Value, name: &str) -> bool {
 /// What a group decision means for the image: both present members of
 /// `Container Management` reach the install list.
 ///
-/// Not `dnf group install`. `render_refine_export` passes no
-/// `RenderContext`, and `render_containerfile` emits no group install
-/// without one, so the mechanism half of § 8.8 is not available from
-/// the refine file set (see the module note). The packages are, and
-/// they are what the decision is about.
+/// Not `dnf group install`. The `POST /api/tarball` handler renders with
+/// no `RenderContext`, and `render_containerfile` emits no group install
+/// without one, so the mechanism half of § 8.8 is not available from the
+/// download this file tests (see the module note, gap 2). Which packages
+/// reach the image is, and that is what the decision is about.
 fn group_members_installed(export: &Export) -> bool {
     export.installs("buildah") && export.installs("containernetworking-plugins")
 }
@@ -869,6 +878,14 @@ fn cases() -> Vec<Case> {
                 let group = package_group(v, CONTAINER_GROUP);
                 assert_eq!(group["render_state"], json!("renderable"));
                 assert_eq!(group["effective_included"], json!(2));
+                // EXPECTED TO GO RED when the export handler is given a
+                // render context (backlog:
+                // inspectah-downloaded-export-drops-every-dnf-group-install).
+                // Today the download has none, so a renderable group's
+                // members are installed individually. Once it does, they
+                // move into a `dnf group install` and this list becomes
+                // `["vim"]`. That is the fix landing, not a regression:
+                // change the expected list and add the group install line.
                 assert_eq!(
                     e.active_install_list(),
                     vec![
