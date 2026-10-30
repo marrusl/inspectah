@@ -29,7 +29,7 @@ use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
 use inspectah_web::adapter::build_web_sections;
 use inspectah_web::handlers::AppState;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
@@ -56,7 +56,6 @@ fn test_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -165,7 +164,6 @@ fn advisory_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -272,7 +270,6 @@ async fn api_op_accepts_ungroup_directive() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -317,7 +314,6 @@ async fn set_include_group_already_excluded_returns_422_and_records_nothing() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -789,7 +785,6 @@ fn rich_snapshot() -> InspectionSnapshot {
 fn rich_state() -> Arc<AppState> {
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(rich_snapshot()))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -839,28 +834,12 @@ async fn sections_items_have_required_fields() {
 }
 
 #[tokio::test]
-async fn sections_cached_across_calls() {
-    let state = rich_state();
-    let app = app(state.clone());
-
-    let (_, json1) = get_json(&app, "/api/snapshot/sections").await;
-    let (_, json2) = get_json(&app, "/api/snapshot/sections").await;
-
-    assert_eq!(json1, json2, "cached sections must be identical");
-    assert!(
-        state.sections_cache.get().is_some(),
-        "cache must be populated"
-    );
-}
-
-#[tokio::test]
 async fn sections_empty_snapshot_returns_empty_items() {
     // A bare snapshot with no sections set — all 9 sections should exist
     // but with empty items vecs.
     let snap = InspectionSnapshot::new();
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/snapshot/sections").await;
@@ -1036,7 +1015,6 @@ async fn view_response_repo_groups_include_tier() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/view").await;
@@ -1111,7 +1089,6 @@ fn vendor_repo_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -1257,7 +1234,6 @@ async fn set_include_repo_with_no_effective_member_returns_422_in_both_direction
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let before = ops_len(&app).await;
@@ -1306,7 +1282,6 @@ async fn set_include_repo_on_incomplete_provenance_with_effective_member_returns
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -1320,7 +1295,7 @@ async fn set_include_repo_on_incomplete_provenance_with_effective_member_returns
 fn normalize_services_maps_state_changes_with_dropins() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
 
     // httpd.service state_change (with folded drop-in detail)
@@ -1364,7 +1339,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
 fn normalize_containers_maps_all_types() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let ctr = sections.iter().find(|s| s.id == "containers").unwrap();
 
     assert_eq!(ctr.items.len(), 4, "quadlet + compose + running + flatpak");
@@ -1403,7 +1378,7 @@ fn build_web_sections_excludes_users_groups() {
     // Users & groups data moved to ViewResponse.users_groups_decisions.
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     assert!(
         sections.iter().all(|s| s.id != "users_groups"),
         "users_groups section should no longer appear in build_web_sections"
@@ -1414,7 +1389,7 @@ fn build_web_sections_excludes_users_groups() {
 fn normalize_network_maps_connections_and_firewall() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let net = sections.iter().find(|s| s.id == "network").unwrap();
 
     // Top-level items should be empty (using subsections)
@@ -1461,7 +1436,7 @@ fn normalize_network_maps_connections_and_firewall() {
 fn normalize_storage_maps_fstab() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let stor = sections.iter().find(|s| s.id == "storage").unwrap();
 
     let boot = stor.items.iter().find(|i| i.id == "/boot").unwrap();
@@ -1473,7 +1448,7 @@ fn normalize_storage_maps_fstab() {
 fn normalize_scheduled_tasks_maps_cron_and_timers() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let sched = sections.iter().find(|s| s.id == "scheduled_tasks").unwrap();
 
     assert_eq!(sched.items.len(), 2, "1 cron + 1 timer");
@@ -1497,7 +1472,7 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
 fn normalize_selinux_includes_mode_and_modules() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let se = sections.iter().find(|s| s.id == "selinux").unwrap();
 
     // Mode item
@@ -1522,7 +1497,7 @@ fn normalize_selinux_includes_mode_and_modules() {
 fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let kb = sections.iter().find(|s| s.id == "kernel_boot").unwrap();
 
     // Items are now in subsections
@@ -1571,7 +1546,7 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
 fn normalize_non_rpm_maps_packages_and_version() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1615,7 +1590,7 @@ fn normalize_non_rpm_empty_section() {
     // Snapshot with no non-rpm data
     let snap = InspectionSnapshot::new();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1627,7 +1602,7 @@ fn normalize_non_rpm_empty_section() {
 fn build_web_sections_section_count_and_ids() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     // Users & groups moved to ViewResponse, version_changes retired — 8 sections remain.
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
@@ -1654,7 +1629,7 @@ fn build_web_sections_section_count_and_ids() {
 fn build_web_sections_item_counts() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
 
     // Verify non-zero item counts for sections with data
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
@@ -1670,24 +1645,6 @@ fn build_web_sections_item_counts() {
     assert_eq!(nrpm.items.len(), 2, "non_rpm_software should have 2 items");
 }
 
-#[test]
-fn sections_cache_returns_same_pointer() {
-    use std::ptr;
-    let state = rich_state();
-
-    // First call populates cache
-    let sections1 = state.sections_cache.get_or_init(|| {
-        let session = state.session.lock().unwrap();
-        build_web_sections(session.reference())
-    });
-    // Second call returns cached value
-    let sections2 = state.sections_cache.get().unwrap();
-    assert!(
-        ptr::eq(sections1, sections2),
-        "OnceLock must return the same allocation"
-    );
-}
-
 #[tokio::test]
 async fn health_pretty_name_fallback_to_name() {
     // When pretty_name is empty, os_name should fall back to name
@@ -1701,7 +1658,6 @@ async fn health_pretty_name_fallback_to_name() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (_, json) = get_json(&app, "/api/health").await;
@@ -1771,7 +1727,6 @@ fn service_subsection_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -1961,7 +1916,6 @@ fn locked_package_state() -> Arc<AppState> {
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -2053,7 +2007,6 @@ async fn api_view_includes_package_groups() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -2118,7 +2071,6 @@ async fn api_view_populates_optional_spillover_provenance() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -2158,7 +2110,6 @@ async fn api_view_populates_ungrouped_member_provenance() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -2221,7 +2172,6 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -2331,7 +2281,6 @@ fn upload_state() -> (Arc<AppState>, tempfile::TempDir) {
     (
         Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         }),
         tmp,
     )
@@ -2919,7 +2868,6 @@ fn upload_state_from_scan(tmp: &tempfile::TempDir, package: serde_json::Value) -
     session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
     Arc::new(AppState {
         session: Arc::new(Mutex::new(session)),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -3055,7 +3003,6 @@ fn colliding_nevra_state(
     session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
     Arc::new(AppState {
         session: Arc::new(Mutex::new(session)),
-        sections_cache: OnceLock::new(),
     })
 }
 

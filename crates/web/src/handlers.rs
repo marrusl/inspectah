@@ -97,15 +97,15 @@ fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
     // No overlap at all
     version_id.to_string()
 }
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::error::AppError;
 
-/// Shared application state. Wraps the session mutex alongside caches
-/// that are immutable for the session lifetime.
+/// Shared application state. The session mutex is the whole of it:
+/// every surface projects from the session on each request, so there is
+/// no server-lifetime copy of its state to go stale (§ 3.9).
 pub struct AppState {
     pub session: Arc<Mutex<RefineSession>>,
-    pub sections_cache: OnceLock<Vec<ReferenceSection>>,
 }
 
 pub use crate::web_types::*;
@@ -1145,11 +1145,8 @@ pub async fn get_groups() -> impl IntoResponse {
 // -- New Phase 4 endpoints ------------------------------------------------
 
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let sections = state.sections_cache.get_or_init(|| {
-        let session = state.session.lock().unwrap();
-        crate::adapter::build_web_sections(session.reference())
-    });
-    Json(sections.clone())
+    let session = state.session.lock().unwrap();
+    Json(crate::adapter::build_web_sections(&session.reference()))
 }
 
 pub async fn mark_viewed(
@@ -1240,7 +1237,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         // Call the health handler synchronously via tokio runtime
@@ -1821,7 +1817,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let actionable_slugs = SectionGroup::all_in_order()
@@ -1855,7 +1850,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let reference_slugs = SectionGroup::all_in_order()
@@ -1887,7 +1881,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let unknown_slugs = vec![
@@ -1931,7 +1924,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({ "include": true });
@@ -2035,7 +2027,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({
@@ -2102,7 +2093,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({
@@ -2160,7 +2150,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({

@@ -78,7 +78,6 @@ async fn refine_server_lifecycle() {
     let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
     let state = std::sync::Arc::new(inspectah_web::handlers::AppState {
         session: std::sync::Arc::new(std::sync::Mutex::new(session)),
-        sections_cache: std::sync::OnceLock::new(),
     });
 
     // Bind to ephemeral port

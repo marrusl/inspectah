@@ -36,7 +36,7 @@ use inspectah_web::adapter::{VAR_SUMMARY_ID, build_web_sections};
 use inspectah_web::handlers::AppState;
 use inspectah_web::web_types::ContextItem;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 /// A reference row with neither `decision` nor `advisory` serializes
@@ -258,7 +258,6 @@ fn contract_snapshot() -> InspectionSnapshot {
 fn contract_state() -> Arc<AppState> {
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(contract_snapshot()))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -361,7 +360,6 @@ async fn grouped_view_contract() {
     let session = RefineSession::new(snap);
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(session)),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/view").await;
@@ -420,10 +418,8 @@ async fn grouped_view_contract() {
 // -- The two assertions Tasks 19 and 21 deferred to this one ---------------
 //
 // Both are function-level: `build_web_sections` is the unit that gained
-// the fields. `RefineSession::reference()` still projects `self.original`
-// and `AppState.sections_cache` is still a never-cleared `OnceLock`, so
-// the same transition over the live endpoint is Task 24's, which deletes
-// both caches (§ 3.9).
+// the fields. The same transition over the live endpoint, through the
+// session and the export, is `decision_surface_test.rs` (§ 3.9).
 
 /// The Kernel & Boot section of a snapshot's reference projection.
 fn kernel_boot_customizations(snap: &InspectionSnapshot) -> Vec<ContextItem> {

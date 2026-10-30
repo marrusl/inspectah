@@ -43,7 +43,6 @@ pub struct RefineSession {
     cached_view: Option<RefinedView>,
     cached_render_context: Option<RenderContext>,
     cached_decisions: Option<crate::projection::DecisionProjection>,
-    cached_reference: std::sync::OnceLock<crate::projection::ReferenceProjection>,
     generation: u64,
     /// Tracks which context items the user has viewed in the UI.
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
@@ -657,7 +656,6 @@ impl RefineSession {
             cached_view: None,
             cached_render_context: None,
             cached_decisions: None,
-            cached_reference: std::sync::OnceLock::new(),
             generation: 0,
             viewed: HashSet::new(),
             tarball_path: None,
@@ -3571,12 +3569,17 @@ impl RefineSession {
             .expect("decisions projection is always computed after new() or mutation")
     }
 
-    /// Returns the reference projection, computing it lazily on first access.
-    /// The reference projection is derived solely from the original snapshot
-    /// and is immutable across mutations.
-    pub fn reference(&self) -> &crate::projection::ReferenceProjection {
-        self.cached_reference
-            .get_or_init(|| crate::projection::project_reference(&self.original))
+    /// Projects the reference sections from the current session state,
+    /// computed on every call.
+    ///
+    /// The source is `snapshot_projected()`, the same state
+    /// `render_refine_export` renders from, so a row that shows a
+    /// decision shows the one the export acts on (§ 3.9). It is not
+    /// cached: the value changes with every mutation, and a cache here
+    /// is what let a Kernel & Boot row keep reporting an include state
+    /// the export had already dropped.
+    pub fn reference(&self) -> crate::projection::ReferenceProjection {
+        crate::projection::project_reference(&self.snapshot_projected())
     }
 }
 
@@ -6133,9 +6136,6 @@ mod tests {
             "httpd.service should start excluded"
         );
 
-        // Capture reference pointer before mutation
-        let ref_before = session.reference() as *const crate::projection::ReferenceProjection;
-
         // Mutate: flip httpd.service include false -> true
         session
             .apply(RefinementOp::SetInclude {
@@ -6167,15 +6167,10 @@ mod tests {
             })
             .unwrap();
 
-        // Reference should be pointer-identical (OnceLock, never recomputed)
-        let ref_after = session.reference() as *const crate::projection::ReferenceProjection;
-        assert!(
-            std::ptr::eq(ref_before as *const (), ref_after as *const ()),
-            "reference projection pointer must be stable across mutations"
-        );
-
-        // Verify reference field stability: version_changes should still
-        // have the same counts regardless of mutations
+        // `reference()` is recomputed on every call, so the fields that
+        // are genuinely reference-only have to come out of the projected
+        // snapshot unchanged rather than out of a frozen copy: these
+        // version_changes counts hold across both mutations above.
         let ref_proj = session.reference();
         assert_eq!(ref_proj.version_changes.downgrades.len(), 1);
         assert_eq!(ref_proj.version_changes.upgrades.len(), 1);
