@@ -179,7 +179,7 @@ Expected: (a) `semanage ABSENT`, the other three PRESENT. (b) all four PRESENT. 
 
 **Every sub-case below runs against image (b), not the stock base**, because that is the state the rendered block creates. Replace `registry.redhat.io/rhel9/rhel-bootc:9.8` with `localhost/b1-precondition` in each `podman run` of steps 2 to 7 on the re-run.
 
-Result: **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
 
 Per-binary `command -v` inside the base: `semanage` status 1 and no path; `matchpathcon` `/usr/sbin/matchpathcon`; `awk` `/usr/bin/awk`; `grep` `/usr/bin/grep`; `printf` a builtin. Neither `/usr/sbin/semanage` nor `/usr/bin/semanage` exists. Everything the emitted commands need except `semanage` is present.
 
@@ -224,7 +224,7 @@ Expected: exit 0. `-d` fails on a key defined in policy and is swallowed by `2>/
 
 **Re-open condition:** the spec allows exactly one surprise here — if a RHEL downstream `semanage` accepts the duplicate `-a`, the `|| -m` fallback stays (harmless) and § 3.1 rule 1 gains a note on the downstream behaviour. Any other failure re-opens § 3.1. "The duplicate-add allowance is not permission to ignore any other failure" (§ 8.14).
 
-Result: **Not run as specified, 2026-10-27: step 1 failed and the stock base has no `semanage`.** Run against the same base with `policycoreutils-python-utils` added, as evidence toward the § 3.1 decision. `policycoreutils` and `libsemanage` are 3.6, the versions § 3.1 cites, so the behaviour transfers.
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27: step 1 failed and the stock base has no `semanage`.** Run against the same base with `policycoreutils-python-utils` added, as evidence toward the § 3.1 decision. `policycoreutils` and `libsemanage` are 3.6, the versions § 3.1 cites, so the behaviour transfers.
 
 Observed: exit 0, and the final listing shows `/var/www(/.*)?  all files  system_u:object_r:public_content_t:s0`, the outcome the step expects. **The one allowed surprise is present:** `-a` on an already-defined key does not fail. `semanage fcontext -a -t public_content_t '/var/www(/.*)?'` prints `File context for /var/www(/.*)? already defined, modifying instead` and **exits 0**, auto-modifying, on a stock key and again on a local one; only `-d` fails, with `ValueError: File context for /var/www(/.*)? is defined in policy, cannot be deleted` (exit 1, swallowed as designed). So the `|| -m` fallback never fires for a duplicate on this base. Per § 8.14 the fallback stays (harmless) and § 3.1 rule 1 gains the downstream note. The end state is the one rule 1 intends, so the recency model is unaffected: sub-cases (iii) and (iv) measure it directly and both hold.
 
@@ -253,7 +253,7 @@ Expected: `pass1 exit=0`, `pass2 exit=0`, and exactly one `/var/srv = /srv` line
 
 **Re-open condition:** a second entry, a nonzero exit, or a mutation on pass 2 re-opens § 3.1 rule 2.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation exactly.** Output was `pass1 exit=0`, `pass2 exit=0`, and the final listing held exactly one line, `/var/srv = /srv`, with the whole equivalence section containing nothing else. Pass 2 found the mapping identical and ran no `semanage` mutation. § 3.1 rule 2's absent-add and identical-no-op branches hold on this base.
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation exactly.** Output was `pass1 exit=0`, `pass2 exit=0`, and the final listing held exactly one line, `/var/srv = /srv`, with the whole equivalence section containing nothing else. Pass 2 found the mapping identical and ran no `semanage` mutation. § 3.1 rule 2's absent-add and identical-no-op branches hold on this base.
 
 **Re-run, 2026-10-28, against image (b), with the form the renderer emits today: PASS.** The executed body is rule 2 as changed by Task 11, with the listing captured and its failure fatal, which the script above predates. `pass1 exit=0`, `pass2 exit=0`, and the final listing holds exactly one `/var/srv = /srv` line (`wc -l` on the filtered listing gives 1). No second entry, no nonzero exit, no mutation on pass 2.
 
@@ -286,7 +286,7 @@ Expected: both replays exit 0, and both `matchpathcon` paths report the **later*
 
 **Re-open condition:** if the two paths disagree, or the winner is `httpd_sys_content_t`, § 3.1 rule 1's recency claim is wrong and § 3.1 is re-opened.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base in both forms, because the spec and this plan set up the store differently, and the difference is load-bearing.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base in both forms, because the spec and this plan set up the store differently, and the difference is load-bearing.**
 
 This plan's form, equivalence added first: both replays exit 0, `matchpathcon /var/srv/www/index.html` and `matchpathcon /srv/www/index.html` both give `system_u:object_r:public_content_t:s0`, they agree, and the winner is the later rule, B. `file_contexts.local` lists A (`/srv/www(/.*)?`) before B (`/srv/.*`). **§ 3.1 rule 1's recency claim holds.**
 
@@ -328,7 +328,7 @@ Expected: both replays exit 0; the listing shows `/srv/.*` with the source's `pu
 
 **Re-open condition:** if `matchpathcon` names `httpd_sys_content_t`, or `file_contexts.local` lists B before A, § 3.1 is wrong and is re-opened before merge.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying the source's `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A (`/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0`) before B (`/srv/.*  system_u:object_r:public_content_t:s0`). The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — **the source winner, not `httpd_sys_content_t`.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying the source's `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A (`/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0`) before B (`/srv/.*  system_u:object_r:public_content_t:s0`). The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — **the source winner, not `httpd_sys_content_t`.**
 
 This is the sub-case that measures what § 3.1 rule 1 says it gives up: a target-local key the source does not define, overlapping a collected key, loses to it. The preseeded `var_t` on `/srv/.*` was replaced by the source's type and the source's relative order survived. `semanage` printed `File context for /srv/.* already defined, modifying instead` twice, once for the preseed (stock policy defines `/srv/.*`) and once for B; the `-d` before B removed the preseeded local key, so B still landed last in the local list. The auto-modify of sub-case (i) does not disturb the ordering model.
 
@@ -360,7 +360,7 @@ and the final listing still shows `/var/srv = /opt/srv` with no `/srv` mapping.
 
 **Re-open condition:** if the mapping was replaced, § 3.1 rule 2 is wrong and is re-opened.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation.** The emitted form exits 1, stdout is empty, and stderr carries exactly the one expected line and nothing else:
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation.** The emitted form exits 1, stdout is empty, and stderr carries exactly the one expected line and nothing else:
 
 ```
 FIXME: /var/srv is already equivalent to /opt/srv on the target, not /srv; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild
@@ -409,7 +409,7 @@ Expected: the three `/var/srv` replays each exit 0 with the rule 1 skip FIXME on
 
 **Re-open condition:** if the equivalence is gone or a `/var/srv` label row appears, § 3.1 is wrong and is re-opened before merge.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** The three `/var/srv` replays print `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv`:
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** The three `/var/srv` replays print `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv`:
 
 ```
 FIXME: skipped the file context rule for /var/srv; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild
@@ -2659,6 +2659,8 @@ Keep a Changelog 1.1.0 categories, the repo's `- **Label** — description` form
 - **Snapshot schema 23** — removed fields and changed types make schema 22 snapshots unloadable. Re-scan; aggregates re-aggregate from re-scanned hosts.
 ```
 
+**Note, 2026-10-31: the draft above did not ship as written.** Two dedicated review seats verified these entries against the shipped code at `8aed2b7a`/HEAD after this draft was written and found four clauses of the fcontext entry, the repo-enabling entry's "every", two history clauses of the repo/group entry, the "66" figure, and most of the Security entry's history wrong or incomplete. `CHANGELOG.md`'s `## [Unreleased]` section is the authoritative text; it does not match the draft above. See `/Users/mrussell/FKA/marks-inbox/reviews/inspectah-changelog-claim-verification-2026-10-30.md` and `/Users/mrussell/FKA/marks-inbox/reviews/inspectah-security-changelog-verification-2026-10-30.md` for what changed and why, and Task 26's own report for the full per-claim accounting.
+
 - [ ] **Step 2: Walk the § 4 consumer checklist**
 
 Open § 4's consumer table and the task map at the top of this plan, and confirm each row's "Phase 0" column is what the code does. Record any row the implementation diverged from, with the reason, under a new "Divergences" heading in this document.
@@ -2767,3 +2769,89 @@ Run against the spec with fresh eyes after the plan was written.
 **4. Review Focus.** Five input classes the spec implies and § 8 does not pin, each with a test in the owning task: `RepoId` case folding (Task 4), `parse_repo_sections` on dnf's `enabled=` vocabulary (Task 4), the no-op arms with no `rpm` section (Task 7), `effective_var_backing` with absent sections (Task 19), and the `validate_staged_name` length boundaries (Task 12).
 
 **5. Proportion.** The plan is shorter than the spec it implements. Most of its bulk is the two merge gates' runnable shell and the two emitted `RUN` forms, both of which are exact bytes the implementer cannot derive.
+
+---
+
+## Divergences
+
+Written by Task 26, step 2 (the § 4 checklist walk) and the companion's
+required record of spec and plan defects found while closing out the plan.
+Each entry names what diverges, from what, and why.
+
+### § 4 consumer checklist walk
+
+Every row of spec § 4's "Phase 0 consumer and merge checklist" was checked
+against the code at HEAD (`d5e93d3e`). Ten of eleven rows match the table's
+"Phase 0" column exactly. One does not:
+
+- **Aggregate merge, storage (`merge.rs:1512`, now `merge_storage_sections`
+  in `crates/core/src/aggregate/merge.rs`).** The § 4 table's Phase 0 column
+  reads "unchanged in structure; `backing` payloads compare by value, and
+  hosts that disagree keep the first in hostname order." Task 18's own
+  file-change note in this plan (its Files list) repeats the same text. The
+  shipped code does something narrower: first-host-in-hostname-order is the
+  default, but a host whose verdict is `Unbacked` loses to another host's
+  backed verdict **only when that verdict names a creator the export can
+  carry** (`VarDirBacking::names_a_carryable_creator`). This was added in
+  commit `965ecdba` ("feat(pipeline): reconcile /var backing against what
+  the export carries", Task 19), whose message explains why: "the fleet
+  case needed its own rule... keeping `Unbacked` because its host sorted
+  first makes the export provision a path the merged config section already
+  creates." The behaviour is correct and the commit message states the
+  reasoning; the § 4 table and Task 18's file note simply predate the
+  exception Task 19 had to add. No action needed beyond this record — the
+  spec's table is stale on one clause, not wrong in intent.
+
+### Spec and plan defects found closing out tasks 20-26
+
+1. **§ 3.5 prescribes building `customizations_from_config` by path prefix**,
+   which would re-derive a classification the config walker already owns.
+   Task 21 implemented a categorical filter instead, by ruling (see Task
+   21's own notes); the spec's path-prefix wording was never followed.
+2. **§ 3.4's "counted in the summary row's `<U> unbacked`" and § 6.6's state
+   text need correcting together.** § 6.6 still prescribes `<U> unbacked` as
+   the only non-empty state text, but Task 23 split the count into
+   `<U> unbacked` and `<N> unconfirmed`. The `/var` review seat made
+   correcting this pairing an explicit condition of its approval; the spec
+   text itself was never updated to match.
+3. **§ 3.8 / Task 23 step 5's delta enumeration is incomplete.** It omits
+   the config-backed pointer row's `decision`, which Task 23's own "Where
+   `decision` is filled" paragraph requires. A reviewer ruled the
+   enumeration defective, not the implementation — the shipped code is
+   correct, the spec's list of what changes is short by one row.
+4. **§ 3.9 credits `invalidate_caches` with clearing the view caches on
+   every mutation.** It has three callers — `rescan_upload_dir`,
+   `set_uploaded`, `unmark_uploaded_rpm` — none on an op path. `apply`,
+   `apply_batch`, `undo`, `redo`, and `reset` each inline the cache-clear
+   work themselves. The behaviour (caches are cleared on every mutation) is
+   correct; the attribution to one shared function is wrong.
+5. **Task 25's own brief had four defects**, found while Task 25 was
+   reviewed: two citations (the brief cited `crates/refine/src/rpm_filename.rs`,
+   which was never created; the module shipped at `crates/core/src/rpm_filename.rs`
+   instead, so it could be read from both `refine` and `pipeline`, which sit
+   on opposite sides of a dependency edge — this plan's own File Structure
+   note at the top carries the same stale `crates/refine/...` path and is
+   wrong for the same reason; and a `normalize.rs` line citation pointed at
+   the callee while its prose described the caller) and two merged claims (the brief's
+   `Inventory`-bucket sentence is true only of sysctl-shadowed config
+   entries, not of `loaded_modules`, which reaches no bucket at all per
+   `web-disposition-contract.md` § 4's Inventory caveat; and "the substring
+   rule is replaced" is true of `classify_recorded_repo` only, not of
+   `repo_matches_enabled`). Task 25's commits (`025c2747`, `d5e93d3e`)
+   already corrected the skill-file text itself; this entry records that
+   the brief that drove Task 25, not just the skills, was wrong.
+6. **Task 26's own step 3 cannot pass as written.**
+   `cargo clippy --workspace --all-targets -- -D clippy::all` exits 101,
+   because the 9-warning baseline is entirely `clippy::all`-style lint and
+   `-D` promotes every one of the nine to a hard error. The step's own
+   expectation ("reports nothing beyond the 9-warning pre-existing
+   baseline") is incompatible with the flag it prescribes. The working
+   check, used for this task's step 3 instead, is
+   `cargo clippy --workspace --all-targets 2>&1 | grep -cE "^warning: [a-z]"`,
+   which must read 9. Two counting traps sit next to this number: a bare
+   `grep -c '^warning: '` reads 13 (the 9 lints plus 4 per-crate "generated
+   N warnings" summary lines), and the `-->` span count reads 11 (the two
+   `field_reassign_with_default` warnings each carry two spans). Neither 13
+   nor 11 is the warning count; **9 is correct and is not changed by this
+   entry**, despite an earlier seat in this plan recommending it be changed
+   to 11.
