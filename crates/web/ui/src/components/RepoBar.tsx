@@ -150,7 +150,10 @@ export function RepoBar({
             <Switch
               id={`repo-toggle-${repo.section_id}`}
               label={countText}
-              aria-label={countText}
+              // aria-label overrides the visible repo name, so the id has
+              // to be in here too: two repos with equal counts would
+              // otherwise announce identically when navigating by control.
+              aria-label={`${repo.section_id}: ${countText}`}
               isChecked={isChecked}
               onChange={() => onToggle(repo.section_id, !isChecked)}
               isReversed

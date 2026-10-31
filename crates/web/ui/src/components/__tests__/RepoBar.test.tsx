@@ -186,6 +186,32 @@ describe("RepoBar", () => {
     },
   );
 
+  it("gives two same-count repos distinguishable accessible names", () => {
+    // `aria-label` overrides the visible repo name in accessible-name
+    // computation, so the name next to the switch does not disambiguate
+    // for a user navigating by control. Identical counts are the worst
+    // case: without the repo id in the label, both switches announce the
+    // same string. Queried by name, not by role, on purpose.
+    render(
+      <RepoBar
+        repos={[
+          repo({ section_id: "epel", effective_included: 2 }),
+          repo({ section_id: "vendor", effective_included: 2 }),
+        ]}
+        onToggle={vi.fn()}
+      />,
+    );
+    const epelSwitch = screen.getByRole("switch", { name: /epel/ });
+    const vendorSwitch = screen.getByRole("switch", { name: /vendor/ });
+    expect(epelSwitch).not.toBe(vendorSwitch);
+    // The count text added this phase stays in the accessible name.
+    for (const el of [epelSwitch, vendorSwitch]) {
+      expect(el).toHaveAccessibleName(
+        expect.stringContaining("2 of 2 packages included"),
+      );
+    }
+  });
+
   it("shows conflict count badge with aria-live when provided", () => {
     render(
       <RepoBar
