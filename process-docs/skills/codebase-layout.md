@@ -163,7 +163,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 | Location | Type |
 |----------|------|
 | `crates/*/tests/` | Per-crate integration tests |
-| `crates/web/ui/e2e/` | Playwright browser tests (React UI) |
+| `crates/web/ui/e2e/` | Playwright browser tests (React UI). Fixtures under `e2e/fixtures/` are hand-maintained, not generated — see `e2e-fixtures-are-hand-maintained.md`. |
 | `crates/web/ui/src/**/__tests__/` | Jest unit tests (React components) |
 | `tests/` | Top-level end-to-end tests |
 | `testdata/` | Fixtures for integration tests |
@@ -205,3 +205,5 @@ Bundled into RPM packages.
 - **Build script version:** `crates/cli/build.rs` stamps version metadata at compile time. Don't manually update version strings in code.
 - **Schema versioning:** Snapshot JSON has a `schema_version` field that MUST be bumped when types change. See `snapshot-schema-versioning.md`.
 - **Package identity is `name.arch`** — Never use bare package names. See `package-identity-is-name-dot-arch.md`.
+- **Clippy clean has two different strictness levels** — the pre-commit hook and CI only run `cargo clippy --workspace -- -W clippy::all` (no `--all-targets`, warn not deny), which does not lint test code and cannot block a commit on clippy alone. A stricter `--all-targets -- -D clippy::all` acceptance exists in some plans but cannot pass as a `-D` command once any baseline warning exists. See `full-workspace-verification-gates.md`.
+- **A clean full-workspace `cargo test` run takes 20-30 minutes**, and a freshly linked test binary idles 60-120 seconds before its first result — that is normal, not a hang, and a real hang looks identical for just as long. Check `ps` elapsed time rather than waiting or re-running. See `full-workspace-verification-gates.md`.
