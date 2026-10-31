@@ -1589,10 +1589,17 @@ fn host_creator(vd: &RefVarDirectory) -> String {
 
 /// What the export does about that creator (§ 3.4), which is where the
 /// summary's count comes from.
+///
+/// Each value leads with the word the summary counts it under, so the
+/// reader can match a row to the count above it: `backed`, `unbacked`,
+/// or `unconfirmed`. Leading with the consequence instead left the
+/// `Provision` row reading reassuringly ("provisioned by this export")
+/// under a count that reads as a problem ("1 unbacked"), with no shared
+/// token to connect them.
 fn export_outcome(vd: &RefVarDirectory) -> &'static str {
     match &vd.outcome {
-        EffectiveBacking::Carried => "carried",
-        EffectiveBacking::Provision { .. } => "provisioned by this export",
+        EffectiveBacking::Carried => "backed: creator carried by this export",
+        EffectiveBacking::Provision { .. } => "unbacked: provisioned by this export",
         EffectiveBacking::Unresolved { .. } => "backing unconfirmed",
     }
 }
@@ -1830,8 +1837,9 @@ mod tests {
                 summary.detail.as_deref(),
                 Some(
                     "/var/lib/missing  ownership not recorded  \
-                     package-owned (appone)  carried\n\
-                     /var/log/plain  0755 root:root  package-owned (appone)  carried"
+                     package-owned (appone)  backed: creator carried by this export\n\
+                     /var/log/plain  0755 root:root  package-owned (appone)  \
+                     backed: creator carried by this export"
                 )
             );
         }

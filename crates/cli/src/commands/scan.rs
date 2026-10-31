@@ -956,14 +956,14 @@ fn format_cert_expiry_line(
         let abs_days = days.unsigned_abs();
         let day_word = if abs_days == 1 { "day" } else { "days" };
         Some(format!(
-            "   \u{26a0} Subscription certs EXPIRED: {date_str} ({abs_days} {day_word} ago) \
-             \u{2014} will not work on unregistered systems"
+            "   \u{26a0} Subscription certs EXPIRED: {date_str} ({abs_days} {day_word} ago). \
+             Will not work on unregistered systems"
         ))
     } else if days < 7 {
         let day_word = if days == 1 { "day" } else { "days" };
         Some(format!(
-            "   \u{26a0} Subscription certs expire: {date_str} ({days} {day_word}) \
-             \u{2014} rebuild soon"
+            "   \u{26a0} Subscription certs expire: {date_str} ({days} {day_word}). \
+             Rebuild soon"
         ))
     } else {
         Some(format!(
@@ -1396,7 +1396,7 @@ VARIANT_ID="workstation"
         let snap = snapshot_with_expiry(expiry);
         let line = format_cert_expiry_line(&snap).expect("should produce line");
         assert!(line.contains("\u{26a0}"));
-        assert!(line.contains("rebuild soon"));
+        assert!(line.contains("Rebuild soon"));
     }
 
     #[test]
@@ -1406,7 +1406,7 @@ VARIANT_ID="workstation"
         let line = format_cert_expiry_line(&snap).expect("should produce line");
         assert!(line.contains("EXPIRED"));
         assert!(line.contains("ago)"));
-        assert!(line.contains("will not work"));
+        assert!(line.contains("Will not work"));
     }
 
     #[test]
@@ -1432,7 +1432,7 @@ VARIANT_ID="workstation"
         let notice = build_sensitivity_notice(&snap).expect("should produce notice");
         assert!(notice.contains("Preserved: subscription"));
         assert!(notice.contains("Subscription certs expire:"));
-        assert!(notice.contains("rebuild soon"));
+        assert!(notice.contains("Rebuild soon"));
     }
 
     #[test]

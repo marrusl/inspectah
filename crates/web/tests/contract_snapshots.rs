@@ -625,11 +625,12 @@ fn excluding_the_tmpfiles_fragment_turns_a_carried_var_dir_into_an_advisory_row(
     );
     // The summary's creator column and its outcome column must not
     // disagree: the line under `1 unbacked` names the host's tmpfiles.d
-    // fragment and then says the export does not carry it.
+    // fragment and then says the export does not carry it. The outcome
+    // leads with the word the count uses, so the two can be matched up.
     assert_eq!(
         summary_detail(&excluded),
         "/var/lib/appone/cache  0750 appone:appone  \
-         tmpfiles.d (/etc/tmpfiles.d/appone.conf)  provisioned by this export"
+         tmpfiles.d (/etc/tmpfiles.d/appone.conf)  unbacked: provisioned by this export"
     );
 
     // Carrying the fragment again drops the advisory. The directory
@@ -657,7 +658,7 @@ fn excluding_the_tmpfiles_fragment_turns_a_carried_var_dir_into_an_advisory_row(
     assert_eq!(
         summary_detail(&included),
         "/var/lib/appone/cache  0750 appone:appone  \
-         tmpfiles.d (/etc/tmpfiles.d/appone.conf)  carried",
+         tmpfiles.d (/etc/tmpfiles.d/appone.conf)  backed: creator carried by this export",
         "the carried directory collapses into the summary's list"
     );
 }
@@ -752,7 +753,8 @@ fn a_var_dir_with_no_recorded_ownership_says_so_rather_than_printing_a_dash() {
     );
     assert_eq!(
         summary_detail(&items),
-        "/var/lib/pgsql  ownership not recorded  nothing declares it  provisioned by this export"
+        "/var/lib/pgsql  ownership not recorded  nothing declares it  \
+         unbacked: provisioned by this export"
     );
     assert_eq!(summary_state(&items), "1 unbacked");
 }

@@ -348,7 +348,7 @@ fn lookup_name(
 
 /// Format the right-hand suffix for a flat receipt line.
 ///
-/// Returns the part after the status label: ` (metric)` and/or ` — reason`.
+/// Returns the part after the status label: ` (metric)` and/or `: reason`.
 fn format_flat_suffix(line: &ReceiptLine) -> String {
     let mut parts = String::new();
 
@@ -359,9 +359,9 @@ fn format_flat_suffix(line: &ReceiptLine) -> String {
         parts.push_str(" (done)");
     }
 
-    // Non-success reason after em dash.
+    // Non-success reason after a colon.
     if let Some(ref reason) = line.reason {
-        parts.push_str(&format!(" \u{2014} {reason}"));
+        parts.push_str(&format!(": {reason}"));
     }
 
     parts
@@ -934,17 +934,17 @@ mod tests {
             "missing skip label: {text}"
         );
         assert!(text.contains("Network... INT"), "missing INT label: {text}");
-        // Reason after em dash for non-success.
+        // Reason after a colon for non-success.
         assert!(
-            text.contains("FAIL \u{2014} podman not found"),
+            text.contains("FAIL: podman not found"),
             "missing FAIL reason: {text}"
         );
         assert!(
-            text.contains("WARN (37 modified) \u{2014} rpm verify timed out"),
+            text.contains("WARN (37 modified): rpm verify timed out"),
             "missing WARN reason: {text}"
         );
         assert!(
-            text.contains("skip \u{2014} disabled"),
+            text.contains("skip: disabled"),
             "missing skip reason: {text}"
         );
     }
