@@ -562,9 +562,11 @@ impl SectionStats {
                 FindingKind::Actionable { include: true } => stats.included += 1,
                 FindingKind::Actionable { include: false } => stats.excluded += 1,
                 // Inventory shares the advisory bucket: it is the other
-                // display-only disposition, never a decision either. Only
-                // network findings are inventory today, and they belong to
-                // no section counted here.
+                // display-only disposition, never a decision either. The
+                // Config section does reach this arm -- a config file whose
+                // path is a sysctl source is shadowed to inventory during
+                // collection -- so the bucket choice is load-bearing, not
+                // theoretical.
                 FindingKind::Advisory { .. } | FindingKind::Inventory => stats.advisory += 1,
             }
         }
@@ -1020,9 +1022,9 @@ mod section_stats_tests {
     /// The partition invariant cannot prove this and never could: every
     /// item increments `total` once and exactly one bucket once, so the
     /// sum holds whichever bucket receives it. This is the guard for the
-    /// assignment, and it is the only cover `Inventory` has -- no counted
-    /// section can produce one today, so no fixture-driven test reaches
-    /// that arm.
+    /// assignment, and the only one that reaches the `Inventory` arm
+    /// directly: a sysctl-shadowed config file is counted as inventory in
+    /// the Config section, but no refine fixture builds that state.
     #[test]
     fn every_disposition_lands_in_its_designated_bucket() {
         // Expectations are the whole bucket vector, not just the bucket

@@ -24,10 +24,11 @@ fn canonical_package_id(name: &str, arch: &str) -> String {
 /// Load a raw JSON snapshot for refine, applying presence-aware defaulting.
 ///
 /// Before typed deserialization, walks raw JSON arrays and patches any
-/// entry lacking an `include` field by inserting `"include": true`.
-/// Entries with an existing `"include": false` are untouched. This
-/// resolves the `serde(default)` bool ambiguity where absent and
-/// explicit-false collapse to the same `false`.
+/// entry lacking a `disposition` field by inserting
+/// `{"kind": "actionable", "include": true}`. Entries that already carry
+/// a `disposition` are untouched, whatever it says. This resolves the
+/// `serde(default)` ambiguity where an absent disposition and an
+/// explicit exclusion would otherwise collapse to the same value.
 ///
 /// Enforces the same schema version gate as `InspectionSnapshot::load()`
 /// (current SCHEMA_VERSION only) by round-tripping through the patched

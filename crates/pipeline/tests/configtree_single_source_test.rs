@@ -1,10 +1,19 @@
-//! § 8.1: `write_config_tree` has exactly one source for `/etc` content —
-//! `config.files`, gated on `is_included()`.
+//! § 8.1: the kernel/boot content `write_config_tree` puts under `/etc`
+//! has exactly one source -- `config.files`, gated on `is_included()`.
 //!
 //! The ungated kernel snippet block these tests exist to catch was deleted
 //! one task earlier, when the fields it read were removed, so they are green
-//! from the moment they are written. They stand as a regression guard:
-//! `write_config_tree` must never regrow a second writer for `/etc`.
+//! from the moment they are written. They stand as a regression guard
+//! against a second writer for the paths they cover: a kernel-side path
+//! rule that materializes a `config.files` entry the decision excluded.
+//!
+//! **Scope.** That is a claim about these paths, not about the function.
+//! `write_config_tree` does still hold another ungated `/etc` writer: the
+//! `systemd_timers` loop writes `etc/systemd/system/<name>.timer` and
+//! `.service` for every `source == "local"` timer with no disposition
+//! check at all. These fixtures carry no `scheduled_tasks` section and
+//! would not catch it. Backlog:
+//! `inspectah-configtree-writes-local-timers-with-no-decision`.
 //!
 //! Their teeth were measured by mutation, not by a red run — reintroducing a
 //! path-rule writer inside the kernel/boot block turns

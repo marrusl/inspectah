@@ -3583,24 +3583,6 @@ impl RefineSession {
     }
 }
 
-/// Render exactly the approved refine export file set to a tarball.
-///
-/// This is NOT `render_all()`. The pipeline's `render_all()` writes 8
-/// artifacts (including report.html, README.md, secrets-review.md,
-/// kickstart-suggestion.ks) that are outside the approved refine export
-/// contract. This function materializes only the contracted set:
-///
-/// Required: inspection-snapshot.json, Containerfile, audit-report.md,
-///           schema/snapshot.schema.json
-/// Conditional: config/ (when snapshot has included config files),
-///              env-files/ (when snapshot has env-file data),
-///              compose/ (when snapshot has compose files with raw content)
-/// Excluded: report.html, README.md, secrets-review.md,
-///           kickstart-suggestion.ks, original-inspection-snapshot.json
-///
-/// Preview/export fidelity: both paths use `render_containerfile(snap,
-/// Some(&materialized_roots))` with the same materialized root set, so
-/// the exported Containerfile is byte-identical to what the preview shows.
 /// Write `aggregate/variants/<path>/<hash>.content` files for every Alternative
 /// config entry, drop-in, and quadlet unit in an aggregate snapshot.  Selected and
 /// Only variants are materialized in the normal config tree; alternatives are
@@ -4369,7 +4351,31 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
     matches!(disposition, FindingKind::Actionable { include: true })
 }
 
-/// Render a refine export tarball at `tarball_path`.
+/// Render exactly the approved refine export file set to a tarball at
+/// `tarball_path`.
+///
+/// This is NOT `render_all()`. The pipeline's `render_all()` writes 8
+/// artifacts (including report.html, README.md, secrets-review.md,
+/// kickstart-suggestion.ks) that are outside the approved refine export
+/// contract. This function materializes only the contracted set:
+///
+/// Required: inspection-snapshot.json, Containerfile, audit-report.md,
+///           schema/snapshot.schema.json
+/// Conditional: config/ (when snapshot has included config files),
+///              env-files/ (when snapshot has env-file data),
+///              compose/ (when snapshot has compose files with raw content)
+/// Excluded: report.html, README.md, secrets-review.md,
+///           kickstart-suggestion.ks, original-inspection-snapshot.json
+///
+/// Preview/export fidelity is conditional on `render_ctx`. Both paths
+/// call `render_containerfile` with the same materialized root set, so
+/// the Containerfile matches the preview byte for byte **only when the
+/// caller passes the `RenderContext` the preview was rendered with**.
+/// `RefineSession::export_tarball` passes `cached_render_context` and
+/// does match; `POST /api/tarball` passes `None`, and the Containerfile
+/// in that download drops every `dnf group install` and installs the
+/// members individually instead. Backlog:
+/// `inspectah-nothing-tests-the-tarball-route-or-the-byte-identity-claim`.
 ///
 /// `upload_dir_canon` must be the *canonical* upload directory the session
 /// prepared, not a path that can still resolve somewhere else; `None`
