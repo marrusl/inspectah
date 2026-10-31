@@ -28,7 +28,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::language_packages;
-use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
+use super::safety::{ExportPath, is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
@@ -1942,8 +1942,45 @@ const DEFAULT_VAR_DIR_OWNER: &str = "root";
 
 /// The comment that precedes a provisioned directory whose source-host
 /// creator this export does not carry.
-fn lost_creator_comment(path: &str, creator: &str) -> String {
+fn lost_creator_comment(path: &ExportPath, creator: &str) -> String {
+    let path = path.as_str();
     format!("# {path}: created on the host by {creator}, which this export does not carry")
+}
+
+/// The `RUN` that makes a provisioned directory the scan captured no mode
+/// for.
+///
+/// This is a shell-form `RUN`: `/bin/sh -c` runs it as root at image
+/// build time and nothing quotes the operand. It takes an [`ExportPath`]
+/// rather than a `&str` so a path that did not pass the allowlist cannot
+/// reach it, which is the same guarantee `StagedName` gives the repo-less
+/// `COPY`/`RUN` pair.
+fn mkdir_line(path: &ExportPath) -> String {
+    format!("RUN mkdir -p {}", path.as_str())
+}
+
+/// The active tmpfiles.d `d` entry for a provisioned directory.
+///
+/// Takes an [`ExportPath`] for the same reason [`mkdir_line`] does: the
+/// fields of a tmpfiles.d line are whitespace-separated and a `#` starts
+/// a comment, so an unproved path can add a directive of its own that
+/// systemd applies at boot.
+fn tmpfiles_dir_line(path: &ExportPath, mode: &str, owner: &str, group: &str) -> String {
+    format!("d {} {mode} {owner} {group} -", path.as_str())
+}
+
+/// The line a directory renders in place of its `RUN` or its `d` entry
+/// when [`ExportPath::parse`] refuses its path.
+///
+/// Rejection is rejection: there is no sanitized form of the path that
+/// names the directory the host had, so the export hands the operator an
+/// instruction instead of writing a build step it cannot vouch for.
+fn refused_path_comment(path: &str) -> String {
+    format!(
+        "# FIXME: create {} by hand; its path has characters this export will not write \
+         into a build instruction",
+        super::language_packages::sanitize_for_comment(path)
+    )
 }
 
 /// The two-line FIXME an `Unresolved` directory renders: an imperative
@@ -1951,8 +1988,14 @@ fn lost_creator_comment(path: &str, creator: &str) -> String {
 ///
 /// Both `inspectah-var.conf` and the Containerfile's Storage block carry
 /// it, so the wording is produced in one place.
+///
+/// `path` is `d`'s own path, proved: the commented `d` line is one the
+/// operator is being told to uncomment, so it has to be a line that is
+/// safe once uncommented. `d` is still needed for the mode and ownership
+/// the line carries.
 fn unresolved_fixme_lines(
     d: &inspectah_core::types::storage::VarDirectory,
+    path: &ExportPath,
     creator: &str,
     reason: UnresolvedReason,
     materialized_users: &std::collections::HashSet<String>,
@@ -1975,10 +2018,10 @@ fn unresolved_fixme_lines(
         format!(
             "# FIXME: confirm the base image creates {}; on the host {creator} created it and {}; \
              if the base does not, uncomment the next line",
-            d.path,
+            path.as_str(),
             reason.reason_text()
         ),
-        format!("#d {} {mode} {owner} {group} -", d.path),
+        format!("#{}", tmpfiles_dir_line(path, mode, &owner, &group)),
     ]
 }
 
@@ -2015,8 +2058,12 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                 let Some(mode) = d.mode.as_deref() else {
                     continue;
                 };
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    lines.push(refused_path_comment(&d.path));
+                    continue;
+                };
                 if let Some(creator) = lost {
-                    lines.push(lost_creator_comment(&d.path, creator));
+                    lines.push(lost_creator_comment(&path, creator));
                 }
                 let (owner, group, comment) = resolve_tmpfiles_ownership(
                     d,
@@ -2027,11 +2074,16 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                 if !comment.is_empty() {
                     lines.push(format!("# {comment}"));
                 }
-                lines.push(format!("d {} {} {} {} -", d.path, mode, owner, group));
+                lines.push(tmpfiles_dir_line(&path, mode, &owner, &group));
             }
             EffectiveBacking::Unresolved { creator, reason } => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    lines.push(refused_path_comment(&d.path));
+                    continue;
+                };
                 lines.extend(unresolved_fixme_lines(
                     d,
+                    &path,
                     creator,
                     *reason,
                     &materialized_users,
@@ -2078,15 +2130,24 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
             // Fallback: RUN mkdir for provisioned dirs WITHOUT
             // ownership/mode data. The rest are in the tmpfiles.d conf.
             EffectiveBacking::Provision { lost } if d.mode.is_none() => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    body.push(refused_path_comment(&d.path));
+                    continue;
+                };
                 if let Some(creator) = lost {
-                    body.push(lost_creator_comment(&d.path, creator));
+                    body.push(lost_creator_comment(&path, creator));
                 }
-                body.push(format!("RUN mkdir -p {}", d.path));
+                body.push(mkdir_line(&path));
             }
             EffectiveBacking::Provision { .. } => {}
             EffectiveBacking::Unresolved { creator, reason } => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    body.push(refused_path_comment(&d.path));
+                    continue;
+                };
                 body.extend(unresolved_fixme_lines(
                     d,
+                    &path,
                     creator,
                     *reason,
                     &materialized_users,
@@ -5530,6 +5591,50 @@ RUN dnf install -y \
         );
         assert!(output.contains("RUN mkdir -p /var/lib/a"));
         assert!(output.contains("RUN mkdir -p /var/lib/b"));
+    }
+
+    /// A `/var` path the export has to provision reaches two emissions
+    /// nothing validated: a shell-form `RUN mkdir -p` when the scan
+    /// captured no mode, and a tmpfiles.d `d` line when it did. The
+    /// first is the dangerous one -- `/bin/sh -c` reads `;` as a command
+    /// separator at image build time, as root -- and the second lets a
+    /// newline add a directive of its own. Neither emission may carry a
+    /// path the allowlist refuses.
+    #[test]
+    fn var_dir_refused_path_reaches_neither_emission() {
+        const SHELL_PATH: &str = "/var/lib/app;id";
+        const CONF_PATH: &str = "/var/lib/two\nd /etc/shadow 0777 root root -";
+
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                var_dir(SHELL_PATH, VarDirBacking::Unbacked),
+                var_dir_with_mode(CONF_PATH, "0755", 0, 0, Some("root"), Some("root")),
+            ],
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            !output
+                .lines()
+                .any(|l| l.starts_with("RUN ") && l.contains("app;id")),
+            "a path with a command separator must not reach a RUN: {output}"
+        );
+        assert!(
+            output.contains("# FIXME: create /var/lib/app;id by hand"),
+            "the refusal must name the directory it skipped: {output}"
+        );
+
+        let conf = render_tmpfiles_conf(&snap).expect("the refusal lines are content");
+        assert!(
+            !conf.lines().any(|l| l.starts_with("d /etc/shadow")),
+            "a newline in a path must not add a directive: {conf}"
+        );
+        assert!(
+            conf.contains("# FIXME: create /var/lib/two"),
+            "the refusal must name the directory it skipped: {conf}"
+        );
     }
 
     /// A unit-backed directory is excluded from active provisioning in

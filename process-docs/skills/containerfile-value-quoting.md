@@ -1,6 +1,6 @@
 ---
 name: containerfile-value-quoting
-description: Three interpolation contexts in the Containerfile renderer need three different treatments — quote, sanitize, or reject — and the quoting has to land before any predicate is narrowed.
+description: Three interpolation contexts in the Containerfile renderer need three different treatments — quote, sanitize, or reject — the quoting has to land before any predicate is narrowed, and a host-sourced value that reaches a command is proved by a newtype rather than by a check at the site.
 ---
 
 # Containerfile Value Quoting
@@ -65,6 +65,35 @@ The same rule covers the npm global package list, the one genuinely
 unquoted command site. Quote the tokens there before narrowing, or the
 blacklist stays load-bearing — and it already under-rejects `>`, `<`, `(`,
 `*`, `{`, and a bare space.
+
+## Host-Sourced Values Get a Type, Not a Site Check
+
+Two instances of the same defect have shipped now: an RPM filename and a
+`/var` directory path, each interpolated into a shell-form `RUN` that
+`/bin/sh -c` runs as root at image build time. Both were closed the same
+way, and the next one should be.
+
+| Value | Type | Home |
+|---|---|---|
+| Staged RPM basename | `StagedName` | `inspectah_core::rpm_filename` |
+| `/var` directory path | `ExportPath` | `inspectah_pipeline::render::safety` |
+
+Each is an ASCII allowlist plus a newtype with no other constructor, and
+the emitting function takes the type rather than a `&str`. The guarantee
+belongs to the type, so a new emission site cannot forget the check; a
+site check closes one site, the type closes the class.
+
+**A value with two emission surfaces is proved once for both, or the fix
+is half a fix.** `ExportPath` guards the tmpfiles.d `d` entry as well as
+the `RUN`: those two are complementary arms of the same `Provision`
+outcome, split only on whether the scan captured a mode. tmpfiles.d fields
+are whitespace-separated and `#` starts a comment there, so an unproved
+path adds a directive systemd applies at boot. Finding the shell half and
+stopping would have left the other arm open.
+
+Rejection stays rejection at these sites: a refused value gets a FIXME
+naming the directory or package, never a sanitised rewrite that names
+something else.
 
 ## Testing These
 
