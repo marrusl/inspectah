@@ -759,6 +759,66 @@ fn a_var_dir_with_no_recorded_ownership_says_so_rather_than_printing_a_dash() {
     assert_eq!(summary_state(&items), "1 unbacked");
 }
 
+/// A directory the scan recorded no verdict for is reported exactly as
+/// one whose verdict is `Unbacked`.
+///
+/// `backing: None` is a live input, not a theoretical one: `classify`
+/// takes `d.backing.as_ref()` and returns `Provision { lost: None }`
+/// for it, the same answer `VarDirBacking::Unbacked` gets, and
+/// `host_creator` collapses the two in the summary's creator column
+/// too. That is deliberate -- neither state names a creator the export
+/// could carry -- but every other web-side `/var` fixture records a
+/// verdict, so nothing held the `None` arm to it. Splitting the two
+/// (an `Unresolved` outcome for the absent verdict, say, or a creator
+/// column reading "not recorded") would pass the rest of the suite.
+#[test]
+fn an_absent_var_backing_verdict_reads_as_unbacked() {
+    let rows = |backing: Option<VarDirBacking>| {
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![VarDirectory {
+                path: "/var/lib/pgsql".into(),
+                backing,
+                mode: Some("0700".into()),
+                owner_name: Some("postgres".into()),
+                group_name: Some("postgres".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        storage_items(&snap)
+    };
+
+    let absent = rows(None);
+    let unbacked = rows(Some(VarDirBacking::Unbacked));
+
+    // The positive half first: both must actually produce the unbacked
+    // presentation, or the equality below would hold between two
+    // sections that each rendered nothing.
+    assert_eq!(summary_state(&absent), "1 unbacked");
+    assert_eq!(
+        summary_detail(&absent),
+        "/var/lib/pgsql  0700 postgres:postgres  nothing declares it  \
+         unbacked: provisioned by this export"
+    );
+    assert_eq!(
+        absent
+            .iter()
+            .find(|i| i.id == "/var/lib/pgsql")
+            .and_then(|i| i.advisory.as_ref())
+            .map(|a| a.rationale.as_str()),
+        Some(
+            "nothing on the host declares this directory: no tmpfiles.d entry, \
+             unit directive, or package owns it. This export provisions it."
+        )
+    );
+
+    assert_eq!(
+        absent, unbacked,
+        "an absent verdict and an Unbacked verdict are the same row"
+    );
+}
+
 /// Both counts at once, so neither branch of the summary's state text
 /// can be the other's.
 #[test]

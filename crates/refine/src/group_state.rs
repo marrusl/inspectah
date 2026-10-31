@@ -200,6 +200,12 @@ mod tests {
         assert_eq!(derive_group_state(&ctx), GroupRenderState::Renderable);
     }
 
+    /// Also the reaffirming-member-op case. An op that sets a member to
+    /// the state its group already implies leaves `divergent_overrides`
+    /// empty, so it reaches `derive_group_state` as exactly this input:
+    /// the function reads the resulting state, not the op history, and
+    /// cannot tell the two apart. A second test under that name sat
+    /// here, byte-identical to this one.
     #[test]
     fn group_level_exclude_with_all_members_off_is_excluded() {
         let ctx = GroupEvalContext {
@@ -229,18 +235,6 @@ mod tests {
                 reason: DegradationReason::MemberOverridden
             }
         ));
-    }
-
-    #[test]
-    fn reaffirming_member_op_does_not_degrade() {
-        let ctx = GroupEvalContext {
-            group: &group("Dev Tools", &["gcc", "make"]),
-            effective_packages: &packages_all_excluded(&["gcc", "make"]),
-            ungrouped: false,
-            group_excluded: true,
-            divergent_overrides: &HashSet::new(),
-        };
-        assert_eq!(derive_group_state(&ctx), GroupRenderState::Excluded);
     }
 
     #[test]

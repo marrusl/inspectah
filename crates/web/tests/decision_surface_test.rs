@@ -952,8 +952,31 @@ fn cases() -> Vec<Case> {
     ]
 }
 
+/// The message a caught panic carried, for the failure table.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
+}
+
+/// Every case, every step, reported together.
+///
+/// The runner collects rather than asserting in place. Eight cases times
+/// four steps is a table, and a runner that panics on the first cell
+/// answers one question per run: two reviewers independently rebuilt the
+/// same `skip(N).take(1)` harness to get the rest of it. A change that
+/// moves several cases at once is also the normal case here, since all
+/// four legs of one op share a surface reader.
+///
+/// `pin` is a plain `fn` and asserts internally, so it runs under
+/// `catch_unwind`. The default hook still prints each panic's own
+/// file and line as it happens; the table at the end is the index.
 #[tokio::test]
 async fn every_decision_surface_reflects_the_export() {
+    let mut failures: Vec<String> = Vec::new();
+
     for case in cases() {
         let state = state((case.snapshot)());
         let app = app(state.clone());
@@ -980,21 +1003,38 @@ async fn every_decision_surface_reflects_the_export() {
             let surface = get_json(&app, case.endpoint).await;
             let export = export_of(&state);
 
-            assert_eq!(
-                (case.surface)(&surface),
-                expected,
-                "{}: the surface {step} must report {expected}",
-                case.name
-            );
-            assert_eq!(
-                (case.export)(&export),
-                expected,
-                "{}: the export {step} must render {expected}",
-                case.name
-            );
-            pin(&surface, &export);
+            let got = (case.surface)(&surface);
+            if got != expected {
+                failures.push(format!(
+                    "{}\n    {step}: the surface must report {expected}, reported {got}",
+                    case.name
+                ));
+            }
+            let got = (case.export)(&export);
+            if got != expected {
+                failures.push(format!(
+                    "{}\n    {step}: the export must render {expected}, rendered {got}",
+                    case.name
+                ));
+            }
+            if let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pin(&surface, &export)))
+            {
+                failures.push(format!(
+                    "{}\n    {step}: pinned value: {}",
+                    case.name,
+                    panic_text(payload.as_ref())
+                ));
+            }
         }
     }
+
+    assert!(
+        failures.is_empty(),
+        "{} decision-surface check(s) failed:\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }
 
 // -- Reset and resume ------------------------------------------------------
