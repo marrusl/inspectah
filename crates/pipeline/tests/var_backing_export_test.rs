@@ -350,6 +350,64 @@ fn units_follow_their_unit_file_and_rpm_owner() {
     );
 }
 
+/// Both unit sources name the same file, which neither of the two
+/// single-source cases above reaches. systemd gives the `/etc` unit
+/// precedence while it exists and falls back to the vendor unit when it
+/// does not, so excluding the `/etc` override leaves the RPM-owned copy
+/// running in the target. That copy still declares `StateDirectory=`, so
+/// the creator is carried and a `d` line would duplicate it under
+/// whatever ownership the export guessed.
+#[test]
+fn an_excluded_etc_unit_falls_back_to_the_vendor_unit_that_survives() {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/myapp",
+            VarDirBacking::StateDirectory {
+                unit: "myapp.service".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![package("myapp", true)],
+        file_ownership: vec![FileOwnershipEntry {
+            package_name: "myapp".into(),
+            paths: vec!["/usr/lib/systemd/system/myapp.service".into()],
+        }],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Carried
+    );
+    let conf = var_conf(&snap);
+    assert!(
+        !conf.contains("/var/lib/myapp"),
+        "the surviving vendor unit makes the directory: {conf}"
+    );
+
+    // The same exclusion with the RPM owning the excluded file itself and
+    // nothing else: no copy survives, so the creator really is lost.
+    snap.rpm.as_mut().expect("rpm").file_ownership = vec![FileOwnershipEntry {
+        package_name: "myapp".into(),
+        paths: vec!["/etc/systemd/system/myapp.service".into()],
+    }];
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Provision {
+            lost: Some("myapp.service".into())
+        }
+    );
+}
+
 #[test]
 fn rpm_owned_absent_from_base_and_install_set_is_provisioned() {
     let mut snap = InspectionSnapshot::new();

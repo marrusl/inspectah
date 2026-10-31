@@ -23,6 +23,10 @@ use super::service_intent::is_package_installable;
 /// unit are narrowed to the systemd unit directories before matching.
 const SYSTEMD_DIR_MARKER: &str = "/systemd/";
 
+/// Unit directory systemd gives precedence to over the vendor copy of
+/// the same filename.
+const ETC_UNIT_PREFIX: &str = "/etc/systemd/";
+
 /// What the export can say about one `/var` directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffectiveBacking {
@@ -100,12 +104,18 @@ enum Carriage {
 struct Evidence<'a> {
     /// Every `config.files` entry's path and whether it is included.
     config_files: HashMap<&'a str, bool>,
-    /// Unit filename to its `config.files` include decision.
-    config_units: HashMap<&'a str, bool>,
+    /// Unit filename to the `config.files` entry naming it: the entry's
+    /// own path and its include decision. The path is kept because an
+    /// excluded entry is only the end of the story for the file at that
+    /// path -- a unit file of the same name somewhere else survives it.
+    config_units: HashMap<&'a str, (&'a str, bool)>,
     /// Every path `rpm.file_ownership` names, to its owning package.
     file_owners: HashMap<&'a str, &'a str>,
-    /// Unit filename to the package owning that unit file.
-    unit_owners: HashMap<&'a str, &'a str>,
+    /// Unit filename to the path of the unit file RPM owns and the
+    /// owning package. A `/etc` path is kept only while no other path
+    /// claims the filename, because the vendor copy is the one that
+    /// survives an excluded `/etc` override.
+    unit_owners: HashMap<&'a str, (&'a str, &'a str)>,
     /// The included `packages_added` entries the export installs.
     ///
     /// Deliberately wider than the Containerfile's own install loop,
@@ -134,7 +144,9 @@ impl<'a> Evidence<'a> {
                 let included = entry.disposition.is_included();
                 config_files.insert(entry.path.as_str(), included);
                 if let Some(unit) = unit_filename(&entry.path) {
-                    config_units.entry(unit).or_insert(included);
+                    config_units
+                        .entry(unit)
+                        .or_insert((entry.path.as_str(), included));
                 }
             }
         }
@@ -150,9 +162,22 @@ impl<'a> Evidence<'a> {
                         .entry(path.as_str())
                         .or_insert(entry.package_name.as_str());
                     if let Some(unit) = unit_filename(path) {
-                        unit_owners
-                            .entry(unit)
-                            .or_insert(entry.package_name.as_str());
+                        let owner = (path.as_str(), entry.package_name.as_str());
+                        match unit_owners.get(unit) {
+                            None => {
+                                unit_owners.insert(unit, owner);
+                            }
+                            // The vendor copy displaces a recorded `/etc`
+                            // one: it is the file systemd runs once the
+                            // `/etc` override is gone.
+                            Some((recorded, _))
+                                if recorded.starts_with(ETC_UNIT_PREFIX)
+                                    && !path.starts_with(ETC_UNIT_PREFIX) =>
+                            {
+                                unit_owners.insert(unit, owner);
+                            }
+                            Some(_) => {}
+                        }
                     }
                 }
             }
@@ -257,12 +282,24 @@ fn classify(backing: Option<&VarDirBacking>, evidence: &Evidence) -> EffectiveBa
         VarDirBacking::StateDirectory { unit }
         | VarDirBacking::CacheDirectory { unit }
         | VarDirBacking::LogsDirectory { unit } => match evidence.config_units.get(unit.as_str()) {
-            Some(true) => EffectiveBacking::Carried,
-            Some(false) => EffectiveBacking::Provision {
-                lost: Some(unit.clone()),
+            Some((_, true)) => EffectiveBacking::Carried,
+            // Dropping one unit file does not drop the unit. A host can
+            // have an `/etc` override and an RPM-owned vendor unit of the
+            // same filename, both declaring the directory; systemd runs
+            // the `/etc` one while it exists and the vendor one when it
+            // does not. So an excluded entry only loses the creator when
+            // no other unit file of that name reaches the image, and
+            // that question is settled by full path, not by filename.
+            Some((config_path, false)) => match evidence.unit_owners.get(unit.as_str()) {
+                Some((owner_path, package)) if owner_path != config_path => {
+                    from_carriage(evidence.carriage(package), unit)
+                }
+                _ => EffectiveBacking::Provision {
+                    lost: Some(unit.clone()),
+                },
             },
             None => match evidence.unit_owners.get(unit.as_str()) {
-                Some(package) => from_carriage(evidence.carriage(package), unit),
+                Some((_, package)) => from_carriage(evidence.carriage(package), unit),
                 None => EffectiveBacking::Unresolved {
                     creator: unit.clone(),
                     reason: UnresolvedReason::UnownedUnit,
