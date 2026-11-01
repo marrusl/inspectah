@@ -357,6 +357,37 @@ curl -s -X POST localhost:8642/api/tarball -H 'content-type: application/json' -
 returns `409` on a stale one. Export warnings ride in the
 `x-export-warnings` response header.
 
+### Backgrounding the server over ssh leaks the session
+
+This one is silent and costs nothing until you notice it eight hours
+later. Measured 2026-11-01.
+
+```
+ssh host 'nohup inspectah refine … --port 8755 & sleep 5; curl …'
+```
+
+**does not return.** Redirecting the server's stdout and stderr is not
+enough: the backgrounded process still inherits the ssh session's
+descriptors, so sshd holds the connection open waiting for them to
+close. The local `ssh` sits there indefinitely and the refine server
+stays up on the guest holding its port.
+
+What it looks like from outside: an agent that reported success hours
+ago but whose harness entry never goes idle, because it still has a
+live child. The run itself was fine — only the teardown leaked.
+
+Use `ssh -n`, or `setsid`, or close the descriptors explicitly:
+
+```
+ssh -n host 'setsid nohup inspectah refine … > /tmp/refine.log 2>&1 < /dev/null & disown; sleep 5; curl …'
+```
+
+And check before you finish: `pgrep -af "inspectah.*refine"` on the
+guest, `ps -eo pid,etime,command | grep "[s]sh <host>"` on the Mac.
+`--fresh` is a second reason to look — it prompts
+`Discard N saved operations? [y/N]` and quits on EOF, so a scripted run
+can die with `curl` exit 7 and an empty log.
+
 ## Verify every COPY source before blaming the build
 
 Two export-contract defects were found this way, and the second was
