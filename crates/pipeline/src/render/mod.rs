@@ -90,6 +90,11 @@ pub fn render_all(
     //     rendering so the COPY line references an actual file)
     write_tmpfiles_conf(snap, output_dir)?;
 
+    // 8d. language-packages/ — pip/npm/gem manifests the Containerfile's
+    //     language sections COPY. Staged on the same condition the
+    //     renderer emits those lines under.
+    language_packages::write_language_package_manifests(snap, output_dir)?;
+
     // 1. Containerfile — COPY lines derived from materialized config tree roots
     let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots), None);
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;

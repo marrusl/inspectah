@@ -572,8 +572,15 @@ fn reimport_is_clean_and_coherent() {
     );
 }
 
+/// The refine export carries `quadlet/`, because the Containerfile it is
+/// rendered alongside emits `COPY quadlet/ /etc/containers/systemd/`.
+///
+/// This test previously asserted the opposite, matching a top-level
+/// allowlist that deleted the directory. Measured on a real RHEL 9.8 host:
+/// every web download from a quadlet-running host failed `podman build` at
+/// that COPY line.
 #[test]
-fn export_excludes_extra_config_tree_artifacts() {
+fn export_carries_the_quadlet_root_its_containerfile_copies() {
     let mut snap = test_snapshot();
     snap.containers = Some(ContainerSection {
         quadlet_units: vec![QuadletUnit {
@@ -594,10 +601,9 @@ fn export_excludes_extra_config_tree_artifacts() {
 
     let files = tarball_file_set(&tarball_path);
 
-    // quadlet/ must NOT appear in the export
     assert!(
-        !files.iter().any(|f| f.starts_with("quadlet/")),
-        "quadlet/ must not be in refine export, got: {files:?}"
+        files.contains("quadlet/myapp.container"),
+        "quadlet/ must be in the refine export, got: {files:?}"
     );
 }
 

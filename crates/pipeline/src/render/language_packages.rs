@@ -4,8 +4,12 @@
 //! language environment items. High-confidence items render as active
 //! instructions; medium-confidence renders commented-out.
 
+use std::path::Path;
+
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::nonrpm::NonRpmItem;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_GEM_SYSTEM, METHOD_NPM_GLOBAL, METHOD_NPM_LOCKFILE,
     METHOD_NPM_MANIFEST, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
@@ -555,6 +559,282 @@ fn render_gem_item(item: &NonRpmItem) -> Vec<String> {
     }
 
     lines
+}
+
+// ---------------------------------------------------------------------------
+// Manifest staging
+//
+// The writer lives beside the renderer that emits its COPY lines. Both
+// export paths call it, because both export paths render those lines:
+// keeping the writer in one of them is what let the CLI scan tarball
+// emit `COPY language-packages/...` for a directory it never wrote.
+// ---------------------------------------------------------------------------
+
+/// Materialize collected manifest files into the export directory under
+/// `language-packages/<ecosystem>/<hash>/`. Only included items with
+/// non-empty manifest_files are materialized — excluded items use
+/// commented-out inline installs in the Containerfile, not COPY paths.
+pub fn write_language_package_manifests(
+    snap: &InspectionSnapshot,
+    out: &Path,
+) -> Result<(), RenderError> {
+    let nrs = match &snap.non_rpm_software {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+
+    let redact = is_redaction_active(snap);
+
+    for item in &nrs.items {
+        if !item.disposition.is_included() || item.manifest_files.is_empty() {
+            continue;
+        }
+
+        // Route to ecosystem subdirectory based on the method string —
+        // the canonical detection-method key used throughout the pipeline.
+        let ecosystem = if item.method == METHOD_PYTHON_VENV || item.method == METHOD_PIP_DIST_INFO
+        {
+            "pip"
+        } else if item.method == METHOD_NPM_LOCKFILE {
+            "npm"
+        } else if item.method == METHOD_GEM_LOCKFILE {
+            "gem"
+        } else {
+            continue;
+        };
+
+        let hash = env_hash(&item.path);
+        let dir = out.join("language-packages").join(ecosystem).join(&hash);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| RenderError::Failed(format!("mkdir {}: {e}", dir.display())))?;
+
+        for (filename, content) in &item.manifest_files {
+            let output = if redact {
+                scrub_manifest_auth(filename, content)
+            } else {
+                content.clone()
+            };
+            let file_path = dir.join(filename);
+            std::fs::write(&file_path, output)
+                .map_err(|e| RenderError::Failed(format!("write {}: {e}", file_path.display())))?;
+        }
+    }
+    Ok(())
+}
+
+/// Returns `true` when the snapshot has an active redaction state that
+/// warrants scrubbing secrets from exported content.
+pub fn is_redaction_active(snap: &InspectionSnapshot) -> bool {
+    matches!(
+        &snap.redaction_state,
+        Some(
+            RedactionState::FullyRedacted { .. }
+                | RedactionState::PartiallyRedacted { .. }
+                | RedactionState::SensitiveRetained { .. }
+        )
+    )
+}
+
+/// Scrub embedded auth credentials from a URL string.
+/// Replaces `://user:pass@host` with `://REDACTED@host` and
+/// `://token@host` with `://REDACTED@host`.
+fn scrub_url_auth(url: &str) -> String {
+    // Find the authority section: everything between :// and the next @.
+    // If there's no ://, or no @ after it, the URL has no embedded auth.
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let rest = &url[authority_start..];
+
+    let Some(at_pos) = rest.find('@') else {
+        return url.to_string();
+    };
+
+    // Verify this @ is in the authority (before any /), not in a path or query.
+    let slash_pos = rest.find('/').unwrap_or(rest.len());
+    if at_pos > slash_pos {
+        return url.to_string();
+    }
+
+    format!("{}://REDACTED@{}", &url[..scheme_end], &rest[at_pos + 1..])
+}
+
+/// Scrub auth tokens from manifest file content based on the filename.
+///
+/// - `requirements.txt`: `--index-url` / `--extra-index-url` lines with auth
+/// - `package.json`: `"registry"` URLs with embedded auth
+/// - `package-lock.json`: `"resolved"` URLs with embedded auth
+/// - `Gemfile`: `source` URLs with embedded auth
+/// - `Gemfile.lock`: any `https://user:pass@host` URLs in raw text
+pub fn scrub_manifest_auth(filename: &str, content: &str) -> String {
+    match filename {
+        "requirements.txt" => scrub_requirements_txt(content),
+        "package.json" => scrub_package_json(content),
+        "package-lock.json" => scrub_package_lock_json(content),
+        "Gemfile" => scrub_gemfile(content),
+        "Gemfile.lock" => scrub_gemfile_lock(content),
+        _ => content.to_string(),
+    }
+}
+
+/// Scrub `--index-url` and `--extra-index-url` lines in requirements.txt.
+fn scrub_requirements_txt(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("--index-url") || trimmed.starts_with("--extra-index-url") {
+                // Split on whitespace: directive + URL
+                let mut parts = trimmed.splitn(2, char::is_whitespace);
+                let directive = parts.next().unwrap_or(trimmed);
+                match parts.next() {
+                    Some(url) => format!("{} {}", directive, scrub_url_auth(url.trim())),
+                    None => line.to_string(),
+                }
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub `"registry"` URLs with embedded auth in package.json.
+/// Operates on raw text to avoid pulling in a JSON library dependency
+/// for a simple find-and-replace in URL values.
+fn scrub_package_json(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            // Match lines like: "registry": "https://user:pass@host/..."
+            if trimmed.contains("\"registry\"") {
+                scrub_json_url_value(line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub the URL value in a JSON key-value line.
+fn scrub_json_url_value(line: &str) -> String {
+    // Find the value portion after the colon that follows "registry".
+    // The value is a quoted string containing a URL.
+    let Some(colon_pos) = line.find(':') else {
+        return line.to_string();
+    };
+    let after_colon = &line[colon_pos + 1..];
+
+    // Find the opening and closing quotes of the value.
+    let Some(open_quote) = after_colon.find('"') else {
+        return line.to_string();
+    };
+    let value_start = colon_pos + 1 + open_quote + 1;
+    let value_slice = &line[value_start..];
+    let Some(close_quote) = value_slice.find('"') else {
+        return line.to_string();
+    };
+
+    let url = &value_slice[..close_quote];
+    let scrubbed = scrub_url_auth(url);
+    format!(
+        "{}\"{}\"{}",
+        &line[..value_start],
+        scrubbed,
+        &line[value_start + close_quote..]
+    )
+}
+
+/// Scrub `source` URLs with embedded auth in Gemfile.
+fn scrub_gemfile(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("source") {
+                // source "https://user:pass@gems.example.com"
+                // source 'https://user:pass@gems.example.com'
+                let quote_chars = ['"', '\''];
+                let mut result = line.to_string();
+                for q in &quote_chars {
+                    if let Some(open) = trimmed.find(*q)
+                        && let Some(close) = trimmed[open + 1..].find(*q)
+                    {
+                        let url = &trimmed[open + 1..open + 1 + close];
+                        let scrubbed = scrub_url_auth(url);
+                        // Reconstruct preserving original indentation.
+                        let indent = &line[..line.len() - trimmed.len()];
+                        result = format!("{}{}", indent, trimmed.replace(url, &scrubbed));
+                        break;
+                    }
+                }
+                result
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub `"resolved"` URLs with embedded auth in package-lock.json.
+fn scrub_package_lock_json(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.contains("\"resolved\"") {
+                scrub_json_url_value(line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Scrub any `https://user:pass@host` URLs found in Gemfile.lock.
+fn scrub_gemfile_lock(content: &str) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if line.contains("://") && line.contains('@') {
+                let mut result = line.to_string();
+                if let Some(scheme_pos) = result.find("://") {
+                    let authority_start = scheme_pos + 3;
+                    let rest = &result[authority_start..];
+                    if let Some(at_pos) = rest.find('@') {
+                        let slash_pos = rest.find('/').unwrap_or(rest.len());
+                        if at_pos < slash_pos {
+                            let url_start = result[..scheme_pos]
+                                .rfind(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                                .map(|p| p + 1)
+                                .unwrap_or(0);
+                            let url_end = result[authority_start + at_pos + 1..]
+                                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                                .map(|p| authority_start + at_pos + 1 + p)
+                                .unwrap_or(result.len());
+                            let url = &result[url_start..url_end];
+                            let scrubbed = scrub_url_auth(url);
+                            result = format!(
+                                "{}{}{}",
+                                &result[..url_start],
+                                scrubbed,
+                                &result[url_end..]
+                            );
+                        }
+                    }
+                }
+                result
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

@@ -320,15 +320,27 @@ Two export-contract defects were found this way, and the second was
 invisible in the build log because an earlier step failed first:
 
 ```
-grep "^COPY" Containerfile | awk '{print $2}' | tr -d "'" | \
-  while read s; do [ -e "$s" ] || echo "MISSING $s"; done
+grep '^COPY ' Containerfile | sed "s/^COPY //" | while read -r line; do
+  src=$(printf '%s' "$line" | awk '{print $1}' | sed "s/^'//; s/'$//")
+  [ -e "$src" ] || echo "MISSING $src"
+done
 ```
 
-Run this against an extracted export before `podman build`. The refine
-web download and the CLI scan tarball write **different** trees — the
-CLI writes `quadlet/`, the web export strips it while still emitting
-`COPY quadlet/`; `language-packages/` exists only in the web export and
-is therefore untouched by any CLI-side test.
+Run this against an extracted export before `podman build`. It names
+every missing source at once, where the build names only the first.
+
+The quoting matters: an earlier revision of this file used
+`tr -d "'"`, which under a layer of shell quoting deletes literal
+characters out of the hashes in `language-packages/<eco>/<hash>/` and
+reports four missing files that are all present. Check a "MISSING" path
+against `ls` before believing it.
+
+**Both defects are fixed** — `quadlet/` is in the refine export and the
+language-package manifests are written by both paths — and
+`crates/cli/tests/copy_source_exists_test.rs` now holds the invariant.
+Why the two paths could disagree at all, and what the guard does not
+cover, is in
+[export-paths-stage-different-trees](export-paths-stage-different-trees.md).
 
 ## Cross-compiling and shipping
 
