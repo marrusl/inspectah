@@ -58,11 +58,18 @@ fn tmpfiles(conf: &str, line: &str) -> VarDirBacking {
 /// `kind` is a parameter and not a constant because it decides whether a
 /// real collector could have produced the entry at all. The config walk
 /// consults its unowned exclusion lists only for unowned files, and one
-/// of those checks discards every bare filename directly under
-/// `/etc/systemd/system`, so an `Unowned` entry at such a path is a
-/// layout no scan produces -- see
-/// `an_excluded_full_shadow_is_invisible_to_var_backing_evidence` below
-/// for what one does produce. Choose this per case.
+/// of those checks drops bare filenames directly under
+/// `/etc/systemd/system`. Choose this per case.
+///
+/// **Revised 2026-11-01.** That check used to be a nesting-depth test and
+/// discarded *every* such filename, which made an `Unowned` entry at a
+/// bare unit path a layout no scan produced. It now tests for a symlink,
+/// so the walk keeps an admin-written regular file there and drops only
+/// systemd's own alias and mask links. Measured on `rhel9`: a privileged
+/// scan puts `/etc/systemd/system/sshd.service` in `config.files` as
+/// `kind: unowned` while `bluetooth.service` and `kdump.service`, both
+/// links to `/dev/null`, stay out. An `Unowned` entry at a bare unit path
+/// is therefore collector-shaped now, provided the file is a regular one.
 fn config_file(path: &str, kind: ConfigFileKind, included: bool) -> ConfigFileEntry {
     ConfigFileEntry {
         path: path.into(),
@@ -690,10 +697,23 @@ const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd
 /// because the shared `package()` helper supplies them and neither
 /// reaches this classification.
 ///
-/// This fixture encodes what the collector produces **today**. If
-/// `is_systemd_unit_alias` is fixed to test for a symlink rather than
-/// for nesting depth, the walk will stop discarding bare unit files and
-/// this snapshot will need a `config.files` entry as well.
+/// This fixture encodes what the collector produced on 2026-11-01,
+/// before the walk's symlink fix. **It is now one entry short of
+/// collector-shaped and needs regenerating:** the walk keeps an
+/// admin-written regular unit file, so a rescan of the same host would
+/// also carry `/etc/systemd/system/crond.service` in `config.files` as
+/// `kind: unowned`, alongside the `services.drop_ins` entry below.
+///
+/// Adding it does not move this test. Measured on 2026-11-01 with the
+/// entry present at both polarities: the verdict is `Carried` either
+/// way, because the excluded-entry arm of `classify` falls through to
+/// `unit_owners` and reads `cronie`'s installation as proof, without
+/// checking whether `cronie`'s unit declares the directory. It does not.
+/// What the walk fix does change is reachability: the `/etc` half of
+/// `config_units` is no longer empty by construction, so the
+/// `/etc`-versus-vendor precedence rule now fires on a real scan.
+/// Regenerating this fixture is deliberately left with the open
+/// `Provision`-versus-`Unresolved` decision rather than done piecemeal.
 fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.storage = Some(StorageSection {
@@ -764,7 +784,8 @@ fn an_excluded_full_shadow_is_invisible_to_var_backing_evidence() {
     let snap = crond_full_shadow_snapshot(false);
     assert!(
         snap.config.as_ref().expect("config").files.is_empty(),
-        "the premise of this test: the walk routes the shadow away from config.files"
+        "this fixture is the pre-fix collector shape; see the note on \
+         crond_full_shadow_snapshot for why regenerating it does not move the outcome"
     );
 
     let rendered = export(&snap);

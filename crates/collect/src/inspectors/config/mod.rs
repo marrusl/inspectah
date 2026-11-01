@@ -195,7 +195,7 @@ impl Inspector for ConfigInspector {
                         continue;
                     }
                     // Skip excluded unowned
-                    if is_excluded_unowned(&abs_path) {
+                    if is_excluded_unowned(exec, &abs_path) {
                         continue;
                     }
                     // Skip dev artifacts

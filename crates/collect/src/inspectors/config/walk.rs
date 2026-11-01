@@ -184,8 +184,9 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
 
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
-/// Checks: exact match, glob match, and subtree prefix exclusion.
-pub fn is_excluded_unowned(path: &str) -> bool {
+/// Checks: exact match, glob match, subtree prefix exclusion, and the
+/// systemd unit symlink test, which needs `exec` to read link metadata.
+pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
     // Exact match
     if UNOWNED_EXCLUDE_EXACT.contains(&path) {
         return true;
@@ -205,36 +206,50 @@ pub fn is_excluded_unowned(path: &str) -> bool {
         }
     }
 
-    // Systemd unit alias symlinks: files directly under /etc/systemd/system/
-    // that are NOT inside a .d/ drop-in directory. Alias symlinks (e.g.,
-    // dbus-org.fedoraproject.FirewallD1.service) are created by `systemctl
-    // enable` — the service inspector already captures enabled services.
-    // Drop-in overrides (e.g., sshd.service.d/override.conf) ARE user config.
-    if is_systemd_unit_alias(path) {
+    // Systemd unit symlinks directly under /etc/systemd/system/: state
+    // systemd itself wrote, which the services inspector already records.
+    if is_systemd_unit_symlink(exec, path) {
         return true;
     }
 
     false
 }
 
-/// Returns `true` if the path is a systemd unit alias symlink —
-/// a file directly under `/etc/systemd/system/` whose path does NOT
-/// pass through a `.d/` drop-in directory.
+/// Returns `true` if the path is a systemd-written unit symlink: a
+/// **symlink** whose name sits directly under `/etc/systemd/system/`.
+///
+/// **The whole test is the file type. The link target is not read, and
+/// this function does not distinguish the two kinds of link that live
+/// here.** Both are systemd's own state and the services inspector
+/// records both independently: alias and enablement links from
+/// `systemctl enable` (e.g. `dbus-org.fedoraproject.FirewallD1.service`),
+/// and mask links to `/dev/null` from `systemctl mask`. Neither carries
+/// content of its own, so copying one into the export would turn a link
+/// into a file. Naming only aliases here would repeat the defect this
+/// replaced, where the name promised more than the code checked.
+///
+/// A **regular** file in the same directory is the opposite case: an
+/// admin-written unit, either a full shadow of a vendor unit or a wholly
+/// new one, and migration-relevant by definition. It must reach
+/// `config.files`.
 ///
 /// Examples:
-///   `/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service` → true (alias)
+///   `/etc/systemd/system/display-manager.service` → true when it is a symlink
+///   `/etc/systemd/system/sshd.service` → false when it is a regular file (full shadow)
 ///   `/etc/systemd/system/sshd.service.d/override.conf` → false (drop-in)
 ///   `/etc/systemd/system/multi-user.target.wants/sshd.service` → false (handled by glob)
-fn is_systemd_unit_alias(path: &str) -> bool {
+fn is_systemd_unit_symlink(exec: &dyn Executor, path: &str) -> bool {
     const PREFIX: &str = "/etc/systemd/system/";
-    if let Some(rest) = path.strip_prefix(PREFIX) {
-        // If the remainder contains '/', it's inside a subdirectory (drop-in
-        // .d/ dir or .wants/.requires, which are already glob-excluded).
-        // Only bare filenames directly under the prefix are alias symlinks.
-        !rest.is_empty() && !rest.contains('/')
-    } else {
-        false
+    let Some(rest) = path.strip_prefix(PREFIX) else {
+        return false;
+    };
+    // Scope the test to bare names directly under the prefix. `.wants/`
+    // and `.requires/` links are already glob-excluded above, and a
+    // symlink inside a `.d/` drop-in directory is admin-made config.
+    if rest.is_empty() || rest.contains('/') {
+        return false;
     }
+    exec.read_link(Path::new(path)).is_ok()
 }
 
 /// Matches a path against a glob pattern.
@@ -489,36 +504,47 @@ mod tests {
 
     #[test]
     fn test_is_excluded_unowned_exact() {
-        assert!(is_excluded_unowned("/etc/machine-id"));
-        assert!(is_excluded_unowned("/etc/hostname"));
-        assert!(is_excluded_unowned("/etc/localtime"));
-        assert!(is_excluded_unowned("/etc/adjtime"));
-        assert!(is_excluded_unowned("/etc/passwd-"));
-        assert!(is_excluded_unowned("/etc/shadow-"));
+        let exec = MockExecutor::new();
+        assert!(is_excluded_unowned(&exec, "/etc/machine-id"));
+        assert!(is_excluded_unowned(&exec, "/etc/hostname"));
+        assert!(is_excluded_unowned(&exec, "/etc/localtime"));
+        assert!(is_excluded_unowned(&exec, "/etc/adjtime"));
+        assert!(is_excluded_unowned(&exec, "/etc/passwd-"));
+        assert!(is_excluded_unowned(&exec, "/etc/shadow-"));
     }
 
     // ---- Test 11: test_is_excluded_unowned_glob ----
 
     #[test]
     fn test_is_excluded_unowned_glob() {
-        assert!(is_excluded_unowned("/etc/selinux/targeted/contexts/foo"));
+        let exec = MockExecutor::new();
         assert!(is_excluded_unowned(
+            &exec,
+            "/etc/selinux/targeted/contexts/foo"
+        ));
+        assert!(is_excluded_unowned(
+            &exec,
             "/etc/selinux/targeted/contexts/files/bar"
         ));
         assert!(is_excluded_unowned(
+            &exec,
             "/etc/NetworkManager/system-connections/eth0.nmconnection.bak"
         ));
-        assert!(is_excluded_unowned("/etc/alternatives/java"));
-        assert!(is_excluded_unowned("/etc/lvm/devices/system.devices"));
+        assert!(is_excluded_unowned(&exec, "/etc/alternatives/java"));
+        assert!(is_excluded_unowned(
+            &exec,
+            "/etc/lvm/devices/system.devices"
+        ));
     }
 
     // ---- Test 12: test_is_excluded_unowned_not_excluded ----
 
     #[test]
     fn test_is_excluded_unowned_not_excluded() {
-        assert!(!is_excluded_unowned("/etc/httpd/conf/httpd.conf"));
-        assert!(!is_excluded_unowned("/etc/custom-app/config.yaml"));
-        assert!(!is_excluded_unowned("/etc/sshd_config"));
+        let exec = MockExecutor::new();
+        assert!(!is_excluded_unowned(&exec, "/etc/httpd/conf/httpd.conf"));
+        assert!(!is_excluded_unowned(&exec, "/etc/custom-app/config.yaml"));
+        assert!(!is_excluded_unowned(&exec, "/etc/sshd_config"));
     }
 
     // ---- Test 13: test_walk_etc_skips_vcs ----
@@ -572,17 +598,21 @@ mod tests {
     /// excluded, because `tuned_disposition` renders them.
     #[test]
     fn test_config_walker_owns_pam_audit_and_tuned_profiles() {
-        assert!(!is_excluded_unowned("/etc/audit/rules.d/custom.rules"));
-        assert!(!is_excluded_unowned("/etc/pam.d/sshd"));
-        assert!(!is_excluded_unowned("/etc/pam.d/system-auth"));
-        assert!(!is_excluded_unowned("/etc/tuned/myapp/tuned.conf"));
+        let exec = MockExecutor::new();
+        assert!(!is_excluded_unowned(
+            &exec,
+            "/etc/audit/rules.d/custom.rules"
+        ));
+        assert!(!is_excluded_unowned(&exec, "/etc/pam.d/sshd"));
+        assert!(!is_excluded_unowned(&exec, "/etc/pam.d/system-auth"));
+        assert!(!is_excluded_unowned(&exec, "/etc/tuned/myapp/tuned.conf"));
 
-        assert!(is_excluded_unowned("/etc/tuned/active_profile"));
-        assert!(is_excluded_unowned("/etc/tuned/profile_mode"));
-        assert!(is_excluded_unowned("/etc/tuned/bootcmdline"));
+        assert!(is_excluded_unowned(&exec, "/etc/tuned/active_profile"));
+        assert!(is_excluded_unowned(&exec, "/etc/tuned/profile_mode"));
+        assert!(is_excluded_unowned(&exec, "/etc/tuned/bootcmdline"));
         // The eight base PAM configs keep their exact-match exclusion.
-        assert!(is_excluded_unowned("/etc/pam.d/su-l"));
-        assert!(is_excluded_unowned("/etc/pam.d/runuser-l"));
+        assert!(is_excluded_unowned(&exec, "/etc/pam.d/su-l"));
+        assert!(is_excluded_unowned(&exec, "/etc/pam.d/runuser-l"));
     }
 
     // ---- DHCP filtering ----
@@ -591,37 +621,109 @@ mod tests {
 
     #[test]
     fn test_yum_subtree_excluded() {
-        assert!(is_excluded_unowned("/etc/yum/protected.d/setup.conf"));
-        assert!(is_excluded_unowned("/etc/yum/vars/releasever"));
-        assert!(is_excluded_unowned("/etc/rpm/macros.dist"));
+        let exec = MockExecutor::new();
+        assert!(is_excluded_unowned(
+            &exec,
+            "/etc/yum/protected.d/setup.conf"
+        ));
+        assert!(is_excluded_unowned(&exec, "/etc/yum/vars/releasever"));
+        assert!(is_excluded_unowned(&exec, "/etc/rpm/macros.dist"));
     }
 
     #[test]
     fn test_xdg_systemd_excluded() {
-        assert!(is_excluded_unowned("/etc/xdg/systemd/user/dbus.service"));
+        let exec = MockExecutor::new();
         assert!(is_excluded_unowned(
+            &exec,
+            "/etc/xdg/systemd/user/dbus.service"
+        ));
+        assert!(is_excluded_unowned(
+            &exec,
             "/etc/xdg/systemd/user/sockets.target.wants/dbus.socket"
         ));
     }
 
+    /// `/etc/systemd/system` splits by file type, not by nesting depth.
+    ///
+    /// **Provenance: the layout is measured, not constructed.** Every
+    /// path below was present on the `rhel9` test VM after `driftify
+    /// --profile standard`, 2026-10-31, with the link targets it
+    /// reported: the full shadow at `sshd.service` is a regular file,
+    /// `kdump.service` and `bluetooth.service` are mask links to
+    /// `/dev/null`, and the firewalld alias is an enablement link into
+    /// the vendor unit directory.
+    ///
+    /// The predicate used to strip the prefix and exclude anything with
+    /// no `/` left, which discarded the admin-written full shadow — the
+    /// one file in the directory a migration must carry.
     #[test]
-    fn test_systemd_alias_symlinks_excluded() {
-        // Alias symlinks directly under /etc/systemd/system/ are excluded
-        assert!(is_excluded_unowned(
-            "/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service"
-        ));
-        assert!(is_excluded_unowned(
-            "/etc/systemd/system/display-manager.service"
-        ));
+    fn test_systemd_unit_symlinks_excluded_regular_files_kept() {
+        let exec = MockExecutor::new()
+            .with_link("/etc/systemd/system/kdump.service", "/dev/null")
+            .with_link("/etc/systemd/system/bluetooth.service", "/dev/null")
+            .with_link(
+                "/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service",
+                "/usr/lib/systemd/system/firewalld.service",
+            )
+            .with_link(
+                "/etc/systemd/system/multi-user.target.wants/sshd.service",
+                "/usr/lib/systemd/system/sshd.service",
+            );
+
+        let cases: &[(&str, bool, &str)] = &[
+            (
+                "/etc/systemd/system/sshd.service",
+                false,
+                "a regular file is an admin-written full shadow of the vendor unit",
+            ),
+            (
+                "/etc/systemd/system/driftify-backup.timer",
+                false,
+                "a regular file with no vendor counterpart is a wholly new admin unit",
+            ),
+            (
+                "/etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service",
+                true,
+                "an alias link into the vendor unit directory is systemd's own state",
+            ),
+            (
+                "/etc/systemd/system/kdump.service",
+                true,
+                "a mask link to /dev/null is recorded by the services inspector instead",
+            ),
+            (
+                "/etc/systemd/system/bluetooth.service",
+                true,
+                "the same, for a unit masked rather than shadowed",
+            ),
+            (
+                "/etc/systemd/system/httpd.service.d/limits.conf",
+                false,
+                "a drop-in is admin config and was never in scope for this rule",
+            ),
+            (
+                "/etc/systemd/system/multi-user.target.wants/sshd.service",
+                true,
+                "an enablement link, excluded by the .wants/ glob rather than by this \
+                 rule — the depth test was never load-bearing for it",
+            ),
+        ];
+
+        for (path, excluded, why) in cases {
+            assert_eq!(is_excluded_unowned(&exec, path), *excluded, "{path}: {why}");
+        }
     }
 
     #[test]
     fn test_systemd_dropin_not_excluded() {
         // Drop-in overrides inside .d/ directories are user config — keep them
+        let exec = MockExecutor::new();
         assert!(!is_excluded_unowned(
+            &exec,
             "/etc/systemd/system/sshd.service.d/override.conf"
         ));
         assert!(!is_excluded_unowned(
+            &exec,
             "/etc/systemd/system/docker.service.d/http-proxy.conf"
         ));
     }
@@ -632,11 +734,19 @@ mod tests {
         // handled by the symlink-aware ownership check in the config
         // inspector (is_rpm_owned_via_symlink). The canonical paths under
         // /etc/pki/tls/certs/ are still glob-excluded.
-        assert!(!is_excluded_unowned("/etc/ssl/certs/ca-bundle.crt"));
-        assert!(!is_excluded_unowned("/etc/ssl/certs/ca-bundle.trust.crt"));
+        let exec = MockExecutor::new();
+        assert!(!is_excluded_unowned(&exec, "/etc/ssl/certs/ca-bundle.crt"));
+        assert!(!is_excluded_unowned(
+            &exec,
+            "/etc/ssl/certs/ca-bundle.trust.crt"
+        ));
         // But the canonical paths ARE excluded via the pki glob
-        assert!(is_excluded_unowned("/etc/pki/tls/certs/ca-bundle.crt"));
         assert!(is_excluded_unowned(
+            &exec,
+            "/etc/pki/tls/certs/ca-bundle.crt"
+        ));
+        assert!(is_excluded_unowned(
+            &exec,
             "/etc/pki/tls/certs/ca-bundle.trust.crt"
         ));
     }

@@ -23,6 +23,11 @@ instead of trying to undo.
 The single most valuable finding of the first real-host run, and the
 mechanism is not where you would look for it.
 
+**Fixed 2026-11-01.** The account below is the behaviour through
+`4af6582f` and is kept because the sequence that hid it is the lesson.
+What the predicate does now, and what the fix did and did not move, is
+in [§ Measured, 2026-11-01: the walk fix](#measured-2026-11-01-the-walk-fix-and-what-it-did-not-move).
+
 `is_systemd_unit_alias` (`crates/collect/src/inspectors/config/walk.rs`)
 runs **after** the three documented exclusion lists, so reading
 `UNOWNED_EXCLUDE_EXACT`, `_GLOBS` and `_PREFIX` does not explain the
@@ -112,6 +117,76 @@ in `crates/pipeline/tests/var_backing_export_test.rs`, which is
 `#[ignore]`d because it fails. Run it with `cargo test -- --ignored`.
 That test is also the worked example of building a pipeline fixture from
 collector output rather than from a guess at it.
+
+### Measured, 2026-11-01: the walk fix, and what it did not move
+
+The predicate now tests the file type instead of the path depth. Same
+host, same driftified state, privileged scan, control snapshot from the
+merged `main` at `4af6582f`:
+
+| path | before | after |
+|---|---|---|
+| `/etc/systemd/system/sshd.service` (regular file) | absent | **present** |
+| `/etc/systemd/system/bluetooth.service` (link to `/dev/null`) | absent | absent |
+| `/etc/systemd/system/kdump.service` (link to `/dev/null`) | absent | absent |
+| `/etc/systemd/system/httpd.service.d/limits.conf` | present | present |
+
+`config.files` went from 57 to 62 entries. The five arrivals are the
+full shadow plus four admin-written units driftify plants
+(`driftify-backup.service`/`.timer`, `myapp-report.service`/`.timer`).
+Nothing was removed and nothing outside `/etc/systemd/system` moved.
+
+**Two things the before-picture would have led you to expect, that did
+not happen.** Both were measured rather than reasoned, and both matter
+more than the row that flipped.
+
+- **The export tree did not change at all.** Byte-identical file sets
+  between the two binaries; the only Containerfile difference is the
+  captured-file count. `configtree::service_owned_paths` subtracts every
+  `services.drop_ins` path from the generic config tree, so a full
+  shadow is still written from `drop-ins/` alone and is not duplicated.
+- **The `/var` verdict did not move either.** `an_excluded_full_shadow_is_invisible_to_var_backing_evidence`
+  fails identically before and after, on the same assertion, and adding
+  the new `config.files` entry to that fixture at either polarity leaves
+  it `Carried`. The walk fix makes the `/etc`-versus-vendor precedence
+  rule **reachable** — the `/etc` half of `config_units` is no longer
+  empty by construction — but `classify`'s excluded-entry arm then falls
+  through to `unit_owners` and reads a same-named vendor unit's
+  installation as proof the directory is created, without checking
+  whether that unit declares it. Reachable is not fixed.
+
+**Note the mask links.** `bluetooth.service` and `kdump.service` are
+symlinks to `/dev/null`, which is masking, not aliasing. A predicate
+written to the strict definition — a symlink whose target is another
+unit file — would have pulled both into `config.files`. They are
+excluded because the test is "is it a symlink", and the services
+inspector records masked units separately. Worth knowing before anyone
+tightens the rule: the services inspector labels both of them
+`shadow_type: full_shadow`, which is wrong for a mask link, and that
+mislabel predates the walk fix.
+
+### Measured, 2026-11-01: one file, two dispositions, written nowhere
+
+Found while checking what the walk fix widened. **It is not caused by
+the walk fix, and it is reachable on `main` today.**
+
+A `*.service.d/*.conf` drop-in appears in **both** `config.files` and
+`services.drop_ins`, so refine offers two independent include switches
+for one file. `configtree::service_owned_paths` subtracts the path from
+the generic config tree with **no disposition check**, while the
+drop-ins writer skips excluded entries. Set the config side included and
+the services side excluded and the file is written to neither tree.
+
+Measured end to end through the refine API with the `main` binary at
+`4af6582f`: exclude the drop-in `/etc/systemd/system/httpd.service.d/limits.conf`,
+leave its `config.files` twin included, download the tarball, and the
+file is in neither `config/` nor `drop-ins/`. `x-export-warnings` is
+`[]`. The reverse polarity carries the file from `drop-ins/`, so the
+config-side switch is inert for these paths in both directions.
+
+The walk fix extends the affected set from drop-in `.conf` files to bare
+unit files: the same probe with the fixed binary and
+`/etc/systemd/system/sshd.service` loses the file the same way.
 
 ## Stock files reach findings, and fixtures never contain them
 
