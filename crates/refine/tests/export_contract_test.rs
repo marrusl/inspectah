@@ -1157,6 +1157,11 @@ fn export_redacts_package_lock_json_resolved_auth() {
         content.contains("integrity"),
         "non-resolved fields must be preserved, got:\n{content}"
     );
+    // The scrubbed lockfile has to survive `npm ci`, so validity is the
+    // assertion that matters — the substring checks above all passed while
+    // the exported file was unparseable.
+    serde_json::from_str::<serde_json::Value>(&content)
+        .unwrap_or_else(|e| panic!("exported package-lock.json must parse: {e}\n{content}"));
 
     // Check inspection-snapshot.json
     let snapshot_json =

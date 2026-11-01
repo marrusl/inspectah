@@ -740,8 +740,11 @@ fn scrub_json_url_value(line: &str) -> String {
 
     let url = &value_slice[..close_quote];
     let scrubbed = scrub_url_auth(url);
+    // Both slices already carry their quote: the prefix ends with the opening
+    // quote and the suffix starts with the closing one. Re-adding either here
+    // emits `""url""` and makes the manifest unparseable.
     format!(
-        "{}\"{}\"{}",
+        "{}{}{}",
         &line[..value_start],
         scrubbed,
         &line[value_start + close_quote..]
@@ -975,6 +978,79 @@ mod tests {
             disposition: FindingKind::from_bool(confidence == HIGH_CONFIDENCE),
             manifest_files,
             ..Default::default()
+        }
+    }
+
+    /// A redacted export must still write manifests the package manager can
+    /// read. Assert on the staged file parsing as JSON, not on a substring:
+    /// the quote-doubling defect shipped past a suite that only checked that
+    /// the credential was gone and `REDACTED@host` was present.
+    #[test]
+    fn redacted_json_manifests_stage_as_parseable_json() {
+        let lockfile = r#"{
+  "name": "webapp",
+  "lockfileVersion": 3,
+  "packages": {
+    "node_modules/private": {
+      "version": "1.2.3",
+      "resolved": "https://deploy:s3cret@npm.corp.example.com/private/-/private-1.2.3.tgz",
+      "integrity": "sha512-abc123"
+    },
+    "node_modules/public": {
+      "version": "4.5.6",
+      "resolved": "https://registry.npmjs.org/public/-/public-4.5.6.tgz",
+      "integrity": "sha512-def456"
+    }
+  }
+}"#;
+        let package_json = r#"{
+  "name": "webapp",
+  "publishConfig": {
+    "registry": "https://deploy:s3cret@npm.corp.example.com/"
+  }
+}"#;
+
+        let mut manifest_files = HashMap::new();
+        manifest_files.insert("package-lock.json".to_string(), lockfile.to_string());
+        manifest_files.insert("package.json".to_string(), package_json.to_string());
+        let item = NonRpmItem {
+            path: "/opt/webapp".into(),
+            name: "webapp".into(),
+            method: METHOD_NPM_LOCKFILE.into(),
+            confidence: HIGH_CONFIDENCE.into(),
+            disposition: FindingKind::included(),
+            manifest_files,
+            ..Default::default()
+        };
+
+        let mut snap = test_snap(vec![item], &[]);
+        snap.redaction_state = Some(RedactionState::FullyRedacted {
+            redacted_by: "test".into(),
+            config_hash: "deadbeef".into(),
+        });
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_language_package_manifests(&snap, tmp.path()).expect("manifests must be written");
+
+        let dir = tmp
+            .path()
+            .join("language-packages")
+            .join("npm")
+            .join(env_hash("/opt/webapp"));
+        for filename in ["package-lock.json", "package.json"] {
+            let staged = std::fs::read_to_string(dir.join(filename))
+                .unwrap_or_else(|e| panic!("{filename} must be staged: {e}"));
+            serde_json::from_str::<serde_json::Value>(&staged).unwrap_or_else(|e| {
+                panic!("staged {filename} must be parseable JSON: {e}\n{staged}")
+            });
+            assert!(
+                !staged.contains("s3cret"),
+                "credential must be scrubbed from {filename}:\n{staged}"
+            );
+            assert!(
+                staged.contains("REDACTED@npm.corp.example.com"),
+                "scrubbed URL must keep its host in {filename}:\n{staged}"
+            );
         }
     }
 
