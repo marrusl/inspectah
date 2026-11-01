@@ -463,15 +463,11 @@ fn a_packaged_etc_override_does_not_mask_its_own_vendor_unit() {
     );
 }
 
-/// A user unit is not a system unit, however identical the filename.
-/// systemd searches `.../systemd/user/` only for units the per-user
-/// manager runs, so a user unit cannot take over when the `/etc` system
-/// unit is excluded, and the directory a `StateDirectory=` verdict came
-/// from simply will not exist in the target. Matching on the filename
-/// plus "some systemd directory" is the same mistake the fallback was
-/// written to fix, one level in.
-#[test]
-fn a_user_unit_is_not_the_system_unit_that_survives_an_exclusion() {
+/// `/var/lib/myapp` backed by `StateDirectory=` in `myapp.service`, with
+/// the `/etc` unit excluded and one RPM-owned path carrying the same
+/// basename. The question each row asks is whether that path is a unit
+/// file the system manager would run once the `/etc` one is gone.
+fn excluded_etc_unit_with_owner(owner_path: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.storage = Some(StorageSection {
         var_directories: vec![dir_with_mode(
@@ -492,21 +488,115 @@ fn a_user_unit_is_not_the_system_unit_that_survives_an_exclusion() {
         packages_added: vec![package("myapp", true)],
         file_ownership: vec![FileOwnershipEntry {
             package_name: "myapp".into(),
-            paths: vec!["/usr/lib/systemd/user/myapp.service".into()],
+            paths: vec![owner_path.into()],
         }],
         ..Default::default()
     });
+    snap
+}
 
-    assert_eq!(
-        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
-        &EffectiveBacking::Provision {
-            lost: Some("myapp.service".into())
-        },
-        "a user unit is no evidence that the system unit reaches the image"
-    );
+/// What counts as the unit file that survives an exclusion, by path
+/// shape.
+///
+/// This table exists because the predicate behind it was narrowed three
+/// times and each narrowing left another shape that satisfied it: a
+/// substring test for `/systemd/` admitted user units, `/systemd/system/`
+/// admitted `.wants/` links, and excluding those would have admitted
+/// `.requires/` and drop-in directories next. A unit file lives at
+/// exactly `<unit-dir>/<name>` and is never nested, so the rule is an
+/// exact parent-directory match and the refusing rows below are all one
+/// consequence of it rather than a list of special cases.
+///
+/// A row that changes here is a decision about what the export will
+/// treat as proof that a creator reaches the image. Change it
+/// deliberately.
+#[test]
+fn only_a_file_directly_in_a_system_unit_directory_survives_an_exclusion() {
+    const CARRIED: bool = true;
+    const PROVISION: bool = false;
+
+    let cases: &[(&str, bool, &str)] = &[
+        (
+            "/usr/lib/systemd/system/myapp.service",
+            CARRIED,
+            "the vendor unit file, which is the whole point of the fallback",
+        ),
+        (
+            "/etc/systemd/system/myapp.service",
+            PROVISION,
+            "the excluded file itself owns nothing the export still carries",
+        ),
+        (
+            "/etc/systemd/system/multi-user.target.wants/myapp.service",
+            PROVISION,
+            "an enablement link enables a dependency and may be dangling",
+        ),
+        (
+            "/usr/lib/systemd/system/multi-user.target.wants/myapp.service",
+            PROVISION,
+            "a preset link is the same, wherever it is shipped",
+        ),
+        (
+            "/etc/systemd/system/myapp.service.requires/myapp.service",
+            PROVISION,
+            "a requires link is an enablement link by another name",
+        ),
+        (
+            "/etc/systemd/system/myapp.service.d/myapp.service",
+            PROVISION,
+            "a drop-in directory nests under the unit directory",
+        ),
+        (
+            "/usr/lib/systemd/user/myapp.service",
+            PROVISION,
+            "a user unit is run by a per-user manager, never the system one",
+        ),
+        (
+            "/etc/systemd/user/myapp.service",
+            PROVISION,
+            "and that is true under /etc too",
+        ),
+        (
+            "/usr/lib/systemd/system-generators/myapp.service",
+            PROVISION,
+            "an adjacent directory whose name merely starts the same way",
+        ),
+        (
+            "/etc/containers/systemd/myapp.service",
+            PROVISION,
+            "a quadlet source is input to a generator, not a unit file",
+        ),
+        (
+            "/usr/local/lib/systemd/system/myapp.service",
+            PROVISION,
+            "a real load-path member, left out because no RPM owns /usr/local \
+             and the config walk is /etc only, so nothing can name it; this row \
+             is scope, not safety",
+        ),
+    ];
+
+    for (owner_path, carried, why) in cases {
+        let snap = excluded_etc_unit_with_owner(owner_path);
+        let want = if *carried {
+            EffectiveBacking::Carried
+        } else {
+            EffectiveBacking::Provision {
+                lost: Some("myapp.service".into()),
+            }
+        };
+        assert_eq!(
+            outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+            &want,
+            "{owner_path}: {why}"
+        );
+    }
+
+    // The outcome has to reach the artifact, not just the classifier.
+    let snap =
+        excluded_etc_unit_with_owner("/etc/systemd/system/multi-user.target.wants/myapp.service");
     assert!(
         var_conf(&snap).contains("d /var/lib/myapp 0755 root root -"),
-        "and the export has to make the directory itself"
+        "a refused shape leaves the export to make the directory itself"
     );
 }
 

@@ -19,22 +19,34 @@ use inspectah_core::types::storage::{
 
 use super::service_intent::is_package_installable;
 
-/// A backing names a unit by filename, so the paths that could be that
-/// unit are narrowed before matching.
+/// The directories a unit file can sit in and still be a unit file this
+/// export can reason about.
 ///
-/// Narrowed to the *system* unit directories, not to every directory
-/// with `systemd` in it. A `StateDirectory=` verdict came from a unit
-/// the system manager runs, and systemd searches `.../systemd/user/`
-/// only for units a per-user manager runs: the two have separate search
-/// paths, so a user unit sharing the filename shares nothing else and
-/// cannot take over when the system unit is dropped. Treating it as
-/// evidence is the same mistake as matching on the filename alone, one
-/// level in.
-const SYSTEM_UNIT_DIR_MARKER: &str = "/systemd/system/";
+/// Enumerated, and matched against a path's parent exactly, because a
+/// substring test does not work here and three rounds of narrowing one
+/// proved it: `/systemd/` admitted user units, `/systemd/system/`
+/// admitted `multi-user.target.wants/` links, and excluding those would
+/// have admitted `.requires/` and drop-in `.d/` directories next. A unit
+/// file lives at exactly `<unit-dir>/<name>` and is never nested, so an
+/// exact parent match rules out every nested shape at once rather than
+/// one per round.
+///
+/// These two and not the rest of systemd's load path, because these two
+/// are what a snapshot can name: `rpm.file_ownership` carries
+/// `/usr/lib/systemd/system`, and the config walk carries
+/// `/etc/systemd/system`. `/usr/local/lib/systemd/system` is a real
+/// member and no RPM owns `/usr/local`, so nothing reaches it.
+/// `/run/systemd/system` is deliberately out as well as unreachable: a
+/// `/run` unit is generated at boot and is not image content, which is
+/// the same reason `RUN_TMPFILES_PREFIX` never counts as a carried
+/// creator above. Missing a directory costs a `d` line the image did not
+/// need; admitting one wrongly costs a directory that never gets made,
+/// so the narrow set is the safe side of this.
+const SYSTEM_UNIT_DIRS: [&str; 2] = ["/etc/systemd/system", "/usr/lib/systemd/system"];
 
 /// The system unit directory that takes precedence over the vendor copy
 /// of the same filename.
-const ETC_UNIT_PREFIX: &str = "/etc/systemd/system/";
+const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// What the export can say about one `/var` directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,10 +190,13 @@ impl<'a> Evidence<'a> {
                             }
                             // The vendor copy displaces a recorded `/etc`
                             // one: it is the file systemd runs once the
-                            // `/etc` override is gone.
+                            // `/etc` override is gone. Both paths reached
+                            // here through `unit_filename`, so comparing
+                            // their directories is comparing two members
+                            // of `SYSTEM_UNIT_DIRS`.
                             Some((recorded, _))
-                                if recorded.starts_with(ETC_UNIT_PREFIX)
-                                    && !path.starts_with(ETC_UNIT_PREFIX) =>
+                                if parent_dir(recorded) == Some(ETC_UNIT_DIR)
+                                    && parent_dir(path) != Some(ETC_UNIT_DIR) =>
                             {
                                 unit_owners.insert(unit, owner);
                             }
@@ -239,10 +254,15 @@ impl<'a> Evidence<'a> {
     }
 }
 
-/// The filename of a path under a systemd *system* unit directory, and
-/// `None` for anything else, user units included.
+/// The directory a path sits in directly, as a string.
+fn parent_dir(path: &str) -> Option<&str> {
+    Path::new(path).parent()?.to_str()
+}
+
+/// The filename of a unit file sitting directly in one of
+/// [`SYSTEM_UNIT_DIRS`], and `None` for every other path.
 fn unit_filename(path: &str) -> Option<&str> {
-    if !path.contains(SYSTEM_UNIT_DIR_MARKER) {
+    if !SYSTEM_UNIT_DIRS.contains(&parent_dir(path)?) {
         return None;
     }
     Path::new(path).file_name()?.to_str()
