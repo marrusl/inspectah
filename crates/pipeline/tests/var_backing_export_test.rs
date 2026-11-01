@@ -11,7 +11,9 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
 };
+use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::var_dirs::{
@@ -53,10 +55,18 @@ fn tmpfiles(conf: &str, line: &str) -> VarDirBacking {
     }
 }
 
-fn config_file(path: &str, included: bool) -> ConfigFileEntry {
+/// `kind` is a parameter and not a constant because it decides whether a
+/// real collector could have produced the entry at all. The config walk
+/// consults its unowned exclusion lists only for unowned files, and one
+/// of those checks discards every bare filename directly under
+/// `/etc/systemd/system`, so an `Unowned` entry at such a path is a
+/// layout no scan produces -- see
+/// `an_excluded_full_shadow_is_invisible_to_var_backing_evidence` below
+/// for what one does produce. Choose this per case.
+fn config_file(path: &str, kind: ConfigFileKind, included: bool) -> ConfigFileEntry {
     ConfigFileEntry {
         path: path.into(),
-        kind: ConfigFileKind::Unowned,
+        kind,
         category: ConfigCategory::Tmpfiles,
         content: "# fixture\n".into(),
         disposition: if included {
@@ -111,6 +121,7 @@ struct Export {
     containerfile: String,
     var_conf: Option<String>,
     appone_fragment_exported: bool,
+    crond_shadow_exported: bool,
     audit: String,
 }
 
@@ -128,6 +139,10 @@ fn export(snap: &InspectionSnapshot) -> Export {
         appone_fragment_exported: out
             .path()
             .join("config/etc/tmpfiles.d/appone.conf")
+            .exists(),
+        crond_shadow_exported: out
+            .path()
+            .join("drop-ins/etc/systemd/system/crond.service")
             .exists(),
         audit: std::fs::read_to_string(out.path().join("audit-report.md")).expect("audit"),
     }
@@ -160,7 +175,11 @@ fn base_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/etc/tmpfiles.d/appone.conf", true)],
+        files: vec![config_file(
+            "/etc/tmpfiles.d/appone.conf",
+            ConfigFileKind::Unowned,
+            true,
+        )],
     });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("appone", true)],
@@ -274,7 +293,11 @@ fn run_fragments_are_provisioned_whatever_the_config_decision() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/run/tmpfiles.d/runapp.conf", true)],
+        files: vec![config_file(
+            "/run/tmpfiles.d/runapp.conf",
+            ConfigFileKind::Unowned,
+            true,
+        )],
     });
 
     let outcomes = effective_var_backing(&snap);
@@ -316,7 +339,11 @@ fn units_follow_their_unit_file_and_rpm_owner() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+        files: vec![config_file(
+            "/etc/systemd/system/myapp.service",
+            ConfigFileKind::Unowned,
+            false,
+        )],
     });
 
     assert_eq!(
@@ -373,7 +400,11 @@ fn an_excluded_etc_unit_falls_back_to_the_vendor_unit_that_survives() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+        files: vec![config_file(
+            "/etc/systemd/system/myapp.service",
+            ConfigFileKind::Unowned,
+            false,
+        )],
     });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("myapp", true)],
@@ -432,7 +463,11 @@ fn a_packaged_etc_override_does_not_mask_its_own_vendor_unit() {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+        files: vec![config_file(
+            "/etc/systemd/system/myapp.service",
+            ConfigFileKind::Unowned,
+            false,
+        )],
     });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("myapp", true)],
@@ -482,7 +517,11 @@ fn excluded_etc_unit_with_owner(owner_path: &str) -> InspectionSnapshot {
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
-        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+        files: vec![config_file(
+            "/etc/systemd/system/myapp.service",
+            ConfigFileKind::Unowned,
+            false,
+        )],
     });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("myapp", true)],
@@ -597,6 +636,170 @@ fn only_a_file_directly_in_a_system_unit_directory_survives_an_exclusion() {
     assert!(
         var_conf(&snap).contains("d /var/lib/myapp 0755 root root -"),
         "a refused shape leaves the export to make the directory itself"
+    );
+}
+
+// --- the collector-shaped full shadow ----------------------------------
+
+/// The admin shadow of `crond.service`, byte for byte as the scan
+/// returned it in `services.drop_ins[].content`.
+const CROND_SHADOW_CONTENT: &str = "[Unit]\n\
+     Description=Command Scheduler (site override)\n\
+     After=auditd.service nss-user-lookup.target systemd-user-sessions.service \
+     time-sync.target ypbind.service autofs.service\n\
+     \n\
+     [Service]\n\
+     EnvironmentFile=/etc/sysconfig/crond\n\
+     ExecStart=/usr/sbin/crond -n $CRONDARGS\n\
+     ExecReload=/bin/kill -HUP $MAINPID\n\
+     KillMode=process\n\
+     Restart=on-failure\n\
+     StateDirectory=crondstate\n\
+     \n\
+     [Install]\n\
+     WantedBy=multi-user.target\n";
+
+/// The rationale string the collector writes beside a `FullShadow`.
+const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd/system/ \
+     overrides the vendor unit in /usr/lib/systemd/system/. Base image updates to this unit \
+     will be silently ignored.";
+
+/// An admin full shadow of a vendor unit, as a real scan reports it.
+///
+/// **Provenance: measured, not constructed.** Every field below comes
+/// from a privileged `inspectah scan --inspect-only` on the `rhel9` test
+/// VM, 2026-11-01, at schema 23. The host had `driftify --profile
+/// standard` applied plus one planted file: an admin-written
+/// `/etc/systemd/system/crond.service` adding `StateDirectory=crondstate`
+/// on top of the stock `cronie` unit, which declares no directory of its
+/// own. What the scan returned:
+///
+/// - `storage.var_directories` carries `/var/lib/crondstate` with
+///   `state_directory` naming `crond.service`.
+/// - `services.drop_ins` carries the shadow at
+///   `/etc/systemd/system/crond.service` with
+///   `shadow_type: full_shadow`.
+/// - `config.files` carries **no** entry for that path. The walk
+///   discarded it, which is why this fixture leaves the section empty
+///   rather than hand-building an entry there.
+/// - `rpm.file_ownership` gives `cronie` exactly one path matching the
+///   filename, `/usr/lib/systemd/system/crond.service`, and `cronie` is
+///   an included `packages_added` entry.
+///
+/// Only the package's arch and repo differ from the measured values,
+/// because the shared `package()` helper supplies them and neither
+/// reaches this classification.
+///
+/// This fixture encodes what the collector produces **today**. If
+/// `is_systemd_unit_alias` is fixed to test for a symlink rather than
+/// for nesting depth, the walk will stop discarding bare unit files and
+/// this snapshot will need a `config.files` entry as well.
+fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/crondstate",
+            VarDirBacking::StateDirectory {
+                unit: "crond.service".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![SystemdDropIn {
+            unit: "crond.service".into(),
+            path: "/etc/systemd/system/crond.service".into(),
+            content: CROND_SHADOW_CONTENT.into(),
+            disposition: if shadow_included {
+                FindingKind::included()
+            } else {
+                FindingKind::excluded()
+            },
+            shadow_type: Some(ShadowType::FullShadow),
+            shadow_rationale: Some(FULL_SHADOW_RATIONALE.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.config = Some(ConfigSection { files: Vec::new() });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![package("cronie", true)],
+        file_ownership: vec![FileOwnershipEntry {
+            package_name: "cronie".into(),
+            paths: vec!["/usr/lib/systemd/system/crond.service".into()],
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// An operator exclusion of a full shadow has to reach the `/var`
+/// verdict, and a vendor package shipping the same filename is not a
+/// substitute for it.
+///
+/// The shadow is the only unit file declaring `StateDirectory=crondstate`
+/// — the `cronie` unit declares no directory at all — so excluding the
+/// shadow removes the directory's only creator from the image. The
+/// export therefore has to say something about `/var/lib/crondstate`,
+/// either provisioning it or flagging it. Which of the two is the open
+/// question this test deliberately does not answer; silence is the one
+/// answer it rules out.
+///
+/// **This test fails today, and the failure is the finding.** Measured
+/// 2026-11-01: the verdict is `Carried` and the rendered
+/// `inspectah-var.conf` is empty, so the export neither makes the
+/// directory nor flags it. `Evidence::from_snapshot` reads unit evidence
+/// out of `config.files` alone and never looks at `services.drop_ins`,
+/// so the operator's exclusion is invisible to it and `cronie`'s
+/// inclusion decides the answer on its own. It is ignored rather than
+/// deleted because fixing it means deciding where `/etc` unit files
+/// belong, which is release-gated and not settled; run it with
+/// `cargo test -- --ignored` and remove this attribute with the fix.
+#[test]
+#[ignore = "measures an open defect: an excluded full shadow still reads Carried"]
+fn an_excluded_full_shadow_is_invisible_to_var_backing_evidence() {
+    let snap = crond_full_shadow_snapshot(false);
+    assert!(
+        snap.config.as_ref().expect("config").files.is_empty(),
+        "the premise of this test: the walk routes the shadow away from config.files"
+    );
+
+    let rendered = export(&snap);
+    assert!(
+        !rendered.crond_shadow_exported,
+        "the excluded shadow is not in the export, so nothing it declares reaches the image"
+    );
+    assert_ne!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/crondstate"),
+        &EffectiveBacking::Carried,
+        "cronie shipping a same-named unit is not evidence that a unit reaching the \
+         image declares /var/lib/crondstate; the only unit that declares it is excluded"
+    );
+    let conf = rendered.var_conf.unwrap_or_default();
+    assert!(
+        conf.contains("/var/lib/crondstate"),
+        "a directory whose only creator the export drops cannot go unmentioned, \
+         as an active entry or as a commented one under a FIXME: {conf}"
+    );
+
+    // The control. Including the shadow carries the unit that declares
+    // the directory, so `Carried` with no entry is right. Today the
+    // classifier reaches it without reading the shadow at all — the
+    // verdict does not move when the operator's decision does, which is
+    // the defect the case above measures.
+    let snap = crond_full_shadow_snapshot(true);
+    let rendered = export(&snap);
+    assert!(rendered.crond_shadow_exported);
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/crondstate"),
+        &EffectiveBacking::Carried
+    );
+    assert!(
+        !rendered.var_conf.unwrap_or_default().contains("crondstate"),
+        "the carried shadow makes the directory, so the export does not"
     );
 }
 
@@ -1079,11 +1282,19 @@ fn a_carryable_backed_verdict_beats_another_hosts_unbacked() {
         "0755",
     );
     backed.config = Some(ConfigSection {
-        files: vec![config_file("/etc/tmpfiles.d/shared.conf", true)],
+        files: vec![config_file(
+            "/etc/tmpfiles.d/shared.conf",
+            ConfigFileKind::Unowned,
+            true,
+        )],
     });
     let mut unbacked = fleet_host("host-a", VarDirBacking::Unbacked, "0700");
     unbacked.config = Some(ConfigSection {
-        files: vec![config_file("/etc/tmpfiles.d/shared.conf", true)],
+        files: vec![config_file(
+            "/etc/tmpfiles.d/shared.conf",
+            ConfigFileKind::Unowned,
+            true,
+        )],
     });
 
     let (merged, _) =
