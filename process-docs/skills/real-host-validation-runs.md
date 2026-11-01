@@ -87,6 +87,32 @@ a correction that is otherwise right.
 whether a real scan would ever put one there — and check the helper that
 builds the entry, not just the path string.**
 
+### Measured, 2026-11-01: the renderer never reads the field the walk routes to
+
+Measured on `rhel9` with a planted `/etc/systemd/system/crond.service`
+adding `StateDirectory=crondstate` over the stock `cronie` unit, which
+declares no directory of its own. The scan returned `/var/lib/crondstate`
+as `state_directory` naming `crond.service`, the shadow in
+`services.drop_ins` as `full_shadow`, nothing in `config.files`, and
+`cronie` as an included package owning
+`/usr/lib/systemd/system/crond.service`.
+
+Exclude the shadow and the export still calls the directory `Carried`,
+and `inspectah-var.conf` comes out **empty** — the export neither makes
+the directory nor flags it. `Evidence::from_snapshot` builds
+`config_units` from `config.files` alone, so an operator decision taken
+on a `services.drop_ins` entry is invisible to `/var` classification, and
+a package shipping a same-named vendor unit is read as proof the
+directory gets created. The two halves fit: the walk sends `/etc` unit
+files to `services.drop_ins`, and the evidence builder does not look
+there.
+
+Pinned by `an_excluded_full_shadow_is_invisible_to_var_backing_evidence`
+in `crates/pipeline/tests/var_backing_export_test.rs`, which is
+`#[ignore]`d because it fails. Run it with `cargo test -- --ignored`.
+That test is also the worked example of building a pipeline fixture from
+collector output rather than from a guess at it.
+
 ## Stock files reach findings, and fixtures never contain them
 
 Curated fixtures hold only interesting files. Real hosts hold the
