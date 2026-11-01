@@ -54,15 +54,38 @@ noticing, because the fixtures put unit files in `config.files` where the
 real collector routes them to `services.drop_ins` as
 `shadow_type: full_shadow`.
 
-One route survives: `is_excluded_unowned` is consulted only for *unowned*
-files, so an RPM-**owned** unit at `/etc/systemd/system/<name>` that
-`rpm -Va` reports modified is captured by the earlier rpm-Va pass and
-does reach `config.files`. Rare in practice — packages are discouraged
-from shipping units to `/etc` — but it is why the rule is near-dead
-rather than dead.
+**Correction, 2026-11-01.** An earlier revision of this file said one
+route survives and called the rule "near-dead rather than dead", citing
+`a_packaged_etc_override_does_not_mask_its_own_vendor_unit` in
+`crates/pipeline/tests/var_backing_export_test.rs` as the test that
+encodes it. **That citation was wrong and the status is `unproven`, not
+`near-dead`.** The test's `config_file()` helper hardcodes
+`kind: ConfigFileKind::Unowned`, so the entry feeding `config_units` is
+unowned — exactly the class the real walk filters. Listing the path in
+`rpm.file_ownership` makes the case "packaged" in name only. The test
+exercises the classifier's path and include bits; it is not an
+RPM-modified collector snapshot.
+
+What still holds: `is_excluded_unowned` is consulted only for *unowned*
+files (`config/mod.rs:198`), so an RPM-**owned** unit at
+`/etc/systemd/system/<name>` that `rpm -Va` reports modified short-circuits before the alias check and
+would reach `config.files`. That
+control flow was re-read and is sound. What does **not** hold is any
+evidence that it happens: no test and no measurement shows a real
+collector producing such an entry. The route may exist. Nothing we have
+demonstrates it does.
+
+**The transferable lesson is the sequence, not the finding.** This is
+the same error three layers deep. A fixture encoded a layout the
+collector cannot produce. A review believed the fixture. A correction to
+that review cited a second fixture carrying the same defect. Each layer
+reasoned correctly from a premise nobody measured. A hand-built snapshot
+is not evidence about collector behaviour at any depth, including inside
+a correction that is otherwise right.
 
 **Before trusting a test that feeds `config.files` a unit path, check
-whether a real scan would ever put one there.**
+whether a real scan would ever put one there — and check the helper that
+builds the entry, not just the path string.**
 
 ## Stock files reach findings, and fixtures never contain them
 
