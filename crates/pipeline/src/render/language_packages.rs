@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use inspectah_core::redaction::{ScrubOutcome, UnscrubbedLine, ValueSyntax, value_span_after_key};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::nonrpm::NonRpmItem;
@@ -610,7 +611,7 @@ pub fn write_language_package_manifests(
 
         for (filename, content) in &item.manifest_files {
             let output = if redact {
-                scrub_manifest_auth(filename, content)
+                scrub_manifest_auth(filename, content).into_content()
             } else {
                 content.clone()
             };
@@ -667,184 +668,217 @@ fn scrub_url_auth(url: &str) -> String {
     format!("{}://REDACTED@{}", &url[..scheme_end], &rest[at_pos + 1..])
 }
 
-/// Scrub auth tokens from manifest file content based on the filename.
+/// What one line's scrubber decided about the line it was given.
+enum LineOutcome {
+    /// Not a line this scrubber handles. No key matched.
+    NotMine,
+    /// Handled. The rewritten line, which may be identical.
+    Rewritten(String),
+    /// A key matched and routed this line here, and the value that key
+    /// names could not be located. The line is emitted unchanged and
+    /// the caller has to say so: this is the state that used to pass in
+    /// silence under a `FullyRedacted` label.
+    Unlocatable(&'static str),
+}
+
+/// Run a per-line scrubber over `content`, collecting the lines it was
+/// routed to and could not handle.
 ///
-/// - `requirements.txt`: `--index-url` / `--extra-index-url` lines with auth
-/// - `package.json`: `"registry"` URLs with embedded auth
-/// - `package-lock.json`: `"resolved"` URLs with embedded auth
-/// - `Gemfile`: `source` URLs with embedded auth
-/// - `Gemfile.lock`: any `https://user:pass@host` URLs in raw text
-pub fn scrub_manifest_auth(filename: &str, content: &str) -> String {
-    match filename {
-        "requirements.txt" => scrub_requirements_txt(content),
-        "package.json" => scrub_package_json(content),
-        "package-lock.json" => scrub_package_lock_json(content),
-        "Gemfile" => scrub_gemfile(content),
-        "Gemfile.lock" => scrub_gemfile_lock(content),
-        _ => content.to_string(),
+/// Preserves a trailing newline. The previous `lines()` + `join("\n")`
+/// dropped one from every manifest it touched, scrubbed or not, which is
+/// why the detector in `redact()` cannot compare whole strings.
+fn scrub_lines(content: &str, mut scrub: impl FnMut(&str) -> LineOutcome) -> ScrubOutcome {
+    let mut out = String::with_capacity(content.len());
+    let mut unscrubbed = Vec::new();
+    let mut lines = content.lines().enumerate().peekable();
+    while let Some((idx, line)) = lines.next() {
+        match scrub(line) {
+            LineOutcome::Rewritten(new_line) => out.push_str(&new_line),
+            LineOutcome::NotMine => out.push_str(line),
+            LineOutcome::Unlocatable(key) => {
+                unscrubbed.push(UnscrubbedLine {
+                    line: idx as u32 + 1,
+                    key: key.to_string(),
+                });
+                out.push_str(line);
+            }
+        }
+        if lines.peek().is_some() {
+            out.push('\n');
+        }
+    }
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    ScrubOutcome {
+        content: out,
+        unscrubbed,
     }
 }
 
-/// Scrub `--index-url` and `--extra-index-url` lines in requirements.txt.
-fn scrub_requirements_txt(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("--index-url") || trimmed.starts_with("--extra-index-url") {
-                // Split on whitespace: directive + URL
-                let mut parts = trimmed.splitn(2, char::is_whitespace);
-                let directive = parts.next().unwrap_or(trimmed);
-                match parts.next() {
-                    Some(url) => format!("{} {}", directive, scrub_url_auth(url.trim())),
-                    None => line.to_string(),
-                }
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Rebuild `line` with `span` replaced, leaving every other byte alone.
+///
+/// Every scrubber reconstructs through here rather than through
+/// `replace`, which rewrote every occurrence of the matched text on the
+/// line instead of the one it had located.
+fn replace_span(line: &str, span: std::ops::Range<usize>, with: &str) -> String {
+    format!("{}{}{}", &line[..span.start], with, &line[span.end..])
 }
 
-/// Scrub `"registry"` URLs with embedded auth in package.json.
-/// Operates on raw text to avoid pulling in a JSON library dependency
-/// for a simple find-and-replace in URL values.
-fn scrub_package_json(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            // Match lines like: "registry": "https://user:pass@host/..."
-            if trimmed.contains("\"registry\"") {
-                scrub_json_url_value(line)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Scrub auth tokens from manifest file content based on the filename.
+///
+/// - `requirements.txt`: `--index-url`, `--extra-index-url` and `-i`
+/// - `package.json`: `"registry"` URLs with embedded auth
+/// - `package-lock.json`: `"resolved"` URLs with embedded auth
+/// - `Gemfile`: `source` URLs with embedded auth
+/// - `Gemfile.lock`: every `scheme://user:pass@host` URL in raw text
+pub fn scrub_manifest_auth(filename: &str, content: &str) -> ScrubOutcome {
+    match filename {
+        "requirements.txt" => scrub_lines(content, scrub_requirements_line),
+        "package.json" => scrub_lines(content, |l| scrub_json_line(l, JSON_REGISTRY_KEY)),
+        "package-lock.json" => scrub_lines(content, |l| scrub_json_line(l, JSON_RESOLVED_KEY)),
+        "Gemfile" => scrub_lines(content, scrub_gemfile_line),
+        "Gemfile.lock" => scrub_lines(content, scrub_gemfile_lock_line),
+        _ => ScrubOutcome {
+            content: content.to_string(),
+            unscrubbed: Vec::new(),
+        },
+    }
 }
 
-/// Scrub the URL value in a JSON key-value line.
-fn scrub_json_url_value(line: &str) -> String {
-    // Find the value portion after the colon that follows "registry".
-    // The value is a quoted string containing a URL.
-    let Some(colon_pos) = line.find(':') else {
-        return line.to_string();
+/// pip index directives, longest first so a prefix match cannot claim a
+/// longer directive's argument.
+const PIP_INDEX_DIRECTIVES: [&str; 3] = ["--extra-index-url", "--index-url", "-i"];
+
+/// Scrub the URL argument of a pip index directive.
+///
+/// `--index-url=URL` and `-i URL` are both valid requirements-file
+/// syntax, confirmed against pip. The previous `splitn` on whitespace
+/// returned `None` for the `=` form and the prefix test never matched
+/// the short form, so each passed through untouched.
+fn scrub_requirements_line(line: &str) -> LineOutcome {
+    let trimmed = line.trim_start();
+    let indent_len = line.len() - trimmed.len();
+    let Some(directive) = PIP_INDEX_DIRECTIVES
+        .iter()
+        .find(|d| trimmed.starts_with(**d))
+    else {
+        return LineOutcome::NotMine;
     };
-    let after_colon = &line[colon_pos + 1..];
+    match value_span_after_key(trimmed, directive.len(), ValueSyntax::OptionArgument) {
+        Some(span) => {
+            let scrubbed = scrub_url_auth(&trimmed[span.clone()]);
+            LineOutcome::Rewritten(format!(
+                "{}{}",
+                &line[..indent_len],
+                replace_span(trimmed, span, &scrubbed)
+            ))
+        }
+        None => LineOutcome::Unlocatable(directive),
+    }
+}
 
-    // Find the opening and closing quotes of the value.
-    let Some(open_quote) = after_colon.find('"') else {
-        return line.to_string();
+const JSON_REGISTRY_KEY: &str = "\"registry\"";
+const JSON_RESOLVED_KEY: &str = "\"resolved\"";
+
+/// Scrub the URL value of a JSON member whose key is `key`.
+///
+/// The value is located from the end of the matched key, not from the
+/// line's first colon. A compact `"publishConfig": { "registry": "…" }`
+/// put the key-value colon of a *different* member first on the line,
+/// so the old search took `publishConfig`'s colon, read `registry` as
+/// the value, found no `://` in it and gave up.
+fn scrub_json_line(line: &str, key: &'static str) -> LineOutcome {
+    let Some(key_pos) = line.find(key) else {
+        return LineOutcome::NotMine;
     };
-    let value_start = colon_pos + 1 + open_quote + 1;
-    let value_slice = &line[value_start..];
-    let Some(close_quote) = value_slice.find('"') else {
-        return line.to_string();
-    };
-
-    let url = &value_slice[..close_quote];
-    let scrubbed = scrub_url_auth(url);
-    // Both slices already carry their quote: the prefix ends with the opening
-    // quote and the suffix starts with the closing one. Re-adding either here
-    // emits `""url""` and makes the manifest unparseable.
-    format!(
-        "{}{}{}",
-        &line[..value_start],
-        scrubbed,
-        &line[value_start + close_quote..]
-    )
+    match value_span_after_key(line, key_pos + key.len(), ValueSyntax::JsonMember) {
+        Some(span) => {
+            let scrubbed = scrub_url_auth(&line[span.clone()]);
+            LineOutcome::Rewritten(replace_span(line, span, &scrubbed))
+        }
+        None => LineOutcome::Unlocatable(key),
+    }
 }
 
-/// Scrub `source` URLs with embedded auth in Gemfile.
-fn scrub_gemfile(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("source") {
-                // source "https://user:pass@gems.example.com"
-                // source 'https://user:pass@gems.example.com'
-                let quote_chars = ['"', '\''];
-                let mut result = line.to_string();
-                for q in &quote_chars {
-                    if let Some(open) = trimmed.find(*q)
-                        && let Some(close) = trimmed[open + 1..].find(*q)
-                    {
-                        let url = &trimmed[open + 1..open + 1 + close];
-                        let scrubbed = scrub_url_auth(url);
-                        // Reconstruct preserving original indentation.
-                        let indent = &line[..line.len() - trimmed.len()];
-                        result = format!("{}{}", indent, trimmed.replace(url, &scrubbed));
-                        break;
-                    }
-                }
-                result
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+const GEMFILE_SOURCE_KEY: &str = "source";
+
+/// Scrub the URL argument of a Gemfile `source` line.
+///
+/// The quoted run has to start at the first non-whitespace character
+/// after `source`, and it ends at a quote of the *same* kind. The old
+/// loop tried `"` before `'` and broke on the first quote character
+/// anywhere on the line, so `source 'url' # see "runbook"` extracted
+/// `runbook`.
+fn scrub_gemfile_line(line: &str) -> LineOutcome {
+    let trimmed = line.trim_start();
+    let indent_len = line.len() - trimmed.len();
+    if !trimmed.starts_with(GEMFILE_SOURCE_KEY) {
+        return LineOutcome::NotMine;
+    }
+    // `source` must be a whole word here, or `sources = [...]` would be
+    // routed to a scrubber and then reported as unlocatable.
+    let after = &trimmed[GEMFILE_SOURCE_KEY.len()..];
+    if !after.starts_with(|c: char| c.is_whitespace() || c == '"' || c == '\'') {
+        return LineOutcome::NotMine;
+    }
+    match value_span_after_key(
+        trimmed,
+        GEMFILE_SOURCE_KEY.len(),
+        ValueSyntax::QuotedArgument,
+    ) {
+        Some(span) => {
+            let scrubbed = scrub_url_auth(&trimmed[span.clone()]);
+            LineOutcome::Rewritten(format!(
+                "{}{}",
+                &line[..indent_len],
+                replace_span(trimmed, span, &scrubbed)
+            ))
+        }
+        None => LineOutcome::Unlocatable(GEMFILE_SOURCE_KEY),
+    }
 }
 
-/// Scrub `"resolved"` URLs with embedded auth in package-lock.json.
-fn scrub_package_lock_json(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            let trimmed = line.trim();
-            if trimmed.contains("\"resolved\"") {
-                scrub_json_url_value(line)
-            } else {
-                line.to_string()
+/// Byte ranges of every whitespace- or quote-delimited token on `line`
+/// that carries a URL scheme.
+fn url_spans(line: &str) -> Vec<std::ops::Range<usize>> {
+    fn is_delimiter(c: char) -> bool {
+        c.is_whitespace() || c == '"' || c == '\''
+    }
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    for (i, c) in line.char_indices() {
+        if is_delimiter(c) {
+            if start < i && line[start..i].contains("://") {
+                spans.push(start..i);
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            start = i + c.len_utf8();
+        }
+    }
+    if start < line.len() && line[start..].contains("://") {
+        spans.push(start..line.len());
+    }
+    spans
 }
 
-/// Scrub any `https://user:pass@host` URLs found in Gemfile.lock.
-fn scrub_gemfile_lock(content: &str) -> String {
-    content
-        .lines()
-        .map(|line| {
-            if line.contains("://") && line.contains('@') {
-                let mut result = line.to_string();
-                if let Some(scheme_pos) = result.find("://") {
-                    let authority_start = scheme_pos + 3;
-                    let rest = &result[authority_start..];
-                    if let Some(at_pos) = rest.find('@') {
-                        let slash_pos = rest.find('/').unwrap_or(rest.len());
-                        if at_pos < slash_pos {
-                            let url_start = result[..scheme_pos]
-                                .rfind(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-                                .map(|p| p + 1)
-                                .unwrap_or(0);
-                            let url_end = result[authority_start + at_pos + 1..]
-                                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-                                .map(|p| authority_start + at_pos + 1 + p)
-                                .unwrap_or(result.len());
-                            let url = &result[url_start..url_end];
-                            let scrubbed = scrub_url_auth(url);
-                            result = format!(
-                                "{}{}{}",
-                                &result[..url_start],
-                                scrubbed,
-                                &result[url_end..]
-                            );
-                        }
-                    }
-                }
-                result
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Scrub every credentialed URL on a Gemfile.lock line.
+///
+/// The old version did a single `find("://")`, so a line carrying two
+/// credentialed URLs kept the second one — and, once the marker
+/// detector landed, reported success while doing it. Replacement runs
+/// in descending offset order so an earlier rewrite cannot invalidate a
+/// later span, the same discipline the regex engine uses.
+fn scrub_gemfile_lock_line(line: &str) -> LineOutcome {
+    let spans = url_spans(line);
+    if spans.is_empty() {
+        return LineOutcome::NotMine;
+    }
+    let mut out = line.to_string();
+    for span in spans.into_iter().rev() {
+        let scrubbed = scrub_url_auth(&line[span.clone()]);
+        out.replace_range(span, &scrubbed);
+    }
+    LineOutcome::Rewritten(out)
 }
 
 #[cfg(test)]
@@ -2240,6 +2274,299 @@ mod tests {
             assert!(
                 output.contains(&format!(r"\n{INJECTED}")),
                 "{method}: the newline must be escaped into the comment: {output}"
+            );
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // The value-span rewrite: Findings 2, 3, 5, 6 and 10.
+    //
+    // Every one was the same defect — right line, wrong span, because
+    // the separator was located with a bare `find()` from the start of
+    // the line instead of from the end of the key already matched. Each
+    // fixture below is the adversarial form measured in the audit, with
+    // the well-formed form kept as a control, because the suite that
+    // shipped all five asserted only on well-formed input.
+    // ----------------------------------------------------------------
+
+    const CRED: &str = "s3cret";
+
+    /// Finding 2. The key-value colon belongs to `publishConfig`, so a
+    /// search for the line's first colon read `registry` as the value,
+    /// found no `://` in it and returned the line untouched.
+    #[test]
+    fn json_member_value_is_found_after_its_own_key() {
+        let cases = [
+            // (label, input, must_still_contain)
+            (
+                "compact publishConfig",
+                "{\"name\":\"app\",\"publishConfig\": { \"registry\": \"https://deploy:s3cret@npm.corp.example.com/\" }}",
+                "npm.corp.example.com",
+            ),
+            (
+                "compact resolved",
+                "    \"node_modules/x\": { \"resolved\": \"https://deploy:s3cret@npm.corp.example.com/x.tgz\" },",
+                "x.tgz",
+            ),
+            (
+                "own-line registry (control)",
+                "  \"registry\": \"https://deploy:s3cret@npm.corp.example.com/\"",
+                "npm.corp.example.com",
+            ),
+        ];
+        for (label, input, keep) in cases {
+            let name = if input.contains("resolved") {
+                "package-lock.json"
+            } else {
+                "package.json"
+            };
+            let out = scrub_manifest_auth(name, input);
+            assert!(
+                !out.content.contains(CRED),
+                "{label}: credential survived: {}",
+                out.content
+            );
+            assert!(
+                out.content.contains("://REDACTED@"),
+                "{label}: no redaction marker: {}",
+                out.content
+            );
+            assert!(
+                out.content.contains(keep),
+                "{label}: host or path was destroyed: {}",
+                out.content
+            );
+            assert!(
+                out.unscrubbed.is_empty(),
+                "{label}: located fine, must not report a miss"
+            );
+        }
+    }
+
+    /// Finding 3. `--index-url=URL` has no whitespace for `splitn` to
+    /// find, and `-i URL` never matched the prefix test at all. Both are
+    /// valid requirements-file syntax, confirmed against pip.
+    #[test]
+    fn pip_index_directives_scrub_in_every_valid_form() {
+        let cases = [
+            (
+                "equals form",
+                "--index-url=https://deploy:s3cret@pypi.corp.example.com/simple",
+            ),
+            (
+                "short form",
+                "-i https://deploy:s3cret@pypi.corp.example.com/simple",
+            ),
+            (
+                "extra equals form",
+                "--extra-index-url=https://deploy:s3cret@pypi.corp.example.com/simple",
+            ),
+            (
+                "space form (control)",
+                "--index-url https://deploy:s3cret@pypi.corp.example.com/simple",
+            ),
+        ];
+        for (label, input) in cases {
+            let out = scrub_manifest_auth("requirements.txt", input);
+            assert!(
+                !out.content.contains(CRED),
+                "{label}: credential survived: {}",
+                out.content
+            );
+            assert!(
+                out.content.contains("pypi.corp.example.com"),
+                "{label}: host was destroyed: {}",
+                out.content
+            );
+            assert!(out.unscrubbed.is_empty(), "{label}: must not report a miss");
+        }
+    }
+
+    /// Finding 5. The old loop tried `"` before `'` and broke on the
+    /// first quote character anywhere on the line, so a double-quoted
+    /// word in a trailing comment won over the single-quoted source URL.
+    #[test]
+    fn gemfile_source_takes_its_own_quoted_run() {
+        let cases = [
+            (
+                "single-quoted source, double-quoted comment",
+                "source 'https://deploy:s3cret@gems.corp.example.com' # see \"runbook\"",
+            ),
+            (
+                "double-quoted source, single-quoted comment",
+                "source \"https://deploy:s3cret@gems.corp.example.com\" # it's here",
+            ),
+            (
+                "single-quoted source (control)",
+                "source 'https://deploy:s3cret@gems.corp.example.com'",
+            ),
+        ];
+        for (label, input) in cases {
+            let out = scrub_manifest_auth("Gemfile", input);
+            assert!(
+                !out.content.contains(CRED),
+                "{label}: credential survived: {}",
+                out.content
+            );
+            assert!(
+                out.content.contains("gems.corp.example.com"),
+                "{label}: host was destroyed: {}",
+                out.content
+            );
+        }
+    }
+
+    /// Finding 5, second half: the rebuild used `replace`, which
+    /// rewrote every occurrence of the located text rather than the one
+    /// occurrence it had located.
+    #[test]
+    fn gemfile_rewrites_only_the_span_it_located() {
+        let input = "source 'https://deploy:s3cret@gems.example.com' # mirror of https://deploy:s3cret@gems.example.com";
+        let out = scrub_manifest_auth("Gemfile", input);
+        assert_eq!(
+            out.content.matches("://REDACTED@").count(),
+            1,
+            "only the source argument is this scrubber's span: {}",
+            out.content
+        );
+    }
+
+    /// Finding 6. A single `find("://")` scrubbed the first URL on the
+    /// line and left the second, and once the marker detector landed it
+    /// did so while reporting success.
+    #[test]
+    fn gemfile_lock_scrubs_every_url_on_a_line() {
+        let input =
+            "  remote: https://deploy:s3cret@a.example.com/ https://deploy:s3cret@b.example.com/";
+        let out = scrub_manifest_auth("Gemfile.lock", input);
+        assert!(
+            !out.content.contains(CRED),
+            "both URLs must be scrubbed: {}",
+            out.content
+        );
+        assert_eq!(
+            out.content.matches("://REDACTED@").count(),
+            2,
+            "one marker per credentialed URL: {}",
+            out.content
+        );
+        assert!(out.content.contains("a.example.com"));
+        assert!(out.content.contains("b.example.com"));
+    }
+
+    /// Finding 10. RFC 3986 ends userinfo at the last `@` before the
+    /// authority terminator, and pip reads it that way. Taking the first
+    /// left the tail of a password containing an `@` in the file.
+    #[test]
+    fn url_userinfo_ends_at_the_last_at_in_the_authority() {
+        let out = scrub_manifest_auth(
+            "requirements.txt",
+            "--index-url https://deploy:p@s3cret@pypi.corp.example.com/simple",
+        );
+        assert!(
+            !out.content.contains(CRED),
+            "the password tail after the first @ survived: {}",
+            out.content
+        );
+        assert_eq!(
+            out.content,
+            "--index-url https://REDACTED@pypi.corp.example.com/simple"
+        );
+    }
+
+    /// An `@` in a query string is not the end of userinfo, which is
+    /// what makes searching backwards safe rather than differently
+    /// wrong.
+    #[test]
+    fn an_at_in_the_query_string_is_not_userinfo() {
+        let input = "--index-url https://pypi.corp.example.com/simple?contact=ops@example.com";
+        let out = scrub_manifest_auth("requirements.txt", input);
+        assert_eq!(out.content, input, "nothing here is a credential");
+    }
+
+    /// The scrubber must say so when it cannot find the value it was
+    /// routed to rewrite. Silence is what let four separate misses ship
+    /// under a `FullyRedacted` label with `Secrets redacted | 0`.
+    #[test]
+    fn a_scrubber_that_cannot_locate_its_value_reports_it() {
+        let cases = [
+            // (label, filename, line, expected key)
+            (
+                "registry key with no colon after it",
+                "package.json",
+                "  \"registry\" \"https://deploy:s3cret@npm.corp.example.com/\"",
+                "\"registry\"",
+            ),
+            (
+                "resolved value is not a quoted run",
+                "package-lock.json",
+                "  \"resolved\": https://deploy:s3cret@npm.corp.example.com/x.tgz,",
+                "\"resolved\"",
+            ),
+            (
+                "index directive with no argument",
+                "requirements.txt",
+                "--index-url",
+                "--index-url",
+            ),
+            (
+                "gemfile source with an unquoted argument",
+                "Gemfile",
+                "source https://deploy:s3cret@gems.corp.example.com",
+                "source",
+            ),
+        ];
+        for (label, filename, line, key) in cases {
+            let out = scrub_manifest_auth(filename, line);
+            assert_eq!(
+                out.unscrubbed.len(),
+                1,
+                "{label}: expected exactly one reported miss, got {:?}",
+                out.unscrubbed
+            );
+            assert_eq!(out.unscrubbed[0].key, key, "{label}: wrong key reported");
+            assert_eq!(out.unscrubbed[0].line, 1, "{label}: wrong line reported");
+            assert!(
+                !out.unscrubbed[0].key.contains(CRED),
+                "{label}: the report must not carry the credential it failed to strip"
+            );
+        }
+    }
+
+    /// A line nothing routed to a scrubber is not a miss, and neither is
+    /// a line whose value was located and simply had no credential in
+    /// it. Without this the signal would fire on every ordinary
+    /// manifest and mean nothing.
+    #[test]
+    fn located_or_unrouted_lines_are_never_reported_as_misses() {
+        let cases = [
+            (
+                "requirements.txt",
+                "--index-url https://pypi.org/simple\nflask==3.0.0\n",
+            ),
+            ("requirements.txt", "flask==3.0.0\n"),
+            (
+                "package.json",
+                "{\n  \"registry\": \"https://registry.npmjs.org/\"\n}\n",
+            ),
+            ("package.json", "{\n  \"name\": \"app\"\n}\n"),
+            ("Gemfile", "source 'https://rubygems.org'\ngem 'rails'\n"),
+            ("Gemfile", "sources = ['https://rubygems.org']\n"),
+            (
+                "Gemfile.lock",
+                "GEM\n  remote: https://rubygems.org/\n  specs:\n",
+            ),
+        ];
+        for (filename, content) in cases {
+            let out = scrub_manifest_auth(filename, content);
+            assert!(
+                out.unscrubbed.is_empty(),
+                "{filename}: false miss on {content:?}: {:?}",
+                out.unscrubbed
+            );
+            assert_eq!(
+                out.content, content,
+                "{filename}: credential-free content must come back byte-identical"
             );
         }
     }

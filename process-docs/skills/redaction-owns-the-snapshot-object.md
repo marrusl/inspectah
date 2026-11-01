@@ -47,21 +47,51 @@ and recognises `python venv`, `pip dist-info`, `npm lockfile` and
 JSON is the *only* copy of the manifest in the export, so a writer-side
 scrub reaches none of them.
 
-## The scrubbers reformat as well as scrub
+## Search forward from the key, never from the start of the line
 
-Do **not** use `scrubbed != original` as the signal that a credential was
-removed. Every scrubber in `render/language_packages.rs` rebuilds its
-content with `content.lines().map(...).collect::<Vec<_>>().join("\n")`,
-which **drops a trailing newline** whether or not anything was scrubbed,
-and `scrub_requirements_txt` additionally re-emits its line from the
-trimmed form, so indentation and interior whitespace on an
-`--index-url` line are normalized away. Both change the string while
-removing nothing. A naive inequality check reports a credential in a
-`requirements.txt` that only ever pointed at `pypi.org`.
+This was the single defect behind eight separate credential leaks
+across six functions, and it always looked the same: the scrubber found
+the right **line** and then took the wrong **span**.
 
-`scrub_url_auth` is the only operation in any of the five scrubbers that
-removes a credential, and it always leaves `://REDACTED@` behind. Detect
-on a rise in that marker's count:
+```
+"publishConfig": { "registry": "https://deploy:s3cret@host/" }
+                ^ line.find(':') stops here, so "registry" is read as the value
+```
+
+The caller already knows which key routed the line to the scrubber.
+Give that to [`value_span_after_key`](../../crates/core/src/redaction.rs)
+and let it search forward from the key's end. It has four named
+syntaxes — `JsonMember`, `QuotedArgument`, `OptionArgument`,
+`Assignment` — for the four forms the callers actually parse, and it is
+the only place in the codebase that decides where a value starts.
+
+Three rules it enforces that each cost a leak to learn:
+
+- **Only whitespace may sit between the key and its separator.**
+  Anything else means the separator belongs to a different key.
+- **A quoted value must open at the first non-whitespace character
+  after the separator, and close on the same quote character.** The old
+  Gemfile loop tried `"` before `'` and broke on whichever appeared
+  first anywhere on the line, so a quoted word in a trailing comment
+  won over the source URL.
+- **The character right after the key must be the separator**, so a
+  prefix match against a longer option cannot take that option's
+  argument.
+
+Reconstruct through the located span, never through `replace`: the
+Gemfile scrubber used `trimmed.replace(url, &scrubbed)` and rewrote
+every occurrence of the matched text on the line, not the one it had
+found.
+
+For "every URL on this line" — `Gemfile.lock` — tokenize and replace in
+**descending offset order**, so an earlier rewrite cannot invalidate a
+later span. Same discipline the regex engine uses.
+
+## Detect on the marker, not on string inequality
+
+A scrubber rebuilds the lines it handles, so the output string can
+differ from the input without anything having been removed. Use the
+redaction marker's count instead:
 
 ```rust
 if scrubbed.matches(URL_AUTH_REDACTED_MARKER).count()
@@ -72,15 +102,15 @@ The count comparison rather than a `contains` keeps a second `redact()`
 pass over an already-scrubbed snapshot from inventing a finding, and
 keeps a credential-free manifest byte-identical through the pass.
 
-**Know what the marker proves.** It answers "did `scrub_url_auth` fire?"
-It does **not** answer "is this content now credential-free." A scrubber
-that locates the wrong span still fires, still emits the marker, and
-still raises a high-confidence finding over a file that kept its
-credential. `scrub_compose_secrets` has the same property with its own
-`<REDACTED>` marker. The finding means a scrub ran, not that the file is
-clean.
+**Know what the marker proves.** It answers "did `scrub_url_auth`
+fire?" It does **not** answer "is this content now credential-free."
+The marker says a scrub ran; the unlocatable report below is what
+covers the rest.
 
-## A scrub that emits no finding is a silent one
+## A scrubber that cannot find its value has to say so
+
+This is the half that makes the span fixes durable rather than five
+more patches.
 
 The scrubbers are rewriters, not detectors. When one runs, or fails to
 run, it emits nothing into `snapshot.redactions`, and three things
@@ -94,7 +124,35 @@ a snapshot mislabelled that way stays unscrubbed through a round trip.
 
 So: anything added to `redact()` that rewrites content must also push a
 `RedactionFinding`. A high-confidence finding is a *resolved* one, which
-keeps `FullyRedacted` reachable and honest rather than merely unchanged.
+keeps `FullyRedacted` reachable.
+
+And the inverse, which is the part that was missing. A per-line
+scrubber returns one of three answers, not two:
+
+| answer | meaning | reported |
+|---|---|---|
+| `NotMine` | no key matched; nothing was routed here | no |
+| `Rewritten` | the value was located; it may or may not have held a credential | only if the marker count rose |
+| `Unlocatable` | **a key matched and the value could not be found** | yes, as an unresolved finding |
+
+The third is the one that used to be folded into the first. A line a
+scrubber was asked to handle and could not is reported at
+`Confidence::Low`, which the state machine counts as unresolved, which
+downgrades the snapshot out of `FullyRedacted`. That is deliberate: the
+label the import path trusts must stop being applied over content
+nothing examined.
+
+Two constraints on that report:
+
+- **It carries no line text.** The findings are serialized into the
+  export and the premise is that the line may hold a credential nothing
+  stripped. File, line number and the key that routed it, nothing more.
+- **It must not fire on well-formed input.** A located value that
+  simply had no credential is silent, and a line no key matched is
+  silent. Otherwise every ordinary manifest downgrades the state and
+  the signal means nothing. `scrub_compose_secrets` has no unlocatable
+  state at all now, because its key locator verifies the separator
+  itself — say that rather than inventing a signal to be symmetrical.
 
 ## Testing it
 

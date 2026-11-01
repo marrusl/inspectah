@@ -1181,25 +1181,23 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             // registry credential. scrub_manifest_auth is the authority for
             // this content.
             for (filename, content) in item.manifest_files.iter_mut() {
-                let scrubbed = scrub_manifest_auth(filename, content);
-                // Detect on the marker, not on string inequality. Every
-                // scrubber rebuilds its content through `lines()` +
-                // `join("\n")`, which drops a trailing newline, and
-                // `scrub_requirements_txt` additionally re-emits its line
-                // from the trimmed form — both change the string without
-                // removing anything. `scrub_url_auth` is the only operation
-                // in any of the five scrubbers that removes a credential,
-                // and it always leaves this marker behind, so a rise in the
-                // marker count is exactly "scrub_url_auth fired at least
-                // once." It is NOT a guarantee that the manifest is now
-                // credential-free: a scrubber that locates the wrong span
-                // still fires, and still emits this finding. See
-                // process-docs/skills/redaction-owns-the-snapshot-object.md.
-                if scrubbed.matches(URL_AUTH_REDACTED_MARKER).count()
+                let manifest_path = format!("{}/{}", item.path.trim_end_matches('/'), filename);
+                let outcome = scrub_manifest_auth(filename, content);
+
+                // Detect on the marker, not on string inequality: a
+                // scrubber rebuilds the lines it handles, so the string
+                // can differ without anything having been removed.
+                // `scrub_url_auth` is the only operation in any of the
+                // five scrubbers that removes a credential and it always
+                // leaves this marker, so a rise in the marker count is
+                // exactly "scrub_url_auth fired at least once." It is
+                // not on its own a guarantee the manifest is clean; the
+                // unlocatable report below is what covers the rest.
+                if outcome.content.matches(URL_AUTH_REDACTED_MARKER).count()
                     > content.matches(URL_AUTH_REDACTED_MARKER).count()
                 {
                     all_findings.push(RedactionFinding {
-                        path: format!("{}/{}", item.path.trim_end_matches('/'), filename),
+                        path: manifest_path.clone(),
                         source: "manifest_auth".into(),
                         kind: RedactionKind::Inline,
                         pattern: "manifest_registry_auth".into(),
@@ -1213,8 +1211,35 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                         confidence: Some(Confidence::High),
                         finding_kind: Some(FindingKind::Password),
                     });
-                    *content = scrubbed;
                 }
+
+                // A line that matched a key and whose value the scrubber
+                // could not then locate. Low confidence on purpose: the
+                // state machine treats anything below High as unresolved,
+                // which is what downgrades the snapshot out of
+                // `FullyRedacted`. That is the whole point — the label
+                // the import path trusts must stop being applied over
+                // content nothing managed to examine.
+                for miss in &outcome.unscrubbed {
+                    all_findings.push(RedactionFinding {
+                        path: manifest_path.clone(),
+                        source: "manifest_auth".into(),
+                        kind: RedactionKind::Flagged,
+                        pattern: "manifest_value_not_located".into(),
+                        remediation: format!(
+                            "Line {}: the `{}` value could not be located, so it was not checked \
+                             for credentials. Review this line by hand before sharing the export.",
+                            miss.line, miss.key
+                        ),
+                        line: Some(miss.line as i32),
+                        replacement: None,
+                        detection_method: DetectionMethod::Heuristic,
+                        confidence: Some(Confidence::Low),
+                        finding_kind: Some(FindingKind::GenericCredential),
+                    });
+                }
+
+                *content = outcome.content;
             }
 
             if !item.git_remote.is_empty() {
@@ -3228,12 +3253,14 @@ mod tests {
         }
     }
 
-    /// `FullyRedacted` is the one state `refine`'s import path trusts to
-    /// skip re-redaction, so it must only be reachable once the manifests
-    /// really are scrubbed. High-confidence findings are resolved findings,
-    /// which keeps the label honest rather than merely unchanged.
+    /// A regression guard that `FullyRedacted` is still **reachable**
+    /// after the manifest pass: every scrub here succeeds, so every
+    /// finding is High and therefore resolved. It does not prove the
+    /// label is honest — that is
+    /// `redact_downgrades_when_a_manifest_value_cannot_be_located`
+    /// below, which covers the case where a scrub does not succeed.
     #[test]
-    fn redact_keeps_fully_redacted_honest_for_manifests() {
+    fn redact_keeps_fully_redacted_reachable_for_scrubbed_manifests() {
         let mut snap = snapshot_with_credentialed_manifests();
         redact(&mut snap, &RedactOptions::default());
 
@@ -3353,5 +3380,135 @@ mod tests {
             !content.contains("s3cret"),
             "npm-manifest item must be scrubbed too: {content}"
         );
+    }
+
+    /// The honesty property, which is the one that matters: a manifest
+    /// line the scrubbers cannot handle must stop the snapshot reaching
+    /// `FullyRedacted`.
+    ///
+    /// Measured on the pre-rewrite code, four separate scrubber misses
+    /// each produced `FullyRedacted` over a live credential with zero
+    /// findings and `Secrets redacted | 0`. Three of those four forms
+    /// are now simply scrubbed; this covers what is left, the line no
+    /// scrubber can parse at all, by downgrading instead of passing in
+    /// silence.
+    #[test]
+    fn redact_downgrades_when_a_manifest_value_cannot_be_located() {
+        let mut manifest_files = HashMap::new();
+        // A `"registry"` key with no colon after it: routed here by the
+        // key match, and not a form the JSON scrubber can split.
+        manifest_files.insert(
+            "package.json".to_string(),
+            "{\n  \"registry\" \"https://deploy:s3cret@npm.corp.example.com/\"\n}\n".to_string(),
+        );
+        let mut snap = InspectionSnapshot::new();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/srv/web".into(),
+                manifest_files,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        redact(&mut snap, &RedactOptions::default());
+
+        let misses: Vec<&RedactionFinding> = snap
+            .redactions
+            .iter()
+            .filter(|f| f.pattern == "manifest_value_not_located")
+            .collect();
+        assert_eq!(
+            misses.len(),
+            1,
+            "the unlocatable line must be reported: {:?}",
+            snap.redactions
+        );
+        assert_eq!(misses[0].confidence, Some(Confidence::Low));
+        assert_eq!(misses[0].kind, RedactionKind::Flagged);
+        assert!(
+            matches!(
+                snap.redaction_state,
+                Some(RedactionState::PartiallyRedacted { .. })
+            ),
+            "a line nothing examined must not be labelled FullyRedacted, got {:?}",
+            snap.redaction_state
+        );
+
+        // And the report must not itself carry the credential: these
+        // findings are serialized into the export.
+        let serialized = serde_json::to_string(&snap.redactions).unwrap();
+        assert!(
+            !serialized.contains("s3cret"),
+            "the finding leaked the credential it failed to strip"
+        );
+    }
+
+    /// The four forms the reviewer measured as `FullyRedacted` over a
+    /// live credential. All four are scrubbed now, so the label is
+    /// earned rather than merely applied.
+    #[test]
+    fn the_forms_that_used_to_escape_now_scrub_and_stay_fully_redacted() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "package.json",
+                "{\"publishConfig\": { \"registry\": \"https://deploy:s3cret@npm.corp.example.com/\" }}",
+            ),
+            (
+                "requirements.txt",
+                "--index-url=https://deploy:s3cret@pypi.corp.example.com/simple\n",
+            ),
+            (
+                "requirements.txt",
+                "-i https://deploy:s3cret@pypi.corp.example.com/simple\n",
+            ),
+            (
+                "Gemfile",
+                "source 'https://deploy:s3cret@gems.corp.example.com' # see \"runbook\"\n",
+            ),
+        ];
+
+        for (filename, content) in cases {
+            let mut manifest_files = HashMap::new();
+            manifest_files.insert(filename.to_string(), content.to_string());
+            let mut snap = InspectionSnapshot::new();
+            snap.non_rpm_software = Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    path: "/srv/app".into(),
+                    manifest_files,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+
+            redact(&mut snap, &RedactOptions::default());
+
+            let stored =
+                &snap.non_rpm_software.as_ref().unwrap().items[0].manifest_files[*filename];
+            assert!(
+                !stored.contains("s3cret"),
+                "{filename}: {content:?} kept its credential: {stored}"
+            );
+            assert!(
+                snap.redactions
+                    .iter()
+                    .any(|f| f.pattern == "manifest_registry_auth"),
+                "{filename}: the scrub must be reported"
+            );
+            assert!(
+                snap.redactions
+                    .iter()
+                    .all(|f| f.pattern != "manifest_value_not_located"),
+                "{filename}: this form is now locatable, not a miss"
+            );
+            assert!(
+                matches!(
+                    snap.redaction_state,
+                    Some(RedactionState::FullyRedacted { .. })
+                ),
+                "{filename}: state was {:?}",
+                snap.redaction_state
+            );
+        }
     }
 }

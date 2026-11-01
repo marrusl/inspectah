@@ -1,3 +1,158 @@
+use std::ops::Range;
+
+/// How a key and its value are written on a single line.
+///
+/// Every hand-rolled scrubber in this codebase shared one defect: it
+/// found the right *line* and then took the wrong *span*, because it
+/// searched for the separator from the start of the line rather than
+/// from the end of the key it had already matched. There were eight
+/// instances across six functions. [`value_span_after_key`] is the one
+/// place that decision is now made, and these are the four syntaxes its
+/// callers actually parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueSyntax {
+    /// `"key": "value"` — a JSON object member. A colon, then a
+    /// double-quoted run. The span excludes the quotes.
+    JsonMember,
+    /// `source "value"` or `source 'value'` — a quoted argument after
+    /// whitespace, in either quote style. The span excludes the quotes,
+    /// and the closing quote must match the opening one.
+    QuotedArgument,
+    /// `--index-url VALUE` or `--index-url=VALUE` — an option argument
+    /// separated by whitespace or `=`, running to the next whitespace.
+    OptionArgument,
+    /// `KEY=value` or `KEY: value` — an assignment whose value runs to
+    /// the end of the line.
+    Assignment,
+}
+
+/// Byte offset of the first non-whitespace character of `s`.
+fn leading_whitespace(s: &str) -> usize {
+    s.len() - s.trim_start().len()
+}
+
+/// The span inside a quoted run that begins at the first non-whitespace
+/// character at or after `from`. The closing quote must match the
+/// opening one, so an apostrophe inside a double-quoted value, or a
+/// quoted comment later on the line, cannot end the run.
+fn quoted_run(line: &str, from: usize, quotes: &[char]) -> Option<Range<usize>> {
+    let rest = line.get(from..)?;
+    let open = from + leading_whitespace(rest);
+    let quote = line.get(open..)?.chars().next()?;
+    if !quotes.contains(&quote) {
+        return None;
+    }
+    let inner = open + quote.len_utf8();
+    let close = line.get(inner..)?.find(quote)?;
+    Some(inner..inner + close)
+}
+
+/// Locate the value belonging to the key that ends at `key_end`.
+///
+/// `key_end` is the byte offset just past the key the caller already
+/// matched. The caller knows which key it routed this line for, and
+/// this function must not re-guess it: searching forward from the key
+/// is the entire point. A bare `line.find(':')` locates the key-value
+/// separator only when the matched key happens to be the first one on
+/// the line, which is how a compact `"publishConfig": { "registry":
+/// "https://user:pass@host" }` kept its credential.
+///
+/// Returns the byte range of the value within `line`, excluding quotes.
+///
+/// # A `None` is not "nothing to scrub"
+///
+/// `None` means the value could not be located. The caller routed this
+/// line here *because it matched a key*, so `None` says the line is
+/// written in a form this function does not understand and its value
+/// has gone unexamined. Callers must surface that rather than return
+/// the line unchanged and say nothing — that silence is what let four
+/// separate misses ship under a `FullyRedacted` label.
+pub fn value_span_after_key(
+    line: &str,
+    key_end: usize,
+    syntax: ValueSyntax,
+) -> Option<Range<usize>> {
+    if key_end > line.len() || !line.is_char_boundary(key_end) {
+        return None;
+    }
+    let rest = &line[key_end..];
+
+    match syntax {
+        ValueSyntax::JsonMember => {
+            let colon = rest.find(':')?;
+            // Only whitespace may sit between the key and its colon. If
+            // anything else does, the colon belongs to a different
+            // member and following it would be the original defect.
+            if !rest[..colon].trim().is_empty() {
+                return None;
+            }
+            quoted_run(line, key_end + colon + 1, &['"'])
+        }
+        ValueSyntax::QuotedArgument => quoted_run(line, key_end, &['"', '\'']),
+        ValueSyntax::OptionArgument => {
+            // The character right after the key has to be the
+            // separator, so a prefix match against a longer option does
+            // not silently take that option's argument.
+            let sep = rest.chars().next()?;
+            if sep != '=' && !sep.is_whitespace() {
+                return None;
+            }
+            let after = key_end + sep.len_utf8();
+            let start = after + leading_whitespace(&line[after..]);
+            if start >= line.len() {
+                return None;
+            }
+            let end = line[start..]
+                .find(char::is_whitespace)
+                .map_or(line.len(), |p| start + p);
+            Some(start..end)
+        }
+        ValueSyntax::Assignment => {
+            let sep = rest.chars().next()?;
+            if sep != '=' && sep != ':' {
+                return None;
+            }
+            let after = key_end + sep.len_utf8();
+            let start = after + leading_whitespace(&line[after..]);
+            Some(start..line.len())
+        }
+    }
+}
+
+/// A line a scrubber was asked to handle and could not.
+///
+/// The scrubbers are rewriters, not detectors: when one could not
+/// locate the value it was routed to rewrite, it returned the line
+/// unchanged and emitted nothing, so the snapshot stayed
+/// `FullyRedacted` over a live credential with no finding anywhere to
+/// contradict it. This is that silence made reportable.
+///
+/// It deliberately carries no line text. These travel into
+/// `snapshot.redactions`, which is serialized into the export, and the
+/// whole premise is that the line may hold a credential nothing
+/// managed to strip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnscrubbedLine {
+    /// 1-based line number within the scrubbed content.
+    pub line: u32,
+    /// The key or directive that routed this line to a scrubber.
+    pub key: String,
+}
+
+/// Scrubbed content, plus the lines the scrubber could not handle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScrubOutcome {
+    pub content: String,
+    pub unscrubbed: Vec<UnscrubbedLine>,
+}
+
+impl ScrubOutcome {
+    /// Content only, for the callers that have no way to report.
+    pub fn into_content(self) -> String {
+        self.content
+    }
+}
+
 /// Scrubs secret-like values from compose YAML content.
 ///
 /// Targets two categories of secrets:
@@ -24,33 +179,49 @@ pub fn scrub_compose_secrets(content: &str) -> String {
         "CREDENTIAL",
     ];
 
-    /// Check if a line looks like an env-var assignment (KEY=value or
-    /// KEY: value with indentation suggesting it's inside an environment
-    /// block, not a top-level YAML key like `secrets:` or `services:`).
-    fn is_env_var_line(trimmed: &str) -> bool {
-        // Lines with `=` are always env-var assignments in compose YAML.
-        if trimmed.contains('=') {
-            return true;
+    /// The byte length of the assignment key at the start of `body`.
+    ///
+    /// The key is the leading run of identifier characters, and the
+    /// character right after it must be the separator. Locating the key
+    /// first is what fixes the old split: `kv_split` used to take
+    /// `trimmed.find('=')`, so a colon-style line whose *value* carried
+    /// an `=` — `DATABASE_URL: postgres://u:p@h/db?sslmode=require` is
+    /// the measured case — split inside the query string, produced a
+    /// "key" that was the whole credentialed URL, and emitted the line
+    /// untouched.
+    fn assignment_key_len(body: &str) -> Option<usize> {
+        let len = body
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'.' || *b == b'-')
+            .count();
+        if len == 0 || len == body.len() {
+            return None;
         }
-        // Lines with `:` could be YAML structure or `KEY: value` env vars.
-        // Env vars appear indented under `environment:` and have the form
-        // `KEY: value` where KEY is UPPER_SNAKE_CASE (e.g., DATABASE_URL).
-        // Top-level YAML keys like `secrets:`, `services:` are lowercase
-        // and are NOT env vars.
-        if let Some(colon_pos) = trimmed.find(':') {
-            let key = &trimmed[..colon_pos];
-            // UPPER_SNAKE_CASE: non-empty, all uppercase ASCII letters,
-            // digits, or underscores, with at least one letter.
-            if !key.is_empty()
-                && key
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-                && key.chars().any(|c| c.is_ascii_uppercase())
-            {
-                return true;
+        let sep = body.as_bytes()[len];
+        let key = &body[..len];
+        match sep {
+            // `KEY=value` is unambiguously an assignment in compose.
+            b'=' => {}
+            b':' => {
+                // A colon is also YAML structure. Only an UPPER_SNAKE
+                // key is an env var; `file:` under a `secrets:` block,
+                // or `command:`, is not, and redacting those would
+                // rewrite the compose file's own structure.
+                if !key
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                    || !key.bytes().any(|b| b.is_ascii_uppercase())
+                {
+                    return None;
+                }
+                // A bare `KEY:` with no value is a nested block header.
+                if body[len + 1..].trim().is_empty() {
+                    return None;
+                }
             }
+            _ => return None,
         }
-        false
+        Some(len)
     }
 
     /// Check if a value contains a URL with embedded credentials
@@ -91,76 +262,55 @@ pub fn scrub_compose_secrets(content: &str) -> String {
             continue;
         }
 
-        // Preserve top-level compose YAML structure keys.
-        // These are unindented (or minimally indented) keys like `secrets:`,
-        // `file:`, `external:` that are compose structure, not env vars.
-        let indent_len = line.len() - line.trim_start().len();
+        let indent = &line[..line.len() - line.trim_start().len()];
         let upper = trimmed.to_uppercase();
-
-        // Check for secret pattern match on env-var-style lines only.
-        let is_env_assignment = is_env_var_line(trimmed);
         let matches_pattern = SECRET_PATTERNS.iter().any(|pat| upper.contains(pat));
 
-        // Split env-var lines into (key_with_sep, value). Supports both
-        // `KEY=value` and `KEY: value` (colon-space mapping style).
-        let kv_split = if is_env_assignment {
-            if let Some(eq_pos) = trimmed.find('=') {
-                // KEY=value — separator is `=`, included in key portion
-                Some((&trimmed[..eq_pos + 1], &trimmed[eq_pos + 1..]))
-            } else if let Some(colon_pos) = trimmed.find(':') {
-                // KEY: value — separator is `: `, included in key portion
-                let rest = &trimmed[colon_pos + 1..];
-                let value = rest.strip_prefix(' ').unwrap_or(rest);
-                let sep_end = colon_pos + 1 + (rest.len() - value.len());
-                Some((&trimmed[..sep_end], value))
-            } else {
-                None
-            }
+        // A list-style entry (`- KEY=value`) carries its dash before the
+        // key; everything after it is the assignment.
+        let dash = if trimmed.starts_with("- ") { 2 } else { 0 };
+        let body = &trimmed[dash..];
+
+        // Locate the key, then the value that belongs to *that* key.
+        let span = assignment_key_len(body)
+            .and_then(|key_len| value_span_after_key(body, key_len, ValueSyntax::Assignment));
+
+        // Not an assignment: ordinary YAML structure. `assignment_key_len`
+        // verifies the separator itself, so once it answers there is no
+        // "routed here but could not locate the value" state left for
+        // this scrubber to be silent about.
+        let Some(span) = span else {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        };
+
+        let value = &body[span.clone()];
+        let key_with_sep = &body[..span.start];
+
+        // A secret-like key name redacts the whole value. Any key at all
+        // redacts credentials embedded in a URL, which is how a
+        // `DATABASE_URL` with no secret-like word in its name is caught.
+        let replacement = if has_url_credentials(value) {
+            Some(scrub_url_credentials(value))
+        } else if matches_pattern {
+            Some("<REDACTED>".to_string())
         } else {
             None
         };
 
-        if is_env_assignment && matches_pattern {
-            if let Some((key, value)) = kv_split {
-                let indent = &line[..indent_len];
-                // Check for URL-embedded credentials in the value
-                if has_url_credentials(value) {
-                    result.push_str(indent);
-                    result.push_str(key);
-                    result.push_str(&scrub_url_credentials(value));
-                    result.push('\n');
-                } else {
-                    result.push_str(indent);
-                    result.push_str(key);
-                    result.push_str("<REDACTED>");
-                    result.push('\n');
-                }
-            } else {
+        match replacement {
+            Some(new_value) => {
+                result.push_str(indent);
+                result.push_str(&trimmed[..dash]);
+                result.push_str(key_with_sep);
+                result.push_str(&new_value);
+                result.push('\n');
+            }
+            None => {
                 result.push_str(line);
                 result.push('\n');
             }
-        } else if is_env_assignment && !matches_pattern {
-            // Not a secret-named key, but check for URL-embedded credentials
-            // in the value (e.g., DATABASE_URL without matching a pattern name
-            // but containing postgres://user:pass@host).
-            if let Some((key, value)) = kv_split {
-                if has_url_credentials(value) {
-                    let indent = &line[..indent_len];
-                    result.push_str(indent);
-                    result.push_str(key);
-                    result.push_str(&scrub_url_credentials(value));
-                    result.push('\n');
-                } else {
-                    result.push_str(line);
-                    result.push('\n');
-                }
-            } else {
-                result.push_str(line);
-                result.push('\n');
-            }
-        } else {
-            result.push_str(line);
-            result.push('\n');
         }
     }
     // Remove trailing newline added by the loop if original didn't have one.
