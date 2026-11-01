@@ -408,6 +408,61 @@ fn an_excluded_etc_unit_falls_back_to_the_vendor_unit_that_survives() {
     );
 }
 
+/// One package owning the same unit filename at two paths, which is what
+/// a packaged override or an RPM-owned preset symlink under
+/// `/etc/systemd/system/*.wants/` produces. `unit_owners` keeps one path
+/// per filename, so whichever path it keeps decides the answer: record
+/// the excluded `/etc` file and the `owner_path != config_path` guard
+/// fails, calling a vendor unit that survives the exclusion lost. The
+/// case above reaches the guard with one path each and never reaches the
+/// rule that picks between two.
+#[test]
+fn a_packaged_etc_override_does_not_mask_its_own_vendor_unit() {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/myapp",
+            VarDirBacking::StateDirectory {
+                unit: "myapp.service".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![package("myapp", true)],
+        file_ownership: vec![FileOwnershipEntry {
+            package_name: "myapp".into(),
+            // `/etc` first, so the displacement rule is what runs rather
+            // than the vacant-entry insert.
+            paths: vec![
+                "/etc/systemd/system/myapp.service".into(),
+                "/usr/lib/systemd/system/myapp.service".into(),
+            ],
+        }],
+        ..Default::default()
+    });
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Carried,
+        "the vendor copy displaces the recorded /etc path"
+    );
+
+    snap.rpm.as_mut().expect("rpm").file_ownership[0]
+        .paths
+        .reverse();
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Carried,
+        "and the verdict does not depend on file_ownership order"
+    );
+}
+
 #[test]
 fn rpm_owned_absent_from_base_and_install_set_is_provisioned() {
     let mut snap = InspectionSnapshot::new();
