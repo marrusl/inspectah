@@ -226,7 +226,15 @@ fn discover_var_directories(
             // Capture ownership and mode via stat
             let stat_result = exec.run("stat", &["-c", "%04a %u %g %U %G", &path]);
             if stat_result.exit_code == 0 {
-                let parts: Vec<&str> = stat_result.stdout.trim().splitn(5, ' ').collect();
+                // `split_whitespace`, not `splitn(5, ' ')`: the latter
+                // handed the whole remainder of the output to the last
+                // field, so a `stat` that printed anything after the
+                // group name put it, newlines included, into
+                // `group_name`. A mode, two ids and two account names
+                // contain no whitespace on any system that can produce
+                // them, so exactly five whitespace-separated fields is
+                // what `stat` emits and anything else is not parseable.
+                let parts: Vec<&str> = stat_result.stdout.split_whitespace().collect();
                 if parts.len() == 5 {
                     var_dir.mode = Some(parts[0].to_string());
                     var_dir.owner_uid = parts[1].parse().ok();

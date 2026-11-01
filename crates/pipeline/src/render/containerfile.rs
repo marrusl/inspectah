@@ -28,7 +28,9 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::language_packages;
-use super::safety::{ExportPath, is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
+use super::safety::{
+    ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
+};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
@@ -1869,26 +1871,36 @@ fn resolve_tmpfiles_ownership(
     materialized_users: &std::collections::HashSet<String>,
     rpm_accounts: &std::collections::HashMap<String, String>,
     replicated_rpms: &std::collections::HashSet<String>,
-) -> (String, String, String) {
+) -> (ExportToken, ExportToken, String) {
     let uid = d.owner_uid.unwrap_or(0);
     let gid = d.owner_gid.unwrap_or(0);
 
     // Case 1: root
     if uid == 0 {
-        return ("root".into(), "root".into(), String::new());
+        return (
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            String::new(),
+        );
     }
 
-    let owner_name = d.owner_name.as_deref().unwrap_or("");
-    let group_name = d.group_name.as_deref().unwrap_or("");
+    // The two names come off the scanned host and reach both a
+    // tmpfiles.d field and a comment, and nothing upstream checks
+    // either. A name the allowlist refuses is treated as a name the
+    // scan never captured, which routes it to the numeric fallback the
+    // later cases already use: the same ownership, written the way this
+    // function already writes it when `stat` reported no name.
+    let owner_name = proved_account_name(d.owner_name.as_deref());
+    let group_name = proved_account_name(d.group_name.as_deref());
 
     // Case 2: materialized user (being created by useradd in this Containerfile)
     if !owner_name.is_empty() && materialized_users.contains(owner_name) {
         let group = if !group_name.is_empty() {
-            group_name.to_string()
+            known_token(group_name)
         } else {
-            gid.to_string()
+            numeric_token(gid)
         };
-        return (owner_name.into(), group, String::new());
+        return (known_token(owner_name), group, String::new());
     }
 
     // Case 3: RPM-provided user (package scriptlets create the account)
@@ -1908,12 +1920,12 @@ fn resolve_tmpfiles_ownership(
 
         if let Some(pkg) = providing_package {
             let group = if !group_name.is_empty() {
-                group_name.to_string()
+                known_token(group_name)
             } else {
-                owner_name.to_string()
+                known_token(owner_name)
             };
             return (
-                owner_name.into(),
+                known_token(owner_name),
                 group,
                 format!("created by package: {pkg}"),
             );
@@ -1923,14 +1935,41 @@ fn resolve_tmpfiles_ownership(
     // Case 4: name known but not guaranteed in the image
     if !owner_name.is_empty() {
         return (
-            uid.to_string(),
-            gid.to_string(),
+            numeric_token(uid),
+            numeric_token(gid),
             format!("account '{owner_name}' not guaranteed in image"),
         );
     }
 
     // Case 5: no name available
-    (uid.to_string(), gid.to_string(), String::new())
+    (numeric_token(uid), numeric_token(gid), String::new())
+}
+
+/// An account name the export may write, or `""` when the scan captured
+/// none and when the one it captured is not a name this will write.
+///
+/// A refusal is deliberately indistinguishable from an absence here:
+/// both mean the renderer has no usable name and both route to the same
+/// numeric fallback, so neither needs a branch of its own.
+fn proved_account_name(name: Option<&str>) -> &str {
+    match name {
+        Some(name) if ExportToken::parse(name).is_ok() => name,
+        _ => "",
+    }
+}
+
+/// A field this module produced rather than read off a host.
+///
+/// Module constants and decimal ids are allowlist-clean by construction,
+/// so this is the one place an `ExportToken` is built without a caller
+/// handling a refusal.
+fn known_token(value: &str) -> ExportToken {
+    ExportToken::parse(value).expect("a module constant or a proved name passes the allowlist")
+}
+
+/// A numeric uid or gid as a tmpfiles.d field.
+fn numeric_token(id: u32) -> ExportToken {
+    ExportToken::parse(&id.to_string()).expect("decimal digits pass the allowlist")
 }
 
 /// Mode and ownership for the commented `#d` line of an `Unresolved`
@@ -1942,8 +1981,17 @@ const DEFAULT_VAR_DIR_OWNER: &str = "root";
 
 /// The comment that precedes a provisioned directory whose source-host
 /// creator this export does not carry.
+/// `creator` is host-sourced in every case the caller can reach: a
+/// tmpfiles.d fragment path, a unit filename, or a package name, each an
+/// unrestricted `String` inside `VarDirBacking`. This comment goes into
+/// both `inspectah-var.conf` and the Containerfile, and on both surfaces
+/// a newline ends the comment and promotes the rest to a directive, so
+/// it is escaped rather than refused: a comment that only labels cannot
+/// execute once its newline is gone, and refusing would cost the
+/// operator the reason for a line they are being asked to act on.
 fn lost_creator_comment(path: &ExportPath, creator: &str) -> String {
     let path = path.as_str();
+    let creator = super::language_packages::sanitize_for_comment(creator);
     format!("# {path}: created on the host by {creator}, which this export does not carry")
 }
 
@@ -1961,24 +2009,45 @@ fn mkdir_line(path: &ExportPath) -> String {
 
 /// The active tmpfiles.d `d` entry for a provisioned directory.
 ///
-/// Takes an [`ExportPath`] for the same reason [`mkdir_line`] does: the
-/// fields of a tmpfiles.d line are whitespace-separated and a `#` starts
-/// a comment, so an unproved path can add a directive of its own that
-/// systemd applies at boot.
-fn tmpfiles_dir_line(path: &ExportPath, mode: &str, owner: &str, group: &str) -> String {
-    format!("d {} {mode} {owner} {group} -", path.as_str())
+/// Every operand is a proved type for the same reason: tmpfiles.d
+/// records are newline-separated and their fields whitespace-separated,
+/// so an unproved value in *any* of the four ends the record and starts
+/// a directive of its own that systemd applies at boot. Proving only the
+/// path would have left the other three carrying the defect the path was
+/// fixed for.
+fn tmpfiles_dir_line(
+    path: &ExportPath,
+    mode: &ExportToken,
+    owner: &ExportToken,
+    group: &ExportToken,
+) -> String {
+    format!(
+        "d {} {} {} {} -",
+        path.as_str(),
+        mode.as_str(),
+        owner.as_str(),
+        group.as_str()
+    )
 }
 
+/// Why a directory got an instruction instead of a build step.
+const REFUSED_PATH_REASON: &str =
+    "its path has characters this export will not write into a build instruction";
+const REFUSED_MODE_REASON: &str =
+    "its recorded mode is not one this export will write into a tmpfiles.d entry";
+
 /// The line a directory renders in place of its `RUN` or its `d` entry
-/// when [`ExportPath::parse`] refuses its path.
+/// when one of its own fields is refused.
 ///
-/// Rejection is rejection: there is no sanitized form of the path that
-/// names the directory the host had, so the export hands the operator an
-/// instruction instead of writing a build step it cannot vouch for.
-fn refused_path_comment(path: &str) -> String {
+/// Rejection is rejection: there is no sanitized form of a path that
+/// names the directory the host had, and no stand-in for a mode that is
+/// still the host's mode, so the export hands the operator an
+/// instruction instead of writing a build step it cannot vouch for. The
+/// path is escaped rather than refused here because this line is a
+/// comment, and naming the directory is the whole point of it.
+fn refused_field_comment(path: &str, reason: &str) -> String {
     format!(
-        "# FIXME: create {} by hand; its path has characters this export will not write \
-         into a build instruction",
+        "# FIXME: create {} by hand; {reason}",
         super::language_packages::sanitize_for_comment(path)
     )
 }
@@ -1989,10 +2058,13 @@ fn refused_path_comment(path: &str) -> String {
 /// Both `inspectah-var.conf` and the Containerfile's Storage block carry
 /// it, so the wording is produced in one place.
 ///
-/// `path` is `d`'s own path, proved: the commented `d` line is one the
-/// operator is being told to uncomment, so it has to be a line that is
-/// safe once uncommented. `d` is still needed for the mode and ownership
-/// the line carries.
+/// `path` and the three fields beside it are proved, not escaped: the
+/// commented `d` line exists to be uncommented, so it has to be a line
+/// that is safe once the `#` comes off. A refused mode takes the same
+/// answer it takes on an active line, an instruction rather than a
+/// substituted default, because a default mode here would be a guess
+/// the operator could not tell from a reading. `d` is still needed for
+/// the mode and ownership the line carries.
 fn unresolved_fixme_lines(
     d: &inspectah_core::types::storage::VarDirectory,
     path: &ExportPath,
@@ -2004,24 +2076,28 @@ fn unresolved_fixme_lines(
 ) -> Vec<String> {
     let (mode, owner, group) = match &d.mode {
         Some(mode) => {
+            let Ok(mode) = ExportToken::parse(mode) else {
+                return vec![refused_field_comment(&d.path, REFUSED_MODE_REASON)];
+            };
             let (owner, group, _) =
                 resolve_tmpfiles_ownership(d, materialized_users, rpm_accounts, replicated_rpms);
-            (mode.as_str(), owner, group)
+            (mode, owner, group)
         }
         None => (
-            DEFAULT_VAR_DIR_MODE,
-            DEFAULT_VAR_DIR_OWNER.to_string(),
-            DEFAULT_VAR_DIR_OWNER.to_string(),
+            known_token(DEFAULT_VAR_DIR_MODE),
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            known_token(DEFAULT_VAR_DIR_OWNER),
         ),
     };
     vec![
         format!(
-            "# FIXME: confirm the base image creates {}; on the host {creator} created it and {}; \
+            "# FIXME: confirm the base image creates {}; on the host {} created it and {}; \
              if the base does not, uncomment the next line",
             path.as_str(),
+            super::language_packages::sanitize_for_comment(creator),
             reason.reason_text()
         ),
-        format!("#{}", tmpfiles_dir_line(path, mode, &owner, &group)),
+        format!("#{}", tmpfiles_dir_line(path, &mode, &owner, &group)),
     ]
 }
 
@@ -2059,7 +2135,11 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                     continue;
                 };
                 let Ok(path) = ExportPath::parse(&d.path) else {
-                    lines.push(refused_path_comment(&d.path));
+                    lines.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
+                    continue;
+                };
+                let Ok(mode) = ExportToken::parse(mode) else {
+                    lines.push(refused_field_comment(&d.path, REFUSED_MODE_REASON));
                     continue;
                 };
                 if let Some(creator) = lost {
@@ -2074,11 +2154,11 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
                 if !comment.is_empty() {
                     lines.push(format!("# {comment}"));
                 }
-                lines.push(tmpfiles_dir_line(&path, mode, &owner, &group));
+                lines.push(tmpfiles_dir_line(&path, &mode, &owner, &group));
             }
             EffectiveBacking::Unresolved { creator, reason } => {
                 let Ok(path) = ExportPath::parse(&d.path) else {
-                    lines.push(refused_path_comment(&d.path));
+                    lines.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
                     continue;
                 };
                 lines.extend(unresolved_fixme_lines(
@@ -2131,7 +2211,7 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
             // ownership/mode data. The rest are in the tmpfiles.d conf.
             EffectiveBacking::Provision { lost } if d.mode.is_none() => {
                 let Ok(path) = ExportPath::parse(&d.path) else {
-                    body.push(refused_path_comment(&d.path));
+                    body.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
                     continue;
                 };
                 if let Some(creator) = lost {
@@ -2142,7 +2222,7 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
             EffectiveBacking::Provision { .. } => {}
             EffectiveBacking::Unresolved { creator, reason } => {
                 let Ok(path) = ExportPath::parse(&d.path) else {
-                    body.push(refused_path_comment(&d.path));
+                    body.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
                     continue;
                 };
                 body.extend(unresolved_fixme_lines(
@@ -5634,6 +5714,102 @@ RUN dnf install -y \
         assert!(
             conf.contains("# FIXME: create /var/lib/two"),
             "the refusal must name the directory it skipped: {conf}"
+        );
+    }
+
+    /// The active (non-comment, non-blank) lines of an artifact are the
+    /// instructions it executes. Asserting on that set, rather than on
+    /// the absence of one bad string, is the only assertion that holds
+    /// when the injection arrives through a field nobody thought of.
+    fn active_lines(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .collect()
+    }
+
+    /// `d {path} {mode} {owner} {group} -` has four host-sourced fields
+    /// and a newline in any of them ends the record and starts a
+    /// directive of its own. Each directory below poisons a different
+    /// one: the mode, the two account names, the creator a `Provision`
+    /// names, and the creator an `Unresolved` names. The assertion is
+    /// the whole active-line set of each artifact, because that is the
+    /// only form that covers the field nobody listed.
+    #[test]
+    fn var_dir_hostile_fields_add_no_directive() {
+        // The age field the format string appends lands on the injected
+        // line, so this payload leaves no dangling token behind it.
+        const PAYLOAD: &str = "\nd /etc/shadow 0777 root root";
+
+        let hostile = |path: &str, mode: String, uid: u32, owner: Option<String>| VarDirectory {
+            path: path.into(),
+            backing: Some(VarDirBacking::Unbacked),
+            mode: Some(mode),
+            owner_uid: Some(uid),
+            owner_gid: Some(uid),
+            owner_name: owner.clone(),
+            group_name: owner,
+        };
+
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                hostile("/var/lib/bad-mode", format!("0755{PAYLOAD}"), 0, None),
+                hostile(
+                    "/var/lib/bad-names",
+                    "0750".into(),
+                    1001,
+                    Some(format!("appone -{PAYLOAD}")),
+                ),
+                VarDirectory {
+                    path: "/var/lib/bad-creator".into(),
+                    backing: Some(VarDirBacking::Tmpfiles {
+                        conf: format!("/etc/tmpfiles.d/appone.conf{PAYLOAD}"),
+                        line: "d /var/lib/bad-creator 0700 root root -".into(),
+                    }),
+                    mode: Some("0700".into()),
+                    owner_uid: Some(0),
+                    owner_gid: Some(0),
+                    owner_name: Some("root".into()),
+                    group_name: Some("root".into()),
+                },
+                VarDirectory {
+                    path: "/var/lib/bad-unit".into(),
+                    backing: Some(VarDirBacking::StateDirectory {
+                        unit: format!("appone.service{PAYLOAD}"),
+                    }),
+                    mode: Some("0755".into()),
+                    owner_uid: Some(0),
+                    owner_gid: Some(0),
+                    owner_name: Some("root".into()),
+                    group_name: Some("root".into()),
+                },
+            ],
+            ..Default::default()
+        });
+
+        let conf = render_tmpfiles_conf(&snap).expect("three of the four produce lines");
+        assert_eq!(
+            active_lines(&conf),
+            vec![
+                // The refused mode takes the whole line with it; a
+                // substituted default would be a guess the operator
+                // could not tell from a reading.
+                "d /var/lib/bad-names 0750 1001 1001 -",
+                "d /var/lib/bad-creator 0700 root root -",
+            ],
+            "the conf executes exactly the two directives it intends: {conf}"
+        );
+
+        let output = render_containerfile(&snap, None, None);
+        let active = active_lines(&output);
+        assert!(
+            !active.iter().any(|l| l.starts_with("d ")),
+            "a tmpfiles directive is never an active Containerfile line: {output}"
+        );
+        assert!(
+            !active.iter().any(|l| l.contains("shadow")),
+            "no payload reaches an active line: {output}"
         );
     }
 

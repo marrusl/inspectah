@@ -77,6 +77,7 @@ way, and the next one should be.
 |---|---|---|
 | Staged RPM basename | `StagedName` | `inspectah_core::rpm_filename` |
 | `/var` directory path | `ExportPath` | `inspectah_pipeline::render::safety` |
+| Mode, account name, group name | `ExportToken` | `inspectah_pipeline::render::safety` |
 
 Each is an ASCII allowlist plus a newtype with no other constructor, and
 the emitting function takes the type rather than a `&str`. The guarantee
@@ -91,9 +92,40 @@ are whitespace-separated and `#` starts a comment there, so an unproved
 path adds a directive systemd applies at boot. Finding the shell half and
 stopping would have left the other arm open.
 
-Rejection stays rejection at these sites: a refused value gets a FIXME
+**And the unit of work is the emitted line, not the value you were sent
+to fix.** `d {path} {mode} {owner} {group} -` has four host-sourced
+fields. The first pass proved the path, because the path is what the
+finding named, and left the other three carrying the same defect; a
+review caught it one commit later. Before calling an emission site
+closed, enumerate every interpolation on the line and name what proves
+each.
+
+**What a refusal costs decides the answer, and the caller decides it, not
+the type.** Three answers, all in use on that one line:
+
+- **Degrade** where a safe stand-in means the same thing. A refused
+  account name falls back to the numeric uid or gid, which provisions
+  identical ownership and is already what the renderer emits when `stat`
+  reported no name.
+- **Refuse the line** where no stand-in is still the host's value. A
+  refused mode does *not* fall back to `0755`. That silently changes the
+  artifact, which is the failure mode this project keeps rediscovering.
+- **Escape** where the value only labels. The named creator goes through
+  `sanitize_for_comment`, because refusing it would cost the operator the
+  reason for a FIXME they are being asked to act on.
+
+Rejection stays rejection in the first two: a refused value gets a FIXME
 naming the directory or package, never a sanitised rewrite that names
 something else.
+
+**Fix the parse as well as the emission when the parse is why the value
+is unbounded.** The strongest vector on that line needed no crafted
+tarball. `discover_var_directories` split `stat -c "%04a %u %g %U %G"`
+with `splitn(5, ' ')`, so the last field took the whole remainder of the
+output, newlines included, straight into `group_name`. A renderer
+allowlist stops it reaching the build; requiring exactly five
+whitespace-separated fields stops it entering the snapshot at all, which
+matters because four other surfaces read that field.
 
 ## Testing These
 

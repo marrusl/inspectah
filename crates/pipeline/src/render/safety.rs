@@ -121,6 +121,85 @@ impl ExportPath {
     }
 }
 
+/// Longest non-path field the export will write into a build
+/// instruction. A mode is four bytes and Linux caps an account name at
+/// 32, so this is generous by two orders of magnitude and exists only to
+/// bound the string.
+pub const MAX_EXPORT_TOKEN_LEN: usize = 256;
+
+/// A byte allowed in a non-path field: `[A-Za-z0-9._-]`.
+///
+/// The POSIX portable filename set, which is what an account name and a
+/// mode are both drawn from. It excludes whitespace, which separates
+/// fields on a tmpfiles.d line, and the newline, which separates
+/// records; `#`, which starts a tmpfiles.d comment, and `%`, which
+/// starts a specifier; `\`, which tmpfiles.d consumes as C-style
+/// escaping; and every shell metacharacter, because these fields also
+/// reach Containerfile comments that a newline could promote to an
+/// instruction.
+fn is_allowed_token_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')
+}
+
+/// Why a field failed [`ExportToken::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TokenError {
+    #[error("exported field is empty")]
+    Empty,
+    #[error("exported field exceeds the maximum exported field length")]
+    TooLong,
+    #[error("exported field has a disallowed byte at position {at}")]
+    BadByte { at: usize },
+}
+
+/// A non-path field the export may write into a generated build
+/// instruction: a mode, an account name, a group name.
+///
+/// The sibling of [`ExportPath`], and it exists for the same reason one
+/// step on. Proving the path of
+/// `d {path} {mode} {owner} {group} -` left four fields on that line
+/// unproved, and `VarDirectory`'s `mode`, `owner_name` and `group_name`
+/// are unrestricted `Option<String>` that snapshot loading does not
+/// check. The strongest of the three is not even a crafted-tarball
+/// vector: `discover_var_directories` parses `stat -c "%04a %u %g %U %G"`
+/// with `splitn(5, ' ')`, so the last field took the whole remainder of
+/// the output, newlines included.
+///
+/// Accepts `value` when, and only when: it is not empty; every byte
+/// passes [`is_allowed_token_byte`]; and it is no more than
+/// [`MAX_EXPORT_TOKEN_LEN`] bytes.
+///
+/// What a refusal costs differs by field, and the caller decides. An
+/// account name degrades to the numeric id the renderer already holds,
+/// which provisions the same ownership. A mode has no safe stand-in that
+/// is still the host's mode, so a refused mode refuses the whole line
+/// rather than quietly substituting a default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportToken(String);
+
+impl ExportToken {
+    /// Validate `value` against the allowlist above and keep it.
+    pub fn parse(value: &str) -> Result<Self, TokenError> {
+        if value.is_empty() {
+            return Err(TokenError::Empty);
+        }
+        if value.len() > MAX_EXPORT_TOKEN_LEN {
+            return Err(TokenError::TooLong);
+        }
+        for (i, b) in value.bytes().enumerate() {
+            if !is_allowed_token_byte(b) {
+                return Err(TokenError::BadByte { at: i });
+            }
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    /// The validated field.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Escape HTML special characters to prevent XSS in report output.
 pub fn html_escape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -261,6 +340,46 @@ mod tests {
         }
         let too_long = format!("/var/{}", "a".repeat(MAX_EXPORT_PATH_LEN));
         assert_eq!(ExportPath::parse(&too_long), Err(PathError::TooLong));
+    }
+
+    #[test]
+    fn export_token_accepts_real_fields() {
+        for value in [
+            "0755",
+            "1777",
+            "-",
+            "root",
+            "appone",
+            "1001",
+            "systemd-resolve",
+            "nfsnobody",
+            "my.user_1",
+        ] {
+            assert!(ExportToken::parse(value).is_ok(), "{value}");
+        }
+    }
+
+    #[test]
+    fn export_token_refuses_table() {
+        let cases: &[(&str, TokenError)] = &[
+            ("", TokenError::Empty),
+            ("appone appone", TokenError::BadByte { at: 6 }),
+            (
+                "appone -\nd /etc/shadow 0777 root root",
+                TokenError::BadByte { at: 6 },
+            ),
+            ("0755\n", TokenError::BadByte { at: 4 }),
+            ("root#", TokenError::BadByte { at: 4 }),
+            ("root%t", TokenError::BadByte { at: 4 }),
+            ("root\\n", TokenError::BadByte { at: 4 }),
+            ("root$(id)", TokenError::BadByte { at: 4 }),
+            ("root/etc", TokenError::BadByte { at: 4 }),
+        ];
+        for (value, want) in cases {
+            assert_eq!(ExportToken::parse(value), Err(*want), "{value}");
+        }
+        let too_long = "a".repeat(MAX_EXPORT_TOKEN_LEN + 1);
+        assert_eq!(ExportToken::parse(&too_long), Err(TokenError::TooLong));
     }
 
     #[test]
