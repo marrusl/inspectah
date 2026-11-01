@@ -521,6 +521,7 @@ function SingleHostApp({
       ) ??
         document.querySelector(`[data-testid="context-item-${itemId}"]`) ??
         document.querySelector(`[data-testid="lang-env-row-${itemId}"]`) ??
+        document.querySelector(`[data-testid="dropin-item-${itemId}"]`) ??
         document.querySelector(
           `[data-testid="unmanaged-item-${itemId}"]`,
         )) as HTMLElement | null;
@@ -645,6 +646,7 @@ function SingleHostApp({
         searchConfigItems={configItems}
         searchUserDecisions={view.data?.users_groups_decisions}
         searchContextSections={sections.data}
+        searchServiceDropins={view.data?.service_dropins}
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}
@@ -724,6 +726,7 @@ function SingleHostApp({
                 filterClearCounter={filterClearCounter}
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}
+                onNavigateToItem={handleNavigateFromSearch}
                 onToggleLangEnv={handleToggleLangEnv}
                 onSetPackagePin={handleSetPackagePin}
                 onSetBulkPackagePin={handleSetBulkPackagePin}

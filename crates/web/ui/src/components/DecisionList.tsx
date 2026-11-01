@@ -25,6 +25,7 @@ import { RepoGroup } from "./RepoGroup";
 import { RoutineSummary } from "./RoutineSummary";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
+import type { ShadowOwner } from "./shadowOwner";
 import { highestAttention, triageBucketToAttention } from "./attentionUtils";
 
 /** Get the primary reason string from an item, preferring triage over legacy attention. */
@@ -278,8 +279,12 @@ export interface DecisionListProps {
   leafDepTree?: Record<string, string[]>;
   /** Version change entries for package version change display. */
   versionChanges?: VersionChangeEntry[];
+  /** Owners of shadowed config entries, keyed by config path. */
+  shadowOwners?: Map<string, ShadowOwner>;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
+  /** Navigate to the owning row of a shadowed config entry. */
+  onNavigateToOwner?: (sectionId: string, itemId: string) => void;
 }
 
 const EMPTY_REPO_GROUPS: RepoGroupInfo[] = [];
@@ -292,11 +297,19 @@ export function DecisionList({
   revealItemId,
   leafDepTree,
   versionChanges,
+  shadowOwners,
   onViewUpdate,
   onMutationError,
+  onNavigateToOwner,
 }: DecisionListProps) {
   const toastIdRef = useRef(0);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
+
+  /** Only config rows can be shadowed; the map is keyed by config path. */
+  const ownerFor = (item: DecisionItemKind): ShadowOwner | undefined =>
+    item.type === "config"
+      ? shadowOwners?.get(item.data.entry.path)
+      : undefined;
 
   const handleSuccess = useCallback(
     (view: ViewResponse) => {
@@ -871,9 +884,11 @@ export function DecisionList({
                         tabIndex={flatIdx === focusedIndex ? 0 : -1}
                         leafDepTree={leafDepTree}
                         versionChanges={versionChanges}
+                        shadowOwner={ownerFor(item)}
                         onToggleInclude={handleToggle}
                         onMarkViewed={markAsViewed}
                         onKeyDown={handleRowKeyDown}
+                        onNavigateToOwner={onNavigateToOwner}
                       />
                     );
                   })}
@@ -904,9 +919,11 @@ export function DecisionList({
                       tabIndex={flatIdx === focusedIndex ? 0 : -1}
                       leafDepTree={leafDepTree}
                       versionChanges={versionChanges}
+                      shadowOwner={ownerFor(item)}
                       onToggleInclude={handleToggle}
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
+                      onNavigateToOwner={onNavigateToOwner}
                     />
                   );
                 })}

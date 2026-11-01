@@ -8,6 +8,7 @@ import { GlobalSearch } from "./GlobalSearch";
 import type { GlobalSearchHandle } from "./GlobalSearch";
 import { ExportDialog } from "./ExportDialog";
 import type {
+  DropInDecisionDto,
   RefineStats,
   ReferenceSection,
   LanguagePackageEnv,
@@ -81,6 +82,8 @@ export interface AppShellProps {
   searchConfigItems: DecisionItemKind[];
   searchUserDecisions?: UserDecision[];
   searchContextSections: ReferenceSection[] | null;
+  /** Service drop-in decision rows for GlobalSearch. */
+  searchServiceDropins?: DropInDecisionDto[];
   /** Language package environments for GlobalSearch. */
   searchLanguagePackageEnvs?: LanguagePackageEnv[];
   /** Unmanaged file groups for GlobalSearch. */
@@ -136,6 +139,7 @@ export function AppShell({
   searchConfigItems,
   searchUserDecisions,
   searchContextSections,
+  searchServiceDropins,
   searchLanguagePackageEnvs,
   searchUnmanagedFileGroups,
   onSearchNavigate,
@@ -222,6 +226,7 @@ export function AppShell({
       configItems={searchConfigItems}
       userDecisions={searchUserDecisions}
       contextSections={searchContextSections}
+      serviceDropins={searchServiceDropins}
       languagePackageEnvs={searchLanguagePackageEnvs}
       unmanagedFileGroups={searchUnmanagedFileGroups}
       onNavigate={handleSearchNavigate}

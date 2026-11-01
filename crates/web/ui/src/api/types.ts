@@ -76,6 +76,12 @@ export type ConfigCategory =
   | "limits"
   | "other";
 
+/**
+ * Rust: ConfigShadow — #[serde(rename_all = "snake_case")]
+ * Which other section's decision carries this file's content.
+ */
+export type ConfigShadow = "sysctl" | "services";
+
 export interface ConfigFileEntry {
   path: string;
   kind: ConfigFileKind;
@@ -90,6 +96,12 @@ export interface ConfigFileEntry {
   tie: boolean;
   tie_winner: boolean;
   aggregate: AggregatePrevalence | null;
+  /**
+   * Set when another section's decision carries this file. `disposition`
+   * is `{ kind: "inventory" }` whenever this is present, and the key is
+   * omitted entirely (not null) when the file owns its own decision.
+   */
+  shadowed_by?: ConfigShadow;
 }
 
 // --- Refine types (inspectah-refine/src/types.rs) ---

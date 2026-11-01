@@ -701,6 +701,26 @@ body,
   background: var(--pf-t--global--border--color--default);
 }
 
+.inspectah-service-section__orphan-heading {
+  margin: var(--pf-t--global--spacer--lg) 0 0;
+  padding: 0 var(--pf-t--global--spacer--md);
+  font-size: var(--pf-t--global--font--size--body--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-service-section__orphan-note {
+  margin: 0 0 var(--pf-t--global--spacer--sm);
+  padding: 0 var(--pf-t--global--spacer--md);
+  font-size: var(--pf-t--global--font--size--xs);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-service-section__orphan-unit {
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  font-size: var(--pf-t--global--font--size--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
 /* ─── Context row (reference sections — single-machine) ──────────────── */
 
 .inspectah-context-row {

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { Label } from "@patternfly/react-core";
+import { Button, Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type {
   RefinedPackage,
@@ -24,6 +24,7 @@ import {
 } from "./attentionUtils";
 import { PackageDetail } from "./PackageDetail";
 import { ConfigDetail } from "./ConfigDetail";
+import type { ShadowOwner } from "./shadowOwner";
 
 export type DecisionItemKind =
   | { type: "package"; data: RefinedPackage }
@@ -40,9 +41,13 @@ export interface DecisionItemProps {
   tabIndex?: number;
   leafDepTree?: Record<string, string[]>;
   versionChanges?: VersionChangeEntry[];
+  /** Set when this row's decision lives in another section (see shadowOwner.ts). */
+  shadowOwner?: ShadowOwner;
   onToggleInclude?: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  /** Navigate to the owning row of a shadowed entry. */
+  onNavigateToOwner?: (sectionId: string, itemId: string) => void;
 }
 
 export function itemId(item: DecisionItemKind): string {
@@ -134,9 +139,11 @@ export function DecisionItem({
   tabIndex = 0,
   leafDepTree,
   versionChanges,
+  shadowOwner,
   onToggleInclude,
   onMarkViewed,
   onKeyDown: onKeyDownProp,
+  onNavigateToOwner,
 }: DecisionItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const id = itemId(item);
@@ -279,9 +286,11 @@ export function DecisionItem({
       aria-describedby={
         itemDisposition.kind === "advisory"
           ? `advisory-rationale-${id}`
-          : locked
-            ? `locked-reason-${id}`
-            : undefined
+          : shadowOwner
+            ? `shadow-owner-explanation-${id}`
+            : locked
+              ? `locked-reason-${id}`
+              : undefined
       }
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
@@ -339,17 +348,62 @@ export function DecisionItem({
             </Label>
           </div>
         )}
-        {itemDisposition.kind === "inventory" && (
-          <div
-            role="gridcell"
-            className="inspectah-decision-row__badge"
-            data-testid="inventory-badge"
-          >
-            <Label color="grey" isCompact>
-              Inventory
-            </Label>
-          </div>
-        )}
+        {itemDisposition.kind === "inventory" &&
+          (shadowOwner ? (
+            <>
+              <div
+                role="gridcell"
+                className="inspectah-decision-row__badge"
+                data-testid="shadow-owner-badge"
+              >
+                <Label color="purple" isCompact>
+                  {shadowOwner.label}
+                </Label>
+              </div>
+              {shadowOwner.state && (
+                <div
+                  role="gridcell"
+                  className="inspectah-decision-row__badge"
+                  data-testid="shadow-owner-state"
+                >
+                  <Label
+                    color={shadowOwner.state.included ? "green" : "grey"}
+                    isCompact
+                  >
+                    {shadowOwner.state.text}
+                  </Label>
+                </div>
+              )}
+              {shadowOwner.target && onNavigateToOwner && (
+                <div role="gridcell" className="inspectah-decision-row__badge">
+                  <Button
+                    variant="link"
+                    isInline
+                    data-testid="shadow-owner-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNavigateToOwner(
+                        shadowOwner.target!.sectionId,
+                        shadowOwner.target!.itemId,
+                      );
+                    }}
+                  >
+                    Go to owner
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div
+              role="gridcell"
+              className="inspectah-decision-row__badge"
+              data-testid="inventory-badge"
+            >
+              <Label color="grey" isCompact>
+                Inventory
+              </Label>
+            </div>
+          ))}
         {bucketBadge && (
           <div
             role="gridcell"
@@ -416,6 +470,23 @@ export function DecisionItem({
           }}
         >
           {itemDisposition.rationale}
+        </div>
+      )}
+      {/* Where the decision went — the row itself offers no control */}
+      {shadowOwner && (
+        <div
+          id={`shadow-owner-explanation-${id}`}
+          className="inspectah-decision-row__helper-text"
+          data-testid={`shadow-owner-explanation-${id}`}
+          style={{
+            paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
+            paddingBottom: "var(--pf-t--global--spacer--xs)",
+            fontSize: "var(--pf-t--global--font--size--xs)",
+            color: "var(--pf-t--global--text--color--subtle)",
+            fontStyle: "italic",
+          }}
+        >
+          {shadowOwner.explanation}
         </div>
       )}
       {isExpanded && (

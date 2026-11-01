@@ -32,6 +32,7 @@ import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
+import { buildShadowOwners } from "./shadowOwner";
 import { Content } from "@patternfly/react-core";
 
 /** Maps section IDs to human-readable heading text (mirrors Sidebar labels). */
@@ -67,6 +68,8 @@ export interface MainContentProps {
   revealItemId?: string;
   /** Called with test ID when an action needs focus restoration after undo. */
   onSetUndoFocusTarget?: (testId: string | null) => void;
+  /** Navigate to a specific item in another section (shadowed config owners). */
+  onNavigateToItem?: (sectionId: string, itemId: string) => void;
   /** Toggle a language package environment include/exclude. */
   onToggleLangEnv?: (ecosystem: string, path: string) => void;
   /** Toggle a single unmanaged file include/exclude. */
@@ -128,6 +131,7 @@ export function MainContent({
   filterClearCounter = 0,
   revealItemId,
   onSetUndoFocusTarget,
+  onNavigateToItem,
   onToggleLangEnv,
   onToggleUnmanagedFile,
   onToggleUnmanagedGroup,
@@ -202,6 +206,22 @@ export function MainContent({
 
   const configItems = useMemo(
     () => (viewData ? toConfigItems(viewData.config_files) : []),
+    [viewData],
+  );
+
+  // A config entry whose path is also carried by Service Drop-ins or by a
+  // sysctl override is Inventory: the session refuses SetInclude on it.
+  // Resolving the owner here is what turns a dead "Inventory" badge into a
+  // pointer at the control that replaced it.
+  const shadowOwners = useMemo(
+    () =>
+      viewData
+        ? buildShadowOwners(
+            viewData.config_files,
+            viewData.service_dropins,
+            viewData.sysctls,
+          )
+        : new Map(),
     [viewData],
   );
 
@@ -540,8 +560,10 @@ export function MainContent({
             sectionLabel="Config Files"
             filterText={filterText}
             revealItemId={revealItemId}
+            shadowOwners={shadowOwners}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
+            onNavigateToOwner={onNavigateToItem}
           />
         )}
       </>

@@ -11,6 +11,7 @@ import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
 import type {
+  DropInDecisionDto,
   LanguagePackageEnv,
   ReferenceSection,
   UnmanagedFileGroup,
@@ -56,6 +57,12 @@ export interface GlobalSearchProps {
   userDecisions?: UserDecision[];
   /** Reference sections (services, containers, etc.). */
   contextSections: ReferenceSection[] | null;
+  /**
+   * Service drop-in decision rows. These are not reference-projection
+   * items, so nothing else in the index covers them — and a drop-in owns
+   * the decision for any config path it shadows.
+   */
+  serviceDropins?: DropInDecisionDto[];
   /** Language package environments from --include-language-packages. */
   languagePackageEnvs?: LanguagePackageEnv[];
   /** Unmanaged file groups from --include-unmanaged. */
@@ -107,6 +114,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       configItems,
       userDecisions,
       contextSections,
+      serviceDropins,
       languagePackageEnvs,
       unmanagedFileGroups,
       onNavigate,
@@ -182,6 +190,17 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         }
       }
 
+      if (serviceDropins) {
+        for (const di of serviceDropins) {
+          results.push({
+            sectionId: "services",
+            sectionLabel: SECTION_LABELS.services,
+            title: di.path,
+            itemId: di.path,
+          });
+        }
+      }
+
       if (languagePackageEnvs) {
         for (const env of languagePackageEnvs) {
           const envItemId = `${env.ecosystem}:${env.path}`;
@@ -221,6 +240,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       configItems,
       userDecisions,
       contextSections,
+      serviceDropins,
       languagePackageEnvs,
       unmanagedFileGroups,
     ]);
@@ -245,6 +265,11 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
           );
         }
       }
+      if (serviceDropins) {
+        for (const di of serviceDropins) {
+          map.set(di.path, `${di.path} ${di.unit}`.toLowerCase());
+        }
+      }
       if (contextSections) {
         for (const section of contextSections) {
           for (const ci of section.items) {
@@ -267,7 +292,13 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       // handles matching on their allItems titles directly.
 
       return map;
-    }, [packageItems, configItems, userDecisions, contextSections]);
+    }, [
+      packageItems,
+      configItems,
+      userDecisions,
+      contextSections,
+      serviceDropins,
+    ]);
 
     // Filter results
     const filtered = useMemo(() => {

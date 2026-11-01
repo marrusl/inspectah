@@ -95,6 +95,35 @@ survived a 26-task review cycle and two whole-branch reviews, and a
 hand-built fixture is free to encode a layout the collectors cannot
 produce.
 
+## Shadowing moves the control; the surfaces have to follow it
+
+Marking an entry `Inventory` only makes the bad state unreachable. On
+its own it leaves a row whose checkbox vanished and nothing naming what
+replaced it, which is a functional answer and not a usable one. Each
+surface has to name the new owner and route to it.
+
+Two things are easy to get wrong here:
+
+- **There is no subtitle to wait for.** `CONTROLLED_IN_SERVICE_DROP_INS`
+  is unreachable for a service shadow: only `project_ref_kernel_boot`
+  builds a `RefConfigRef`, and a drop-in's `ConfigCategory` is `Other`,
+  so it never enters `customizations_from_config`. Render the owner
+  label from `shadowed_by` directly.
+- **The owner row may not render at all.** A drop-in reaches
+  `services.drop_ins` whenever the file exists, but its unit reaches
+  `services.state_changes` only when the unit's enable state diverges
+  from its preset. A unit at its preset state therefore has a drop-in
+  and no parent service row, and the web `ServiceSection` nested
+  drop-ins under their parent, so the owning row rendered nowhere. That
+  is the common case, not an edge one. Before pointing an operator at an
+  owner, check the owner is on screen.
+
+The join key needs no new field: `service_dropins[].path` and
+`sysctls[].source` are the same strings
+`shadow_matching_config_entries` matched on. `shadowed_by` is
+`skip_serializing_if = "Option::is_none"`, so a TypeScript mirror
+declares it optional and never `null`.
+
 ## Known and unmeasured
 
 Only the service case above has been measured. A read of the source

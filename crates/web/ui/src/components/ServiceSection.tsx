@@ -53,6 +53,109 @@ function badgeTextForTriage(triage: TriageTag): string | null {
   return formatTriageReason(triage.primary_reason);
 }
 
+interface DropInRowProps {
+  dropin: DropInDecisionDto;
+  /** The parent service row is excluded, so this drop-in cannot apply. */
+  parentExcluded: boolean;
+  /** The parent service row is locked, which locks its drop-ins too. */
+  parentLocked: boolean;
+  isPending: boolean;
+  onToggle: (path: string, currentInclude: boolean) => void;
+}
+
+function DropInRow({
+  dropin: di,
+  parentExcluded,
+  parentLocked,
+  isPending,
+  onToggle,
+}: DropInRowProps) {
+  const diBucket = extractTriageBucket(di.triage);
+  const diBorder = LEVEL_BORDER[diBucket] ?? "none";
+  const diBadge = badgeTextForTriage(di.triage);
+  const diLevel = triageBucketToAttention(di.triage);
+  const diLocked = di.locked === true || parentLocked;
+  const disabled = parentExcluded || isPending || diLocked;
+
+  return (
+    <div
+      role="row"
+      aria-label={di.path}
+      aria-describedby={
+        diLocked ? `locked-reason-dropin-${di.path}` : undefined
+      }
+      tabIndex={diLocked ? 0 : -1}
+      data-testid={`dropin-item-${di.path}`}
+      data-locked={diLocked ? "true" : undefined}
+      className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
+      style={{
+        borderLeft: diBorder,
+        paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
+        opacity: parentExcluded ? 0.55 : 1,
+        transition: "opacity 200ms ease, background-color 150ms ease",
+      }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (disabled) return;
+        if (e.key === " " || e.key === "x") {
+          e.preventDefault();
+          onToggle(di.path, di.include);
+        }
+      }}
+    >
+      <div className="inspectah-service-dropin__connector" aria-hidden="true" />
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__toggle">
+          <input
+            type="checkbox"
+            role="checkbox"
+            id={`switch-dropin-${di.path}`}
+            checked={di.include}
+            onChange={() => onToggle(di.path, di.include)}
+            disabled={disabled}
+            aria-label={
+              diLocked
+                ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})`
+                : `Toggle ${di.path}`
+            }
+            aria-disabled={parentExcluded}
+            style={{ minWidth: 20, minHeight: 20 }}
+          />
+        </div>
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span style={{ fontSize: "var(--pf-t--global--font--size--sm)" }}>
+            {di.path}
+          </span>
+        </div>
+        {parentExcluded && !diLocked && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            <Label color="grey" data-testid={`dropin-excluded-badge-${di.path}`}>
+              Service excluded
+            </Label>
+          </div>
+        )}
+        {diLocked && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            id={`locked-reason-dropin-${di.path}`}
+            data-testid={`locked-badge-dropin-${di.path}`}
+          >
+            <Label color="grey" isCompact>
+              {di.attention_reason ?? "LOCKED"}
+            </Label>
+          </div>
+        )}
+        {!parentExcluded && !diLocked && diBadge && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ServiceSection({
   services,
   dropins,
@@ -62,6 +165,11 @@ export function ServiceSection({
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
   const dropinsByUnit = useMemo(() => groupDropinsByUnit(dropins), [dropins]);
+
+  const orphanDropins = useMemo(() => {
+    const units = new Set(services.map((s) => s.unit));
+    return dropins.filter((d) => !units.has(d.unit));
+  }, [services, dropins]);
 
   const handleToggleService = useCallback(
     (unit: string, currentInclude: boolean) => {
@@ -127,7 +235,7 @@ export function ServiceSection({
     [onViewUpdate, onMutationError],
   );
 
-  if (services.length === 0) {
+  if (services.length === 0 && dropins.length === 0) {
     return (
       <div className="inspectah-service-section" data-testid="service-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
@@ -296,123 +404,54 @@ export function ServiceSection({
             </div>
 
             {/* Drop-in children */}
-            {unitDropins.map((di) => {
-              const parentExcluded = !svc.include;
-              const diBucket = extractTriageBucket(di.triage);
-              const diBorder = LEVEL_BORDER[diBucket] ?? "none";
-              const diBadge = badgeTextForTriage(di.triage);
-              const diLevel = triageBucketToAttention(di.triage);
-              const diPending = pendingIds.has(`dropin:${di.path}`);
-              const diLocked = di.locked === true || svcLocked;
-              const disabled = parentExcluded || diPending || diLocked;
-
-              return (
-                <div
-                  key={di.path}
-                  role="row"
-                  aria-label={di.path}
-                  aria-describedby={
-                    diLocked ? `locked-reason-dropin-${di.path}` : undefined
-                  }
-                  tabIndex={diLocked ? 0 : -1}
-                  data-testid={`dropin-item-${di.path}`}
-                  data-locked={diLocked ? "true" : undefined}
-                  className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
-                  style={{
-                    borderLeft: diBorder,
-                    paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
-                    opacity: parentExcluded ? 0.55 : 1,
-                    transition:
-                      "opacity 200ms ease, background-color 150ms ease",
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget) return;
-                    if (disabled) return;
-                    if (e.key === " " || e.key === "x") {
-                      e.preventDefault();
-                      handleToggleDropin(di.path, di.include);
-                    }
-                  }}
-                >
-                  <div
-                    className="inspectah-service-dropin__connector"
-                    aria-hidden="true"
-                  />
-                  <div className="inspectah-decision-row__main">
-                    <div
-                      role="gridcell"
-                      className="inspectah-decision-row__toggle"
-                    >
-                      <input
-                        type="checkbox"
-                        role="checkbox"
-                        id={`switch-dropin-${di.path}`}
-                        checked={di.include}
-                        onChange={() => handleToggleDropin(di.path, di.include)}
-                        disabled={disabled}
-                        aria-label={
-                          diLocked
-                            ? `${di.path} (locked: ${di.attention_reason ?? "cannot toggle"})`
-                            : `Toggle ${di.path}`
-                        }
-                        aria-disabled={parentExcluded}
-                        style={{ minWidth: 20, minHeight: 20 }}
-                      />
-                    </div>
-                    <div
-                      role="gridcell"
-                      className="inspectah-decision-row__name"
-                    >
-                      <span
-                        style={{
-                          fontSize: "var(--pf-t--global--font--size--sm)",
-                        }}
-                      >
-                        {di.path}
-                      </span>
-                    </div>
-                    {parentExcluded && !diLocked && (
-                      <div
-                        role="gridcell"
-                        className="inspectah-decision-row__badge"
-                      >
-                        <Label
-                          color="grey"
-                          data-testid={`dropin-excluded-badge-${di.path}`}
-                        >
-                          Service excluded
-                        </Label>
-                      </div>
-                    )}
-                    {diLocked && (
-                      <div
-                        role="gridcell"
-                        className="inspectah-decision-row__badge"
-                        id={`locked-reason-dropin-${di.path}`}
-                        data-testid={`locked-badge-dropin-${di.path}`}
-                      >
-                        <Label color="grey" isCompact>
-                          {di.attention_reason ?? "LOCKED"}
-                        </Label>
-                      </div>
-                    )}
-                    {!parentExcluded && !diLocked && diBadge && (
-                      <div
-                        role="gridcell"
-                        className="inspectah-decision-row__badge"
-                      >
-                        <Label color={attentionLabelColor(diLevel)}>
-                          {diBadge}
-                        </Label>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {unitDropins.map((di) => (
+              <DropInRow
+                key={di.path}
+                dropin={di}
+                parentExcluded={!svc.include}
+                parentLocked={svcLocked}
+                isPending={pendingIds.has(`dropin:${di.path}`)}
+                onToggle={handleToggleDropin}
+              />
+            ))}
           </div>
         );
       })}
+
+      {/* Drop-ins whose unit produced no state change: a unit sitting at
+          its preset state never reaches `state_changes`, so without this
+          group the drop-in row — which owns the decision for a config
+          path it shadows — would render nowhere. */}
+      {orphanDropins.length > 0 && (
+        <div data-testid="dropin-orphans">
+          <h3 className="inspectah-service-section__orphan-heading">
+            Other drop-in overrides
+          </h3>
+          <p className="inspectah-service-section__orphan-note">
+            These units are at their preset state, so the drop-in is the whole
+            decision.
+          </p>
+          {[...groupDropinsByUnit(orphanDropins).entries()].map(
+            ([unit, unitDropins]) => (
+              <div key={unit} data-testid={`dropin-orphan-group-${unit}`}>
+                <div className="inspectah-service-section__orphan-unit">
+                  {unit}
+                </div>
+                {unitDropins.map((di) => (
+                  <DropInRow
+                    key={di.path}
+                    dropin={di}
+                    parentExcluded={false}
+                    parentLocked={false}
+                    isPending={pendingIds.has(`dropin:${di.path}`)}
+                    onToggle={handleToggleDropin}
+                  />
+                ))}
+              </div>
+            ),
+          )}
+        </div>
+      )}
     </div>
   );
 }
