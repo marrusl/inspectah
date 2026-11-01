@@ -1,5 +1,35 @@
 # Unmanaged /usr Presentation Implementation Plan
 
+> ## DO NOT EXECUTE AS WRITTEN — reanalysis required first (Mark, 2026-11-01)
+>
+> This plan was written 2026-08-15 against a tree that has moved
+> substantially since. **Mark: it needs a full reanalysis before anyone
+> attempts it.** Treat the task list as a record of intent, not as
+> instructions.
+>
+> **The schema numbers are deliberately left at 23**, which is wrong, so
+> that this header is the only thing that makes the plan look current.
+> Correcting them in isolation would make a stale document appear fresh
+> and invite exactly the execution this header exists to prevent.
+>
+> The concrete known drift, as of 2026-11-01:
+>
+> - § Schema Version Decision says "**This is settled: `SCHEMA_VERSION =
+>   23`, `MIN_SCHEMA = 23`**". The tree is at **25** — phase 0 took it to
+>   23, `0625ff6f` to 24, `26d1a8de` to 25. Executing Task 1 as written
+>   would write a **downgrade**.
+> - Task 1's fixture sweep and Task 13's rewrite of
+>   `process-docs/skills/snapshot-schema-versioning.md` were both
+>   overtaken by phase 0, which did the same work. See
+>   [[inspectah-two-plans-claim-schema-23]] in the backlog.
+> - The `/usr` walk itself is unchanged and still collected-but-unread,
+>   so the plan's **goal** stands. It is the task-level detail that has
+>   rotted.
+>
+> Reanalysis should start from the design note named below, which is
+> authoritative over this plan, and re-derive the tasks against the
+> current tree rather than patching this file.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give the already-complete /usr walk an output surface: an "Unmanaged /usr" section in refine (single-host and aggregate), the HTML report, the Containerfile export, and the audit report, with /usr entries treated as ordinary Actionable findings.
