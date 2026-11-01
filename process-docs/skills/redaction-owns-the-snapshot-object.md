@@ -10,6 +10,10 @@ This is the redaction form of the two-export-paths problem
 and it bites harder, because the symptom is silence rather than a failed
 build.
 
+**Read the last section first.** Four fields had this gap, and the
+principle written down here did not prevent the second, third and fourth
+of them. What prevents them is the pair of tests at the end.
+
 ## The instance
 
 `redact()` (`crates/pipeline/src/redaction/engine.rs`) walked
@@ -68,6 +72,14 @@ The count comparison rather than a `contains` keeps a second `redact()`
 pass over an already-scrubbed snapshot from inventing a finding, and
 keeps a credential-free manifest byte-identical through the pass.
 
+**Know what the marker proves.** It answers "did `scrub_url_auth` fire?"
+It does **not** answer "is this content now credential-free." A scrubber
+that locates the wrong span still fires, still emits the marker, and
+still raises a high-confidence finding over a file that kept its
+credential. `scrub_compose_secrets` has the same property with its own
+`<REDACTED>` marker. The finding means a scrub ran, not that the file is
+clean.
+
 ## A scrub that emits no finding is a silent one
 
 The scrubbers are rewriters, not detectors. When one runs, or fails to
@@ -97,12 +109,49 @@ Pair it with a credential-free fixture asserting the content comes back
 **byte-identical**, which is what catches the reformat-as-scrub
 confusion above.
 
-## Still open
+## The class, and the two tests that close it
 
-`containers.compose_files[].raw_content` has the same gap, measured:
-`redact()` does not visit it, the scan path writes no compose sidecar at
-all, and the refine export path scrubs it in that same local projection.
-A `POSTGRES_PASSWORD` in a collected compose file reaches
-`inspection-snapshot.json` in the clear. Unlike the manifest case the
-compose file usually carries an inspector hint, which keeps the state at
-`PartiallyRedacted`, but the content still ships.
+Four fields had this gap, found one at a time:
+
+| field | also reached | found by |
+|---|---|---|
+| `non_rpm_software.items[].manifest_files` | the tarball, `aggregate` | audit |
+| `containers.compose_files[].raw_content` | — | fixing the first |
+| `containers.quadlet_units[].content` | **the built image** | review of the first fix |
+| `scheduled_tasks.*.timer_content` | `config/etc/systemd/system/` | review of the first fix |
+| `scheduled_tasks.systemd_timers[].description` | the audit report | the sweep test below |
+
+None of these was a parsing bug. Each was a content-bearing field nobody
+wired into `redact()`. The quadlet one is the sharpest: a
+`COPY quadlet/ /etc/containers/systemd/` put an unscrubbed
+`Environment=DB_PASSWORD=` line into the built image, at a path systemd
+reads at boot, with the snapshot stamped `FullyRedacted` and no finding
+raised — and the identical content *is* scrubbed when it arrives as
+`services.drop_ins[].content`.
+
+Two tests in `crates/pipeline/src/render/mod.rs` now hold it shut, and
+they need each other:
+
+1. **`every_field_of_a_content_bearing_type_is_classified`** destructures
+   every content-bearing snapshot struct with no `..` in the pattern, so
+   **adding a field stops the build** until someone writes it into the
+   scrubbed or exempt group with a reason. A compile error, not a
+   convention.
+2. **`exactly_the_exempt_fields_survive_the_export`** plants a distinct
+   sentinel in every one of those fields, runs `redact()` and
+   `render_all()`, and asserts that the set surviving anywhere under the
+   export directory is **exactly** the declared exempt set.
+
+Assert only that scrubbed fields vanish and you get an untested half.
+That is precisely how `systemd_timers[].description` got through: it was
+classified exempt on the reasoning that a `Description=` is prose rather
+than a value, nothing planted a secret in it, and a real scan then put
+one in the snapshot and in the rendered audit report. **An exemption
+nothing exercises is an assumption, not a decision** — so the exempt
+fields are planted too, and the test fails if one of them stops
+surviving, which means someone wired it and the classification is stale.
+
+When adding a field to a snapshot type: the compile error tells you to
+classify it; if you classify it scrubbed, add a sentinel and wire the
+field in `redact()`; if you classify it exempt, add a sentinel anyway
+and say why in the comment beside it.

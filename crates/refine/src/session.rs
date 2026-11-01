@@ -10,7 +10,6 @@ use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
-use inspectah_pipeline::render::language_packages::{is_redaction_active, scrub_manifest_auth};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
@@ -4316,35 +4315,17 @@ pub fn render_refine_export(
     let audit = inspectah_pipeline::render::audit::render_audit(snap);
     std::fs::write(out.join("audit-report.md"), audit)?;
 
-    // 5. inspection-snapshot.json (projected)
-    //    When redaction is active, scrub manifest_files from NonRpmItems
-    //    so the exported JSON doesn't leak registry URLs and auth tokens
-    //    that were already scrubbed from the sidecar files above.
-    let snap_for_json = if is_redaction_active(snap) {
-        let mut redacted = snap.clone();
-        if let Some(ref mut nrs) = redacted.non_rpm_software {
-            for item in &mut nrs.items {
-                for (filename, content) in item.manifest_files.iter_mut() {
-                    *content = scrub_manifest_auth(filename, content);
-                }
-            }
-        }
-        // Scrub compose raw_content so the snapshot JSON doesn't leak
-        // unsanitized compose YAML that was already scrubbed in the
-        // compose/ sidecar files above.
-        if let Some(ref mut containers) = redacted.containers {
-            for cf in &mut containers.compose_files {
-                if let Some(ref raw) = cf.raw_content {
-                    cf.raw_content = Some(inspectah_core::redaction::scrub_compose_secrets(raw));
-                }
-            }
-        }
-        redacted
-    } else {
-        snap.clone()
-    };
-    let snap_json = serde_json::to_string_pretty(&snap_for_json)
-        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    // 5. inspection-snapshot.json
+    //    Serialized as-is. `redact()` owns manifest_files and compose
+    //    raw_content on the snapshot object itself, so this path and
+    //    `render::render_all` write the same bytes from the same state.
+    //    This used to carry a local projection that scrubbed both fields
+    //    here and nowhere else, which is exactly how the scan path came
+    //    to ship them raw. A second scrubber on one of two export paths
+    //    is the structure that produces that defect, so there is now
+    //    none rather than one with a comment on it.
+    let snap_json =
+        serde_json::to_string_pretty(snap).map_err(|e| RefineError::TarballError(e.to_string()))?;
     std::fs::write(out.join("inspection-snapshot.json"), snap_json)?;
 
     // 6. schema/snapshot.schema.json (placeholder -- same as scan.rs)

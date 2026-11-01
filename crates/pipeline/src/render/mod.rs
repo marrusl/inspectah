@@ -210,6 +210,440 @@ mod tests {
         );
     }
 
+    // ---------------------------------------------------------------
+    // The unvisited-field guard.
+    //
+    // Findings 1, 7, 8 and 9 were not parsing bugs. Each was a
+    // content-bearing field that nobody wired into `redact()`, and each
+    // shipped a credential into the export with the snapshot stamped
+    // `FullyRedacted` and no finding raised. A principle in a skill file
+    // did not prevent the second, third and fourth of them. These two
+    // tests are the thing that does.
+    // ---------------------------------------------------------------
+
+    /// Every field of every content-bearing snapshot type, classified.
+    ///
+    /// **This test exists to fail at compile time.** None of the patterns
+    /// below uses `..`, so adding a field to any of these structs stops
+    /// the build here until someone writes it into the right group. That
+    /// forces the decision the four findings were each missing: does this
+    /// new field carry host content, and if so who scrubs it?
+    ///
+    /// The runtime half is `no_content_bearing_field_survives_the_export`
+    /// below, which proves the `scrubbed` group is wired rather than just
+    /// declared. This half proves the groups are complete.
+    #[test]
+    fn every_field_of_a_content_bearing_type_is_classified() {
+        use inspectah_core::types::containers::{ComposeFile, QuadletUnit};
+        use inspectah_core::types::network::FirewallZone;
+        use inspectah_core::types::rpm::RepoFile;
+        use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
+        use inspectah_core::types::services::SystemdDropIn;
+
+        // `config.files[]` and `non_rpm_software.env_files[]`.
+        let ConfigFileEntry {
+            content: _,           // scrubbed: config pass
+            path: _,              // identifier
+            kind: _,              // classification
+            category: _,          // classification
+            rpm_va_flags: _,      // rpm verify flags
+            package: _,           // owning package name
+            diff_against_rpm: _,  // exempt: always None, deferred to Phase 3
+            disposition: _,       // decision
+            locked: _,            // decision
+            variant_selection: _, // decision
+            aggregate: _,         // fleet counts
+            attention_reason: _,  // generated prose
+            shadowed_by: _,       // cross-inspector link
+        } = ConfigFileEntry::default();
+
+        // `rpm.repo_files[]` and `rpm.gpg_keys[]`.
+        let RepoFile {
+            content: _, // scrubbed: repo-file pass
+            path: _,
+            is_default_repo: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = RepoFile::default();
+
+        // `services.drop_ins[]`.
+        let SystemdDropIn {
+            content: _, // scrubbed: drop-in pass
+            unit: _,
+            path: _,
+            disposition: _,
+            locked: _,
+            variant_selection: _,
+            aggregate: _,
+            attention_reason: _,
+            shadow_type: _,
+            shadow_rationale: _,
+        } = SystemdDropIn::default();
+
+        // `scheduled_tasks.generated_timer_units[]`.
+        let GeneratedTimerUnit {
+            command: _,         // scrubbed
+            service_content: _, // scrubbed
+            timer_content: _,   // scrubbed (Finding 9)
+            name: _,
+            cron_expr: _, // schedule expression, no value field
+            source_path: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = GeneratedTimerUnit::default();
+
+        // `scheduled_tasks.systemd_timers[]`.
+        let SystemdTimer {
+            exec_start: _,      // scrubbed
+            service_content: _, // scrubbed
+            timer_content: _,   // scrubbed (Finding 9)
+            name: _,
+            on_calendar: _, // schedule expression
+            description: _, // scrubbed: the one free-text line a .timer has
+            source: _,
+            path: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = SystemdTimer::default();
+
+        // `scheduled_tasks.at_jobs[]`.
+        let AtJob {
+            command: _, // scrubbed
+            file: _,
+            user: _,
+            working_dir: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = AtJob::default();
+
+        // `containers.quadlet_units[]`.
+        let QuadletUnit {
+            content: _, // scrubbed (Finding 8) — reaches the built image
+            path: _,
+            name: _,
+            image: _, // image reference; a registry credential would be
+            // in the pull secret, not here
+            disposition: _,
+            locked: _,
+            variant_selection: _,
+            aggregate: _,
+            ports: _,
+            volumes: _,
+            generated: _,
+        } = QuadletUnit::default();
+
+        // `containers.compose_files[]`.
+        let ComposeFile {
+            raw_content: _, // scrubbed (Finding 7)
+            path: _,
+            images: _, // service/image names, parsed structure
+            disposition: _,
+            locked: _,
+            variant_selection: _,
+            aggregate: _,
+        } = ComposeFile::default();
+
+        // `network.firewall_zones[]`.
+        let FirewallZone {
+            // EXEMPT, deliberately, and pinned by SENTINEL-FIREWALL in
+            // the sweep below. firewalld zone XML has no field that
+            // holds a credential: services, ports and rich rules are
+            // addresses and protocol names. Revisit if a zone ever
+            // carries an arbitrary value.
+            content: _,
+            path: _,
+            name: _,
+            services: _,
+            ports: _,
+            rich_rules: _,
+            disposition: _,
+            locked: _,
+            aggregate: _,
+        } = FirewallZone::default();
+
+        // `non_rpm_software.items[]`.
+        let NonRpmItem {
+            manifest_files: _, // scrubbed (Finding 1)
+            git_remote: _,     // scrubbed
+            // EXEMPT, pinned by SENTINEL-NRSCONTENT in the sweep below:
+            // no collector writes this field as of this commit. If one
+            // starts, it holds file content and must be scrubbed, and
+            // the sweep says so when it stops surviving.
+            content: _,
+            notes: _, // operator-authored in refine, not host content
+            path: _,
+            name: _,
+            method: _,
+            confidence: _,
+            disposition: _,
+            locked: _,
+            acknowledged: _,
+            lang: _,
+            r#static: _, // ELF linkage, not content
+            version: _,
+            shared_libs: _,
+            system_site_packages: _,
+            packages: _,
+            has_c_extensions: _,
+            git_commit: _,
+            git_branch: _,
+            rpm_filtered: _,
+            files: _,
+            aggregate: _,
+            review_status: _,
+        } = NonRpmItem::default();
+    }
+
+    /// Plant a distinct secret in every content-bearing field and assert
+    /// that the set which survives the export is **exactly** the set
+    /// declared exempt above.
+    ///
+    /// Both directions matter, and the second one is not decoration. A
+    /// field declared `scrubbed` that survives is a leak: this would have
+    /// failed for `manifest_files`, `raw_content`,
+    /// `quadlet_units[].content` and both `timer_content` fields. A field
+    /// declared exempt that stops surviving means somebody wired it in
+    /// and the classification above is now stale.
+    ///
+    /// Asserting only the first direction is what let
+    /// `SystemdTimer.description` through: it was classified exempt on
+    /// the reasoning that a `Description=` is prose rather than a value,
+    /// nothing planted a secret in it, and a real scan then put one in
+    /// the snapshot and in the rendered audit report. An exemption that
+    /// nothing exercises is an assumption, not a decision.
+    #[test]
+    fn exactly_the_exempt_fields_survive_the_export() {
+        use inspectah_core::types::config::ConfigFileKind;
+        use inspectah_core::types::containers::{ComposeFile, ContainerSection, QuadletUnit};
+        use inspectah_core::types::scheduled::{
+            AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+        };
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+
+        // Each sentinel is planted behind a keyword the pattern set
+        // recognises, so a visited field redacts it and an unvisited one
+        // ships it verbatim. The sentinel itself is what the sweep greps
+        // for, so it must not look like anything a renderer emits.
+        const SCRUBBED: &[&str] = &[
+            "SENTINEL-CONFIG",
+            "SENTINEL-REPOFILE",
+            "SENTINEL-GPGKEY",
+            "SENTINEL-DROPIN",
+            "SENTINEL-ENVFILE",
+            "SENTINEL-GENTIMER-SERVICE",
+            "SENTINEL-GENTIMER-TIMER",
+            "SENTINEL-GENTIMER-COMMAND",
+            "SENTINEL-SYSTIMER-SERVICE",
+            "SENTINEL-SYSTIMER-TIMER",
+            "SENTINEL-SYSTIMER-EXEC",
+            "SENTINEL-SYSTIMER-DESC",
+            "SENTINEL-ATJOB",
+            "SENTINEL-QUADLET",
+            "SENTINEL-COMPOSE",
+            "SENTINEL-MANIFEST",
+            "SENTINEL-GITREMOTE",
+        ];
+
+        // Declared exempt, and planted anyway so the exemption is a
+        // measured decision rather than an untested assumption. Each
+        // one's reason is recorded beside its field in
+        // `every_field_of_a_content_bearing_type_is_classified`.
+        const EXEMPT: &[&str] = &[
+            "SENTINEL-FIREWALL",   // firewalld zone XML holds no credential
+            "SENTINEL-NRSCONTENT", // no collector writes NonRpmItem.content
+        ];
+
+        let mut snap = test_snapshot();
+
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/app.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                content: "password=SENTINEL-CONFIG\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+
+        if let Some(ref mut rpm) = snap.rpm {
+            rpm.repo_files = vec![inspectah_core::types::rpm::RepoFile {
+                path: "/etc/yum.repos.d/corp.repo".into(),
+                content: "[corp]\npassword=SENTINEL-REPOFILE\n".into(),
+                ..Default::default()
+            }];
+            rpm.gpg_keys = vec![inspectah_core::types::rpm::RepoFile {
+                path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-corp".into(),
+                content: "password=SENTINEL-GPGKEY\n".into(),
+                ..Default::default()
+            }];
+        }
+
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "app.service".into(),
+                path: "/etc/systemd/system/app.service.d/override.conf".into(),
+                content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-DROPIN\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: "backup".into(),
+                source_path: "/etc/cron.d/backup".into(),
+                command: "/usr/bin/backup --password=SENTINEL-GENTIMER-COMMAND".into(),
+                service_content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-GENTIMER-SERVICE\n"
+                    .into(),
+                // A `.timer` has no ExecStart= or Environment=, so a
+                // secret in one realistically rides on Description=.
+                // Not a comment line: comment lines are exempt from
+                // scanning on every field, by design.
+                timer_content:
+                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-GENTIMER-TIMER\n"
+                        .into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            systemd_timers: vec![SystemdTimer {
+                name: "report".into(),
+                description: "report job api_key=SENTINEL-SYSTIMER-DESC".into(),
+                source: "local".into(),
+                path: "/etc/systemd/system/report.timer".into(),
+                exec_start: "/usr/bin/report --password=SENTINEL-SYSTIMER-EXEC".into(),
+                service_content: "[Service]\nEnvironment=API_TOKEN=SENTINEL-SYSTIMER-SERVICE\n"
+                    .into(),
+                timer_content:
+                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-SYSTIMER-TIMER\n"
+                        .into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            at_jobs: vec![AtJob {
+                file: "/var/spool/at/a0001".into(),
+                command: "/usr/bin/sync --password=SENTINEL-ATJOB".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![QuadletUnit {
+                path: "/etc/containers/systemd/app.container".into(),
+                name: "app.container".into(),
+                content: "[Container]\nImage=registry.example.com/app\n\
+                          Environment=DB_PASSWORD=SENTINEL-QUADLET\n"
+                    .into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            compose_files: vec![ComposeFile {
+                path: "opt/myapp/docker-compose.yml".into(),
+                raw_content: Some(
+                    "services:\n  db:\n    environment:\n      \
+                     POSTGRES_PASSWORD: SENTINEL-COMPOSE\n"
+                        .into(),
+                ),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let mut manifest_files = std::collections::HashMap::new();
+        manifest_files.insert(
+            "package-lock.json".to_string(),
+            "{\n  \"resolved\": \"https://u:SENTINEL-MANIFEST@npm.corp.example.com/x.tgz\"\n}\n"
+                .to_string(),
+        );
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "opt/webapp".into(),
+                name: "webapp".into(),
+                content: "password=SENTINEL-NRSCONTENT\n".into(),
+                method: inspectah_core::util::METHOD_NPM_LOCKFILE.into(),
+                git_remote: "https://u:SENTINEL-GITREMOTE@git.corp.example.com/webapp.git".into(),
+                manifest_files,
+                ..Default::default()
+            }],
+            env_files: vec![ConfigFileEntry {
+                path: "opt/webapp/.env".into(),
+                content: "DB_PASSWORD=SENTINEL-ENVFILE\n".into(),
+                ..Default::default()
+            }],
+        });
+
+        snap.network = Some(inspectah_core::types::network::NetworkSection {
+            firewall_zones: vec![inspectah_core::types::network::FirewallZone {
+                path: "/etc/firewalld/zones/corp.xml".into(),
+                name: "corp".into(),
+                content: "<zone>\n  <!-- password=SENTINEL-FIREWALL -->\n</zone>\n".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        // Every sentinel must actually be in the snapshot before
+        // redaction, or the sweep passes for the wrong reason.
+        let before = serde_json::to_string(&snap).unwrap();
+        for s in SCRUBBED.iter().chain(EXEMPT) {
+            assert!(before.contains(s), "fixture never planted {s}");
+        }
+
+        crate::redaction::engine::redact(&mut snap, &Default::default());
+
+        let context = RenderContext { target: None };
+        let dir = TempDir::new().unwrap();
+        render_all(&snap, &context, dir.path()).unwrap();
+
+        let mut files = Vec::new();
+        walk_files(dir.path(), &mut files);
+        let mut survived: Vec<String> = Vec::new();
+        for s in SCRUBBED.iter().chain(EXEMPT) {
+            let found: Vec<String> = files
+                .iter()
+                .filter(|p| std::fs::read_to_string(p).is_ok_and(|c| c.contains(*s)))
+                .map(|p| {
+                    p.strip_prefix(dir.path())
+                        .unwrap_or(p)
+                        .display()
+                        .to_string()
+                })
+                .collect();
+            if !found.is_empty() {
+                survived.push(format!("{s} in {}", found.join(", ")));
+            }
+        }
+
+        let leaked: Vec<&String> = survived
+            .iter()
+            .filter(|line| SCRUBBED.iter().any(|s| line.starts_with(s)))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "fields declared scrubbed reached the export unredacted:\n  {}",
+            leaked
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+
+        for s in EXEMPT {
+            assert!(
+                survived.iter().any(|line| line.starts_with(s)),
+                "{s} is declared exempt but no longer reaches the export. \
+                 Something now scrubs it: move it to the scrubbed group."
+            );
+        }
+    }
+
     /// Recursively collect every file written under `dir`.
     fn walk_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {

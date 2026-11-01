@@ -635,27 +635,34 @@ pub fn is_redaction_active(snap: &InspectionSnapshot) -> bool {
     )
 }
 
+/// Characters that end the authority component of a URL, per RFC 3986:
+/// the path, query and fragment delimiters. An `@` after any of these
+/// belongs to the path or query, not to the userinfo.
+const AUTHORITY_TERMINATORS: [char; 3] = ['/', '?', '#'];
+
 /// Scrub embedded auth credentials from a URL string.
 /// Replaces `://user:pass@host` with `://REDACTED@host` and
 /// `://token@host` with `://REDACTED@host`.
 fn scrub_url_auth(url: &str) -> String {
-    // Find the authority section: everything between :// and the next @.
-    // If there's no ://, or no @ after it, the URL has no embedded auth.
+    // Find the authority section: everything between :// and the end of
+    // the authority. If there's no ://, or no @ in the authority, the URL
+    // has no embedded auth.
     let Some(scheme_end) = url.find("://") else {
         return url.to_string();
     };
     let authority_start = scheme_end + 3;
     let rest = &url[authority_start..];
 
-    let Some(at_pos) = rest.find('@') else {
+    // RFC 3986: userinfo runs to the LAST `@` before the authority ends.
+    // A password may legitimately contain an `@`, and real clients read it
+    // that way (pip masks `deploy:p@s3cret` whole). Taking the first `@`
+    // instead left the tail of such a password in the output. Bounding the
+    // search by the terminator first is what makes `rfind` safe: an `@`
+    // in a query string must not be mistaken for the end of userinfo.
+    let authority_end = rest.find(AUTHORITY_TERMINATORS).unwrap_or(rest.len());
+    let Some(at_pos) = rest[..authority_end].rfind('@') else {
         return url.to_string();
     };
-
-    // Verify this @ is in the authority (before any /), not in a path or query.
-    let slash_pos = rest.find('/').unwrap_or(rest.len());
-    if at_pos > slash_pos {
-        return url.to_string();
-    }
 
     format!("{}://REDACTED@{}", &url[..scheme_end], &rest[at_pos + 1..])
 }

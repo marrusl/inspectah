@@ -19,6 +19,22 @@ use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp, ViewDirective};
 use std::collections::{BTreeSet, HashMap};
 
+/// Put a snapshot through the real redaction pass, the way `inspectah
+/// scan` does before a tarball is ever written.
+///
+/// `test_snapshot()` stamps `FullyRedacted` by hand. A snapshot carrying
+/// that label without having been through `redact()` is not a state
+/// production can reach: the scan path redacts before it writes, and the
+/// import path re-redacts anything not already labelled. Asserting that
+/// the *export* scrubs such a snapshot tested a projection that lived on
+/// the refine path alone, which is how the scan path came to ship these
+/// fields raw. The export now serializes what `redact()` produced, so
+/// the fixture has to produce it.
+fn redacted(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    inspectah_pipeline::redaction::engine::redact(&mut snap, &Default::default());
+    snap
+}
+
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
@@ -935,7 +951,7 @@ fn export_redacts_manifest_files_in_snapshot_json() {
     });
 
     // test_snapshot() sets FullyRedacted.
-    let session = RefineSession::new(snap);
+    let session = RefineSession::new(redacted(snap));
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-snapshot-json-test.tar.gz");
     session
@@ -1132,7 +1148,7 @@ fn export_redacts_package_lock_json_resolved_auth() {
         ..Default::default()
     });
 
-    let session = RefineSession::new(snap);
+    let session = RefineSession::new(redacted(snap));
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-lockfile-npm.tar.gz");
     session
@@ -1191,7 +1207,7 @@ fn export_redacts_gemfile_lock_auth() {
         ..Default::default()
     });
 
-    let session = RefineSession::new(snap);
+    let session = RefineSession::new(redacted(snap));
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-lockfile-gem.tar.gz");
     session

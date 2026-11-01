@@ -1,3 +1,4 @@
+use inspectah_core::redaction::scrub_compose_secrets;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
@@ -22,6 +23,11 @@ const REDACTION_ALLOWLIST: &[&str] = &["etc/pam.d/"];
 /// authority-embedded credential. Used to tell a real scrub apart from the
 /// incidental reformatting the manifest scrubbers also do.
 const URL_AUTH_REDACTED_MARKER: &str = "://REDACTED@";
+
+/// What `inspectah_core::redaction::scrub_compose_secrets` leaves in place
+/// of a secret value. Same job as `URL_AUTH_REDACTED_MARKER`: that scrubber
+/// also rewrites content it did not scrub, so the marker is the signal.
+const COMPOSE_REDACTED_MARKER: &str = "<REDACTED>";
 
 /// Returns true if `path` matches a known false-positive prefix.
 /// Handles both absolute and relative path forms.
@@ -612,6 +618,44 @@ fn extract_hint_keyword(reason: &str) -> Option<String> {
     None
 }
 
+/// Run the generic pattern pass over one content-bearing field, in place.
+///
+/// This is the block `redact()` repeats for every content field it visits:
+/// scan for findings, and when there are any, collect every pattern's
+/// matches, deduplicate overlapping spans, then replace in descending
+/// offset order so an earlier replacement cannot invalidate a later
+/// offset. Returns the findings, and leaves `content` untouched when
+/// there are none.
+///
+/// The older call sites above still inline this block; three of them
+/// use `registry.token_for` instead of `build_replacement`, which drops
+/// the URL structure a connection-string pattern's template preserves.
+/// This helper uses `build_replacement`, matching the `drop_ins` pass.
+fn scan_and_redact_field(
+    content: &mut String,
+    source_path: &str,
+    registry: &mut CounterRegistry,
+) -> Vec<RedactionFinding> {
+    let findings = scan_content(content, source_path);
+    if findings.is_empty() {
+        return findings;
+    }
+    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
+    for (idx, pat) in PATTERNS.iter().enumerate() {
+        for em in collect_eligible_matches(pat, content, Some(source_path)) {
+            all_matches.push((idx, em));
+        }
+    }
+    dedup_overlapping_matches(&mut all_matches);
+    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
+    for (pat_idx, em) in all_matches {
+        let kind_label = format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
+        let replacement = build_replacement(&PATTERNS[pat_idx], &em, registry, &kind_label);
+        content.replace_range(em.start..em.end, &replacement);
+    }
+    findings
+}
+
 /// Redact a snapshot in place, setting its `redaction_state` and populating `redactions`.
 ///
 /// - Scans config file contents and shadow entries for secrets.
@@ -822,6 +866,83 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 }
             }
         }
+
+        // Quadlet unit file content. This is raw systemd unit text, the
+        // same thing `services.drop_ins[].content` holds and is scanned
+        // for above, and it travels further than any other field here:
+        // `configtree` writes it to `quadlet/<name>` and the renderer
+        // emits `COPY quadlet/ /etc/containers/systemd/`, so an
+        // unredacted `Environment=DB_PASSWORD=…` line is copied into the
+        // built image at a path systemd reads at boot. The quadlet
+        // collector emits no redaction hints either, so nothing else
+        // holds the state down for it.
+        for unit in &mut containers.quadlet_units {
+            let source_path = if unit.path.is_empty() {
+                format!("quadlet:{}", unit.name)
+            } else {
+                unit.path.clone()
+            };
+            all_findings.extend(scan_and_redact_field(
+                &mut unit.content,
+                &source_path,
+                &mut registry,
+            ));
+        }
+
+        // Compose file content. Two passes, because neither alone covers
+        // the other's cases:
+        //
+        // 1. `scrub_compose_secrets` keys on its own name list and
+        //    rewrites credentials in a URL of any scheme, which the
+        //    generic patterns do not (they cover postgres, mongodb,
+        //    redis and jdbc only). It emits no finding of its own.
+        // 2. The generic pass detects and reports, and catches the case
+        //    that defeats pass 1 entirely: a connection string whose key
+        //    name carries no secret-like word, which also means the
+        //    collector's hint never fires for it either.
+        //
+        // Pass 1 runs first so the generic pass sees its output and can
+        // still report on a line it rewrote. Assigning only when the
+        // marker count rises keeps a secret-free compose file
+        // byte-identical, because `scrub_compose_secrets` normalizes
+        // trailing whitespace and appends a final newline regardless.
+        for compose in &mut containers.compose_files {
+            let Some(raw) = compose.raw_content.as_mut() else {
+                continue;
+            };
+            let scrubbed = scrub_compose_secrets(raw);
+            let compose_pass_fired = scrubbed.matches(COMPOSE_REDACTED_MARKER).count()
+                > raw.matches(COMPOSE_REDACTED_MARKER).count();
+            if compose_pass_fired {
+                *raw = scrubbed;
+            }
+
+            let generic_findings = scan_and_redact_field(raw, &compose.path, &mut registry);
+            let generic_pass_fired = !generic_findings.is_empty();
+            all_findings.extend(generic_findings);
+
+            // Only when pass 1 found something pass 2 did not report, so
+            // one secret does not produce two findings. A file with both
+            // kinds is reported once rather than twice; it is never
+            // reported as clean.
+            if compose_pass_fired && !generic_pass_fired {
+                all_findings.push(RedactionFinding {
+                    path: compose.path.clone(),
+                    source: "compose_env".into(),
+                    kind: RedactionKind::Inline,
+                    pattern: "compose_secret_value".into(),
+                    remediation:
+                        "Move the secret out of the compose file: use a compose secret, an \
+                         env_file outside the image, or a systemd credential"
+                            .to_string(),
+                    line: None,
+                    replacement: None,
+                    detection_method: DetectionMethod::Pattern,
+                    confidence: Some(Confidence::High),
+                    finding_kind: Some(FindingKind::Password),
+                });
+            }
+        }
     }
 
     // Scan scheduled task commands and service-unit content blobs for secrets.
@@ -873,6 +994,22 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     unit.service_content = content;
                     all_findings.extend(findings);
                 }
+            }
+
+            // GeneratedTimerUnit.timer_content — the sibling field of
+            // service_content above, and written to the same place:
+            // `configtree` stages it as
+            // `config/etc/systemd/system/<name>.timer`, which the config
+            // tree COPYs into the image. A `.timer` carries schedule
+            // rather than ExecStart, so the secret density is lower than
+            // a `.service`, but the destination is identical.
+            if !unit.timer_content.is_empty() {
+                let timer_path = format!("generated:{}.timer", unit.name);
+                all_findings.extend(scan_and_redact_field(
+                    &mut unit.timer_content,
+                    &timer_path,
+                    &mut registry,
+                ));
             }
         }
 
@@ -961,6 +1098,42 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     all_findings.extend(findings);
                 }
             }
+
+            // SystemdTimer.description — the unit's `Description=`,
+            // parsed out into its own field. Classified exempt as
+            // "prose, not a value" and measured otherwise: a `.timer`
+            // has no ExecStart= or Environment=, so `Description=` is
+            // the one line in it that carries free host-authored text,
+            // and it reaches both the snapshot JSON and the rendered
+            // audit report as a table cell.
+            if !timer.description.is_empty() {
+                let desc_path = if timer.path.is_empty() {
+                    format!("timer:{}", timer.name)
+                } else {
+                    timer.path.clone()
+                };
+                all_findings.extend(scan_and_redact_field(
+                    &mut timer.description,
+                    &desc_path,
+                    &mut registry,
+                ));
+            }
+
+            // SystemdTimer.timer_content — same sibling gap as on
+            // GeneratedTimerUnit, and `configtree` stages a local
+            // timer's text under config/etc/systemd/system/ as well.
+            if !timer.timer_content.is_empty() {
+                let timer_path = if timer.path.is_empty() {
+                    format!("timer:{}.timer", timer.name)
+                } else {
+                    timer.path.clone()
+                };
+                all_findings.extend(scan_and_redact_field(
+                    &mut timer.timer_content,
+                    &timer_path,
+                    &mut registry,
+                ));
+            }
         }
     }
 
@@ -1017,7 +1190,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 // removing anything. `scrub_url_auth` is the only operation
                 // in any of the five scrubbers that removes a credential,
                 // and it always leaves this marker behind, so a rise in the
-                // marker count is exactly "a credential was stripped."
+                // marker count is exactly "scrub_url_auth fired at least
+                // once." It is NOT a guarantee that the manifest is now
+                // credential-free: a scrubber that locates the wrong span
+                // still fires, and still emits this finding. See
+                // process-docs/skills/redaction-owns-the-snapshot-object.md.
                 if scrubbed.matches(URL_AUTH_REDACTED_MARKER).count()
                     > content.matches(URL_AUTH_REDACTED_MARKER).count()
                 {
