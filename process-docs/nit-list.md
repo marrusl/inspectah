@@ -1,6 +1,57 @@
-# inspectah Nit List
+# inspectah Nit List (retired 2026-11-01)
 
-Small output quality and polish items. Not worth individual specs — just fix when touching nearby code.
+> **This list is closed. Nothing below is maintained. Do not add to it,
+> and do not tick a box in it.**
+>
+> Every entry that is still true now has an item in the backlog, which
+> is the only place inspectah work is tracked. The list is kept in the
+> tree, rather than deleted, so that its history and the reasoning in
+> its entries stay findable.
+
+## Why it was retired
+
+It drifted. The list last moved on 2026-08-15 and carried 41 unchecked
+entries on the day it was closed. Reconciled against the code on
+2026-11-01:
+
+| What the reconciliation found | Entries |
+|---|---|
+| Already tracked by a backlog item, mostly inside a batch | 18 |
+| Still true, verified against the tree, now filed as 9 items | 18 |
+| Shipped, and the list never recorded it | 3 |
+| Sent to Mark, because dropping them is his call and not the reconciler's | 2 |
+
+Two of those failures are worth naming, because they are the reason a
+second list is not worth keeping:
+
+- **Shipped work stayed open.** The RPM upload feature sat unchecked
+  under "Repo Tier Model" for five months after it landed in June
+  (`0dcb02e1`, `1ed7f31f`). The list has no way to notice a commit.
+- **Live defects were invisible where they were filed.** The two
+  "Aggregate Aggregate Polish" entries are a `core` crate warning with
+  no threshold and a CLI output filename that repeats its own label.
+  Both were swept into a web UI batch. Neither has a UI surface, so
+  nobody working that batch would ever have found them. Both are still
+  true today.
+
+A backlog item carries its own state, its own evidence, and its own
+verification date. A parallel list carries none of those and goes stale
+between edits.
+
+## Where its contents went
+
+The surviving entries are in the backlog as individual items, not as a
+single sweep, for the reason above. The full reconciliation, with the
+evidence for every drop, is in the 2026-11-01 roadmap reconciliation
+note.
+
+---
+
+# Archived list, as of 2026-08-15
+
+**Not maintained. Retained for its history and its reasoning.**
+
+Small output quality and polish items. Not worth individual specs, just fix when touching nearby code.
 
 ## ~~Build Output Streaming~~ (DONE — 2026-05-30)
 
