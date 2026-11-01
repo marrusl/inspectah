@@ -10,7 +10,7 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
-use inspectah_core::types::config::ConfigShadow;
+use inspectah_core::types::config::{ConfigSection, ConfigShadow};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::progress::{InspectorOutcome, ProgressEvent};
 use inspectah_core::types::system::SourceSystem;
@@ -248,17 +248,28 @@ pub fn collect(
 /// A pass placed in `orchestrate.rs` would be skipped by the production
 /// scan.
 ///
-/// The only pass today: a config file whose path appears in
-/// `kernel_boot.sysctl_overrides[].source` had its keys collected into
-/// the synthesized sysctl drop-in, so the file is inventory and its
-/// content reaches the image through those keys alone.
+/// Each pass is a separate function and every one of them is called
+/// unconditionally. A pass's own missing-section checks are `return`s
+/// inside that pass, never inside this dispatcher: a pass written into
+/// the body of another pass would inherit that pass's early returns and
+/// silently not run on hosts that take them, which no test or gate here
+/// would catch.
+pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
+    shadow_sysctl_sources(snapshot);
+    shadow_service_owned_paths(snapshot);
+}
+
+/// A config file whose path appears in `kernel_boot.sysctl_overrides[].source`
+/// had its keys collected into the synthesized sysctl drop-in, so the
+/// file is inventory and its content reaches the image through those
+/// keys alone.
 ///
 /// The criterion is the override list, not the kernel/boot inspector's
 /// degraded flag. A failed sysctl collection returns `Err` and leaves
 /// `sysctl_overrides` empty, so a source path can appear in the list
 /// only when that collection succeeded; an inspector degraded for an
 /// unrelated reason changes nothing about which files are shadowed.
-pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
+fn shadow_sysctl_sources(snapshot: &mut InspectionSnapshot) {
     let Some(kernel_boot) = snapshot.kernel_boot.as_ref() else {
         return;
     };
@@ -270,17 +281,57 @@ pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
     if sources.is_empty() {
         return;
     }
-    let Some(config) = snapshot.config.as_mut() else {
+    shadow_matching_config_entries(snapshot.config.as_mut(), &sources, ConfigShadow::Sysctl);
+}
+
+/// A config file whose path appears in `services.drop_ins[].path` is
+/// materialized by the services renderer, under that entry's own
+/// decision, and the config tree subtracts the path unconditionally
+/// (`render::configtree::service_owned_paths`). Two live toggles over
+/// one carriage decision let an included config entry ship nothing and
+/// an excluded one ship anyway; marking the config entry inventory
+/// leaves exactly one decision and makes that subtraction correct by
+/// construction rather than by accident.
+///
+/// The criterion is the drop-in list, for the same reason the sysctl
+/// pass uses the override list: the services inspector returns `Err`
+/// when its collection fails, so a path can appear here only when the
+/// entry that owns it was really collected.
+fn shadow_service_owned_paths(snapshot: &mut InspectionSnapshot) {
+    let Some(services) = snapshot.services.as_ref() else {
+        return;
+    };
+    let owned: std::collections::HashSet<&str> = services
+        .drop_ins
+        .iter()
+        .map(|d| d.path.as_str())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if owned.is_empty() {
+        return;
+    }
+    shadow_matching_config_entries(snapshot.config.as_mut(), &owned, ConfigShadow::Services);
+}
+
+/// Mark every config entry whose path is in `owner_paths` as inventory
+/// shadowed by `shadow`.
+///
+/// An advisory lives in the same field, and shadowing would erase it:
+/// `config_advisories` matches on `FindingKind::Advisory`, so the
+/// operator would lose the warning that the file points outside /etc.
+/// An advisory entry is already never materialized, so the shadow would
+/// buy nothing in exchange.
+fn shadow_matching_config_entries(
+    config: Option<&mut ConfigSection>,
+    owner_paths: &std::collections::HashSet<&str>,
+    shadow: ConfigShadow,
+) {
+    let Some(config) = config else {
         return;
     };
     for entry in &mut config.files {
-        // An advisory lives in the same field, and shadowing would erase
-        // it: `config_advisories` matches on `FindingKind::Advisory`, so
-        // the operator would lose the warning that the file points
-        // outside /etc. An advisory entry is already never materialized,
-        // so the shadow would buy nothing in exchange.
-        if sources.contains(entry.path.as_str()) && !entry.disposition.is_advisory() {
-            entry.shadowed_by = Some(ConfigShadow::Sysctl);
+        if owner_paths.contains(entry.path.as_str()) && !entry.disposition.is_advisory() {
+            entry.shadowed_by = Some(shadow.clone());
             entry.disposition = FindingKind::inventory();
         }
     }
@@ -1881,8 +1932,10 @@ mod tests {
 mod finalize_tests {
     use super::*;
     use inspectah_core::types::AdvisoryType;
-    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::config::ConfigFileEntry;
+    use inspectah_core::types::finding::ShadowType;
     use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 
     const SOURCE: &str = "/etc/sysctl.d/99-driftify.conf";
 
@@ -1945,5 +1998,104 @@ mod finalize_tests {
             entry.shadowed_by, None,
             "an entry that is not shadowed must not claim to be"
         );
+    }
+
+    const DROP_IN: &str = "/etc/systemd/system/httpd.service.d/limits.conf";
+
+    /// A host with a service-owned config path and **no kernel/boot
+    /// section at all** — the state every one of the sysctl pass's three
+    /// early returns produces. A service pass written inside that pass's
+    /// body would not run here, and nothing downstream would say so.
+    #[test]
+    fn the_service_pass_runs_where_the_sysctl_pass_returns_early() {
+        let mut snap = InspectionSnapshot::new();
+        assert!(
+            snap.kernel_boot.is_none(),
+            "the premise of this test is the absent section"
+        );
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "httpd.service".into(),
+                path: DROP_IN.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: DROP_IN.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+
+        finalize_cross_inspector(&mut snap);
+
+        let entry = only_entry(&snap);
+        assert_eq!(entry.shadowed_by, Some(ConfigShadow::Services));
+        assert!(entry.disposition.is_inventory());
+    }
+
+    /// The mirror: a host with sysctl overrides and no services section
+    /// still gets the sysctl shadow. Neither pass gates the other.
+    #[test]
+    fn the_sysctl_pass_runs_where_the_service_pass_returns_early() {
+        let mut snap = snapshot_with(FindingKind::included());
+        assert!(snap.services.is_none());
+        finalize_cross_inspector(&mut snap);
+        assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Sysctl));
+    }
+
+    /// `services.drop_ins` holds full unit shadows as well as
+    /// `*.service.d/*.conf`, which is why the variant is named for the
+    /// owning set rather than for the field.
+    #[test]
+    fn a_full_unit_shadow_is_service_owned_too() {
+        const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                unit: "custom.service".into(),
+                path: FULL_SHADOW.into(),
+                shadow_type: Some(ShadowType::FullShadow),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: FULL_SHADOW.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+
+        finalize_cross_inspector(&mut snap);
+
+        assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Services));
+    }
+
+    /// An empty `path` is not a match for every config entry that also
+    /// has one. The services inspector writes `path` from a real
+    /// `read_dir` result, but a merged or hand-edited snapshot need not.
+    #[test]
+    fn an_empty_drop_in_path_shadows_nothing() {
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn::default()],
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: String::new(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+        });
+
+        finalize_cross_inspector(&mut snap);
+
+        assert_eq!(only_entry(&snap).shadowed_by, None);
+        assert!(only_entry(&snap).disposition.is_included());
     }
 }

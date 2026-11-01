@@ -250,6 +250,7 @@ pub fn config_ref_summary(entry: &RefConfigRef) -> String {
         Some(ConfigShadow::Sysctl) => {
             format!("merged into {SYNTHESIZED_SYSCTL_FILE}")
         }
+        Some(ConfigShadow::Services) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
         None => DECIDED_UNDER_CONFIG_FILES.to_string(),
     }
 }
@@ -257,6 +258,11 @@ pub fn config_ref_summary(entry: &RefConfigRef) -> String {
 /// Summary on a row that only points at the Configuration Files row
 /// where the file is actually decided.
 pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
+
+/// Summary on a row whose file is carried by a `services.drop_ins`
+/// entry. The Service Drop-ins row keyed by the same path is the one
+/// decision, and the Configuration Files row is inventory.
+pub const CONTROLLED_IN_SERVICE_DROP_INS: &str = "controlled in Service Drop-ins";
 
 #[derive(Debug, Clone)]
 pub struct RefSysctlOverride {

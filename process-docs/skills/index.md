@@ -10,6 +10,7 @@ development or review.
 | [two-wave-collection](two-wave-collection.md) | Inspector dispatch ordering, RPM runs first in Wave 1, Wave 2 gets `RpmState`; None vs Some(empty) contract |
 | [mock-executor-key-format](mock-executor-key-format.md) | Test infrastructure: command key is `cmd + " " + args.join(" ")`; mismatches silently return exit 127 |
 | [snapshot-schema-versioning](snapshot-schema-versioning.md) | Snapshot JSON schema version gating, serde annotation requirements, no backward compat |
+| [cross-inspector-shadow-passes](cross-inspector-shadow-passes.md) | One file in two inventories must have one live disposition; mark the other `Inventory` + `shadowed_by` in its own pass under `finalize_cross_inspector`, never inside a sibling pass's early returns; name the variant for the owning set; four-state tests over collector-produced input |
 | [rpm-epoch-normalization](rpm-epoch-normalization.md) | RPM epoch empty-string vs "0" equivalence across serialization boundaries |
 | [serde-include-default-ambiguity](serde-include-default-ambiguity.md) | `include` field deserialization requires pre-patch via `load_for_refine()` to distinguish absent from explicit-false |
 | [finding-disposition-serde-defaults](finding-disposition-serde-defaults.md) | `disposition: FindingKind` fields must name their serde default; field-level `serde(default)` ignores the struct's `Default` impl |

@@ -25,23 +25,41 @@ fn schema_22_is_rejected() {
     }
 }
 
+/// Schema 23 is the last version collected before the cross-inspector
+/// pass that marks a `services.drop_ins`-owned config entry as
+/// inventory. Loading one would mean re-rendering from the two-toggle
+/// state the pass exists to remove, with no field that distinguishes it,
+/// so `MIN_SCHEMA` rose alongside `SCHEMA_VERSION`.
 #[test]
-fn schema_23_round_trips() {
+fn schema_23_is_rejected() {
+    let json = r#"{"schema_version": 23, "meta": {}, "system_type": "package-mode",
+        "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+    match InspectionSnapshot::load(json) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 23),
+        other => panic!("expected UnsupportedVersion(23), got {other:?}"),
+    }
+}
+
+#[test]
+fn schema_24_round_trips() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         ..Default::default()
     };
     let json = serde_json::to_string(&snap).unwrap();
-    assert_eq!(InspectionSnapshot::load(&json).unwrap().schema_version, 23);
+    assert_eq!(
+        InspectionSnapshot::load(&json).unwrap().schema_version,
+        SCHEMA_VERSION
+    );
 }
 
-/// A schema 23 snapshot does not serialize the lists the config walker
+/// A schema 24 snapshot does not serialize the lists the config walker
 /// now owns. Serde ignores unknown fields, so a 23 payload that still
 /// carries one of these keys loads and drops it; that is accepted and is
 /// not what this asserts. What it asserts is that nothing we write puts
 /// the duplicate back on the wire.
 #[test]
-fn schema_23_does_not_serialize_the_relocated_section_lists() {
+fn schema_24_does_not_serialize_the_relocated_section_lists() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         kernel_boot: Some(KernelBootSection::default()),
@@ -49,7 +67,10 @@ fn schema_23_does_not_serialize_the_relocated_section_lists() {
         ..Default::default()
     };
     let json = serde_json::to_string(&snap).unwrap();
-    assert_eq!(InspectionSnapshot::load(&json).unwrap().schema_version, 23);
+    assert_eq!(
+        InspectionSnapshot::load(&json).unwrap().schema_version,
+        SCHEMA_VERSION
+    );
 
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     let kernel_boot = value["kernel_boot"]

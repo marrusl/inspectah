@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 23;
+pub const SCHEMA_VERSION: u32 = 24;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -100,7 +100,15 @@ impl InspectionSnapshot {
     }
 
     /// Minimum accepted schema version.
-    const MIN_SCHEMA: u32 = 23;
+    ///
+    /// Held equal to `SCHEMA_VERSION`: the loading contract is an exact
+    /// match, not a rolling window. Schema 24 marks a config entry whose
+    /// path a `services.drop_ins` entry owns as inventory, and that
+    /// annotation is written once, at collect time. A schema-23 snapshot
+    /// is precisely a snapshot collected before that pass existed, so
+    /// accepting one would mean loading the unfixed two-toggle state and
+    /// re-rendering from it with no way to tell it apart.
+    const MIN_SCHEMA: u32 = 24;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -229,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 24, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 25, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),
