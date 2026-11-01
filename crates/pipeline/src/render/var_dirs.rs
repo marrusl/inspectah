@@ -20,12 +20,21 @@ use inspectah_core::types::storage::{
 use super::service_intent::is_package_installable;
 
 /// A backing names a unit by filename, so the paths that could be that
-/// unit are narrowed to the systemd unit directories before matching.
-const SYSTEMD_DIR_MARKER: &str = "/systemd/";
+/// unit are narrowed before matching.
+///
+/// Narrowed to the *system* unit directories, not to every directory
+/// with `systemd` in it. A `StateDirectory=` verdict came from a unit
+/// the system manager runs, and systemd searches `.../systemd/user/`
+/// only for units a per-user manager runs: the two have separate search
+/// paths, so a user unit sharing the filename shares nothing else and
+/// cannot take over when the system unit is dropped. Treating it as
+/// evidence is the same mistake as matching on the filename alone, one
+/// level in.
+const SYSTEM_UNIT_DIR_MARKER: &str = "/systemd/system/";
 
-/// Unit directory systemd gives precedence to over the vendor copy of
-/// the same filename.
-const ETC_UNIT_PREFIX: &str = "/etc/systemd/";
+/// The system unit directory that takes precedence over the vendor copy
+/// of the same filename.
+const ETC_UNIT_PREFIX: &str = "/etc/systemd/system/";
 
 /// What the export can say about one `/var` directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,9 +239,10 @@ impl<'a> Evidence<'a> {
     }
 }
 
-/// The filename of a path under a systemd unit directory.
+/// The filename of a path under a systemd *system* unit directory, and
+/// `None` for anything else, user units included.
 fn unit_filename(path: &str) -> Option<&str> {
-    if !path.contains(SYSTEMD_DIR_MARKER) {
+    if !path.contains(SYSTEM_UNIT_DIR_MARKER) {
         return None;
     }
     Path::new(path).file_name()?.to_str()

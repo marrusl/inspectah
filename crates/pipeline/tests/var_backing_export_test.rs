@@ -463,6 +463,53 @@ fn a_packaged_etc_override_does_not_mask_its_own_vendor_unit() {
     );
 }
 
+/// A user unit is not a system unit, however identical the filename.
+/// systemd searches `.../systemd/user/` only for units the per-user
+/// manager runs, so a user unit cannot take over when the `/etc` system
+/// unit is excluded, and the directory a `StateDirectory=` verdict came
+/// from simply will not exist in the target. Matching on the filename
+/// plus "some systemd directory" is the same mistake the fallback was
+/// written to fix, one level in.
+#[test]
+fn a_user_unit_is_not_the_system_unit_that_survives_an_exclusion() {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/myapp",
+            VarDirBacking::StateDirectory {
+                unit: "myapp.service".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![config_file("/etc/systemd/system/myapp.service", false)],
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![package("myapp", true)],
+        file_ownership: vec![FileOwnershipEntry {
+            package_name: "myapp".into(),
+            paths: vec!["/usr/lib/systemd/user/myapp.service".into()],
+        }],
+        ..Default::default()
+    });
+
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Provision {
+            lost: Some("myapp.service".into())
+        },
+        "a user unit is no evidence that the system unit reaches the image"
+    );
+    assert!(
+        var_conf(&snap).contains("d /var/lib/myapp 0755 root root -"),
+        "and the export has to make the directory itself"
+    );
+}
+
 #[test]
 fn rpm_owned_absent_from_base_and_install_set_is_provisioned() {
     let mut snap = InspectionSnapshot::new();
