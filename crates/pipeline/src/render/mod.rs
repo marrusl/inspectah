@@ -148,6 +148,7 @@ mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use tempfile::TempDir;
 
@@ -207,6 +208,67 @@ mod tests {
             dir.path().join("config").exists(),
             "config/ directory missing"
         );
+    }
+
+    /// Recursively collect every file written under `dir`.
+    fn walk_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The export is only as redacted as its leakiest artifact, so this
+    /// asserts over every file under the output directory rather than over
+    /// one named file. The leak this replaces was a sidecar that scrubbed
+    /// correctly next to an `inspection-snapshot.json` that did not.
+    #[test]
+    fn no_export_artifact_carries_a_manifest_credential() {
+        const FIXTURE_CREDENTIAL: &str = "s3cret";
+
+        let mut manifest_files = std::collections::HashMap::new();
+        manifest_files.insert(
+            "package-lock.json".to_string(),
+            format!(
+                "{{\n  \"packages\": {{\n    \"node_modules/x\": {{\n      \"resolved\": \"https://deploy:{FIXTURE_CREDENTIAL}@npm.corp.example.com/x.tgz\"\n    }}\n  }}\n}}\n"
+            ),
+        );
+        let mut snap = test_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/srv/web".into(),
+                name: "webapp".into(),
+                method: inspectah_core::util::METHOD_NPM_LOCKFILE.into(),
+                manifest_files,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        crate::redaction::engine::redact(&mut snap, &Default::default());
+
+        let context = RenderContext { target: None };
+        let dir = TempDir::new().unwrap();
+        render_all(&snap, &context, dir.path()).unwrap();
+
+        let mut files = Vec::new();
+        walk_files(dir.path(), &mut files);
+        assert!(!files.is_empty(), "export produced no artifacts");
+
+        for path in &files {
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue; // binary artifact, nothing to match
+            };
+            assert!(
+                !content.contains(FIXTURE_CREDENTIAL),
+                "{} carries the fixture credential",
+                path.display()
+            );
+        }
     }
 
     #[test]

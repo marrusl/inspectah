@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::redaction::patterns::{PATTERNS, SecretPattern, scan_shadow};
+use crate::render::language_packages::scrub_manifest_auth;
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
@@ -16,6 +17,11 @@ use crate::redaction::patterns::{PATTERNS, SecretPattern, scan_shadow};
 /// Listed WITHOUT a leading slash — the check handles both absolute
 /// (`/etc/pam.d/...`) and relative (`etc/pam.d/...`) forms.
 const REDACTION_ALLOWLIST: &[&str] = &["etc/pam.d/"];
+
+/// What `render::language_packages::scrub_url_auth` leaves in place of an
+/// authority-embedded credential. Used to tell a real scrub apart from the
+/// incidental reformatting the manifest scrubbers also do.
+const URL_AUTH_REDACTED_MARKER: &str = "://REDACTED@";
 
 /// Returns true if `path` matches a known false-positive prefix.
 /// Handles both absolute and relative path forms.
@@ -987,6 +993,53 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         // Git remote URLs — scan for embedded credentials (user:pass@host
         // and token-as-username ://token@host patterns)
         for item in &mut nrs.items {
+            // Language-package manifests (requirements.txt, package.json,
+            // package-lock.json, Gemfile, Gemfile.lock) carry registry URLs
+            // that can embed auth credentials. Scrub them on the snapshot
+            // object here rather than where each export path writes its
+            // sidecar: the snapshot itself is what goes into
+            // inspection-snapshot.json, the tarball, and `aggregate`, so
+            // owning it in redact() is what makes every export path inherit
+            // one decision instead of each one re-solving it.
+            //
+            // The generic regex pass is deliberately not used here: PATTERNS
+            // has no `https://user:pass@host` rule (only postgres/mongodb/
+            // redis/jdbc), so it would neither detect nor scrub a private
+            // registry credential. scrub_manifest_auth is the authority for
+            // this content.
+            for (filename, content) in item.manifest_files.iter_mut() {
+                let scrubbed = scrub_manifest_auth(filename, content);
+                // Detect on the marker, not on string inequality. Every
+                // scrubber rebuilds its content through `lines()` +
+                // `join("\n")`, which drops a trailing newline, and
+                // `scrub_requirements_txt` additionally re-emits its line
+                // from the trimmed form — both change the string without
+                // removing anything. `scrub_url_auth` is the only operation
+                // in any of the five scrubbers that removes a credential,
+                // and it always leaves this marker behind, so a rise in the
+                // marker count is exactly "a credential was stripped."
+                if scrubbed.matches(URL_AUTH_REDACTED_MARKER).count()
+                    > content.matches(URL_AUTH_REDACTED_MARKER).count()
+                {
+                    all_findings.push(RedactionFinding {
+                        path: format!("{}/{}", item.path.trim_end_matches('/'), filename),
+                        source: "manifest_auth".into(),
+                        kind: RedactionKind::Inline,
+                        pattern: "manifest_registry_auth".into(),
+                        remediation:
+                            "Remove embedded credentials from the registry URL; use a credential \
+                             helper or a machine-local netrc instead of inlining them in the manifest"
+                                .to_string(),
+                        line: None,
+                        replacement: None,
+                        detection_method: DetectionMethod::Pattern,
+                        confidence: Some(Confidence::High),
+                        finding_kind: Some(FindingKind::Password),
+                    });
+                    *content = scrubbed;
+                }
+            }
+
             if !item.git_remote.is_empty() {
                 let (masked, finding) = mask_proxy_credentials(&item.git_remote, &item.path);
                 if let Some(f) = finding {
@@ -1297,6 +1350,7 @@ mod tests {
     use super::*;
     use inspectah_core::types::FindingKind as SnapshotFindingKind;
     use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
     use inspectah_core::types::users::UserGroupSection;
 
     // -- scan_content tests (plan steps 1-3 + 5) --
@@ -2893,6 +2947,234 @@ mod tests {
             mongo_findings.len(),
             1,
             "MongoDB URI must produce exactly one finding"
+        );
+    }
+
+    // --- Language-package manifest scrubbing in redact() ---
+
+    /// Build a snapshot carrying one non-RPM item per manifest format, each
+    /// manifest holding a credentialed registry URL.
+    fn snapshot_with_credentialed_manifests() -> InspectionSnapshot {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "/srv/py",
+                "requirements.txt",
+                "--index-url https://deploy:s3cret@pypi.corp.example.com/simple\nflask==3.0.0\n",
+            ),
+            (
+                "/srv/web",
+                "package.json",
+                "{\n  \"name\": \"webapp\",\n  \"publishConfig\": {\n    \"registry\": \"https://deploy:s3cret@npm.corp.example.com/\"\n  }\n}\n",
+            ),
+            (
+                "/srv/lock",
+                "package-lock.json",
+                "{\n  \"packages\": {\n    \"node_modules/x\": {\n      \"resolved\": \"https://deploy:s3cret@npm.corp.example.com/x.tgz\"\n    }\n  }\n}\n",
+            ),
+            (
+                "/srv/ruby",
+                "Gemfile",
+                "source 'https://deploy:s3cret@gems.corp.example.com'\ngem 'rails'\n",
+            ),
+            (
+                "/srv/ruby",
+                "Gemfile.lock",
+                "GEM\n  remote: https://deploy:s3cret@gems.corp.example.com/\n  specs:\n",
+            ),
+        ];
+
+        let items = cases
+            .iter()
+            .map(|(path, filename, content)| {
+                let mut manifest_files = HashMap::new();
+                manifest_files.insert(filename.to_string(), content.to_string());
+                NonRpmItem {
+                    path: path.to_string(),
+                    manifest_files,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let mut snap = InspectionSnapshot::new();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items,
+            ..Default::default()
+        });
+        snap
+    }
+
+    #[test]
+    fn redact_scrubs_manifest_credentials_in_every_format() {
+        let mut snap = snapshot_with_credentialed_manifests();
+        redact(&mut snap, &RedactOptions::default());
+
+        for item in &snap.non_rpm_software.as_ref().unwrap().items {
+            for (filename, content) in &item.manifest_files {
+                assert!(
+                    !content.contains("s3cret"),
+                    "{filename} still carries the credential after redact(): {content}"
+                );
+                assert!(
+                    content.contains("REDACTED"),
+                    "{filename} must carry the redaction marker: {content}"
+                );
+            }
+        }
+    }
+
+    /// The scrub has to be visible in the artifacts the operator reads.
+    /// A silent rewrite leaves `secrets-review.md` empty and the README
+    /// reporting `Secrets redacted | 0` over a credential that was found.
+    #[test]
+    fn redact_emits_a_finding_for_each_scrubbed_manifest() {
+        let mut snap = snapshot_with_credentialed_manifests();
+        redact(&mut snap, &RedactOptions::default());
+
+        let manifest_findings: Vec<&RedactionFinding> = snap
+            .redactions
+            .iter()
+            .filter(|f| f.source == "manifest_auth")
+            .collect();
+        assert_eq!(
+            manifest_findings.len(),
+            5,
+            "one finding per credentialed manifest, got {manifest_findings:?}"
+        );
+        for f in &manifest_findings {
+            assert_eq!(f.kind, RedactionKind::Inline);
+            assert_eq!(f.confidence, Some(Confidence::High));
+            assert!(
+                !f.path.is_empty(),
+                "the finding must name the manifest it came from"
+            );
+        }
+    }
+
+    /// `FullyRedacted` is the one state `refine`'s import path trusts to
+    /// skip re-redaction, so it must only be reachable once the manifests
+    /// really are scrubbed. High-confidence findings are resolved findings,
+    /// which keeps the label honest rather than merely unchanged.
+    #[test]
+    fn redact_keeps_fully_redacted_honest_for_manifests() {
+        let mut snap = snapshot_with_credentialed_manifests();
+        redact(&mut snap, &RedactOptions::default());
+
+        assert!(
+            matches!(
+                snap.redaction_state,
+                Some(RedactionState::FullyRedacted { .. })
+            ),
+            "state was {:?}",
+            snap.redaction_state
+        );
+    }
+
+    /// A manifest with no embedded credential must not inflate the count,
+    /// and must come out byte-identical. The scrubbers rewrite content that
+    /// they did not scrub — they drop the trailing newline, and
+    /// `scrub_requirements_txt` re-emits its line from the trimmed form —
+    /// so "the string changed" is not evidence that a credential was found.
+    #[test]
+    fn redact_leaves_a_credential_free_manifest_untouched() {
+        let clean: &[(&str, &str)] = &[
+            (
+                "requirements.txt",
+                "--index-url https://pypi.org/simple\nflask==3.0.0\n",
+            ),
+            // Indented and trailing-whitespace forms: reformatted by the
+            // scrubber, but nothing was removed.
+            (
+                "requirements.txt",
+                "  --index-url https://pypi.org/simple  \nflask==3.0.0",
+            ),
+            (
+                "package.json",
+                "{\n  \"registry\": \"https://registry.npmjs.org/\"\n}\n",
+            ),
+            ("Gemfile", "source 'https://rubygems.org'\ngem 'rails'\n"),
+        ];
+
+        for (filename, content) in clean {
+            let mut manifest_files = HashMap::new();
+            manifest_files.insert(filename.to_string(), content.to_string());
+            let mut snap = InspectionSnapshot::new();
+            snap.non_rpm_software = Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    path: "/srv/py".into(),
+                    manifest_files,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+
+            redact(&mut snap, &RedactOptions::default());
+
+            assert!(
+                snap.redactions.iter().all(|f| f.source != "manifest_auth"),
+                "clean {filename} must not produce a finding: {:?}",
+                snap.redactions
+            );
+            assert_eq!(
+                &snap.non_rpm_software.as_ref().unwrap().items[0].manifest_files[*filename],
+                content,
+                "clean {filename} must come out byte-identical"
+            );
+        }
+    }
+
+    /// Re-running `redact()` on an already-scrubbed snapshot must not
+    /// invent a second finding for the same credential.
+    #[test]
+    fn redact_is_idempotent_over_manifest_findings() {
+        let mut snap = snapshot_with_credentialed_manifests();
+        redact(&mut snap, &RedactOptions::default());
+        let first = snap
+            .redactions
+            .iter()
+            .filter(|f| f.source == "manifest_auth")
+            .count();
+
+        redact(&mut snap, &RedactOptions::default());
+        let second = snap
+            .redactions
+            .iter()
+            .filter(|f| f.source == "manifest_auth")
+            .count();
+
+        assert_eq!(first, 5);
+        assert_eq!(second, 0, "a second pass has nothing left to scrub");
+    }
+
+    /// `METHOD_NPM_MANIFEST` items never get a sidecar
+    /// (`write_language_package_manifests` routes them to `continue`), so
+    /// the snapshot JSON is their only copy in the export. Scrubbing in
+    /// `redact()` is what covers them; a sidecar-time scrub never would.
+    #[test]
+    fn redact_covers_manifest_only_items_that_get_no_sidecar() {
+        let mut manifest_files = HashMap::new();
+        manifest_files.insert(
+            "package.json".to_string(),
+            "{\n  \"registry\": \"https://deploy:s3cret@npm.corp.example.com/\"\n}\n".to_string(),
+        );
+        let mut snap = InspectionSnapshot::new();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                path: "/srv/web".into(),
+                method: inspectah_core::util::METHOD_NPM_MANIFEST.to_string(),
+                manifest_files,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        redact(&mut snap, &RedactOptions::default());
+
+        let content =
+            &snap.non_rpm_software.as_ref().unwrap().items[0].manifest_files["package.json"];
+        assert!(
+            !content.contains("s3cret"),
+            "npm-manifest item must be scrubbed too: {content}"
         );
     }
 }
