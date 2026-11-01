@@ -1,11 +1,11 @@
 ---
 name: full-workspace-verification-gates
-description: Running the full clippy/test/frontend gate suite correctly — which clippy invocation the hook actually runs versus what a stricter "clean" acceptance needs, why `-D clippy::all --all-targets` cannot pass here, how long a clean full-workspace run legitimately takes, and how to tell a slow run from a real hang.
+description: Running the full clippy/test/frontend gate suite correctly — which clippy invocation the hook actually runs versus what a stricter "clean" acceptance needs, why `-D clippy::all --all-targets` cannot pass here, how to count the clippy baseline without overcounting, measured timings for every gate (all under a minute) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
 ---
 
 # Running the Full Verification Gate Suite
 
-Four things that have each already produced a wrong conclusion in this
+Six things that have each already produced a wrong conclusion in this
 repo's review history.
 
 ## 1. The pre-commit hook and CI do not gate what "clippy clean" means here
@@ -61,38 +61,98 @@ When the baseline changes, update it in one place
 states it) and re-derive the new number with the `^warning: [a-z]`
 form, not by eyeballing `-->` counts.
 
-## 3. A clean full-workspace run takes 20-30 minutes, and a fresh test binary idles before its first test
+## 3. The gates are fast. A slow run is a symptom, not a budget
 
-`cargo test --workspace` compiles and links a separate test binary per
-integration test file. Each freshly linked binary has a real startup
-cost — 60 to 120 seconds idle before its first test result prints —
-which is normal, not a hang. A session that reads "nothing printed for
-90 seconds" and concludes the run is stuck has mistaken linker/startup
-latency for a stall at least twice in this repo's history.
+Every gate in this workspace finishes in **seconds to about a minute**.
+Measured 2026-10-31 on an Apple M3 Pro (12 cores, 36 GB), macOS 27.2,
+`rustc 1.99.1 (58cf8f9c3 2026-10-13)`, workspace at
+`phase-0-refine-ui-fixup`:
 
-**The converse is just as real: an actual hang looks identical for
-25 minutes.** Do not resolve the ambiguity by waiting longer or by
-re-running the command. Check `ps` for the process and read its
-**elapsed time**, not just whether it exists:
+| command | starting state | wall clock |
+|---|---|---|
+| `cargo clean` | 9.4 GB target | 8s |
+| `cargo test --workspace --no-run` | after `cargo clean` (269 crates) | **66s** |
+| `cargo test --workspace` | binaries just linked, first execution | **29s**, 3010 tests |
+| `cargo test --workspace` | fully warm, nothing to rebuild | 11s |
+| `cargo fmt --check` | any | 1s |
+| `cargo clippy --workspace -- -W clippy::all` | first clippy after a clean build | 25s |
+| `cargo clippy --workspace -- -W clippy::all` | warm | 3s |
+| `cargo clippy -p inspectah-core` | warm | 5s |
+| all three hook gates in sequence | warm, nothing changed | 11s |
+| all three hook gates in sequence | after touching `crates/core/src/lib.rs` — every downstream crate rebuilds and every test binary relinks | **47s** |
+
+An independent measurement the same day on the same machine got 51s for
+the cold `--no-run`, 28-50s for a warm suite, 14s for workspace clippy
+and 65s for the hook. Treat the two sets together as the range: **a
+from-scratch rebuild plus the full suite is one to two minutes, and the
+hook on a realistic change is under a minute.** The spread between the
+two runs is cache state and machine load, nothing structural.
+
+There is no per-binary idle. The row that matters is the third one: the
+very first execution of all **77** freshly linked test binaries, none of
+them ever run before, is 29 seconds for all 3010 tests together — well
+under half a second of binary, on average, for the thing that was
+reported as 60-120 seconds of idle each.
+
+**So a run that has not returned in a couple of minutes is not slow, it
+is wrong.** Do not wait it out and do not re-run it. Check `ps` and read
+the **elapsed time**:
 
 ```bash
 ps -eo pid,etime,command | grep -E "cargo|rustc"
 ```
 
-A `rustc` child actively present with a plausible elapsed time next to
-a `cargo test` parent is compiling, not stuck. If the elapsed time
-climbs well past the 20-30 minute budget with no new child processes
-appearing, that is the actual signal to investigate, not the silence
-itself.
+A `rustc` child with a plausible elapsed time under a `cargo test`
+parent is compiling. No child process and a parent at 5 minutes is a
+hang — most likely a command blocked on stdin (see point 5). Diagnose
+it; it will not finish.
 
-## 4. Never pipe a commit message
+## 4. An agent is a poor witness to its own wall clock
 
-One `git commit` in this repo's history blocked on a pipe for 17 hours
-and was only found by a human checking in, not by any automated check —
-indistinguishable from the legitimate long run in point 3 above while it
-was happening. Always pass the commit message with `-F <file>`, never
-through a shell pipeline and never `-F -` (which reads stdin and blocks
-identically if nothing is piped into it).
+Every long-duration claim in this phase came from an agent reporting on
+its own run, and **every one was wrong by roughly twenty times when
+somebody measured it**: 20-30 minutes for the suite, 15-17 minutes for
+the hook, 60-120 seconds of per-binary idle. Those figures then shaped
+days of work — they padded every wait, they got `cargo clean` banned
+for a whole plan, and they led two separate seats to diagnose entirely
+normal behaviour as a hang.
+
+The reason is structural, not carelessness. An agent's sense of "how
+long that took" is the length of its own turn, which includes model
+latency, tool round trips and its own thinking — none of which it can
+see or subtract. It has no clock, only an impression.
+
+**A duration therefore belongs in a skill file, a plan or a review only
+with the command that produced it and the machine it ran on.** If you
+cannot name the command you timed, you do not have a number, and the
+honest sentence is "I did not measure it."
+
+## 5. Never pipe a commit message
+
+One `git commit` in this repo's history blocked on a pipe for **17
+hours** and was found by a human looking at a UI, not by any automated
+check. Nothing in the session noticed, because the expectation at the
+time was that long runs were normal — this is exactly the cost of the
+wrong numbers in point 3. Against the real numbers it would have been
+obvious inside two minutes.
+
+Always pass the commit message with `-F <file>`, never through a shell
+pipeline and never `-F -` (which reads stdin and blocks identically if
+nothing is piped into it).
+
+## 6. The target directory grows, and `cargo clean` is cheap maintenance
+
+A clean rebuild leaves `target/` at **3.8 GB**. Over this phase it
+reached **36 GB** — stale artifacts from every intermediate build,
+nothing that speeds anything up. A bloated target makes incremental
+builds look expensive and tempts the next seat into believing the
+inflated durations in point 3.
+
+`cargo clean` costs 8 seconds, and the full rebuild it forces costs
+about a minute (66s to `--no-run`). **That is maintenance, not a risk.**
+Any guidance that bans `cargo clean` to protect a cache is trading a
+one-minute rebuild against tens of gigabytes and a misleading
+performance picture; run it periodically.
 
 ## See Also
 
