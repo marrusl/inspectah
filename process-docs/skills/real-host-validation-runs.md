@@ -18,21 +18,48 @@ Profiles are **cumulative**. A partially-applied larger profile cannot
 host a clean run of a smaller one; revert the VM to a clean snapshot
 instead of trying to undo.
 
-## Fixtures and real hosts disagree about where `/etc` unit files live
+## A unit file directly in `/etc/systemd/system` never reaches `config.files`
 
-The single most valuable finding of the first real-host run.
+The single most valuable finding of the first real-host run, and the
+mechanism is not where you would look for it.
 
-`config.files` carries **zero** paths whose parent is
-`/etc/systemd/system`. Real `/etc` unit files land in
-`services.drop_ins`, classified with `shadow_type: full_shadow`. The
-hand-built fixtures put them in `config.files`.
+`is_systemd_unit_alias` (`crates/collect/src/inspectors/config/walk.rs`)
+runs **after** the three documented exclusion lists, so reading
+`UNOWNED_EXCLUDE_EXACT`, `_GLOBS` and `_PREFIX` does not explain the
+behaviour. It is:
 
-This matters because `Evidence::from_snapshot` in
-`crates/pipeline/src/render/var_dirs.rs` builds `config_units` from
-`snap.config.files`. On real data that map is empty, so the
-`/etc`-versus-vendor unit precedence rule cannot fire. Three rounds of
-review argued over that predicate without anyone noticing the path was
-unreachable, because every test fed it fixture-shaped data.
+```rust
+const PREFIX: &str = "/etc/systemd/system/";
+if let Some(rest) = path.strip_prefix(PREFIX) {
+    !rest.is_empty() && !rest.contains('/')
+} else { false }
+```
+
+**Named for alias symlinks, implemented as a nesting-depth test.** It
+never checks whether the path is a symlink. An admin-written full unit
+shadow — a regular file, owned by no package, exactly the thing a
+migration must carry — is discarded for having no `/` left after the
+prefix. Measured: `/etc/systemd/system/sshd.service` (regular file,
+unowned) absent from `config.files`; `httpd.service.d/*.conf` present.
+
+This matters beyond the walk, because that match set is the **exact
+complement** of `unit_filename`'s `/etc`-side accept set in
+`crates/pipeline/src/render/var_dirs.rs`. Both mean "a bare filename
+directly under `/etc/systemd/system`". One excludes from `config.files`
+exactly what the other looks for there, so `Evidence::from_snapshot`
+builds an empty `/etc` half of `config_units` **by construction** and the
+`/etc`-versus-vendor precedence rule cannot fire on an admin-written
+shadow. Three review rounds argued over that predicate without anyone
+noticing, because the fixtures put unit files in `config.files` where the
+real collector routes them to `services.drop_ins` as
+`shadow_type: full_shadow`.
+
+One route survives: `is_excluded_unowned` is consulted only for *unowned*
+files, so an RPM-**owned** unit at `/etc/systemd/system/<name>` that
+`rpm -Va` reports modified is captured by the earlier rpm-Va pass and
+does reach `config.files`. Rare in practice — packages are discouraged
+from shipping units to `/etc` — but it is why the rule is near-dead
+rather than dead.
 
 **Before trusting a test that feeds `config.files` a unit path, check
 whether a real scan would ever put one there.**
