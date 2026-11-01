@@ -1,6 +1,6 @@
 ---
 name: cross-inspector-shadow-passes
-description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns.
+description: Where a file lands in two inventories with two dispositions, one of them must be marked Inventory at collect time -- in its own pass, below finalize_cross_inspector, never inside a sibling pass's early returns. Also: absence from services.state_changes is not an exclusion.
 ---
 
 # Cross-Inspector Shadow Passes
@@ -124,6 +124,54 @@ The join key needs no new field: `service_dropins[].path` and
 `skip_serializing_if = "Option::is_none"`, so a TypeScript mirror
 declares it optional and never `null`.
 
+## Absence from `state_changes` is not an exclusion
+
+The same preset fact bites a second time, one layer down, and this one
+cost the operator the file.
+
+`session.rs` guarded `SetInclude(DropIn, true)` by requiring the parent
+unit to be an **included** `state_changes` row. A unit at its preset
+state has no row at all, so the test could never pass, and the drop-in
+switched off once stayed off for the rest of the session. Exclusion was
+unguarded, so the sequence was reachable in one click. The comment above
+it said "cannot include a drop-in when its parent service is excluded",
+which is a different and correct intent that the predicate did not
+implement.
+
+Write the predicate as the positive test for the state you mean to
+refuse:
+
+```rust
+let parent_excluded = svc_section.state_changes.iter().any(|s| {
+    s.unit == dropin.unit
+        && matches!(s.disposition, FindingKind::Actionable { include: false })
+});
+```
+
+Three things make the narrowed guard the right one, all measured on RHEL
+9.8, 2026-11-01:
+
+- **A drop-in whose parent carries no `systemctl enable` line is not
+  broken.** Built the exported Containerfile and looked:
+  `/etc/systemd/system/multi-user.target.wants/chronyd.service` comes
+  from the base image's own preset, the drop-in sits beside it, and
+  `systemctl is-enabled` reads `enabled` — the host's state, reproduced,
+  with inspectah emitting nothing for that unit. There was no hazard to
+  protect against.
+- **The export cannot tell "no row" from "excluded row" anyway.**
+  `render_service_intent` filters `state_changes` by `is_included()`, so
+  both produce the same Containerfile.
+- **What the guard really protects is the cascade.** `SetInclude` on a
+  `Service` sets every drop-in for that unit to the same disposition, so
+  re-including one drop-in alone would undo the operator's parent
+  decision for a single file. That is a decision-model conflict, not an
+  export defect, and it is the only state worth refusing.
+
+The cascade is also the answer to a question that looks open from the
+source: the web owner badge reads `service_dropins[].include`, so it
+cannot report "Owner included" under an excluded parent — the cascade
+has already set it false. Measured through `/api/view`.
+
 ## Known and unmeasured
 
 Only the service case above has been measured. A read of the source
@@ -141,5 +189,6 @@ reasoned from unverified premises. Measure first.
 - `crates/pipeline/src/collect.rs` -- `finalize_cross_inspector` and the passes
 - `crates/core/src/types/config.rs` -- `ConfigShadow`, `ConfigFileEntry::shadowed_by`
 - `crates/pipeline/src/render/configtree.rs` -- `service_owned_paths`, `container_owned_paths`
-- `crates/cli/tests/scan_service_shadow_test.rs` -- the four-state regression test
+- `crates/cli/tests/scan_service_shadow_test.rs` -- the four-state regression test, and both legs of the drop-in guard
+- `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Service` cascade
 - `real-host-validation-runs.md` -- why measurement beats fixtures here

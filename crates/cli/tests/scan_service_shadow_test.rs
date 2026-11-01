@@ -45,17 +45,23 @@ const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
 /// the assertions below from passing because config rows never decide.
 const PLAIN_CONFIG: &str = "/etc/httpd/conf/httpd.conf";
 
-/// Both units are enabled against a preset that disables them, so both
-/// are operator state changes. A drop-in whose parent unit is not an
-/// included state change can be excluded but never re-included
-/// (`session.rs`, "cannot include drop-in when parent service is
-/// excluded"), and this test needs both directions of its one toggle.
+/// `httpd.service` sits **at** its preset, so the services inspector
+/// writes it to `preset_matched_units` and `state_changes` has no row
+/// for it. That is the common case on a real host and the one the
+/// drop-in guard used to read as "parent excluded", which made the
+/// drop-in toggle move only one way. `custom.service` diverges, so the
+/// two parents between them cover both sides of the guard.
 const SYSTEMCTL: &str = "UNIT FILE                 STATE     PRESET\n\
-                         httpd.service             enabled   disabled\n\
+                         httpd.service             enabled   enabled\n\
                          custom.service            enabled   disabled\n\
                          \n\
                          2 unit files listed.\n";
-const PRESET: &str = "disable httpd.service\ndisable custom.service\n";
+const PRESET: &str = "enable httpd.service\ndisable custom.service\n";
+
+/// `DROP_IN`'s parent: at its preset, so it has no `state_changes` row.
+const PRESET_MATCHED_UNIT: &str = "httpd.service";
+/// `FULL_SHADOW`'s parent: diverges from its preset, so it does.
+const PRESET_DIVERGING_UNIT: &str = "custom.service";
 
 const DROP_IN_CONTENT: &str = "[Service]\nLimitNOFILE=65535\n";
 const FULL_SHADOW_CONTENT: &str =
@@ -409,4 +415,120 @@ fn an_unowned_config_file_still_decides_its_own_carriage() {
             "{PLAIN_CONFIG} is staged exactly when its own decision says so"
         );
     }
+}
+
+/// The premise the two tests below rest on, asserted against collector
+/// output rather than assumed: a unit at its preset state has no
+/// `state_changes` row, and a unit that diverges does.
+#[test]
+fn only_a_preset_diverging_unit_gets_a_state_change_row() {
+    let snapshot = scan_like(&overlapping_paths_mock());
+    let services = snapshot.services.as_ref().expect("the services section");
+
+    let changed: Vec<&str> = services
+        .state_changes
+        .iter()
+        .map(|s| s.unit.as_str())
+        .collect();
+    assert_eq!(
+        changed,
+        vec![PRESET_DIVERGING_UNIT],
+        "only the preset-diverging unit gets a state change row"
+    );
+    assert!(
+        services
+            .preset_matched_units
+            .iter()
+            .any(|u| u == PRESET_MATCHED_UNIT),
+        "the preset-matched unit goes to preset_matched_units, got {:?}",
+        services.preset_matched_units
+    );
+}
+
+/// The defect this file's drop-in fixture used to have to work around.
+///
+/// `DROP_IN`'s parent is at its preset, so it has no `state_changes`
+/// row. The guard on `SetInclude` used to require the parent to be an
+/// *included* state change, which absence can never satisfy, so the
+/// operator could switch the file off and never back on. Since the
+/// Configuration Files row over the same path became inventory, this
+/// toggle is the only control over the file, and a control that moves
+/// one way loses the file for the rest of the session.
+#[test]
+fn a_drop_in_over_a_preset_matched_parent_toggles_both_ways() {
+    let snapshot = scan_like(&overlapping_paths_mock());
+    let mut session = RefineSession::new(snapshot);
+
+    for include in [false, true, false, true] {
+        session
+            .apply(set_include(
+                ItemId::DropIn {
+                    path: DROP_IN.into(),
+                },
+                include,
+            ))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "SetInclude(DropIn {DROP_IN}, {include}) must be accepted \
+                     when the parent took no decision, got {e:?}"
+                )
+            });
+        assert_eq!(
+            carriage_of(&session.snapshot_projected(), DROP_IN).reaches_image(),
+            include,
+            "the export must follow the drop-in's own decision (include={include})"
+        );
+    }
+}
+
+/// The guard, kept where it means something. An explicit exclusion of
+/// the parent cascades onto its drop-ins, and re-including one of them
+/// alone would undo that decision for a single file.
+#[test]
+fn a_drop_in_cannot_contradict_an_explicit_parent_exclusion() {
+    let snapshot = scan_like(&overlapping_paths_mock());
+    let mut session = RefineSession::new(snapshot);
+    let parent = ItemId::Service {
+        unit: PRESET_DIVERGING_UNIT.into(),
+    };
+
+    session
+        .apply(set_include(parent.clone(), false))
+        .expect("excluding the parent service is a decision the session takes");
+    assert!(
+        !carriage_of(&session.snapshot_projected(), FULL_SHADOW).reaches_image(),
+        "excluding the parent cascades onto its drop-ins"
+    );
+
+    let before = session.timeline_len();
+    match session.apply(set_include(
+        ItemId::DropIn {
+            path: FULL_SHADOW.into(),
+        },
+        true,
+    )) {
+        Err(RefineError::BadRequest(msg)) => {
+            assert!(
+                msg.contains("parent service is excluded"),
+                "the refusal must name the parent exclusion, got {msg}"
+            );
+            assert_eq!(
+                session.timeline_len(),
+                before,
+                "a refused op must not extend the timeline"
+            );
+        }
+        other => panic!(
+            "re-including a drop-in under an explicitly excluded parent must \
+             be refused, got {other:?}"
+        ),
+    }
+
+    session
+        .apply(set_include(parent, true))
+        .expect("re-including the parent service is a decision the session takes");
+    assert!(
+        carriage_of(&session.snapshot_projected(), FULL_SHADOW).reaches_image(),
+        "re-including the parent cascades back onto its drop-ins"
+    );
 }

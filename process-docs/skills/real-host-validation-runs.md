@@ -188,6 +188,55 @@ The walk fix extends the affected set from drop-in `.conf` files to bare
 unit files: the same probe with the fixed binary and
 `/etc/systemd/system/sshd.service` loses the file the same way.
 
+### Measured, 2026-11-01: a drop-in over a preset-state unit builds correctly
+
+The question behind the drop-in include guard: what does the export do
+with a drop-in whose parent unit carries no `systemctl enable` line?
+Answer: the right thing, and it is the ordinary case rather than a
+corner.
+
+Planted `/etc/systemd/system/chronyd.service.d/inspectah-probe.conf` on
+`rhel9`. `chronyd.service` is `enabled` against an `enabled` preset, so
+the services inspector put it in `preset_matched_units` and wrote no
+`state_changes` row; the scan tarball from `f8839078` staged the file
+under `drop-ins/` and emitted `COPY drop-ins/etc/systemd/system/
+/etc/systemd/system/` with nothing naming `chronyd.service` in the
+Service Enablement block.
+
+`podman build` of that Containerfile, unmodified, against
+`registry.redhat.io/rhel9/rhel-bootc:9.8`, inspected in the layer after
+`COPY config/etc/ /etc/`:
+
+```
+/etc/systemd/system/chronyd.service.d/inspectah-probe.conf   present
+/etc/systemd/system/multi-user.target.wants/chronyd.service  Jan  1 1970 -> /usr/lib/...
+systemctl is-enabled chronyd.service                         enabled
+```
+
+The `Jan 1 1970` timestamp is the tell: that wants-link came from the
+base image's own preset, not from anything inspectah wrote. The host was
+enabled, the image is enabled, and the drop-in is in place. Emitting no
+enable line is the correct output for a unit at its preset, not an
+omission.
+
+Two notes for whoever runs this next.
+
+- **The build needs two workarounds, neither of them a bug in the
+  export.** The driftify standard profile sets `HTTPS_PROXY` to an
+  unresolvable `proxy.internal` and leaves `access.redhat.com` out of
+  `NO_PROXY`, so the signature fetch fails; run podman under
+  `env -u HTTP_PROXY -u HTTPS_PROXY -u NO_PROXY`. And the CLI scan
+  tarball emits `COPY language-packages/...` lines for a directory only
+  the web export writes, so the build dies there. Build with
+  `--layers=true` and inspect the last good layer; everything the
+  services sections do is finished by then.
+- **A full shadow's wants-link still points at the vendor path.**
+  `/etc/systemd/system/multi-user.target.wants/sshd.service ->
+  /usr/lib/systemd/system/sshd.service` while the shadow sits at
+  `/etc/systemd/system/sshd.service`. Unmeasured which fragment systemd
+  loads at boot from that pair. Out of scope for the drop-in guard;
+  worth a measurement before anyone relies on full-shadow enablement.
+
 ## Stock files reach findings, and fixtures never contain them
 
 Curated fixtures hold only interesting files. Real hosts hold the

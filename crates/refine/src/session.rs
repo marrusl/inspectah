@@ -2062,18 +2062,39 @@ impl RefineSession {
                         if !found {
                             return Err(RefineError::UnknownTarget(path.clone()));
                         }
-                        // Cannot include a drop-in when its parent service is excluded.
+                        // A drop-in may not contradict an *explicit* exclusion
+                        // of its parent service. Excluding a service cascades
+                        // exclusion onto every drop-in for that unit, so
+                        // re-including one of them alone would silently undo
+                        // that decision for a single file.
+                        //
+                        // The test is an excluded `state_changes` row, not
+                        // absence from `state_changes`. The services inspector
+                        // records a row only for a unit whose enable state
+                        // diverges from its preset; a unit at its preset state
+                        // lands in `preset_matched_units` and has no row at
+                        // all. Absence means "the operator took no decision
+                        // here", not "excluded" -- reading it as exclusion made
+                        // the common case (a drop-in over a preset-state unit)
+                        // a switch that only moved one way. Measured on RHEL
+                        // 9.8, 2026-11-01: a drop-in whose parent carries no
+                        // `systemctl enable` line is correct, not broken --
+                        // the image's own preset enables the unit exactly as
+                        // the host had it.
                         if *include {
                             let projected = self.project_snapshot();
                             if let Some(ref svc_section) = projected.services
                                 && let Some(dropin) =
                                     svc_section.drop_ins.iter().find(|d| d.path == *path)
                             {
-                                let parent_included = svc_section
-                                    .state_changes
-                                    .iter()
-                                    .any(|s| s.unit == dropin.unit && s.disposition.is_included());
-                                if !parent_included {
+                                let parent_excluded = svc_section.state_changes.iter().any(|s| {
+                                    s.unit == dropin.unit
+                                        && matches!(
+                                            s.disposition,
+                                            FindingKind::Actionable { include: false }
+                                        )
+                                });
+                                if parent_excluded {
                                     return Err(RefineError::BadRequest(
                                         "cannot include drop-in when parent service is excluded"
                                             .into(),
