@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -102,13 +102,21 @@ impl InspectionSnapshot {
     /// Minimum accepted schema version.
     ///
     /// Held equal to `SCHEMA_VERSION`: the loading contract is an exact
-    /// match, not a rolling window. Schema 24 marks a config entry whose
-    /// path a `services.drop_ins` entry owns as inventory, and that
-    /// annotation is written once, at collect time. A schema-23 snapshot
-    /// is precisely a snapshot collected before that pass existed, so
-    /// accepting one would mean loading the unfixed two-toggle state and
-    /// re-rendering from it with no way to tell it apart.
-    const MIN_SCHEMA: u32 = 24;
+    /// match, not a rolling window.
+    ///
+    /// Schema 25 replaces the `unit` filename on the three `/var`
+    /// directory-directive backings with `declared_by`, the full path of
+    /// every unit file that declares the directory. Two separate reasons
+    /// close the window on 24, and the first alone would be enough: the
+    /// field is renamed and retyped, so a schema-24 payload does not
+    /// deserialize at all. The second is why no migration is written
+    /// either. The declaring path is a collect-time observation, read
+    /// from a grep over the host's unit directories; the snapshot carries
+    /// no vendor unit bodies, so nothing at load time can recover from a
+    /// filename which file it named. A schema-24 snapshot is one taken
+    /// before the collector asked the question, and the answer is not
+    /// derivable after the fact.
+    const MIN_SCHEMA: u32 = 25;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -237,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 25, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 26, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

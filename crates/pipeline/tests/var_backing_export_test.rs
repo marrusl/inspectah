@@ -9,7 +9,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{
-    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection, ConfigShadow,
 };
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
@@ -196,6 +196,29 @@ fn base_snapshot() -> InspectionSnapshot {
     snap
 }
 
+/// Replace the declaring unit paths on a directory's backing, for the
+/// cases that walk one directory through several collector verdicts.
+fn set_declared_by(snap: &mut InspectionSnapshot, path: &str, declared_by: &[&str]) {
+    let paths: Vec<String> = declared_by.iter().map(|p| p.to_string()).collect();
+    let dir = snap
+        .storage
+        .as_mut()
+        .expect("storage section")
+        .var_directories
+        .iter_mut()
+        .find(|d| d.path == path)
+        .expect("var directory");
+    dir.backing = Some(match dir.backing.take() {
+        Some(VarDirBacking::CacheDirectory { .. }) => {
+            VarDirBacking::CacheDirectory { declared_by: paths }
+        }
+        Some(VarDirBacking::LogsDirectory { .. }) => {
+            VarDirBacking::LogsDirectory { declared_by: paths }
+        }
+        _ => VarDirBacking::StateDirectory { declared_by: paths },
+    });
+}
+
 fn set_config_included(snap: &mut InspectionSnapshot, path: &str, included: bool) {
     let entry = snap
         .config
@@ -337,7 +360,7 @@ fn units_follow_their_unit_file_and_rpm_owner() {
         var_directories: vec![dir_with_mode(
             "/var/lib/myapp",
             VarDirBacking::StateDirectory {
-                unit: "myapp.service".into(),
+                declared_by: vec!["/etc/systemd/system/myapp.service".into()],
             },
             "0755",
             0,
@@ -368,7 +391,13 @@ fn units_follow_their_unit_file_and_rpm_owner() {
     );
     assert!(!var_conf(&snap).contains("/var/lib/myapp"));
 
-    // No config entry, but the unit file is owned by a carried package.
+    // The declaring file is the vendor unit instead, owned by a carried
+    // package and named by no config entry.
+    set_declared_by(
+        &mut snap,
+        "/var/lib/myapp",
+        &["/usr/lib/systemd/system/myapp.service"],
+    );
     snap.config = Some(ConfigSection { files: Vec::new() });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("myapp", true)],
@@ -384,21 +413,30 @@ fn units_follow_their_unit_file_and_rpm_owner() {
     );
 }
 
-/// Both unit sources name the same file, which neither of the two
-/// single-source cases above reaches. systemd gives the `/etc` unit
+/// Two unit files declare the same directory, which neither of the two
+/// single-declarer cases above reaches. systemd gives the `/etc` unit
 /// precedence while it exists and falls back to the vendor unit when it
 /// does not, so excluding the `/etc` override leaves the RPM-owned copy
-/// running in the target. That copy still declares `StateDirectory=`, so
-/// the creator is carried and a `d` line would duplicate it under
-/// whatever ownership the export guessed.
+/// running in the target. That copy declares `StateDirectory=` too, and
+/// the collector recorded that it does, so the creator is carried and a
+/// `d` line would duplicate it under whatever ownership the export
+/// guessed.
+///
+/// The second half is the case this pair exists to tell apart, and the
+/// one the filename-keyed lookup got wrong: the vendor unit is installed
+/// and carried, but declares nothing. A unit of that name reaching the
+/// image is not a unit declaring this directory reaching the image.
 #[test]
-fn an_excluded_etc_unit_falls_back_to_the_vendor_unit_that_survives() {
+fn a_vendor_unit_rescues_the_directory_only_when_it_declares_it() {
     let mut snap = InspectionSnapshot::new();
     snap.storage = Some(StorageSection {
         var_directories: vec![dir_with_mode(
             "/var/lib/myapp",
             VarDirBacking::StateDirectory {
-                unit: "myapp.service".into(),
+                declared_by: vec![
+                    "/etc/systemd/system/myapp.service".into(),
+                    "/usr/lib/systemd/system/myapp.service".into(),
+                ],
             },
             "0755",
             0,
@@ -432,76 +470,38 @@ fn an_excluded_etc_unit_falls_back_to_the_vendor_unit_that_survives() {
         "the surviving vendor unit makes the directory: {conf}"
     );
 
-    // The same exclusion with the RPM owning the excluded file itself and
-    // nothing else: no copy survives, so the creator really is lost.
-    snap.rpm.as_mut().expect("rpm").file_ownership = vec![FileOwnershipEntry {
-        package_name: "myapp".into(),
-        paths: vec!["/etc/systemd/system/myapp.service".into()],
-    }];
+    // Order must not decide it.
+    set_declared_by(
+        &mut snap,
+        "/var/lib/myapp",
+        &[
+            "/usr/lib/systemd/system/myapp.service",
+            "/etc/systemd/system/myapp.service",
+        ],
+    );
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
+        &EffectiveBacking::Carried,
+        "the verdict does not depend on the order grep printed the paths in"
+    );
+
+    // The same installed, carried vendor unit, declaring nothing. The
+    // excluded `/etc` shadow is the only declarer, so the creator is
+    // lost however well-carried the file of that name is.
+    set_declared_by(
+        &mut snap,
+        "/var/lib/myapp",
+        &["/etc/systemd/system/myapp.service"],
+    );
     assert_eq!(
         outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
         &EffectiveBacking::Provision {
             lost: Some("myapp.service".into())
         }
     );
-}
-
-/// One package owning the same unit filename at two paths, which is what
-/// a packaged override or an RPM-owned preset symlink under
-/// `/etc/systemd/system/*.wants/` produces. `unit_owners` keeps one path
-/// per filename, so whichever path it keeps decides the answer: record
-/// the excluded `/etc` file and the `owner_path != config_path` guard
-/// fails, calling a vendor unit that survives the exclusion lost. The
-/// case above reaches the guard with one path each and never reaches the
-/// rule that picks between two.
-#[test]
-fn a_packaged_etc_override_does_not_mask_its_own_vendor_unit() {
-    let mut snap = InspectionSnapshot::new();
-    snap.storage = Some(StorageSection {
-        var_directories: vec![dir_with_mode(
-            "/var/lib/myapp",
-            VarDirBacking::StateDirectory {
-                unit: "myapp.service".into(),
-            },
-            "0755",
-            0,
-            "root",
-        )],
-        ..Default::default()
-    });
-    snap.config = Some(ConfigSection {
-        files: vec![config_file(
-            "/etc/systemd/system/myapp.service",
-            ConfigFileKind::Unowned,
-            false,
-        )],
-    });
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![package("myapp", true)],
-        file_ownership: vec![FileOwnershipEntry {
-            package_name: "myapp".into(),
-            // `/etc` first, so the displacement rule is what runs rather
-            // than the vacant-entry insert.
-            paths: vec![
-                "/etc/systemd/system/myapp.service".into(),
-                "/usr/lib/systemd/system/myapp.service".into(),
-            ],
-        }],
-        ..Default::default()
-    });
-    assert_eq!(
-        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
-        &EffectiveBacking::Carried,
-        "the vendor copy displaces the recorded /etc path"
-    );
-
-    snap.rpm.as_mut().expect("rpm").file_ownership[0]
-        .paths
-        .reverse();
-    assert_eq!(
-        outcome_for(&effective_var_backing(&snap), "/var/lib/myapp"),
-        &EffectiveBacking::Carried,
-        "and the verdict does not depend on file_ownership order"
+    assert!(
+        var_conf(&snap).contains("d /var/lib/myapp 0755 root root -"),
+        "the export has to make the directory itself"
     );
 }
 
@@ -515,7 +515,13 @@ fn excluded_etc_unit_with_owner(owner_path: &str) -> InspectionSnapshot {
         var_directories: vec![dir_with_mode(
             "/var/lib/myapp",
             VarDirBacking::StateDirectory {
-                unit: "myapp.service".into(),
+                // The collector's grep is recursive over the two unit
+                // roots, so a nested path reaches `declared_by` exactly
+                // as a top-level one does.
+                declared_by: vec![
+                    "/etc/systemd/system/myapp.service".into(),
+                    owner_path.into(),
+                ],
             },
             "0755",
             0,
@@ -543,6 +549,11 @@ fn excluded_etc_unit_with_owner(owner_path: &str) -> InspectionSnapshot {
 
 /// What counts as the unit file that survives an exclusion, by path
 /// shape.
+///
+/// Each row is a second declaring path beside the excluded `/etc` one.
+/// The collector's grep recurses over both unit roots, so every shape
+/// below really can reach `declared_by`; what the table pins is which
+/// of them the export will read as a creator that makes the directory.
 ///
 /// This table exists because the predicate behind it was narrowed three
 /// times and each narrowing left another shape that satisfied it: a
@@ -686,41 +697,31 @@ const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd
 /// - `services.drop_ins` carries the shadow at
 ///   `/etc/systemd/system/crond.service` with
 ///   `shadow_type: full_shadow`.
-/// - `config.files` carries **no** entry for that path. The walk
-///   discarded it, which is why this fixture leaves the section empty
-///   rather than hand-building an entry there.
+/// - `config.files` carries the same path as an **inventory** row whose
+///   `shadowed_by` is `Services`: the walk keeps an admin-written
+///   regular unit file, and the cross-inspector pass hands the one
+///   include decision to `services.drop_ins`.
 /// - `rpm.file_ownership` gives `cronie` exactly one path matching the
 ///   filename, `/usr/lib/systemd/system/crond.service`, and `cronie` is
-///   an included `packages_added` entry.
+///   an included `packages_added` entry. That file declares no
+///   directory, so it is **not** in `declared_by`.
 ///
 /// Only the package's arch and repo differ from the measured values,
 /// because the shared `package()` helper supplies them and neither
 /// reaches this classification.
 ///
-/// This fixture encodes what the collector produced on 2026-11-01,
-/// before the walk's symlink fix. **It is now one entry short of
-/// collector-shaped and needs regenerating:** the walk keeps an
-/// admin-written regular unit file, so a rescan of the same host would
-/// also carry `/etc/systemd/system/crond.service` in `config.files` as
-/// `kind: unowned`, alongside the `services.drop_ins` entry below.
-///
-/// Adding it does not move this test. Measured on 2026-11-01 with the
-/// entry present at both polarities: the verdict is `Carried` either
-/// way, because the excluded-entry arm of `classify` falls through to
-/// `unit_owners` and reads `cronie`'s installation as proof, without
-/// checking whether `cronie`'s unit declares the directory. It does not.
-/// What the walk fix does change is reachability: the `/etc` half of
-/// `config_units` is no longer empty by construction, so the
-/// `/etc`-versus-vendor precedence rule now fires on a real scan.
-/// Regenerating this fixture is deliberately left with the open
-/// `Provision`-versus-`Unresolved` decision rather than done piecemeal.
+/// Regenerated 2026-11-01 against a privileged `rhel9` scan on schema
+/// 25. The earlier revision encoded the pre-walk-fix shape, with an
+/// empty `config.files` and a bare `crond.service` filename on the
+/// backing. Both are now wrong about what the collector produces.
 fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.storage = Some(StorageSection {
         var_directories: vec![dir_with_mode(
             "/var/lib/crondstate",
             VarDirBacking::StateDirectory {
-                unit: "crond.service".into(),
+                // The shadow is the only file matching the grep.
+                declared_by: vec!["/etc/systemd/system/crond.service".into()],
             },
             "0755",
             0,
@@ -744,7 +745,16 @@ fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
         }],
         ..Default::default()
     });
-    snap.config = Some(ConfigSection { files: Vec::new() });
+    let mut shadow_row = config_file(
+        "/etc/systemd/system/crond.service",
+        ConfigFileKind::Unowned,
+        false,
+    );
+    shadow_row.disposition = FindingKind::inventory();
+    shadow_row.shadowed_by = Some(ConfigShadow::Services);
+    snap.config = Some(ConfigSection {
+        files: vec![shadow_row],
+    });
     snap.rpm = Some(RpmSection {
         packages_added: vec![package("cronie", true)],
         file_ownership: vec![FileOwnershipEntry {
@@ -768,26 +778,22 @@ fn crond_full_shadow_snapshot(shadow_included: bool) -> InspectionSnapshot {
 /// question this test deliberately does not answer; silence is the one
 /// answer it rules out.
 ///
-/// **This test fails today, and the failure is the finding.** Measured
-/// 2026-11-01: the verdict is `Carried` and the rendered
-/// `inspectah-var.conf` is empty, so the export neither makes the
-/// directory nor flags it. `Evidence::from_snapshot` reads unit evidence
-/// out of `config.files` alone and never looks at `services.drop_ins`,
-/// so the operator's exclusion is invisible to it and `cronie`'s
-/// inclusion decides the answer on its own. It is ignored rather than
-/// deleted because fixing it means deciding where `/etc` unit files
-/// belong, which is release-gated and not settled; run it with
-/// `cargo test -- --ignored` and remove this attribute with the fix.
+/// **This test was `#[ignore]`d for measuring an open defect, and is
+/// live again.** It failed while the backing recorded a bare
+/// `crond.service` and the classifier resolved that filename against
+/// `rpm.file_ownership`: `cronie` ships a file of that name, so its
+/// installation read as proof the directory gets created, and the
+/// verdict stayed `Carried` whichever way the operator set the shadow.
+/// The backing now records the path that actually carried the
+/// directive, and the only such path is the excluded shadow.
+///
+/// The assertions deliberately do not name `Provision` or `Unresolved`.
+/// Which of the two an excluded sole declarer should produce is still
+/// open; silence is the one answer this test rules out, and it rules it
+/// out either way.
 #[test]
-#[ignore = "measures an open defect: an excluded full shadow still reads Carried"]
 fn an_excluded_full_shadow_is_invisible_to_var_backing_evidence() {
     let snap = crond_full_shadow_snapshot(false);
-    assert!(
-        snap.config.as_ref().expect("config").files.is_empty(),
-        "this fixture is the pre-fix collector shape; see the note on \
-         crond_full_shadow_snapshot for why regenerating it does not move the outcome"
-    );
-
     let rendered = export(&snap);
     assert!(
         !rendered.crond_shadow_exported,
@@ -807,10 +813,10 @@ fn an_excluded_full_shadow_is_invisible_to_var_backing_evidence() {
     );
 
     // The control. Including the shadow carries the unit that declares
-    // the directory, so `Carried` with no entry is right. Today the
-    // classifier reaches it without reading the shadow at all — the
-    // verdict does not move when the operator's decision does, which is
-    // the defect the case above measures.
+    // the directory, so `Carried` with no entry is right. The pair is
+    // the point: the verdict moves with the operator's decision, which
+    // is what it would not do while a same-named vendor unit could
+    // stand in for the declarer.
     let snap = crond_full_shadow_snapshot(true);
     let rendered = export(&snap);
     assert!(rendered.crond_shadow_exported);
@@ -1175,19 +1181,19 @@ fn absent_sections_follow_the_table_rather_than_panicking() {
             dir(
                 "/var/lib/stated",
                 VarDirBacking::StateDirectory {
-                    unit: "stated.service".into(),
+                    declared_by: vec!["/usr/lib/systemd/system/stated.service".into()],
                 },
             ),
             dir(
                 "/var/cache/cached",
                 VarDirBacking::CacheDirectory {
-                    unit: "cached.service".into(),
+                    declared_by: vec!["/usr/lib/systemd/system/cached.service".into()],
                 },
             ),
             dir(
                 "/var/log/logged",
                 VarDirBacking::LogsDirectory {
-                    unit: "logged.service".into(),
+                    declared_by: vec!["/usr/lib/systemd/system/logged.service".into()],
                 },
             ),
             dir(

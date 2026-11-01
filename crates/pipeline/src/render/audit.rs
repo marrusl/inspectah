@@ -1002,7 +1002,7 @@ fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 /// `Carried` directory needs no action and gets no row.
 fn var_dir_outcome_rows(snap: &InspectionSnapshot) -> Vec<String> {
     use super::var_dirs::{EffectiveBacking, effective_var_backing};
-    use inspectah_core::types::storage::VarDirBacking;
+    use inspectah_core::types::storage::{VarDirBacking, declaring_unit_label};
 
     effective_var_backing(snap)
         .into_iter()
@@ -1013,10 +1013,10 @@ fn var_dir_outcome_rows(snap: &InspectionSnapshot) -> Vec<String> {
                     format!("created on host by {conf}")
                 }
                 Some(
-                    VarDirBacking::StateDirectory { unit }
-                    | VarDirBacking::CacheDirectory { unit }
-                    | VarDirBacking::LogsDirectory { unit },
-                ) => format!("created on host by {unit}"),
+                    VarDirBacking::StateDirectory { declared_by }
+                    | VarDirBacking::CacheDirectory { declared_by }
+                    | VarDirBacking::LogsDirectory { declared_by },
+                ) => format!("created on host by {}", declaring_unit_label(declared_by)),
                 Some(VarDirBacking::RpmOwned { package }) => {
                     format!("created on host by {package}")
                 }

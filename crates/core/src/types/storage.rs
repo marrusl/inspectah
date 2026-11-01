@@ -78,17 +78,20 @@ pub enum VarDirBacking {
         conf: String,
         line: String,
     },
-    /// `unit` is the filename of the unit carrying the `StateDirectory=`.
+    /// `declared_by` holds the full path of every unit file carrying a
+    /// `StateDirectory=` for this directory, in search order.
     StateDirectory {
-        unit: String,
+        declared_by: Vec<String>,
     },
-    /// `unit` is the filename of the unit carrying the `CacheDirectory=`.
+    /// `declared_by` holds the full path of every unit file carrying a
+    /// `CacheDirectory=` for this directory, in search order.
     CacheDirectory {
-        unit: String,
+        declared_by: Vec<String>,
     },
-    /// `unit` is the filename of the unit carrying the `LogsDirectory=`.
+    /// `declared_by` holds the full path of every unit file carrying a
+    /// `LogsDirectory=` for this directory, in search order.
     LogsDirectory {
-        unit: String,
+        declared_by: Vec<String>,
     },
     /// `package` is the bare RPM name owning the directory, matching the
     /// identity `rpm.file_ownership` and `rpm.baseline_package_names` use.
@@ -110,13 +113,42 @@ impl VarDirBacking {
     pub fn names_a_carryable_creator(&self) -> bool {
         match self {
             Self::Tmpfiles { conf, .. } => !conf.starts_with(RUN_TMPFILES_PREFIX),
-            Self::StateDirectory { .. }
-            | Self::CacheDirectory { .. }
-            | Self::LogsDirectory { .. }
-            | Self::RpmOwned { .. } => true,
+            Self::StateDirectory { declared_by }
+            | Self::CacheDirectory { declared_by }
+            | Self::LogsDirectory { declared_by } => !declared_by.is_empty(),
+            Self::RpmOwned { .. } => true,
             Self::Unbacked => false,
         }
     }
+}
+
+/// Separator between the unit names of a directory two unit files both
+/// declare.
+const DECLARING_UNIT_SEPARATOR: &str = ", ";
+
+/// Name the declaring units for a surface that shows an operator which
+/// creator a `/var` directory has.
+///
+/// Filenames rather than full paths, because that is the name
+/// `systemctl` answers to, and all of them rather than the first,
+/// because a directory two unit files declare has two creators and
+/// naming one of them invites the reader to act on the wrong file.
+///
+/// Distinct filenames, because the commonest two-declarer case is an
+/// `/etc` shadow over the vendor unit of the same name: one unit, two
+/// files, and printing the name twice says nothing the reader can use.
+pub fn declaring_unit_label(declared_by: &[String]) -> String {
+    let mut names: Vec<String> = Vec::new();
+    for path in declared_by {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names.join(DECLARING_UNIT_SEPARATOR)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,7 +221,7 @@ mod tests {
         assert!(dir.mode.is_none());
     }
 
-    /// The tag and payload keys are the schema 23 wire contract, so they
+    /// The tag and payload keys are the schema 25 wire contract, so they
     /// are written out here rather than snapshotted from the serializer.
     #[test]
     fn var_dir_backing_tags_its_payload() {
@@ -203,21 +235,26 @@ mod tests {
             ),
             (
                 VarDirBacking::StateDirectory {
-                    unit: "myapp.service".into(),
+                    declared_by: vec!["/usr/lib/systemd/system/myapp.service".into()],
                 },
-                r#"{"kind":"state_directory","unit":"myapp.service"}"#,
+                r#"{"kind":"state_directory","declared_by":["/usr/lib/systemd/system/myapp.service"]}"#,
             ),
             (
+                // Two declarers, the case the filename could not record:
+                // an `/etc` shadow and the vendor unit under it.
                 VarDirBacking::CacheDirectory {
-                    unit: "httpd.service".into(),
+                    declared_by: vec![
+                        "/usr/lib/systemd/system/httpd.service".into(),
+                        "/etc/systemd/system/httpd.service".into(),
+                    ],
                 },
-                r#"{"kind":"cache_directory","unit":"httpd.service"}"#,
+                r#"{"kind":"cache_directory","declared_by":["/usr/lib/systemd/system/httpd.service","/etc/systemd/system/httpd.service"]}"#,
             ),
             (
                 VarDirBacking::LogsDirectory {
-                    unit: "nginx.service".into(),
+                    declared_by: vec!["/usr/lib/systemd/system/nginx.service".into()],
                 },
-                r#"{"kind":"logs_directory","unit":"nginx.service"}"#,
+                r#"{"kind":"logs_directory","declared_by":["/usr/lib/systemd/system/nginx.service"]}"#,
             ),
             (
                 VarDirBacking::RpmOwned {

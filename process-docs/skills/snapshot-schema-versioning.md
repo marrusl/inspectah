@@ -9,11 +9,11 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
 
 // ...
 
-const MIN_SCHEMA: u32 = 24;
+const MIN_SCHEMA: u32 = 25;
 
 if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
     return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
@@ -22,19 +22,33 @@ if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSIO
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 24). Only `schema_version == 24` loads; any other value is
+(both 25). Only `schema_version == 25` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
 
 **Raise `MIN_SCHEMA` with `SCHEMA_VERSION`, and decide it explicitly.**
-Bumping `SCHEMA_VERSION` alone widens the window: 24 with `MIN_SCHEMA`
-still 23 accepts both. Ask what the prior version *is* before leaving it
-accepted. The 23 -> 24 bump added a cross-inspector annotation written
-once, at collect time, so a schema-23 snapshot is by definition one
-collected before that pass ran: accepting it would mean re-rendering
-from the state the pass exists to remove, with no field that tells the
-two apart.
+Bumping `SCHEMA_VERSION` alone widens the window: 25 with `MIN_SCHEMA`
+still 24 accepts both. Ask what the prior version *is* before leaving it
+accepted, and derive the answer rather than reusing the last one.
+
+Two bumps, two different arguments, both landing on "reject":
+
+- 23 -> 24 added a cross-inspector annotation written once, at collect
+  time, so a schema-23 snapshot is by definition one collected before
+  that pass ran. It deserializes cleanly; accepting it would mean
+  re-rendering from the state the pass exists to remove, with no field
+  that tells the two apart. **Semantic staleness.**
+- 24 -> 25 renamed and retyped a field on three `VarDirBacking`
+  variants, so a schema-24 payload does not deserialize at all. Beyond
+  the mechanics, the new value is a collect-time observation (which
+  file on the host carried a directive) that nothing at load time could
+  derive from the rest of the snapshot. **Unreadable and
+  unupgradable.**
+
+The second argument does not follow from the first. A renamed field
+would force the bump even if the data were recoverable, and stale
+semantics force it even when the payload parses. Check both.
 
 ### When to Bump the Version
 

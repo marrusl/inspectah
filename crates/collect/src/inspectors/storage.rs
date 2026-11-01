@@ -404,18 +404,32 @@ const OWNING_PACKAGE_QUERY_FORMAT: &str = "%{NAME}\\n";
 
 /// A systemd directory directive: the `/var` prefix it provisions under,
 /// the directive name, and the backing a match produces.
-type DirectoryDirective = (&'static str, &'static str, fn(String) -> VarDirBacking);
+type DirectoryDirective = (&'static str, &'static str, fn(Vec<String>) -> VarDirBacking);
 
 const DIRECTORY_DIRECTIVES: [DirectoryDirective; 3] = [
-    ("/var/lib/", "StateDirectory", |unit| {
-        VarDirBacking::StateDirectory { unit }
+    ("/var/lib/", "StateDirectory", |declared_by| {
+        VarDirBacking::StateDirectory { declared_by }
     }),
-    ("/var/cache/", "CacheDirectory", |unit| {
-        VarDirBacking::CacheDirectory { unit }
+    ("/var/cache/", "CacheDirectory", |declared_by| {
+        VarDirBacking::CacheDirectory { declared_by }
     }),
-    ("/var/log/", "LogsDirectory", |unit| {
-        VarDirBacking::LogsDirectory { unit }
+    ("/var/log/", "LogsDirectory", |declared_by| {
+        VarDirBacking::LogsDirectory { declared_by }
     }),
+];
+
+/// The unit types `systemd.exec(5)` applies to, and therefore the only
+/// ones that can carry a `StateDirectory=`, `CacheDirectory=` or
+/// `LogsDirectory=`.
+///
+/// `.timer`, `.path` and `.target` are absent deliberately rather than
+/// by oversight: they have no execution context, so the directives are
+/// not valid in them and searching them would only cost a wider grep.
+const EXEC_UNIT_GLOBS: [&str; 4] = [
+    "--include=*.service",
+    "--include=*.socket",
+    "--include=*.mount",
+    "--include=*.swap",
 ];
 
 /// A tmpfiles.d entry whose type creates a directory: the fragment that
@@ -493,13 +507,20 @@ fn index_tmpfiles_fragment(conf: &str, content: &str, index: &mut TmpfilesIndex)
     }
 }
 
-/// `grep -l` prints one matching file path per line; the backing records
-/// the unit's filename, not the directory it was found in.
-fn first_unit_filename(grep_stdout: &str) -> Option<String> {
-    let first = grep_stdout.lines().map(str::trim).find(|l| !l.is_empty())?;
-    Path::new(first)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+/// `grep -l` prints one matching file path per line.
+///
+/// Every path is kept, and kept whole. Which file declared the
+/// directory is the question the export has to answer -- an `/etc`
+/// shadow the operator excluded and the vendor unit underneath it have
+/// the same filename and opposite answers -- and whether a second file
+/// declared it decides whether excluding the first loses the creator.
+fn declaring_unit_paths(grep_stdout: &str) -> Vec<String> {
+    grep_stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Ask rpm which package owns `path`.
@@ -556,22 +577,20 @@ fn detect_var_dir_backing(
                 continue;
             }
             let pattern = format!(r"{}\s*=\s*{}", directive, relative);
-            let grep = exec.run(
-                "grep",
-                &[
-                    "-rE",
-                    "--include=*.service",
-                    "--include=*.socket",
-                    "-l",
-                    &pattern,
-                    "/usr/lib/systemd/system/",
-                    "/etc/systemd/system/",
-                ],
-            );
-            if grep.exit_code == 0
-                && let Some(unit) = first_unit_filename(&grep.stdout)
-            {
-                return backing(unit);
+            let mut args = vec!["-rE"];
+            args.extend_from_slice(&EXEC_UNIT_GLOBS);
+            args.extend_from_slice(&[
+                "-l",
+                &pattern,
+                "/usr/lib/systemd/system/",
+                "/etc/systemd/system/",
+            ]);
+            let grep = exec.run("grep", &args);
+            if grep.exit_code == 0 {
+                let declared_by = declaring_unit_paths(&grep.stdout);
+                if !declared_by.is_empty() {
+                    return backing(declared_by);
+                }
             }
         }
     }
@@ -833,7 +852,7 @@ mod tests {
         // /var/lib/postgresql/data searches for StateDirectory=postgresql/data,
         // not the bare leaf "data" the old rsplit('/').next() code produced.
         let exec = MockExecutor::new().with_command(
-            r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*postgresql/data /usr/lib/systemd/system/ /etc/systemd/system/",
+            r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l StateDirectory\s*=\s*postgresql/data /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/postgresql.service\n"),
         );
         let result = detect_var_dir_backing(
@@ -845,7 +864,7 @@ mod tests {
         assert_eq!(
             result,
             VarDirBacking::StateDirectory {
-                unit: "postgresql.service".into()
+                declared_by: vec!["/usr/lib/systemd/system/postgresql.service".into()]
             }
         );
     }
@@ -855,7 +874,7 @@ mod tests {
         // The negative half of the test above: a unit declaring
         // StateDirectory=data does not back /var/lib/postgresql/data.
         let exec = MockExecutor::new().with_command(
-            r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*data /usr/lib/systemd/system/ /etc/systemd/system/",
+            r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l StateDirectory\s*=\s*data /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/other.service\n"),
         );
         let result = detect_var_dir_backing(
@@ -870,7 +889,7 @@ mod tests {
     #[test]
     fn cache_directory_detected() {
         let exec = MockExecutor::new().with_command(
-            r"grep -rE --include=*.service --include=*.socket -l CacheDirectory\s*=\s*httpd /usr/lib/systemd/system/ /etc/systemd/system/",
+            r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l CacheDirectory\s*=\s*httpd /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/httpd.service\n"),
         );
         let result = detect_var_dir_backing(
@@ -882,7 +901,7 @@ mod tests {
         assert_eq!(
             result,
             VarDirBacking::CacheDirectory {
-                unit: "httpd.service".into()
+                declared_by: vec!["/usr/lib/systemd/system/httpd.service".into()]
             }
         );
     }
@@ -890,7 +909,7 @@ mod tests {
     #[test]
     fn logs_directory_detected() {
         let exec = MockExecutor::new().with_command(
-            r"grep -rE --include=*.service --include=*.socket -l LogsDirectory\s*=\s*nginx /usr/lib/systemd/system/ /etc/systemd/system/",
+            r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l LogsDirectory\s*=\s*nginx /usr/lib/systemd/system/ /etc/systemd/system/",
             grep_success("/usr/lib/systemd/system/nginx.service\n"),
         );
         let result = detect_var_dir_backing(
@@ -902,7 +921,7 @@ mod tests {
         assert_eq!(
             result,
             VarDirBacking::LogsDirectory {
-                unit: "nginx.service".into()
+                declared_by: vec!["/usr/lib/systemd/system/nginx.service".into()]
             }
         );
     }
@@ -934,7 +953,7 @@ mod tests {
         let path = "/var/lib/myapp";
         let exec = MockExecutor::new()
             .with_command(
-                r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
+                r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
                 grep_success("/usr/lib/systemd/system/myapp.service\n"),
             )
             .with_command(&owning_package_key(path), grep_success("myapp\n"));
@@ -960,7 +979,7 @@ mod tests {
         let path = "/var/lib/myapp";
         let exec = MockExecutor::new()
             .with_command(
-                r"grep -rE --include=*.service --include=*.socket -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
+                r"grep -rE --include=*.service --include=*.socket --include=*.mount --include=*.swap -l StateDirectory\s*=\s*myapp /usr/lib/systemd/system/ /etc/systemd/system/",
                 grep_success("/usr/lib/systemd/system/myapp.service\n"),
             )
             .with_command(&owning_package_key(path), grep_success("myapp\n"));
@@ -972,7 +991,7 @@ mod tests {
         assert_eq!(
             detect_var_dir_backing(&exec, path, &rpm_owned, &TmpfilesIndex::new()),
             VarDirBacking::StateDirectory {
-                unit: "myapp.service".into()
+                declared_by: vec!["/usr/lib/systemd/system/myapp.service".into()]
             }
         );
     }

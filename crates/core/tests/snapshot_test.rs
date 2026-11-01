@@ -40,8 +40,23 @@ fn schema_23_is_rejected() {
     }
 }
 
+/// Schema 24 is the last version collected before `detect_var_dir_backing`
+/// recorded which file declared a `/var` directory. It names a unit by
+/// filename in a `unit` field schema 25 does not have, and the path it
+/// stands for cannot be recovered from the rest of the snapshot, so a 24
+/// payload is both unreadable and unupgradable.
 #[test]
-fn schema_24_round_trips() {
+fn schema_24_is_rejected() {
+    let json = r#"{"schema_version": 24, "meta": {}, "system_type": "package-mode",
+        "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+    match InspectionSnapshot::load(json) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 24),
+        other => panic!("expected UnsupportedVersion(24), got {other:?}"),
+    }
+}
+
+#[test]
+fn schema_25_round_trips() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         ..Default::default()
@@ -53,13 +68,13 @@ fn schema_24_round_trips() {
     );
 }
 
-/// A schema 24 snapshot does not serialize the lists the config walker
+/// A schema 25 snapshot does not serialize the lists the config walker
 /// now owns. Serde ignores unknown fields, so a 23 payload that still
 /// carries one of these keys loads and drops it; that is accepted and is
 /// not what this asserts. What it asserts is that nothing we write puts
 /// the duplicate back on the wire.
 #[test]
-fn schema_24_does_not_serialize_the_relocated_section_lists() {
+fn schema_25_does_not_serialize_the_relocated_section_lists() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         kernel_boot: Some(KernelBootSection::default()),

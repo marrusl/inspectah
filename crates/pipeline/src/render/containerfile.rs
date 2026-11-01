@@ -5812,7 +5812,9 @@ RUN dnf install -y \
                 VarDirectory {
                     path: "/var/lib/bad-unit".into(),
                     backing: Some(VarDirBacking::StateDirectory {
-                        unit: format!("appone.service{PAYLOAD}"),
+                        declared_by: vec![format!(
+                            "/usr/lib/systemd/system/appone.service{PAYLOAD}"
+                        )],
                     }),
                     mode: Some("0755".into()),
                     owner_uid: Some(0),
@@ -5824,7 +5826,7 @@ RUN dnf install -y \
             ..Default::default()
         });
 
-        let conf = render_tmpfiles_conf(&snap).expect("three of the five produce lines");
+        let conf = render_tmpfiles_conf(&snap).expect("four of the five produce lines");
         assert_eq!(
             active_lines(&conf),
             vec![
@@ -5840,8 +5842,15 @@ RUN dnf install -y \
                 "d /var/lib/bad-owner 0750 1001 1001 -",
                 "d /var/lib/bad-group 0751 appone 1001 -",
                 "d /var/lib/bad-creator 0700 root root -",
+                // The payload puts a `/` in the declaring path, so the
+                // parent is no longer a system unit directory and the
+                // declarer is not a unit the manager would load. The
+                // export provisions the directory itself, and every
+                // field of the line it writes comes from the directory
+                // record rather than from the creator.
+                "d /var/lib/bad-unit 0755 root root -",
             ],
-            "the conf executes exactly the three directives it intends: {conf}"
+            "the conf executes exactly the four directives it intends: {conf}"
         );
 
         let output = render_containerfile(&snap, None, None);
@@ -5874,13 +5883,19 @@ RUN dnf install -y \
                 var_dir(
                     "/var/log",
                     VarDirBacking::LogsDirectory {
-                        unit: "rsyslog.service".into(),
+                        declared_by: vec![
+                            "/etc/systemd/system/rsyslog.service".into(),
+                            "/usr/lib/systemd/system/rsyslog.service".into(),
+                        ],
                     },
                 ),
                 var_dir(
                     "/var/cache",
                     VarDirBacking::CacheDirectory {
-                        unit: "dnf-makecache.service".into(),
+                        declared_by: vec![
+                            "/etc/systemd/system/dnf-makecache.service".into(),
+                            "/usr/lib/systemd/system/dnf-makecache.service".into(),
+                        ],
                     },
                 ),
                 var_dir_with_mode("/var/lib/app", "0755", 0, 0, Some("root"), Some("root")),

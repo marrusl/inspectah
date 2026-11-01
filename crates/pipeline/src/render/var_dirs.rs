@@ -15,6 +15,7 @@ use std::path::Path;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::storage::{
     ETC_TMPFILES_PREFIX, RUN_TMPFILES_PREFIX, USR_TMPFILES_PREFIX, VarDirBacking,
+    declaring_unit_label,
 };
 
 use super::service_intent::is_package_installable;
@@ -22,7 +23,11 @@ use super::service_intent::is_package_installable;
 /// The directories a unit file can sit in and still be a unit file this
 /// export can reason about.
 ///
-/// Enumerated, and matched against a path's parent exactly, because a
+/// The collector's grep is recursive over these two roots, so a file
+/// matching `*.service` inside `multi-user.target.wants/`, a
+/// `<unit>.service.d/` drop-in directory, or any other nested directory
+/// reaches `declared_by` even though the system manager would never run
+/// it as a unit. Matched against a path's parent exactly, because a
 /// substring test does not work here and three rounds of narrowing one
 /// proved it: `/systemd/` admitted user units, `/systemd/system/`
 /// admitted `multi-user.target.wants/` links, and excluding those would
@@ -30,22 +35,12 @@ use super::service_intent::is_package_installable;
 /// file lives at exactly `<unit-dir>/<name>` and is never nested, so an
 /// exact parent match rules out every nested shape at once rather than
 /// one per round.
-///
-/// These two and not the rest of systemd's load path, because these two
-/// are what a snapshot can name: `rpm.file_ownership` carries
-/// `/usr/lib/systemd/system`, and the config walk carries
-/// `/etc/systemd/system`. `/usr/local/lib/systemd/system` is a real
-/// member and no RPM owns `/usr/local`, so nothing reaches it.
-/// `/run/systemd/system` is deliberately out as well as unreachable: a
-/// `/run` unit is generated at boot and is not image content, which is
-/// the same reason `RUN_TMPFILES_PREFIX` never counts as a carried
-/// creator above. Missing a directory costs a `d` line the image did not
-/// need; admitting one wrongly costs a directory that never gets made,
-/// so the narrow set is the safe side of this.
 const SYSTEM_UNIT_DIRS: [&str; 2] = ["/etc/systemd/system", "/usr/lib/systemd/system"];
 
-/// The system unit directory that takes precedence over the vendor copy
-/// of the same filename.
+/// The system unit directory whose files the export writes itself,
+/// rather than carrying inside a package. Which of the two roots a
+/// declaring path sits in decides whether an operator's include
+/// decision or a package's carriage settles it.
 const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// What the export can say about one `/var` directory.
@@ -120,23 +115,30 @@ enum Carriage {
     Unknown,
 }
 
+/// Whether one unit file reaches the image, carrying the reason when
+/// the export cannot tell.
+enum UnitReach {
+    Carried,
+    Lost,
+    Unresolved(UnresolvedReason),
+}
+
 /// The two sets the proof is made from (§ 3.4), plus the lookups that
 /// place a creator in them.
 struct Evidence<'a> {
     /// Every `config.files` entry's path and whether it is included.
     config_files: HashMap<&'a str, bool>,
-    /// Unit filename to the `config.files` entry naming it: the entry's
-    /// own path and its include decision. The path is kept because an
-    /// excluded entry is only the end of the story for the file at that
-    /// path -- a unit file of the same name somewhere else survives it.
-    config_units: HashMap<&'a str, (&'a str, bool)>,
+    /// The live include decision for each `/etc` unit file, by full
+    /// path.
+    ///
+    /// Not `config_files`, because a unit file the services inspector
+    /// also records carries an `Inventory` `config.files` row whose
+    /// `is_included()` is false while the operator's actual decision,
+    /// in `services.drop_ins`, may well be to carry it. Reading the
+    /// config row alone would call every full shadow excluded.
+    etc_unit_includes: HashMap<&'a str, bool>,
     /// Every path `rpm.file_ownership` names, to its owning package.
     file_owners: HashMap<&'a str, &'a str>,
-    /// Unit filename to the path of the unit file RPM owns and the
-    /// owning package. A `/etc` path is kept only while no other path
-    /// claims the filename, because the vendor copy is the one that
-    /// survives an excluded `/etc` override.
-    unit_owners: HashMap<&'a str, (&'a str, &'a str)>,
     /// The included `packages_added` entries the export installs.
     ///
     /// Deliberately wider than the Containerfile's own install loop,
@@ -159,21 +161,30 @@ struct Evidence<'a> {
 impl<'a> Evidence<'a> {
     fn from_snapshot(snap: &'a InspectionSnapshot) -> Self {
         let mut config_files = HashMap::new();
-        let mut config_units = HashMap::new();
+        let mut etc_unit_includes = HashMap::new();
         if let Some(config) = &snap.config {
             for entry in &config.files {
                 let included = entry.disposition.is_included();
                 config_files.insert(entry.path.as_str(), included);
-                if let Some(unit) = unit_filename(&entry.path) {
-                    config_units
-                        .entry(unit)
-                        .or_insert((entry.path.as_str(), included));
+                // An inventory row is a shadow of a decision taken
+                // elsewhere, so it is not the answer for this path.
+                if parent_dir(&entry.path) == Some(ETC_UNIT_DIR)
+                    && !entry.disposition.is_inventory()
+                {
+                    etc_unit_includes.insert(entry.path.as_str(), included);
+                }
+            }
+        }
+        if let Some(services) = &snap.services {
+            for dropin in &services.drop_ins {
+                if parent_dir(&dropin.path) == Some(ETC_UNIT_DIR) {
+                    etc_unit_includes
+                        .insert(dropin.path.as_str(), dropin.disposition.is_included());
                 }
             }
         }
 
         let mut file_owners = HashMap::new();
-        let mut unit_owners = HashMap::new();
         let mut install_set = HashSet::new();
         let mut baseline = None;
         if let Some(rpm) = &snap.rpm {
@@ -182,27 +193,6 @@ impl<'a> Evidence<'a> {
                     file_owners
                         .entry(path.as_str())
                         .or_insert(entry.package_name.as_str());
-                    if let Some(unit) = unit_filename(path) {
-                        let owner = (path.as_str(), entry.package_name.as_str());
-                        match unit_owners.get(unit) {
-                            None => {
-                                unit_owners.insert(unit, owner);
-                            }
-                            // The vendor copy displaces a recorded `/etc`
-                            // one: it is the file systemd runs once the
-                            // `/etc` override is gone. Both paths reached
-                            // here through `unit_filename`, so comparing
-                            // their directories is comparing two members
-                            // of `SYSTEM_UNIT_DIRS`.
-                            Some((recorded, _))
-                                if parent_dir(recorded) == Some(ETC_UNIT_DIR)
-                                    && parent_dir(path) != Some(ETC_UNIT_DIR) =>
-                            {
-                                unit_owners.insert(unit, owner);
-                            }
-                            Some(_) => {}
-                        }
-                    }
                 }
             }
             install_set = rpm
@@ -231,11 +221,45 @@ impl<'a> Evidence<'a> {
 
         Self {
             config_files,
-            config_units,
+            etc_unit_includes,
             file_owners,
-            unit_owners,
             install_set,
             baseline,
+        }
+    }
+
+    /// Whether the unit file at `path` reaches the image.
+    ///
+    /// An `/etc` unit file is carried on the operator's decision alone:
+    /// the export writes the file itself. A vendor unit file is carried
+    /// with its package.
+    fn unit_file_reach(&self, path: &str) -> UnitReach {
+        let Some(parent) = parent_dir(path) else {
+            return UnitReach::Lost;
+        };
+        if !SYSTEM_UNIT_DIRS.contains(&parent) {
+            // Nested under a unit directory rather than in one: an
+            // enablement link, a drop-in, or a file that merely ends in
+            // `.service`. The system manager runs none of them, so a
+            // directive in one creates nothing.
+            return UnitReach::Lost;
+        }
+        if parent == ETC_UNIT_DIR {
+            // The config walk records every admin-written unit file in
+            // this directory, so a path neither it nor the services
+            // inspector names is one no decision carries.
+            return match self.etc_unit_includes.get(path) {
+                Some(true) => UnitReach::Carried,
+                _ => UnitReach::Lost,
+            };
+        }
+        match self.file_owners.get(path) {
+            Some(package) => match self.carriage(package) {
+                Carriage::Carried => UnitReach::Carried,
+                Carriage::Lost => UnitReach::Lost,
+                Carriage::Unknown => UnitReach::Unresolved(UnresolvedReason::BaseUnknown),
+            },
+            None => UnitReach::Unresolved(UnresolvedReason::UnownedUnit),
         }
     }
 
@@ -257,15 +281,6 @@ impl<'a> Evidence<'a> {
 /// The directory a path sits in directly, as a string.
 fn parent_dir(path: &str) -> Option<&str> {
     Path::new(path).parent()?.to_str()
-}
-
-/// The filename of a unit file sitting directly in one of
-/// [`SYSTEM_UNIT_DIRS`], and `None` for every other path.
-fn unit_filename(path: &str) -> Option<&str> {
-    if !SYSTEM_UNIT_DIRS.contains(&parent_dir(path)?) {
-        return None;
-    }
-    Path::new(path).file_name()?.to_str()
 }
 
 /// The § 3.4 table, one arm per source backing.
@@ -309,35 +324,44 @@ fn classify(backing: Option<&VarDirBacking>, evidence: &Evidence) -> EffectiveBa
             }
         }
 
-        VarDirBacking::StateDirectory { unit }
-        | VarDirBacking::CacheDirectory { unit }
-        | VarDirBacking::LogsDirectory { unit } => match evidence.config_units.get(unit.as_str()) {
-            Some((_, true)) => EffectiveBacking::Carried,
-            // Dropping one unit file does not drop the unit. A host can
-            // have an `/etc` override and an RPM-owned vendor unit of the
-            // same filename, both declaring the directory; systemd runs
-            // the `/etc` one while it exists and the vendor one when it
-            // does not. So an excluded entry only loses the creator when
-            // no other unit file of that name reaches the image, and
-            // that question is settled by full path, not by filename.
-            Some((config_path, false)) => match evidence.unit_owners.get(unit.as_str()) {
-                Some((owner_path, package)) if owner_path != config_path => {
-                    from_carriage(evidence.carriage(package), unit)
-                }
-                _ => EffectiveBacking::Provision {
-                    lost: Some(unit.clone()),
-                },
-            },
-            None => match evidence.unit_owners.get(unit.as_str()) {
-                Some((_, package)) => from_carriage(evidence.carriage(package), unit),
-                None => EffectiveBacking::Unresolved {
-                    creator: unit.clone(),
-                    reason: UnresolvedReason::UnownedUnit,
-                },
-            },
-        },
+        VarDirBacking::StateDirectory { declared_by }
+        | VarDirBacking::CacheDirectory { declared_by }
+        | VarDirBacking::LogsDirectory { declared_by } => classify_declarers(declared_by, evidence),
 
         VarDirBacking::RpmOwned { package } => from_carriage(evidence.carriage(package), package),
+    }
+}
+
+/// Reconcile the unit files that declare a directory against what the
+/// export carries.
+///
+/// The question is whether a unit file *that declares this directory*
+/// reaches the image, which is not the question "is a unit of that
+/// filename carried". A vendor unit of the same name as an excluded
+/// `/etc` shadow is routinely carried while declaring nothing, and
+/// reading its installation as proof is what called an excluded
+/// full shadow's directory `Carried`.
+fn classify_declarers(declared_by: &[String], evidence: &Evidence) -> EffectiveBacking {
+    let mut unresolved: Option<UnresolvedReason> = None;
+    for path in declared_by {
+        match evidence.unit_file_reach(path) {
+            UnitReach::Carried => return EffectiveBacking::Carried,
+            // One declarer the export cannot place leaves the whole
+            // verdict unplaceable, however many others it ruled out.
+            UnitReach::Unresolved(reason) => unresolved = unresolved.or(Some(reason)),
+            UnitReach::Lost => {}
+        }
+    }
+    let label = declaring_unit_label(declared_by);
+    match unresolved {
+        Some(reason) => EffectiveBacking::Unresolved {
+            creator: label,
+            reason,
+        },
+        // Every declarer is accounted for and none reaches the image.
+        // An empty `declared_by` lands here too, with no creator to name.
+        None if declared_by.is_empty() => EffectiveBacking::Provision { lost: None },
+        None => EffectiveBacking::Provision { lost: Some(label) },
     }
 }
 

@@ -16,7 +16,7 @@ use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
-use inspectah_core::types::storage::VarDirBacking;
+use inspectah_core::types::storage::{VarDirBacking, declaring_unit_label};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::advisory::config_advisories;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
@@ -1577,9 +1577,15 @@ fn summary_line(vd: &RefVarDirectory) -> String {
 fn host_creator(vd: &RefVarDirectory) -> String {
     match &vd.source {
         Some(VarDirBacking::Tmpfiles { conf, .. }) => format!("tmpfiles.d ({conf})"),
-        Some(VarDirBacking::StateDirectory { unit }) => format!("StateDirectory= ({unit})"),
-        Some(VarDirBacking::CacheDirectory { unit }) => format!("CacheDirectory= ({unit})"),
-        Some(VarDirBacking::LogsDirectory { unit }) => format!("LogsDirectory= ({unit})"),
+        Some(VarDirBacking::StateDirectory { declared_by }) => {
+            format!("StateDirectory= ({})", declaring_unit_label(declared_by))
+        }
+        Some(VarDirBacking::CacheDirectory { declared_by }) => {
+            format!("CacheDirectory= ({})", declaring_unit_label(declared_by))
+        }
+        Some(VarDirBacking::LogsDirectory { declared_by }) => {
+            format!("LogsDirectory= ({})", declaring_unit_label(declared_by))
+        }
         Some(VarDirBacking::RpmOwned { package }) => format!("package-owned ({package})"),
         // Not "unbacked": that word names an outcome, and this column
         // names a mechanism. The two do not denote the same set.

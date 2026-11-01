@@ -92,6 +92,32 @@ a correction that is otherwise right.
 whether a real scan would ever put one there — and check the helper that
 builds the entry, not just the path string.**
 
+## Three things that hide a `/var` backing defect from a real host
+
+All three cost time on 2026-11-01 while measuring the `crond.service`
+full-shadow case below. Each one makes the host answer look right.
+
+**The `/var` walk skips empty directories.** `discover_var_directories`
+runs `find <base> -mindepth 1 -maxdepth 2 -type d ! -empty`. A
+`StateDirectory=` systemd has just created has nothing in it, so it
+reaches no snapshot at all and the export says nothing about it. Plant a
+file inside the directory before scanning or the case does not exist.
+Worth knowing beyond the test setup: a state directory that is empty on
+the source host is invisible to the migration.
+
+**Excluding a full shadow in refine also excludes the owning package.**
+Unchecking `/etc/systemd/system/crond.service` left `cronie` excluded in
+the exported snapshot. That masks a backing defect precisely, because
+the thing being tested is whether a *carried* vendor package is wrongly
+read as proof: with the package gone, the wrong rule and the right rule
+agree. Re-include the package in the same session
+(`SetInclude` on `ItemId::Package`) before downloading the export.
+
+**`inspectah refine --fresh` prompts.** With saved operations on disk it
+asks `Discard 1 saved operations? [y/N]` and quits on EOF, so a script
+that backgrounds it with no stdin dies with curl exit 7 and an empty
+log. Pipe `y` into it.
+
 ### Measured, 2026-11-01: the renderer never reads the field the walk routes to
 
 Measured on `rhel9` with a planted `/etc/systemd/system/crond.service`
@@ -113,10 +139,27 @@ files to `services.drop_ins`, and the evidence builder does not look
 there.
 
 Pinned by `an_excluded_full_shadow_is_invisible_to_var_backing_evidence`
-in `crates/pipeline/tests/var_backing_export_test.rs`, which is
-`#[ignore]`d because it fails. Run it with `cargo test -- --ignored`.
-That test is also the worked example of building a pipeline fixture from
-collector output rather than from a guess at it.
+in `crates/pipeline/tests/var_backing_export_test.rs`. That test is also
+the worked example of building a pipeline fixture from collector output
+rather than from a guess at it.
+
+**Fixed on 2026-11-01 and the test is live again.** The backing records
+the full path of every unit file carrying the directive instead of one
+filename, so "a unit of that name is carried" stopped standing in for "a
+unit that declares this directory is carried". Re-measured on the same
+host with the same planted shadow, with `cronie` put back in the install
+set so the package cascade above could not decide it:
+
+| | before | after |
+|---|---|---|
+| snapshot backing | `{"unit": "crond.service"}` | `{"declared_by": ["/etc/systemd/system/crond.service"]}` |
+| verdict with the shadow excluded | `Carried` | `Provision` |
+| `inspectah-var.conf` | no mention | comment naming the lost creator, then `d /var/lib/crondstate 0755 root root -` |
+| audit report | no row | `created on host by crond.service \| not carried, provisioned` |
+
+The control still holds: include the shadow and the directory is
+`Carried` with nothing written, so the verdict follows the operator's
+decision in both directions.
 
 ### Measured, 2026-11-01: the walk fix, and what it did not move
 
@@ -341,6 +384,27 @@ language-package manifests are written by both paths — and
 Why the two paths could disagree at all, and what the guard does not
 cover, is in
 [export-paths-stage-different-trees](export-paths-stage-different-trees.md).
+
+## A redaction test that checks for the secret proves nothing about the file
+
+The auth scrubber doubled the quotes around every URL it rewrote, so a
+redacted export's `package-lock.json` was unparseable on every
+`"resolved"` line. `npm ci` reports that as a missing or too-old
+lockfile, which points nowhere near the export, and the build dies at
+that step after fifteen successful ones.
+
+It shipped past a test over exactly that path. The test asserted the
+credential was gone and `REDACTED@host` survived, and both were true of
+`""https://REDACTED@host/…""`. **Assert that the staged file still
+parses**, in the format the package manager will read it in, and only
+then assert what was removed. The same reasoning covers any scrubber
+that rewrites structured text in place.
+
+The first unmodified export to build end to end on a real host,
+`29/29` with `bootc container lint` passing, came after that fix. Two
+warnings from the lint, `nonempty-run-tmp` and `var-tmpfiles`, are
+about content the base image and the build's own `dnf` leave behind,
+not about anything the export wrote.
 
 ## Cross-compiling and shipping
 
