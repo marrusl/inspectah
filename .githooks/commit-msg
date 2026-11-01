@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Refuse any commit message carrying a Co-Authored-By trailer.
+#
+# Why a hook and not a convention. The rule is written in CLAUDE.md and it
+# holds whenever it is in a dispatch brief. It fails the moment one brief
+# omits it: on 2026-11-01, 30 of that day's commits carried the trailer and
+# every one was a subagent's, because the harness issues a per-session
+# reminder asking for it and that reminder reaches every agent. The rule was
+# right and unenforced, which is the same shape as a principle with no
+# failing test behind it.
+#
+# Enable per clone with: git config core.hooksPath .githooks
+# Written for bash 3.2 (macOS /bin/bash): no mapfile, no ${var^^}.
+set -euo pipefail
+
+MSG_FILE=$1
+
+# Comment lines are stripped by git before the message is stored, so a
+# trailer inside one is not a trailer. Match only real content lines.
+if grep -qiE '^[[:space:]]*Co-Authored-By:' <(grep -v '^#' "$MSG_FILE"); then
+  cat >&2 <<'EOF'
+commit-msg: commit refused — Co-Authored-By is not used in this repo.
+
+Attribution is a single trailer:
+
+    Assisted-by: Claude Code (<model>)
+
+A second Assisted-by line is allowed only when the commit carries
+substantial verbatim content from a different model's output. Reviewer
+influence alone never earns a trailer.
+
+Your harness may have told you to add Co-Authored-By. CLAUDE.md overrides
+it; see § Commit Policy. Remove the line and commit again.
+EOF
+  exit 1
+fi
+
+exit 0
