@@ -5731,35 +5731,71 @@ RUN dnf install -y \
     /// `d {path} {mode} {owner} {group} -` has four host-sourced fields
     /// and a newline in any of them ends the record and starts a
     /// directive of its own. Each directory below poisons a different
-    /// one: the mode, the two account names, the creator a `Provision`
+    /// one: the mode, the owner, the group, the creator a `Provision`
     /// names, and the creator an `Unresolved` names. The assertion is
     /// the whole active-line set of each artifact, because that is the
     /// only form that covers the field nobody listed.
+    ///
+    /// The owner and the group need separate directories, which is the
+    /// correction to the first version of this test. Poisoning both at
+    /// once proves less than it looks: the refused owner falls through
+    /// to the numeric branch, which emits a numeric group too, and the
+    /// group's own check is never reached. `/var/lib/bad-group` keeps a
+    /// guaranteed owner so that the group is the only field in doubt.
     #[test]
     fn var_dir_hostile_fields_add_no_directive() {
         // The age field the format string appends lands on the injected
         // line, so this payload leaves no dangling token behind it.
         const PAYLOAD: &str = "\nd /etc/shadow 0777 root root";
 
-        let hostile = |path: &str, mode: String, uid: u32, owner: Option<String>| VarDirectory {
-            path: path.into(),
-            backing: Some(VarDirBacking::Unbacked),
-            mode: Some(mode),
-            owner_uid: Some(uid),
-            owner_gid: Some(uid),
-            owner_name: owner.clone(),
-            group_name: owner,
-        };
+        let unbacked =
+            |path: &str, mode: String, uid: u32, owner: &str, group: &str| VarDirectory {
+                path: path.into(),
+                backing: Some(VarDirBacking::Unbacked),
+                mode: Some(mode),
+                owner_uid: Some(uid),
+                owner_gid: Some(uid),
+                owner_name: Some(owner.into()),
+                group_name: Some(group.into()),
+            };
+
+        use inspectah_core::types::users::UserGroupSection;
 
         let mut snap = InspectionSnapshot::new();
+        // `appone` reaches case 2 of `resolve_tmpfiles_ownership`, which
+        // is the only path on which the group field is read at all.
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "appone",
+                "uid": 1001,
+                "gid": 1001,
+                "include": true,
+                "containerfile_strategy": "useradd"
+            })],
+            ..Default::default()
+        });
         snap.storage = Some(StorageSection {
             var_directories: vec![
-                hostile("/var/lib/bad-mode", format!("0755{PAYLOAD}"), 0, None),
-                hostile(
-                    "/var/lib/bad-names",
+                unbacked(
+                    "/var/lib/bad-mode",
+                    format!("0755{PAYLOAD}"),
+                    0,
+                    "root",
+                    "root",
+                ),
+                unbacked(
+                    "/var/lib/bad-owner",
                     "0750".into(),
                     1001,
-                    Some(format!("appone -{PAYLOAD}")),
+                    &format!("appone -{PAYLOAD}"),
+                    "appone",
+                ),
+                unbacked(
+                    "/var/lib/bad-group",
+                    "0751".into(),
+                    1001,
+                    "appone",
+                    &format!("appone -{PAYLOAD}"),
                 ),
                 VarDirectory {
                     path: "/var/lib/bad-creator".into(),
@@ -5788,17 +5824,24 @@ RUN dnf install -y \
             ..Default::default()
         });
 
-        let conf = render_tmpfiles_conf(&snap).expect("three of the four produce lines");
+        let conf = render_tmpfiles_conf(&snap).expect("three of the five produce lines");
         assert_eq!(
             active_lines(&conf),
             vec![
                 // The refused mode takes the whole line with it; a
                 // substituted default would be a guess the operator
                 // could not tell from a reading.
-                "d /var/lib/bad-names 0750 1001 1001 -",
+                //
+                // A refused owner degrades both fields, because the
+                // numeric branch is what the renderer already uses when
+                // it has no name. A refused group degrades only itself,
+                // and that is the case the first version of this test
+                // could not reach.
+                "d /var/lib/bad-owner 0750 1001 1001 -",
+                "d /var/lib/bad-group 0751 appone 1001 -",
                 "d /var/lib/bad-creator 0700 root root -",
             ],
-            "the conf executes exactly the two directives it intends: {conf}"
+            "the conf executes exactly the three directives it intends: {conf}"
         );
 
         let output = render_containerfile(&snap, None, None);
