@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::kernelboot::SysctlOverride;
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::users::UserContainerfileStrategy;
@@ -106,9 +107,6 @@ pub enum ItemId {
     },
 
     // Kernel/boot section
-    KernelModule {
-        name: String,
-    },
     Sysctl {
         key: String,
     },
@@ -257,8 +255,20 @@ pub struct AnnotatedTimelineEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepoProvenance {
+    /// Section present, enabled, has a source (`baseurl`/`metalink`/
+    /// `mirrorlist`), and any `gpgkey=file://` paths it declares were
+    /// captured in `rpm.gpg_keys`.
     Verified,
+    /// Section present and enabled, but not fetchable as captured: no
+    /// source, or a declared `gpgkey=file://` path missing from the
+    /// captured GPG keys.
     Incomplete,
+    /// Section present with `enabled = 0`.
+    Disabled,
+    /// Referenced by packages, but no section on the host -- likely
+    /// removed or renamed since install.
+    Stale,
+    /// Pseudo repo (e.g. `@commandline`) or an empty id.
     Unknown,
 }
 
@@ -552,9 +562,11 @@ impl SectionStats {
                 FindingKind::Actionable { include: true } => stats.included += 1,
                 FindingKind::Actionable { include: false } => stats.excluded += 1,
                 // Inventory shares the advisory bucket: it is the other
-                // display-only disposition, never a decision either. Only
-                // network findings are inventory today, and they belong to
-                // no section counted here.
+                // display-only disposition, never a decision either. The
+                // Config section does reach this arm -- a config file whose
+                // path is a sysctl source is shadowed to inventory during
+                // collection -- so the bucket choice is load-bearing, not
+                // theoretical.
                 FindingKind::Advisory { .. } | FindingKind::Inventory => stats.advisory += 1,
             }
         }
@@ -579,12 +591,34 @@ pub struct RefineStats {
     pub baseline_available: bool,
 }
 
+/// A repo section's effective member counts (§ 3.2): the projected
+/// `packages_added` entries whose `source_repo` resolves to the section
+/// (`Exact`/`Resolved` attribution), that are actionable, and that are not
+/// locked -- computed before any display filter. `unlisted` is how many of
+/// those effective members are absent from the filtered `view.packages`.
+/// One definition, computed once per [`RefinedView`] and read through
+/// [`crate::session::RefineSession::repo_effective`] by both the repo
+/// no-op rule and `RepoGroupInfo`'s counts, so the two can never diverge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoEffective {
+    pub member_count: usize,
+    pub included: usize,
+    pub unlisted: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedView {
     pub packages: Vec<RefinedPackage>,
     pub config_files: Vec<RefinedConfig>,
     pub containerfile_preview: String,
     pub stats: RefineStats,
+    /// Per-`RepoId` effective-member counts (§ 3.2). Not part of the wire
+    /// contract: `ViewResponse` flattens `RefinedView` directly into
+    /// `/api/view`, and this is an internal computation the session reads
+    /// through `repo_effective`, not a field the client sees -- the client
+    /// sees `RepoGroupInfo`'s three counts instead.
+    #[serde(skip)]
+    pub repo_effective: BTreeMap<RepoId, RepoEffective>,
     pub generation: u64,
 }
 
@@ -720,6 +754,8 @@ pub enum RefineError {
     InventoryNotToggleable(String),
     #[error("advisory item is not toggleable: {0}")]
     AdvisoryNotToggleable(String),
+    #[error("nothing to change: {0}")]
+    NoopTarget(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -986,9 +1022,9 @@ mod section_stats_tests {
     /// The partition invariant cannot prove this and never could: every
     /// item increments `total` once and exactly one bucket once, so the
     /// sum holds whichever bucket receives it. This is the guard for the
-    /// assignment, and it is the only cover `Inventory` has -- no counted
-    /// section can produce one today, so no fixture-driven test reaches
-    /// that arm.
+    /// assignment, and the only one that reaches the `Inventory` arm
+    /// directly: a sysctl-shadowed config file is counted as inventory in
+    /// the Config section, but no refine fixture builds that state.
     #[test]
     fn every_disposition_lands_in_its_designated_bucket() {
         // Expectations are the whole bucket vector, not just the bucket

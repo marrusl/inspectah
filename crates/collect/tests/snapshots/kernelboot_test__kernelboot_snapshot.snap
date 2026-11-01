@@ -29,22 +29,13 @@ expression: section
       "aggregate": null
     }
   ],
-  "modules_load_d": [],
-  "modprobe_d": [],
-  "dracut_conf": [
-    {
-      "path": "/etc/dracut.conf.d/50-custom.conf",
-      "content": "add_dracutmodules+=\" lvm \"\nhostonly=\"yes\"\n"
-    }
-  ],
   "loaded_modules": [
     {
       "name": "bridge",
       "size": "307200",
       "used_by": "0",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -53,8 +44,7 @@ expression: section
       "size": "16384",
       "used_by": "1 bridge",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -63,8 +53,7 @@ expression: section
       "size": "16384",
       "used_by": "2 stp,bridge",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -73,8 +62,7 @@ expression: section
       "size": "20480",
       "used_by": "1",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -83,8 +71,7 @@ expression: section
       "size": "86016",
       "used_by": "1 vfat",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -93,8 +80,7 @@ expression: section
       "size": "172032",
       "used_by": "0",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -103,8 +89,7 @@ expression: section
       "size": "28672",
       "used_by": "0",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     },
@@ -113,19 +98,16 @@ expression: section
       "size": "196608",
       "used_by": "2",
       "disposition": {
-        "kind": "actionable",
-        "include": true
+        "kind": "inventory"
       },
       "aggregate": null
     }
   ],
-  "non_default_modules": [],
   "tuned_active": "virtual-guest",
   "tuned_disposition": {
     "kind": "actionable",
     "include": true
   },
-  "tuned_custom_profiles": [],
   "locale": "en_US.UTF-8",
   "timezone": "America/New_York",
   "alternatives": []

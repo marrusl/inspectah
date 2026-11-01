@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
@@ -15,6 +16,45 @@ use std::collections::BTreeSet;
 /// Primary header name for acknowledging sensitive data exports.
 /// Both this and the legacy header are accepted for backward compatibility.
 pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
+/// Where `POST /api/tarball` reports what it demoted.
+///
+/// **This is a UI affordance, not the record.** Every demotion is already
+/// in the artifact, as a per-package `# FIXME` line in the exported
+/// Containerfile, which every consumer of the tarball gets whatever route
+/// produced it. That is why the CLI and TUI exports not surfacing this
+/// header costs them nothing, and why truncating the list below loses a
+/// convenience rather than a fact.
+///
+/// The body of this route is the tarball itself, so the list travels as a
+/// JSON array in a header, and two layers make that safe for a string a
+/// scanned snapshot named. `serde_json::to_string` escapes the C0 range,
+/// so header injection is closed before `sanitize_package_id` is
+/// consulted. It does *not* escape DEL or anything non-ASCII, both of
+/// which `HeaderValue` rejects -- an unsanitized one would turn this
+/// export into a 500 -- so the sanitizer is load-bearing for those
+/// rather than a second opinion. `warnings_header_value_escapes_c0_and_\
+/// leaves_the_rest_to_the_sanitizer` pins which layer owns what.
+pub const EXPORT_WARNINGS_HEADER: &str = "x-export-warnings";
+
+/// How many warnings the header carries before it summarizes the rest.
+///
+/// One warning per unprovable uploaded package, and a snapshot chooses
+/// how many of those there are, so the array is attacker-sized. Browsers
+/// and proxies drop headers at 8-16 KB, which would make the export
+/// undownloadable or strip the warnings silently; twenty of these is
+/// about a kilobyte.
+const MAX_HEADER_WARNINGS: usize = 20;
+
+/// Render the export warnings as a JSON array small enough for a header.
+fn warnings_header_value(warnings: &[String]) -> String {
+    let shown: Vec<&String> = warnings.iter().take(MAX_HEADER_WARNINGS).collect();
+    let rest = warnings.len().saturating_sub(shown.len());
+    let mut values: Vec<String> = shown.into_iter().cloned().collect();
+    if rest > 0 {
+        values.push(format!("...and {rest} more"));
+    }
+    serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
+}
 const LEGACY_ACK_SENSITIVE_HEADER: &str = "x-acknowledge-sensitive";
 
 /// Produce a display version that avoids duplicating what's already in pretty_name.
@@ -57,15 +97,15 @@ fn deduplicate_version(pretty_name: &str, version_id: &str) -> String {
     // No overlap at all
     version_id.to_string()
 }
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::error::AppError;
 
-/// Shared application state. Wraps the session mutex alongside caches
-/// that are immutable for the session lifetime.
+/// Shared application state. The session mutex is the whole of it:
+/// every surface projects from the session on each request, so there is
+/// no server-lifetime copy of its state to go stale (§ 3.9).
 pub struct AppState {
     pub session: Arc<Mutex<RefineSession>>,
-    pub sections_cache: OnceLock<Vec<ReferenceSection>>,
 }
 
 pub use crate::web_types::*;
@@ -201,18 +241,19 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let repos_excluded = changes.repos_excluded();
     let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
-    // Count visible packages per source_repo (lowercased for consistency
-    // with RepoIndex, which normalizes section IDs to lowercase).
+    // Count visible packages per source_repo, keeping the package's recorded
+    // spelling as-is -- RepoIndex and RepoId fold ASCII case internally, so
+    // the lookups below match regardless of case.
     let mut repo_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
     for pkg in &view.packages {
-        let section = pkg.entry.source_repo.to_lowercase();
+        let section = pkg.entry.source_repo.clone();
         *repo_counts.entry(section).or_insert(0) += 1;
     }
 
     // Also include repos known to the index but not visible (0-count)
-    for section_id in repo_index.packages_by_repo.keys() {
-        repo_counts.entry(section_id.clone()).or_insert(0);
+    for section_id in repo_index.packages_by_repo().keys() {
+        repo_counts.entry(section_id.to_string()).or_insert(0);
     }
 
     let mut groups: Vec<RepoGroupInfo> = repo_counts
@@ -221,7 +262,7 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
             let provenance = if section_id.is_empty() {
                 RepoProvenance::Unknown
             } else {
-                repo_index.provenance(&section_id)
+                repo_index.provenance(&RepoId::new(section_id.as_str()))
             };
             let is_distro = if section_id.is_empty() {
                 false
@@ -230,12 +271,16 @@ pub(crate) fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
             };
             let tier = RepoIndex::repo_tier(&section_id);
             let enabled = !excluded.contains(section_id.as_str());
+            let effective = session.repo_effective(&RepoId::new(section_id.as_str()));
             RepoGroupInfo {
                 section_id,
                 provenance,
                 is_distro,
                 tier,
                 package_count,
+                effective_member_count: effective.member_count,
+                effective_included: effective.included,
+                effective_unlisted: effective.unlisted,
                 enabled,
             }
         })
@@ -394,7 +439,10 @@ pub async fn export_tarball(
             orig_inc,
             filename,
             session.source_tarball_path().map(|p| p.to_path_buf()),
-            session.upload_dir_path().map(|p| p.to_path_buf()),
+            // The canonical path, so what the export copies from is the
+            // directory `ensure_upload_dir` proved, not a path that can
+            // still resolve somewhere else.
+            session.upload_dir_canon().map(|p| p.to_path_buf()),
         )
     };
     // Lock is released here.
@@ -419,11 +467,11 @@ pub async fn export_tarball(
 
     // Expensive render + tar work happens outside the lock via spawn_blocking.
     let dl_name = export_filename.clone();
-    let bytes = tokio::task::spawn_blocking(
-        move || -> Result<Vec<u8>, inspectah_refine::types::RefineError> {
+    let (bytes, warnings) = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<u8>, Vec<String>), inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join(&dl_name);
-            inspectah_refine::session::render_refine_export(
+            let warnings = inspectah_refine::session::render_refine_export(
                 &projected,
                 &tarball_path,
                 Some(&original_includes),
@@ -431,7 +479,7 @@ pub async fn export_tarball(
                 source_tarball.as_deref(),
                 upload_dir.as_deref(),
             )?;
-            Ok(std::fs::read(&tarball_path)?)
+            Ok((std::fs::read(&tarball_path)?, warnings))
         },
     )
     .await
@@ -454,6 +502,7 @@ pub async fn export_tarball(
                 axum::http::header::CONTENT_DISPOSITION.as_str(),
                 disposition,
             ),
+            (EXPORT_WARNINGS_HEADER, warnings_header_value(&warnings)),
         ],
         bytes,
     )
@@ -825,30 +874,7 @@ pub async fn batch_toggle_group(
             }
             // Kernel boot items
             if include_kernel && let Some(ref kernel) = snap.kernel_boot {
-                // Loaded modules
-                for kmod in &kernel.loaded_modules {
-                    if kmod.disposition.is_advisory() || kmod.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::KernelModule {
-                            name: kmod.name.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
-                // Non-default modules
-                for kmod in &kernel.non_default_modules {
-                    if kmod.disposition.is_advisory() || kmod.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::KernelModule {
-                            name: kmod.name.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
+                // Loaded modules are inventory and carry no op.
                 // Sysctls
                 for sysctl in &kernel.sysctl_overrides {
                     if sysctl.disposition.is_advisory() || sysctl.locked {
@@ -1119,11 +1145,8 @@ pub async fn get_groups() -> impl IntoResponse {
 // -- New Phase 4 endpoints ------------------------------------------------
 
 pub async fn get_sections(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let sections = state.sections_cache.get_or_init(|| {
-        let session = state.session.lock().unwrap();
-        crate::adapter::build_web_sections(session.reference())
-    });
-    Json(sections.clone())
+    let session = state.session.lock().unwrap();
+    Json(crate::adapter::build_web_sections(&session.reference()))
 }
 
 pub async fn mark_viewed(
@@ -1214,7 +1237,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         // Call the health handler synchronously via tokio runtime
@@ -1274,9 +1296,8 @@ mod tests {
             ],
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/redhat.repo".into(),
-                content:
-                    "[appstream]\nname=AppStream\ngpgcheck=1\n[baseos]\nname=BaseOS\ngpgcheck=1"
-                        .into(),
+                content: "[appstream]\nname=AppStream\nbaseurl=http://example.invalid/appstream\ngpgcheck=1\n[baseos]\nname=BaseOS\nbaseurl=http://example.invalid/baseos\ngpgcheck=1"
+                    .into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1314,8 +1335,8 @@ mod tests {
             .expect("should have epel group");
         assert!(!epel.is_distro);
         assert_eq!(epel.tier, RepoTier::ThirdParty);
-        // epel has packages but no repo file -> Incomplete
-        assert_eq!(epel.provenance, RepoProvenance::Incomplete);
+        // epel has packages but no section on the host -> Stale
+        assert_eq!(epel.provenance, RepoProvenance::Stale);
         assert!(epel.enabled);
     }
 
@@ -1362,11 +1383,23 @@ mod tests {
 
     #[test]
     fn apply_exclude_repo_via_op_endpoint() {
+        use inspectah_core::baseline::BaselineData;
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_refine::types::RefinementOp;
 
         // Build snapshot with packages from multiple repos including epel
         let mut snap = empty_snapshot();
+        // A baseline (even empty) is required so these packages normalize to
+        // the Site bucket, defaulting to included (no `leaf_packages` means
+        // every Site package defaults to leaf), rather than Investigate ->
+        // excluded with no baseline at all -- otherwise the exclude op below
+        // is already a no-op under the § 3.2 member-based rule and never
+        // exercises the op endpoint this test is for.
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: Default::default(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
         snap.rpm = Some(RpmSection {
             packages_added: vec![
                 PackageEntry {
@@ -1562,6 +1595,91 @@ mod tests {
         );
     }
 
+    /// The export warnings header stays inside what a browser or proxy
+    /// will carry, however many packages a snapshot demotes.
+    #[test]
+    fn warnings_header_value_caps_an_attacker_sized_list() {
+        assert_eq!(warnings_header_value(&[]), "[]");
+        assert_eq!(
+            warnings_header_value(&["a.noarch: x".into()]),
+            r#"["a.noarch: x"]"#
+        );
+
+        // Exactly at the cap: no summary element.
+        let at_cap: Vec<String> = (0..MAX_HEADER_WARNINGS)
+            .map(|i| format!("p{i}.noarch"))
+            .collect();
+        let rendered = warnings_header_value(&at_cap);
+        assert!(!rendered.contains("more"), "{rendered}");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered)
+                .unwrap()
+                .len(),
+            MAX_HEADER_WARNINGS
+        );
+
+        // One over, and a thousand over: the cap plus one summary either
+        // way, and the summary counts what it dropped.
+        for total in [MAX_HEADER_WARNINGS + 1, MAX_HEADER_WARNINGS + 1000] {
+            let many: Vec<String> = (0..total).map(|i| format!("p{i}.noarch")).collect();
+            let rendered = warnings_header_value(&many);
+            let parsed: Vec<String> = serde_json::from_str(&rendered).unwrap();
+            assert_eq!(parsed.len(), MAX_HEADER_WARNINGS + 1, "{total}");
+            assert_eq!(
+                parsed.last().unwrap(),
+                &format!("...and {} more", total - MAX_HEADER_WARNINGS),
+                "{total}"
+            );
+            // Comfortably under the 8 KB a proxy may drop at.
+            assert!(rendered.len() < 4096, "{total}: {} bytes", rendered.len());
+        }
+    }
+
+    /// Exactly which layer closes which byte.
+    ///
+    /// The doc on [`EXPORT_WARNINGS_HEADER`] first credited
+    /// `sanitize_package_id` for all of it, which was too much. The
+    /// correction offered -- that `serde_json::to_string` escapes every
+    /// control character -- is too little: it escapes the C0 range, so
+    /// CR and LF are closed before the sanitizer is consulted, but it
+    /// passes DEL and every non-ASCII char through raw, and
+    /// `HeaderValue` rejects both. So the sanitizer is load-bearing for
+    /// those two, not merely a second layer. Pinned here because the
+    /// division is the reason a snapshot-named string is allowed into a
+    /// header at all.
+    #[test]
+    fn warnings_header_value_escapes_c0_and_leaves_the_rest_to_the_sanitizer() {
+        // The half serde_json owns: header injection.
+        let rendered = warnings_header_value(&["a\r\nX-Evil: 1".into()]);
+        assert!(
+            !rendered.contains('\r') && !rendered.contains('\n'),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\\r\\n"), "{rendered}");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&rendered).unwrap()[0],
+            "a\r\nX-Evil: 1"
+        );
+
+        // The half it does not own. If this ever starts failing,
+        // serde_json got stricter and the note above needs revising --
+        // it does not mean the sanitizer became unnecessary.
+        let raw = warnings_header_value(&["b\u{7f}c".into(), "d\u{20ac}e".into()]);
+        assert!(raw.contains('\u{7f}'), "serde_json passes DEL through");
+        assert!(
+            raw.contains('\u{20ac}'),
+            "serde_json passes non-ASCII through"
+        );
+        assert!(
+            axum::http::HeaderValue::from_str(&raw).is_err(),
+            "a header value may not carry either, so the sanitizer must"
+        );
+
+        // What the export actually produces, having been through it.
+        let real = warnings_header_value(&["epel-release.noarch: staged RPM not verified".into()]);
+        assert!(axum::http::HeaderValue::from_str(&real).is_ok(), "{real}");
+    }
+
     /// Structural test: ensure the ACK_SENSITIVE_HEADER constant stays in sync
     /// with the CORS allow-headers configuration in lib.rs.
     ///
@@ -1699,7 +1817,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let actionable_slugs = SectionGroup::all_in_order()
@@ -1733,7 +1850,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let reference_slugs = SectionGroup::all_in_order()
@@ -1765,7 +1881,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let unknown_slugs = vec![
@@ -1809,7 +1924,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({ "include": true });
@@ -1913,7 +2027,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({
@@ -1980,7 +2093,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({
@@ -2038,7 +2150,6 @@ mod tests {
         let session = RefineSession::new(snap);
         let state = Arc::new(AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let payload = serde_json::json!({

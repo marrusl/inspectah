@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useId } from "react";
 import { Button } from "@patternfly/react-core";
 import {
   AngleRightIcon,
@@ -37,12 +37,14 @@ export function GroupRow({
   const [localExpanded, setLocalExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+  const inertStateTextId = useId();
 
   // Group is visually expanded if user expanded it OR search forced it open
   const expanded = localExpanded || forceExpanded;
 
   const isDegraded = group.render_state === "degraded";
   const isExcluded = group.render_state === "excluded";
+  const isInert = group.render_state === "inert";
   const hasOptionalSpillover = group.optional_spillover_count > 0;
 
   const handleExpandToggle = useCallback(() => {
@@ -107,6 +109,7 @@ export function GroupRow({
       className={rowClassName}
       role="group"
       aria-label={`${group.name}, ${pkgLabel}`}
+      aria-describedby={isInert ? inertStateTextId : undefined}
       tabIndex={-1}
       onKeyDown={handleKeyDown}
       {...(groupNameMatches ? { "data-search-match": "true" } : {})}
@@ -140,6 +143,15 @@ export function GroupRow({
         {isExcluded && hasOptionalSpillover && (
           <span className="inspectah-group-row__subtitle">
             {group.optional_spillover_count} optional still included
+          </span>
+        )}
+
+        {isInert && (
+          <span
+            id={inertStateTextId}
+            className="inspectah-group-row__subtitle"
+          >
+            nothing to decide: all members are locked or from base
           </span>
         )}
 

@@ -6,6 +6,7 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
+use inspectah_core::types::kernelboot::KernelModule;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 
@@ -133,6 +134,11 @@ fn happy_path() {
         .expect("bridge module should be parsed");
     assert_eq!(bridge.size, "307200");
     assert_eq!(bridge.used_by, "0");
+    assert!(
+        bridge.disposition.is_inventory(),
+        "the collector records a loaded module as inventory, got {:?}",
+        bridge.disposition
+    );
 
     // sysctl overrides detected (only where file != runtime)
     assert!(!section.sysctl_overrides.is_empty());
@@ -145,10 +151,6 @@ fn happy_path() {
 
     // tuned profile
     assert_eq!(section.tuned_active, "virtual-guest");
-
-    // dracut config
-    assert_eq!(section.dracut_conf.len(), 1);
-    assert!(section.dracut_conf[0].content.contains("lvm"));
 }
 
 // ── Test 2: Sysctl three-way diff ────────────────────────────────────
@@ -256,62 +258,6 @@ fn lsmod_failure_returns_degraded() {
     }
 }
 
-// ── Test 4: Partial failure — dracut unreadable ──────────────────────
-
-#[test]
-fn partial_failure_dracut_unreadable() {
-    // All primary sources work, but dracut.conf.d directory is not readable
-    let exec = MockExecutor::new()
-        .with_file("/proc/cmdline", CMDLINE_FIXTURE)
-        .with_command(
-            "lsmod",
-            ExecResult {
-                stdout: LSMOD_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "sysctl -a",
-            ExecResult {
-                stdout: SYSCTL_A_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/etc/sysctl.d", vec!["99-custom.conf"])
-        .with_file("/etc/sysctl.d/99-custom.conf", SYSCTL_CONF_FIXTURE)
-        .with_dir("/usr/lib/sysctl.d", vec![])
-        .with_dir("/etc/modprobe.d", vec![])
-        .with_dir("/etc/modules-load.d", vec![]);
-    // No .with_dir for /etc/dracut.conf.d → read_dir returns Err
-
-    let source = pkg_source();
-    let ctx = InspectionContext {
-        source_system: &source,
-        executor: &exec,
-        rpm_state: None,
-        baseline_data: None,
-    };
-
-    let result = KernelbootInspector::new().inspect(&ctx, &NullProgress);
-    match result {
-        Err(InspectorError::Degraded { reason, partial }) => {
-            assert!(
-                reason.contains("dracut"),
-                "reason should mention dracut, got: {reason}"
-            );
-            if let SectionData::KernelBoot(s) = &partial.section {
-                assert!(!s.cmdline.is_empty());
-                assert!(!s.loaded_modules.is_empty());
-            } else {
-                panic!("partial should be KernelBoot section");
-            }
-        }
-        other => panic!("expected Degraded, got {:?}", other),
-    }
-}
-
 // ── Test 5: tuned not installed → no error ───────────────────────────
 
 #[test]
@@ -359,62 +305,6 @@ fn tuned_not_installed() {
     };
 
     assert_eq!(section.tuned_active, "");
-}
-
-// ── Test 6: Config snippet with secret → RedactionHint ───────────────
-
-#[test]
-fn config_snippet_with_secret() {
-    let exec = MockExecutor::new()
-        .with_file("/proc/cmdline", CMDLINE_FIXTURE)
-        .with_command(
-            "lsmod",
-            ExecResult {
-                stdout: LSMOD_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "sysctl -a",
-            ExecResult {
-                stdout: SYSCTL_A_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/etc/sysctl.d", vec![])
-        .with_dir("/usr/lib/sysctl.d", vec![])
-        .with_dir("/etc/modprobe.d", vec!["secret.conf"])
-        .with_file(
-            "/etc/modprobe.d/secret.conf",
-            "options wifi password=hunter2\n",
-        )
-        .with_dir("/etc/modules-load.d", vec![])
-        .with_dir("/etc/dracut.conf.d", vec![]);
-
-    let source = pkg_source();
-    let ctx = InspectionContext {
-        source_system: &source,
-        executor: &exec,
-        rpm_state: None,
-        baseline_data: None,
-    };
-
-    let output = KernelbootInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
-
-    assert!(
-        !output.redaction_hints.is_empty(),
-        "should produce RedactionHint for password in config snippet"
-    );
-    let hint = output
-        .redaction_hints
-        .iter()
-        .find(|h| h.path.contains("secret.conf"))
-        .expect("hint should reference secret.conf");
-    assert!(hint.reason.contains("password"));
 }
 
 // ── Test 7: cmdline with password → RedactionHint ────────────────────
@@ -514,11 +404,24 @@ fn empty_system() {
 
     assert!(section.sysctl_overrides.is_empty());
     assert!(section.loaded_modules.is_empty());
-    assert!(section.dracut_conf.is_empty());
-    assert!(section.modprobe_d.is_empty());
-    assert!(section.modules_load_d.is_empty());
     assert!(section.tuned_active.is_empty());
     assert!(output.redaction_hints.is_empty());
+}
+
+// ── Test 8b: loaded module disposition defaults to inventory ─────────
+
+/// A loaded module is inventory: it is displayed and never mounted on a
+/// decision. A snapshot that omits the key must not read back as an
+/// actionable, included finding.
+#[test]
+fn absent_loaded_module_disposition_deserializes_as_inventory() {
+    let json = r#"{"name":"bridge","size":"307200","used_by":"0"}"#;
+    let module: KernelModule = serde_json::from_str(json).unwrap();
+    assert!(
+        module.disposition.is_inventory(),
+        "absent disposition must deserialize as inventory, got {:?}",
+        module.disposition
+    );
 }
 
 // ── Test 9: Applicability ────────────────────────────────────────────

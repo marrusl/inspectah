@@ -13,7 +13,7 @@ use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
 use inspectah_web::handlers::AppState;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn app(state: Arc<AppState>) -> axum::Router {
@@ -59,7 +59,6 @@ fn single_host_state() -> Arc<AppState> {
     let snap = InspectionSnapshot::new();
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -75,7 +74,6 @@ fn aggregate_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -280,7 +278,6 @@ async fn aggregate_view_returns_flat_for_aggregate_of_2() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/aggregate/view").await;
@@ -390,7 +387,6 @@ fn aggregate_state_with_variants() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -572,7 +568,6 @@ async fn aggregate_diff_422_binary() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -693,7 +688,6 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
 
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/aggregate/view").await;
@@ -877,7 +871,6 @@ fn aggregate_state_with_packages() -> Arc<AppState> {
 
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(merged))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -1114,7 +1107,6 @@ async fn aggregate_view_contains_leaf_authority_metadata() {
 
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/aggregate/view").await;

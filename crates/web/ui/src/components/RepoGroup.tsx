@@ -59,6 +59,7 @@ export function RepoGroup({
         provenance={repo.provenance}
         isDistro={repo.is_distro}
         packageCount={repo.package_count}
+        effectiveMemberCount={repo.effective_member_count}
         enabled={repo.enabled}
         isExpanded={effectiveExpanded}
         infoCount={infoCount}

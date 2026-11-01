@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use inspectah_refine::session::RefineSession;
 
@@ -166,7 +166,6 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
     let is_dirty_on_exit = {
         let state = Arc::new(inspectah_web::handlers::AppState {
             session: Arc::new(Mutex::new(session)),
-            sections_cache: OnceLock::new(),
         });
 
         let rt = tokio::runtime::Runtime::new()?;

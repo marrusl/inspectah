@@ -1,13 +1,16 @@
 use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, QuadletUnit};
 use inspectah_core::types::nonrpm::{
     FileType, NonRpmItem, NonRpmSoftwareSection, UnmanagedFile, UnmanagedFileSection,
 };
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV, env_hash,
@@ -126,6 +129,120 @@ fn tarball_file_set(tarball_path: &std::path::Path) -> BTreeSet<String> {
         }
     }
     files
+}
+
+/// The source operand of every **active** `COPY` in a Containerfile.
+///
+/// Commented lines are skipped deliberately: the renderer emits
+/// `# COPY <path> /usr/local/bin/...` for a Go or shell binary it will
+/// not carry, `# COPY config/selinux/ ...` in the SELinux block, and a
+/// commented `COPY repoless-packages/...` for a demoted package. None of
+/// those is an instruction to the builder.
+fn active_copy_sources(containerfile: &str) -> Vec<String> {
+    containerfile
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("COPY "))
+        .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
+        .collect()
+}
+
+/// A `/var` directory whose only creator is a `config.files` entry the
+/// operator can exclude, which is the § 3.4 route that makes
+/// `render_tmpfiles_conf` produce a line.
+const APPONE_CONF: &str = "/etc/tmpfiles.d/appone.conf";
+const VAR_TMPFILES_MEMBER: &str = "config/usr/lib/tmpfiles.d/inspectah-var.conf";
+
+/// Every active `COPY` in the exported Containerfile names something the
+/// archive carries.
+///
+/// Stated over the rendered output rather than over a list of members,
+/// so it holds for the next `COPY` the renderer learns to emit as well
+/// as for the ones it emits today. The defect it was written for:
+/// `render_tmpfiles_conf` returning `Some` makes the Containerfile stage
+/// `inspectah-var.conf`, and the refine export did not write it, so the
+/// archive a user downloads failed at that line under `podman build`
+/// with nothing from inspectah saying why.
+///
+/// The op below is the reachable route, not the shortest one. A
+/// `VarDirBacking::Unbacked` verdict would also produce the line, but it
+/// comes from the scan and no decision reaches it; excluding a
+/// tmpfiles.d fragment under Configuration Files is something the UI
+/// offers, and it turns a building export into a non-building one.
+#[test]
+fn every_copy_source_is_in_the_archive() {
+    let mut snap = test_snapshot();
+    snap.config.as_mut().unwrap().files.push(ConfigFileEntry {
+        path: APPONE_CONF.into(),
+        kind: ConfigFileKind::Unowned,
+        category: ConfigCategory::Tmpfiles,
+        content: "d /var/lib/appone 0750 root root -\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    snap.storage = Some(StorageSection {
+        var_directories: vec![VarDirectory {
+            path: "/var/lib/appone".into(),
+            backing: Some(VarDirBacking::Tmpfiles {
+                conf: APPONE_CONF.into(),
+                line: "d /var/lib/appone 0750 root root -".into(),
+            }),
+            mode: Some("0750".into()),
+            owner_name: Some("root".into()),
+            group_name: Some("root".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: APPONE_CONF.into(),
+            },
+            include: false,
+        })
+        .unwrap();
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+    let containerfile = tarball_read_file(&tarball_path, "Containerfile")
+        .expect("the export writes a Containerfile");
+    let sources = active_copy_sources(&containerfile);
+
+    // Without these two the invariant below holds over nothing: a
+    // Containerfile with no COPY line satisfies it, and so does one that
+    // stopped staging the member this test was written for.
+    assert!(
+        sources.len() >= 2,
+        "the fixture must produce several COPY lines: {sources:?}\n{containerfile}"
+    );
+    assert!(
+        sources.iter().any(|s| s == VAR_TMPFILES_MEMBER),
+        "the exclusion must still reach the /var provisioning COPY: \
+         {sources:?}\n{containerfile}"
+    );
+
+    let missing: Vec<&String> = sources
+        .iter()
+        .filter(|src| match src.strip_suffix('/') {
+            // A directory operand is satisfied by any member beneath it.
+            Some(dir) => !files.iter().any(|f| f.starts_with(&format!("{dir}/"))),
+            None => !files.contains(*src),
+        })
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "the Containerfile COPYs {missing:?}, which the archive does not \
+         contain, so the build fails at that line.\n  archive: {files:?}"
+    );
 }
 
 #[test]
@@ -1277,8 +1394,12 @@ fn export_allowlist_includes_repoless_packages_root() {
 fn export_includes_uploaded_rpms() {
     // Build a snapshot with repo-less RPM that will be uploaded
     let mut snap = test_snapshot();
-    // After upload, mark_uploaded_rpm sets repoless_cached = true.
-    // The export filter relies on this to include the uploaded RPM.
+    // `set_uploaded` sets `uploaded`, `repoless_cached` and `cache_path`
+    // together, and the export proves the last of those rather than
+    // scanning the directory: the filename matching the snapshot's NEVRA
+    // is no longer what gets it exported.
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path().canonicalize().unwrap();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
             name: "uploaded-tool".into(),
@@ -1288,15 +1409,20 @@ fn export_includes_uploaded_rpms() {
             source_repo: String::new(),
             disposition: FindingKind::included(),
             repoless_cached: true,
+            uploaded: true,
+            cache_path: Some(
+                upload_dir
+                    .join("uploaded-tool-2.0.0-1.el9.x86_64.rpm")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             repoless_annotation: "No repo source — cached RPM bundled".into(),
             ..Default::default()
         }],
         ..Default::default()
     });
 
-    // Create upload_dir with an uploaded RPM
-    let upload_tempdir = tempfile::tempdir().unwrap();
-    let upload_dir = upload_tempdir.path();
+    let upload_dir = upload_dir.as_path();
     std::fs::write(
         upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
         b"uploaded rpm data",
@@ -1328,6 +1454,8 @@ fn export_includes_uploaded_rpms() {
 fn export_merges_cached_and_uploaded_rpms() {
     // Build a snapshot with two repo-less RPMs: one cached, one uploaded
     let mut snap = test_snapshot();
+    let upload_tempdir = tempfile::tempdir().unwrap();
+    let upload_dir = upload_tempdir.path().canonicalize().unwrap();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
@@ -1348,7 +1476,14 @@ fn export_merges_cached_and_uploaded_rpms() {
                 arch: "x86_64".into(),
                 source_repo: String::new(),
                 disposition: FindingKind::included(),
-                repoless_cached: true, // set by mark_uploaded_rpm after upload
+                repoless_cached: true, // set by set_uploaded after upload
+                uploaded: true,
+                cache_path: Some(
+                    upload_dir
+                        .join("uploaded-tool-2.0.0-1.el9.x86_64.rpm")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
                 repoless_annotation: "No repo source — cached RPM bundled".into(),
                 ..Default::default()
             },
@@ -1372,8 +1507,7 @@ fn export_merges_cached_and_uploaded_rpms() {
         .unwrap();
 
     // Upload dir has uploaded-tool.rpm
-    let upload_tempdir = tempfile::tempdir().unwrap();
-    let upload_dir = upload_tempdir.path();
+    let upload_dir = upload_dir.as_path();
     std::fs::write(
         upload_dir.join("uploaded-tool-2.0.0-1.el9.x86_64.rpm"),
         b"uploaded rpm data",

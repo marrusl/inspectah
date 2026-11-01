@@ -20,7 +20,9 @@ pub mod readme;
 pub mod report;
 pub mod safety;
 pub mod secrets;
+pub mod selinux;
 pub mod tarball;
+pub mod var_dirs;
 
 pub mod users;
 
@@ -30,6 +32,7 @@ pub mod report_data;
 pub mod language_packages;
 pub mod service_intent;
 
+pub mod repo_enabling;
 pub mod repoless;
 pub mod unmanaged;
 
@@ -41,6 +44,34 @@ use std::path::Path;
 ///
 /// The snapshot JSON itself is written here as well (artifact 7).
 /// Config tree writing (artifact 8) is deferred to Task 24.
+/// Where the Storage block's `COPY` expects the `/var` provisioning
+/// fragment to be, relative to the output directory.
+const VAR_TMPFILES_DIR: &str = "config/usr/lib/tmpfiles.d";
+const VAR_TMPFILES_FILE: &str = "inspectah-var.conf";
+
+/// Stage the `/var` provisioning fragment, when the snapshot produces one.
+///
+/// **Every path that renders a Containerfile must call this first.**
+/// `var_dir_section_lines` emits
+/// `COPY config/usr/lib/tmpfiles.d/inspectah-var.conf …` under exactly the
+/// condition this writes under — `render_tmpfiles_conf` returning `Some` —
+/// so an output set that has the one and not the other fails at that line
+/// under `podman build`, with nothing said before then. That is what
+/// happened: this was inlined here and the refine export, which builds its
+/// own file set, had no equivalent step.
+pub fn write_tmpfiles_conf(
+    snap: &InspectionSnapshot,
+    output_dir: &Path,
+) -> Result<(), RenderError> {
+    let Some(content) = containerfile::render_tmpfiles_conf(snap) else {
+        return Ok(());
+    };
+    let dir = output_dir.join(VAR_TMPFILES_DIR);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(VAR_TMPFILES_FILE), content)?;
+    Ok(())
+}
+
 pub fn render_all(
     snap: &InspectionSnapshot,
     context: &RenderContext,
@@ -57,11 +88,7 @@ pub fn render_all(
 
     // 8c. tmpfiles.d — /var directory provisioning (staged before Containerfile
     //     rendering so the COPY line references an actual file)
-    if let Some(tmpfiles_content) = containerfile::render_tmpfiles_conf(snap) {
-        let tmpfiles_dir = output_dir.join("config/usr/lib/tmpfiles.d");
-        std::fs::create_dir_all(&tmpfiles_dir)?;
-        std::fs::write(tmpfiles_dir.join("inspectah-var.conf"), &tmpfiles_content)?;
-    }
+    write_tmpfiles_conf(snap, output_dir)?;
 
     // 1. Containerfile — COPY lines derived from materialized config tree roots
     let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots), None);

@@ -299,3 +299,120 @@ test.describe("Aggregate mode", () => {
     await expect(firstVisible).toBeFocused();
   });
 });
+
+// Position 29 (§ 3.2, § 6.3) in the aggregate mount: the repo Switch reads
+// the effective counts, never `enabled`/history, and activation posts the
+// direction those counts derive through `handleAggregateRepoToggle`. Same
+// `repo-disagree` sequence fixtures as e2e/repos.spec.ts (built to double as
+// both a ViewResponse and an AggregateViewResponse).
+test.describe("Repo disagreement in aggregate mode (position 29)", () => {
+  test.beforeEach(async ({ page }) => {
+    await applyMockApi(page, "aggregate-3");
+  });
+
+  test.afterEach(async ({ page }) => {
+    await clearMocks(page);
+  });
+
+  test("enabled history, members excluded, then included; undo and redo", async ({
+    page,
+  }) => {
+    await mockSequence(
+      page,
+      "/api/aggregate/view",
+      [
+        "sequences/repo-disagree/00-enabled-all-excluded.json",
+        "sequences/repo-disagree/01-after-include-all.json",
+        "sequences/repo-disagree/02-after-undo.json",
+        "sequences/repo-disagree/03-after-redo.json",
+      ],
+      { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
+    );
+
+    const opPayloads: unknown[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/api/op")) {
+        opPayloads.push(req.postDataJSON());
+      }
+    });
+
+    await page.goto("/");
+    await expect(page.getByTestId("aggregate-app")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const vendorSwitch = page.locator("#repo-toggle-vendor");
+    await expect(vendorSwitch).toBeVisible();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+
+    await vendorSwitch.click({ force: true });
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+    expect(opPayloads.at(-1)).toMatchObject({
+      target: {
+        item_id: { kind: "Repo", key: { path: "vendor" } },
+        include: true,
+      },
+    });
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+
+    await page.getByRole("button", { name: "Redo" }).click();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+  });
+
+  test("mirror direction: excluded history, members included, then excluded", async ({
+    page,
+  }) => {
+    await mockSequence(
+      page,
+      "/api/aggregate/view",
+      [
+        "sequences/repo-disagree/10-disabled-all-included.json",
+        "sequences/repo-disagree/11-after-exclude-all.json",
+        "sequences/repo-disagree/12-after-undo.json",
+        "sequences/repo-disagree/13-after-redo.json",
+      ],
+      { triggerOn: ["/api/op", "/api/undo", "/api/redo"] },
+    );
+
+    const opPayloads: unknown[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "POST" && req.url().includes("/api/op")) {
+        opPayloads.push(req.postDataJSON());
+      }
+    });
+
+    await page.goto("/");
+    await expect(page.getByTestId("aggregate-app")).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const vendorSwitch = page.locator("#repo-toggle-vendor");
+    await expect(vendorSwitch).toBeVisible();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+
+    await vendorSwitch.click({ force: true });
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+    expect(opPayloads.at(-1)).toMatchObject({
+      target: {
+        item_id: { kind: "Repo", key: { path: "vendor" } },
+        include: false,
+      },
+    });
+
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(vendorSwitch).toBeChecked();
+    await expect(page.getByText("2 of 2 packages included")).toBeVisible();
+
+    await page.getByRole("button", { name: "Redo" }).click();
+    await expect(vendorSwitch).not.toBeChecked();
+    await expect(page.getByText("2 packages excluded")).toBeVisible();
+  });
+});

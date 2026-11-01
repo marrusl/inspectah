@@ -56,7 +56,6 @@ fn item_id_to_viewed_key(item_id: &ItemId) -> String {
         } => format!("{app_id}/{remote}/{branch}"),
         ItemId::NMConnection { path } => path.clone(),
         ItemId::FirewallZone { path } => path.clone(),
-        ItemId::KernelModule { name } => name.clone(),
         ItemId::Sysctl { key } => key.clone(),
         ItemId::TunedSelection { profile } => profile.clone(),
         ItemId::CronJob { path } => path.clone(),

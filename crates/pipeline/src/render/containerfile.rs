@@ -9,7 +9,7 @@
 //! 6. Non-RPM software
 //! 7. Containers (quadlet COPYs)
 //! 8. Users
-//! 9. Kernel/boot (kargs.d, sysctl, modules)
+//! 9. Kernel/boot (kargs.d, sysctl, tuned activation)
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
@@ -18,16 +18,21 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
+use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::language_packages;
-use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
+use super::safety::{
+    ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
+};
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
+use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
 /// Human-readable label for a `DegradationReason`.
 fn degradation_reason_label(reason: &DegradationReason) -> &'static str {
@@ -194,7 +199,7 @@ fn render_containerfile_inner(
             "# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into(),
         );
     }
-    lines.extend(non_rpm_section_lines(snap));
+    lines.extend(non_rpm_section_lines(snap, render_ctx));
 
     // 7. Containers
     if is_degraded(&snap.completeness, InspectorId::Containers) {
@@ -290,6 +295,194 @@ fn install_name_for_package(
     }
 }
 
+/// Section id prefix of the CodeReady Builder repository, lowercased.
+const CRB_ID_PREFIX: &str = "codeready-builder-";
+
+/// Infixes that mark a CRB section as a debuginfo or source mirror rather
+/// than the binary repo EPEL packages resolve against.
+const CRB_ID_EXCLUDED_INFIXES: [&str; 2] = ["-debug-", "-source-"];
+
+/// Why the CRB flags are there, said once per Containerfile.
+const CRB_BANNER: &str = "# CRB was enabled on the source host; EPEL packages may depend on it.";
+
+/// The CRB section ids this export carries enabled, as the host wrote them.
+///
+/// `--enablerepo` takes an id verbatim: nothing here reconstructs one from
+/// a prefix. That is also why no `$(arch)` can reach a `RUN` line -- an id
+/// containing it fails `sanitize_shell_value`, which rejects `$`, `(` and
+/// `)`, so the property is the filter's rather than a separate check's.
+fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
+    let mut ids: std::collections::BTreeSet<RepoId> = std::collections::BTreeSet::new();
+    for file in rpm
+        .repo_files
+        .iter()
+        .filter(|f| f.disposition.is_included())
+    {
+        for sec in parse_repo_sections(&file.content) {
+            let lower = sec.id.as_str().to_ascii_lowercase();
+            if sec.enabled
+                && lower.starts_with(CRB_ID_PREFIX)
+                && !CRB_ID_EXCLUDED_INFIXES.iter().any(|m| lower.contains(m))
+                && sanitize_shell_value(sec.id.as_str()).is_some()
+            {
+                ids.insert(sec.id);
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+/// The `--enablerepo` flags and one-time banner that CRB adds to the
+/// package, group, module-stream and repo-enabling transactions.
+///
+/// Those four ask for it by name. § 3.1's `RUN dnf install -y
+/// policycoreutils-python-utils` at the head of the SELinux block does
+/// not, and cannot: it is a `const` in `selinux.rs` that nothing here
+/// rewrites. Scoping by call site rather than by sweeping `dnf install`
+/// lines is what keeps that exclusion from regressing when a later
+/// transaction is added.
+struct CrbFlags {
+    /// Appended straight after the `dnf` subcommand; empty when no CRB
+    /// section is carried.
+    flags: String,
+    banner_pending: bool,
+}
+
+impl CrbFlags {
+    fn new(rpm: &RpmSection) -> CrbFlags {
+        let ids = crb_ids(rpm);
+        CrbFlags {
+            flags: ids
+                .iter()
+                .map(|id| format!(" --enablerepo={id}"))
+                .collect::<String>(),
+            banner_pending: !ids.is_empty(),
+        }
+    }
+
+    /// The banner, for the first transaction that asks.
+    fn banner(&mut self) -> Option<String> {
+        if !self.banner_pending {
+            return None;
+        }
+        self.banner_pending = false;
+        Some(CRB_BANNER.to_string())
+    }
+}
+
+/// A `RUN dnf install -y` transaction over `names`, with the cleanup tail
+/// every install block in this file carries.
+fn dnf_install_lines(names: &[&str], crb: &CrbFlags) -> Vec<String> {
+    let mut body = vec![format!("RUN dnf install -y{} \\", crb.flags)];
+    for name in names {
+        body.push(format!("    {} \\", name));
+    }
+    body.push("    && dnf clean all \\".into());
+    body.push("    && rm -rf \\".into());
+    body.push("        /var/cache/dnf \\".into());
+    body.push("        /var/lib/dnf/history* \\".into());
+    body.push("        /var/log/dnf* \\".into());
+    body.push("        /var/log/hawkey.log \\".into());
+    body.push("        /var/log/rhsm".into());
+    body
+}
+
+/// Upstream "latest" RPM URLs for release packages whose project
+/// publishes one. Advice on a `#` line only: it reaches the network,
+/// which installing from the copied definition does not have to.
+const RELEASE_PERMALINKS: &[(&str, &str)] = &[(
+    "epel-release",
+    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{major}.noarch.rpm",
+)];
+
+/// What a permalink substitutes the host's OS major version into.
+const OS_MAJOR_PLACEHOLDER: &str = "{major}";
+
+/// The permalink for `pkg` and the host it points at, when the project
+/// publishes one and the snapshot recorded an OS version to fill in.
+fn release_permalink(snap: &InspectionSnapshot, pkg: &PackageEntry) -> Option<(String, String)> {
+    let (_, template) = RELEASE_PERMALINKS
+        .iter()
+        .find(|(name, _)| *name == pkg.name)?;
+    let version_id = &snap.os_release.as_ref()?.version_id;
+    let major = sanitize_shell_value(version_id.split('.').next()?).filter(|m| !m.is_empty())?;
+    let url = template.replace(OS_MAJOR_PLACEHOLDER, major);
+    let host = url.split_once("://")?.1.split('/').next()?.to_string();
+    Some((url, host))
+}
+
+/// Longest line the repo-enabling narration wraps to, counting the
+/// leading `# `. § 5.2's block text is this wrap over its sentences.
+const NARRATION_WIDTH: usize = 80;
+
+/// Greedy word wrap into `# `-prefixed comment lines.
+fn comment_paragraph(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::from("#");
+    for word in text.split_whitespace() {
+        if current.len() > 1 && current.len() + 1 + word.len() > NARRATION_WIDTH {
+            lines.push(std::mem::replace(&mut current, String::from("#")));
+        }
+        current.push(' ');
+        current.push_str(word);
+    }
+    if current.len() > 1 {
+        lines.push(current);
+    }
+    lines
+}
+
+/// § 5.2's narration for one repo-enabling package: why it installs by
+/// name from the copied definition, and what the build needs for that to
+/// work.
+fn repo_enabling_narration(
+    snap: &InspectionSnapshot,
+    rpm: &RpmSection,
+    pkg: &PackageEntry,
+) -> Vec<String> {
+    let mut text = format!(
+        "{} was installed outside any repo on the source host; the host's enabled repos \
+         served it, and its repo files and key are copied above, so it installs from the \
+         copied definition. The build needs those repo endpoints reachable with any \
+         credentials and CA trust they require.",
+        super::language_packages::sanitize_for_comment(&pkg.name)
+    );
+    if let Some(file) = super::repo_enabling::owned_repo_file_name(rpm, pkg) {
+        text.push_str(&format!(
+            " Installing after the COPY may leave a cosmetic {}.rpmnew.",
+            super::language_packages::sanitize_for_comment(file)
+        ));
+    }
+    let permalink = release_permalink(snap, pkg);
+    if let Some((_, host)) = &permalink {
+        text.push_str(&format!(" Alternative, when {host} is reachable:"));
+    }
+    let mut lines = comment_paragraph(&text);
+    if let Some((url, _)) = &permalink {
+        lines.push(format!("# RUN dnf install -y {url}"));
+    }
+    lines
+}
+
+/// § 3.3's demotion line, printed in place of the active install when no
+/// serving repo definition survives the export.
+fn demotion_fixme(pkg: &PackageEntry, loss: &super::repo_enabling::ServingLoss) -> String {
+    let name = super::language_packages::sanitize_for_comment(&pkg.name);
+    let id = super::language_packages::sanitize_for_comment(loss.id.as_str());
+    let tail =
+        format!("{name} installs from that repo definition, which this export does not carry");
+    match &loss.file {
+        Some(file) => format!(
+            "# FIXME: include {} under Configuration Files, or re-include repo {id}, or \
+             upload the RPM; {tail}",
+            super::language_packages::sanitize_for_comment(file)
+        ),
+        // Nothing captured defines the section, so there is no file to
+        // name; the advice that would name one is dropped, not invented.
+        None => format!("# FIXME: re-include repo {id}, or upload the RPM; {tail}"),
+    }
+}
+
 fn packages_section_lines(
     snap: &InspectionSnapshot,
     base: Option<&str>,
@@ -356,14 +549,16 @@ fn packages_section_lines(
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
                 gpg_body.push(format!(
-                    "# FIXME: GPG key path contains unsafe characters: {}",
+                    "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
+                     its path contains unsafe characters: {}",
                     super::safety::html_escape(&key.path)
                 ));
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
                 gpg_body.push(format!(
-                    "# FIXME: GPG key path unsafe for shell: {}",
+                    "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
+                     its path is unsafe for the shell: {}",
                     super::safety::html_escape(&key.path)
                 ));
                 continue;
@@ -421,6 +616,8 @@ fn packages_section_lines(
         ));
     }
 
+    let mut crb = CrbFlags::new(rpm);
+
     // Module streams
     let enabled_modules: Vec<_> = rpm
         .module_streams
@@ -458,9 +655,12 @@ fn packages_section_lines(
                 }
                 format!("/{}", safe_profiles.join(","))
             };
+            if let Some(banner) = crb.banner() {
+                mod_body.push(banner);
+            }
             mod_body.push(format!(
-                "RUN dnf module enable -y {}:{}{}",
-                ms.module_name, ms.stream, profiles
+                "RUN dnf module enable -y{} {}:{}{}",
+                crb.flags, ms.module_name, ms.stream, profiles
             ));
         }
         lines.extend(section("Module Streams", mod_body));
@@ -495,7 +695,10 @@ fn packages_section_lines(
 
                 // Emit group install section
                 let mut grp_body: Vec<String> = Vec::new();
-                grp_body.push("RUN dnf group install -y \\".into());
+                if let Some(banner) = crb.banner() {
+                    grp_body.push(banner);
+                }
+                grp_body.push(format!("RUN dnf group install -y{} \\", crb.flags));
                 for g in &renderable {
                     grp_body.push(format!("    \"{}\" \\", g.name));
                 }
@@ -615,84 +818,72 @@ fn packages_section_lines(
             counts
         });
 
+    // Repo-enabling packages (e.g. epel-release) install in an earlier
+    // transaction so their GPG keys and repo configs are present when DNF
+    // verifies signatures of packages from those repos. Which packages
+    // those are is `repo_enabling_from` and nothing else: deciding it by a
+    // name ending in `-release` rendered a package the host's repos never
+    // served as an active install *and* as a MANUAL block.
+    let mut repo_enabling: Vec<(&PackageEntry, String)> = Vec::new();
+    let mut demoted: Vec<(&PackageEntry, super::repo_enabling::ServingLoss)> = Vec::new();
+
     for pkg in installable_packages {
         // Suppress packages whose name is covered by a renderable group
         if group_member_suppressed.contains(&pkg.name) {
             continue;
         }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
-        if sanitize_shell_value(&install_name).is_some() {
-            install_names.push(install_name);
+        if sanitize_shell_value(&install_name).is_none() {
+            continue;
         }
+        match super::repo_enabling::repo_enabling_export(rpm, pkg) {
+            super::repo_enabling::RepoEnablingExport::NotEnabling => {
+                install_names.push(install_name)
+            }
+            super::repo_enabling::RepoEnablingExport::Served => {
+                repo_enabling.push((pkg, install_name))
+            }
+            super::repo_enabling::RepoEnablingExport::Lost(loss) => demoted.push((pkg, loss)),
+        }
+    }
+
+    if !repo_enabling.is_empty() || !demoted.is_empty() {
+        let mut repo_body: Vec<String> = Vec::new();
+        for (pkg, _) in &repo_enabling {
+            repo_body.extend(repo_enabling_narration(snap, rpm, pkg));
+        }
+        for (pkg, loss) in &demoted {
+            repo_body.push(demotion_fixme(pkg, loss));
+        }
+        if !repo_enabling.is_empty() {
+            let mut names: Vec<&str> = repo_enabling.iter().map(|(_, n)| n.as_str()).collect();
+            names.sort();
+            if let Some(banner) = crb.banner() {
+                repo_body.push(banner);
+            }
+            repo_body.extend(dnf_install_lines(&names, &crb));
+        }
+        lines.extend(section(
+            &format!(
+                "Repo-enabling packages ({})",
+                repo_enabling.len() + demoted.len()
+            ),
+            repo_body,
+        ));
     }
 
     if !install_names.is_empty() {
         install_names.sort();
-
-        // Split repo-enabling packages (e.g. epel-release) from the rest.
-        // These must be installed first so their GPG keys and repo configs
-        // are present when DNF verifies signatures of packages from those repos.
-        let (repo_pkgs, other_pkgs): (Vec<_>, Vec<_>) = install_names.iter().partition(|n| {
-            // Strip optional .arch suffix (e.g. "epel-release.noarch" -> "epel-release")
-            let base = n.split('.').next().unwrap_or(n);
-            base.ends_with("-release")
-        });
-
-        if !repo_pkgs.is_empty() && !other_pkgs.is_empty() {
-            // Emit repo-enabling packages first
-            let mut repo_body: Vec<String> = Vec::new();
-            repo_body.push("RUN dnf install -y \\".into());
-            for name in &repo_pkgs {
-                repo_body.push(format!("    {} \\", name));
-            }
-            repo_body.push("    && dnf clean all \\".into());
-            repo_body.push("    && rm -rf \\".into());
-            repo_body.push("        /var/cache/dnf \\".into());
-            repo_body.push("        /var/lib/dnf/history* \\".into());
-            repo_body.push("        /var/log/dnf* \\".into());
-            repo_body.push("        /var/log/hawkey.log \\".into());
-            repo_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Repo-enabling packages ({})", repo_pkgs.len()),
-                repo_body,
-            ));
-
-            // Then emit the remaining packages
-            let mut pkg_body: Vec<String> = Vec::new();
-            pkg_body.push("RUN dnf install -y \\".into());
-            for name in &other_pkgs {
-                pkg_body.push(format!("    {} \\", name));
-            }
-            pkg_body.push("    && dnf clean all \\".into());
-            pkg_body.push("    && rm -rf \\".into());
-            pkg_body.push("        /var/cache/dnf \\".into());
-            pkg_body.push("        /var/lib/dnf/history* \\".into());
-            pkg_body.push("        /var/log/dnf* \\".into());
-            pkg_body.push("        /var/log/hawkey.log \\".into());
-            pkg_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Packages ({})", other_pkgs.len()),
-                pkg_body,
-            ));
-        } else {
-            // All packages are the same kind — single block is fine
-            let mut pkg_body: Vec<String> = Vec::new();
-            pkg_body.push("RUN dnf install -y \\".into());
-            for name in &install_names {
-                pkg_body.push(format!("    {} \\", name));
-            }
-            pkg_body.push("    && dnf clean all \\".into());
-            pkg_body.push("    && rm -rf \\".into());
-            pkg_body.push("        /var/cache/dnf \\".into());
-            pkg_body.push("        /var/lib/dnf/history* \\".into());
-            pkg_body.push("        /var/log/dnf* \\".into());
-            pkg_body.push("        /var/log/hawkey.log \\".into());
-            pkg_body.push("        /var/log/rhsm".into());
-            lines.extend(section(
-                &format!("Packages ({})", install_names.len()),
-                pkg_body,
-            ));
+        let names: Vec<&str> = install_names.iter().map(|n| n.as_str()).collect();
+        let mut pkg_body: Vec<String> = Vec::new();
+        if let Some(banner) = crb.banner() {
+            pkg_body.push(banner);
         }
+        pkg_body.extend(dnf_install_lines(&names, &crb));
+        lines.extend(section(
+            &format!("Packages ({})", install_names.len()),
+            pkg_body,
+        ));
     }
 
     if !todo_lines.is_empty() {
@@ -1205,7 +1396,10 @@ fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Non-RPM Software section ---
 
-fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+fn non_rpm_section_lines(
+    snap: &InspectionSnapshot,
+    render_ctx: Option<&RenderContext>,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     // Language package sections (executable, not advisory).
@@ -1218,7 +1412,7 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines.extend(super::unmanaged::unmanaged_file_lines(snap));
 
     // Repo-less RPM packages
-    lines.extend(super::repoless::repoless_rpm_lines(snap));
+    lines.extend(super::repoless::repoless_rpm_lines(snap, render_ctx));
 
     // Remaining non-RPM items that aren't language packages
     // (ELF binaries, .env files, git repos — still advisory).
@@ -1303,6 +1497,23 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Kernel/Boot section ---
 
+/// The `config.files` path of `profile`'s own `tuned.conf`, when that
+/// entry exists and the export is not carrying it.
+///
+/// `None` covers both the stock-profile case (no entry under
+/// `/etc/tuned/<profile>/`, because nothing there was collected) and the
+/// included case, which are the two ways activation is consistent.
+fn excluded_tuned_profile_file(snap: &InspectionSnapshot, profile: &str) -> Option<String> {
+    let path = format!("/etc/tuned/{profile}/tuned.conf");
+    let entry = snap
+        .config
+        .as_ref()?
+        .files
+        .iter()
+        .find(|f| f.path == path)?;
+    (!entry.disposition.is_included()).then(|| entry.path.clone())
+}
+
 fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let kb = match &snap.kernel_boot {
         Some(k) => k,
@@ -1329,19 +1540,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         );
     }
 
-    // Non-default modules
-    let included_mods: usize = kb
-        .non_default_modules
-        .iter()
-        .filter(|m| m.disposition.is_included())
-        .count();
-    if included_mods > 0 {
-        body.push(format!(
-            "# {} non-default kernel module(s) — config files in COPY config/etc/ above",
-            included_mods
-        ));
-    }
-
     // Sysctl overrides — synthesized into a single drop-in
     let included_sysctl: usize = kb
         .sysctl_overrides
@@ -1353,28 +1551,36 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "# {} sysctl override(s) — merged into single drop-in",
             included_sysctl
         ));
-        body.push("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/".into());
+        body.push(format!(
+            "COPY sysctl/etc/sysctl.d/{SYNTHESIZED_SYSCTL_FILE} /etc/sysctl.d/"
+        ));
     }
 
     // Tuned — gated on include flag (set by collectors / aggregate merge).
+    // The profile's own file is a `config.files` entry with its own
+    // decision, so activation can outlive the file: when the operator
+    // excluded it, naming the profile would point the image at a file it
+    // does not carry.
     let tuned_included = kb.tuned_disposition.is_included();
     if tuned_included && !kb.tuned_active.is_empty() {
-        if is_valid_tuned_profile(&kb.tuned_active) {
+        if !is_valid_tuned_profile(&kb.tuned_active) {
+            body.push(format!(
+                "# FIXME: tuned profile name contains unsafe characters: {:?}",
+                kb.tuned_active
+            ));
+        } else if let Some(excluded) = excluded_tuned_profile_file(snap, &kb.tuned_active) {
+            body.push(format!(
+                "# FIXME: include {excluded} under Configuration Files or activate a stock \
+                 profile; the active profile is custom and its file is excluded"
+            ));
+        } else {
             body.push(format!("# Tuned profile: {}", kb.tuned_active));
-            if !kb.tuned_custom_profiles.is_empty() {
-                body.push("COPY tuned/etc/tuned/ /etc/tuned/".into());
-            }
             body.push(format!(
                 "RUN echo \"{}\" > /etc/tuned/active_profile",
                 kb.tuned_active
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
             body.push("RUN systemctl enable tuned.service".into());
-        } else {
-            body.push(format!(
-                "# FIXME: tuned profile name contains unsafe characters: {:?}",
-                kb.tuned_active
-            ));
         }
     }
 
@@ -1382,6 +1588,15 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 }
 
 // --- Security & Access Control section ---
+
+/// Whether a port label renders as a `semanage port` command rather than a
+/// FIXME. The install precondition and the port loop read the same answer, so
+/// the block never installs `semanage` for a command it will not emit.
+fn port_label_renders(pl: &inspectah_core::types::selinux::SelinuxPortLabel) -> bool {
+    sanitize_shell_value(&pl.protocol).is_some()
+        && sanitize_shell_value(&pl.port).is_some()
+        && sanitize_shell_value(&pl.label_type).is_some()
+}
 
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let sel = match &snap.selinux {
@@ -1442,38 +1657,21 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
 
-    if !sel.fcontext_rules.is_empty() {
-        body.push(format!(
-            "# FIXME: {} custom fcontext rule(s) detected — apply in image",
-            sel.fcontext_rules.len()
-        ));
-        let limit = sel.fcontext_rules.len().min(10);
-        for fc in &sel.fcontext_rules[..limit] {
-            if sanitize_shell_value(fc).is_some() {
-                body.push(format!("# RUN semanage fcontext -a {}", fc));
-            } else {
-                body.push(format!(
-                    "# FIXME: fcontext rule contains unsafe characters: {:?}",
-                    fc
-                ));
-            }
-        }
-        body.push("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs".into());
+    // The fcontext rules, and the precondition that installs the tool their
+    // commands need. The precondition sits here rather than beside the port
+    // labels because it has to precede whichever `semanage` command the block
+    // emits first (spec § 3.1).
+    let fcontext = super::selinux::render_fcontext_rules(snap);
+    let ports_need_semanage = sel.port_labels.iter().any(port_label_renders);
+    body.extend(fcontext.preamble);
+    if fcontext.emits_command || ports_need_semanage {
+        body.extend(
+            super::selinux::INSTALL_PRECONDITION
+                .iter()
+                .map(|l| (*l).to_string()),
+        );
     }
-
-    if !sel.audit_rules.is_empty() {
-        body.push(format!(
-            "# {} custom audit rule file(s) materialized under config/etc/audit/rules.d/",
-            sel.audit_rules.len()
-        ));
-    }
-
-    if !sel.pam_configs.is_empty() {
-        body.push(format!(
-            "# {} custom PAM config file(s) materialized under config/etc/pam.d/",
-            sel.pam_configs.len()
-        ));
-    }
+    body.extend(fcontext.rules);
 
     if !sel.port_labels.is_empty() {
         body.push(format!(
@@ -1481,10 +1679,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             sel.port_labels.len()
         ));
         for pl in &sel.port_labels {
-            if sanitize_shell_value(&pl.protocol).is_some()
-                && sanitize_shell_value(&pl.port).is_some()
-                && sanitize_shell_value(&pl.label_type).is_some()
-            {
+            if port_label_renders(pl) {
                 body.push(format!(
                     "RUN semanage port -a -t {} -p {} {}",
                     pl.label_type, pl.protocol, pl.port
@@ -1676,26 +1871,36 @@ fn resolve_tmpfiles_ownership(
     materialized_users: &std::collections::HashSet<String>,
     rpm_accounts: &std::collections::HashMap<String, String>,
     replicated_rpms: &std::collections::HashSet<String>,
-) -> (String, String, String) {
+) -> (ExportToken, ExportToken, String) {
     let uid = d.owner_uid.unwrap_or(0);
     let gid = d.owner_gid.unwrap_or(0);
 
     // Case 1: root
     if uid == 0 {
-        return ("root".into(), "root".into(), String::new());
+        return (
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            String::new(),
+        );
     }
 
-    let owner_name = d.owner_name.as_deref().unwrap_or("");
-    let group_name = d.group_name.as_deref().unwrap_or("");
+    // The two names come off the scanned host and reach both a
+    // tmpfiles.d field and a comment, and nothing upstream checks
+    // either. A name the allowlist refuses is treated as a name the
+    // scan never captured, which routes it to the numeric fallback the
+    // later cases already use: the same ownership, written the way this
+    // function already writes it when `stat` reported no name.
+    let owner_name = proved_account_name(d.owner_name.as_deref());
+    let group_name = proved_account_name(d.group_name.as_deref());
 
     // Case 2: materialized user (being created by useradd in this Containerfile)
     if !owner_name.is_empty() && materialized_users.contains(owner_name) {
         let group = if !group_name.is_empty() {
-            group_name.to_string()
+            known_token(group_name)
         } else {
-            gid.to_string()
+            numeric_token(gid)
         };
-        return (owner_name.into(), group, String::new());
+        return (known_token(owner_name), group, String::new());
     }
 
     // Case 3: RPM-provided user (package scriptlets create the account)
@@ -1715,12 +1920,12 @@ fn resolve_tmpfiles_ownership(
 
         if let Some(pkg) = providing_package {
             let group = if !group_name.is_empty() {
-                group_name.to_string()
+                known_token(group_name)
             } else {
-                owner_name.to_string()
+                known_token(owner_name)
             };
             return (
-                owner_name.into(),
+                known_token(owner_name),
                 group,
                 format!("created by package: {pkg}"),
             );
@@ -1730,49 +1935,243 @@ fn resolve_tmpfiles_ownership(
     // Case 4: name known but not guaranteed in the image
     if !owner_name.is_empty() {
         return (
-            uid.to_string(),
-            gid.to_string(),
+            numeric_token(uid),
+            numeric_token(gid),
             format!("account '{owner_name}' not guaranteed in image"),
         );
     }
 
     // Case 5: no name available
-    (uid.to_string(), gid.to_string(), String::new())
+    (numeric_token(uid), numeric_token(gid), String::new())
 }
 
-/// Generate tmpfiles.d conf content for unbacked /var directories with
-/// ownership and mode data.
+/// An account name the export may write, or `""` when the scan captured
+/// none and when the one it captured is not a name this will write.
 ///
-/// Returns `None` when no directories qualify (no mode data), in which case
-/// all unbacked dirs fall back to `RUN mkdir -p` in the Containerfile.
-///
-/// Directories without mode data are skipped here and handled by
-/// `var_dir_section_lines()` as `RUN mkdir -p` fallback. A single snapshot
-/// can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
-pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
-    use inspectah_core::types::storage::VarDirBacking;
+/// A refusal is deliberately indistinguishable from an absence here:
+/// both mean the renderer has no usable name and both route to the same
+/// numeric fallback, so neither needs a branch of its own.
+fn proved_account_name(name: Option<&str>) -> &str {
+    match name {
+        Some(name) if ExportToken::parse(name).is_ok() => name,
+        _ => "",
+    }
+}
 
+/// A field this module produced rather than read off a host.
+///
+/// Module constants and decimal ids are allowlist-clean by construction,
+/// so this is the one place an `ExportToken` is built without a caller
+/// handling a refusal.
+fn known_token(value: &str) -> ExportToken {
+    ExportToken::parse(value).expect("a module constant or a proved name passes the allowlist")
+}
+
+/// A numeric uid or gid as a tmpfiles.d field.
+fn numeric_token(id: u32) -> ExportToken {
+    ExportToken::parse(&id.to_string()).expect("decimal digits pass the allowlist")
+}
+
+/// Mode and ownership for the commented `#d` line of an `Unresolved`
+/// directory whose own mode the scan did not capture. The line is inert
+/// until the user uncomments it, and these are tmpfiles.d's own
+/// defaults for a directory.
+const DEFAULT_VAR_DIR_MODE: &str = "0755";
+const DEFAULT_VAR_DIR_OWNER: &str = "root";
+
+/// The comment that precedes a provisioned directory whose source-host
+/// creator this export does not carry.
+/// `creator` is host-sourced in every case the caller can reach: a
+/// tmpfiles.d fragment path, a unit filename, or a package name, each an
+/// unrestricted `String` inside `VarDirBacking`. This comment goes into
+/// both `inspectah-var.conf` and the Containerfile, and on both surfaces
+/// a newline ends the comment and promotes the rest to a directive, so
+/// it is escaped rather than refused: a comment that only labels cannot
+/// execute once its newline is gone, and refusing would cost the
+/// operator the reason for a line they are being asked to act on.
+fn lost_creator_comment(path: &ExportPath, creator: &str) -> String {
+    let path = path.as_str();
+    let creator = super::language_packages::sanitize_for_comment(creator);
+    format!("# {path}: created on the host by {creator}, which this export does not carry")
+}
+
+/// The `RUN` that makes a provisioned directory the scan captured no mode
+/// for.
+///
+/// This is a shell-form `RUN`: `/bin/sh -c` runs it as root at image
+/// build time and nothing quotes the operand. It takes an [`ExportPath`]
+/// rather than a `&str` so a path that did not pass the allowlist cannot
+/// reach it, which is the same guarantee `StagedName` gives the repo-less
+/// `COPY`/`RUN` pair.
+fn mkdir_line(path: &ExportPath) -> String {
+    format!("RUN mkdir -p {}", path.as_str())
+}
+
+/// The active tmpfiles.d `d` entry for a provisioned directory.
+///
+/// Every operand is a proved type for the same reason: tmpfiles.d
+/// records are newline-separated and their fields whitespace-separated,
+/// so an unproved value in *any* of the four ends the record and starts
+/// a directive of its own that systemd applies at boot. Proving only the
+/// path would have left the other three carrying the defect the path was
+/// fixed for.
+fn tmpfiles_dir_line(
+    path: &ExportPath,
+    mode: &ExportToken,
+    owner: &ExportToken,
+    group: &ExportToken,
+) -> String {
+    format!(
+        "d {} {} {} {} -",
+        path.as_str(),
+        mode.as_str(),
+        owner.as_str(),
+        group.as_str()
+    )
+}
+
+/// Why a directory got an instruction instead of a build step.
+const REFUSED_PATH_REASON: &str =
+    "its path has characters this export will not write into a build instruction";
+const REFUSED_MODE_REASON: &str =
+    "its recorded mode is not one this export will write into a tmpfiles.d entry";
+
+/// The line a directory renders in place of its `RUN` or its `d` entry
+/// when one of its own fields is refused.
+///
+/// Rejection is rejection: there is no sanitized form of a path that
+/// names the directory the host had, and no stand-in for a mode that is
+/// still the host's mode, so the export hands the operator an
+/// instruction instead of writing a build step it cannot vouch for. The
+/// path is escaped rather than refused here because this line is a
+/// comment, and naming the directory is the whole point of it.
+fn refused_field_comment(path: &str, reason: &str) -> String {
+    format!(
+        "# FIXME: create {} by hand; {reason}",
+        super::language_packages::sanitize_for_comment(path)
+    )
+}
+
+/// The two-line FIXME an `Unresolved` directory renders: an imperative
+/// instruction naming the cause (§ 5.6), then the `d` line to uncomment.
+///
+/// Both `inspectah-var.conf` and the Containerfile's Storage block carry
+/// it, so the wording is produced in one place.
+///
+/// `path` and the three fields beside it are proved, not escaped: the
+/// commented `d` line exists to be uncommented, so it has to be a line
+/// that is safe once the `#` comes off. A refused mode takes the same
+/// answer it takes on an active line, an instruction rather than a
+/// substituted default, because a default mode here would be a guess
+/// the operator could not tell from a reading. `d` is still needed for
+/// the mode and ownership the line carries.
+fn unresolved_fixme_lines(
+    d: &inspectah_core::types::storage::VarDirectory,
+    path: &ExportPath,
+    creator: &str,
+    reason: UnresolvedReason,
+    materialized_users: &std::collections::HashSet<String>,
+    rpm_accounts: &std::collections::HashMap<String, String>,
+    replicated_rpms: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let (mode, owner, group) = match &d.mode {
+        Some(mode) => {
+            let Ok(mode) = ExportToken::parse(mode) else {
+                return vec![refused_field_comment(&d.path, REFUSED_MODE_REASON)];
+            };
+            let (owner, group, _) =
+                resolve_tmpfiles_ownership(d, materialized_users, rpm_accounts, replicated_rpms);
+            (mode, owner, group)
+        }
+        None => (
+            known_token(DEFAULT_VAR_DIR_MODE),
+            known_token(DEFAULT_VAR_DIR_OWNER),
+            known_token(DEFAULT_VAR_DIR_OWNER),
+        ),
+    };
+    vec![
+        format!(
+            "# FIXME: confirm the base image creates {}; on the host {} created it and {}; \
+             if the base does not, uncomment the next line",
+            path.as_str(),
+            super::language_packages::sanitize_for_comment(creator),
+            reason.reason_text()
+        ),
+        format!("#{}", tmpfiles_dir_line(path, &mode, &owner, &group)),
+    ]
+}
+
+/// Generate tmpfiles.d conf content for the /var directories this export
+/// has to provision or cannot resolve.
+///
+/// `Provision` with mode data gets an active `d` line, preceded by the
+/// lost-creator comment when the verdict named a creator the export
+/// drops. `Unresolved` gets the two-line FIXME and no active line.
+/// `Carried` gets nothing: a creator the export carries already makes
+/// the directory, and a second `d` line would duplicate it.
+///
+/// Returns `None` when no directory produces a line. `Provision`
+/// directories without mode data are skipped here and handled by
+/// `var_dir_section_lines()` as `RUN mkdir -p` fallback, so a single
+/// snapshot can produce BOTH a tmpfiles.d conf AND `RUN mkdir` lines.
+pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> {
     let storage = snap.storage.as_ref()?;
     let materialized_users = collect_materialized_usernames(snap);
     let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut lines = Vec::new();
 
-    for d in &storage.var_directories {
-        if d.backing != Some(VarDirBacking::Unbacked) {
-            continue;
+    for (d, outcome) in storage
+        .var_directories
+        .iter()
+        .zip(effective_var_backing(snap))
+    {
+        debug_assert_eq!(d.path, outcome.path);
+        match &outcome.outcome {
+            EffectiveBacking::Carried => {}
+            EffectiveBacking::Provision { lost } => {
+                // Per-directory: skip directories missing mode data.
+                // These get RUN mkdir fallback in var_dir_section_lines().
+                let Some(mode) = d.mode.as_deref() else {
+                    continue;
+                };
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    lines.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
+                    continue;
+                };
+                let Ok(mode) = ExportToken::parse(mode) else {
+                    lines.push(refused_field_comment(&d.path, REFUSED_MODE_REASON));
+                    continue;
+                };
+                if let Some(creator) = lost {
+                    lines.push(lost_creator_comment(&path, creator));
+                }
+                let (owner, group, comment) = resolve_tmpfiles_ownership(
+                    d,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                );
+                if !comment.is_empty() {
+                    lines.push(format!("# {comment}"));
+                }
+                lines.push(tmpfiles_dir_line(&path, &mode, &owner, &group));
+            }
+            EffectiveBacking::Unresolved { creator, reason } => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    lines.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
+                    continue;
+                };
+                lines.extend(unresolved_fixme_lines(
+                    d,
+                    &path,
+                    creator,
+                    *reason,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                ));
+            }
         }
-        // Per-directory: skip directories missing mode data.
-        // These get RUN mkdir fallback in var_dir_section_lines().
-        let mode = match &d.mode {
-            Some(m) => m.as_str(),
-            None => continue,
-        };
-        let (owner, group, comment) =
-            resolve_tmpfiles_ownership(d, &materialized_users, &rpm_accounts, &replicated_rpms);
-        if !comment.is_empty() {
-            lines.push(format!("# {comment}"));
-        }
-        lines.push(format!("d {} {} {} {} -", d.path, mode, owner, group));
     }
 
     if lines.is_empty() {
@@ -1783,13 +2182,13 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
 }
 
 fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Vec<String> {
-    use inspectah_core::types::storage::VarDirBacking;
-
     let storage = match &snap.storage {
         Some(s) => s,
         None => return Vec::new(),
     };
 
+    let materialized_users = collect_materialized_usernames(snap);
+    let (rpm_accounts, replicated_rpms) = collect_rpm_provided_accounts(snap);
     let mut body = Vec::new();
 
     if tmpfiles_staged {
@@ -1800,10 +2199,42 @@ fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Ve
         );
     }
 
-    // Fallback: RUN mkdir for unbacked dirs WITHOUT ownership/mode data
-    for d in &storage.var_directories {
-        if d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_none() {
-            body.push(format!("RUN mkdir -p {}", d.path));
+    for (d, outcome) in storage
+        .var_directories
+        .iter()
+        .zip(effective_var_backing(snap))
+    {
+        debug_assert_eq!(d.path, outcome.path);
+        match &outcome.outcome {
+            EffectiveBacking::Carried => {}
+            // Fallback: RUN mkdir for provisioned dirs WITHOUT
+            // ownership/mode data. The rest are in the tmpfiles.d conf.
+            EffectiveBacking::Provision { lost } if d.mode.is_none() => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    body.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
+                    continue;
+                };
+                if let Some(creator) = lost {
+                    body.push(lost_creator_comment(&path, creator));
+                }
+                body.push(mkdir_line(&path));
+            }
+            EffectiveBacking::Provision { .. } => {}
+            EffectiveBacking::Unresolved { creator, reason } => {
+                let Ok(path) = ExportPath::parse(&d.path) else {
+                    body.push(refused_field_comment(&d.path, REFUSED_PATH_REASON));
+                    continue;
+                };
+                body.extend(unresolved_fixme_lines(
+                    d,
+                    &path,
+                    creator,
+                    *reason,
+                    &materialized_users,
+                    &rpm_accounts,
+                    &replicated_rpms,
+                ));
+            }
         }
     }
 
@@ -1851,6 +2282,502 @@ mod tests {
             ..Default::default()
         });
         snap
+    }
+
+    // --- Repo-enabling fixtures (Task 17) -------------------------------
+
+    const EPEL_REPO_PATH: &str = "/etc/yum.repos.d/epel.repo";
+    const EPEL_KEY_PATH: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
+    const EPEL_REPO_CONTENT: &str = "[epel]\n\
+         name=EPEL\n\
+         baseurl=https://example.invalid/epel\n\
+         enabled=1\n\
+         gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n";
+
+    fn repo_file(
+        path: &str,
+        content: &str,
+        included: bool,
+    ) -> inspectah_core::types::rpm::RepoFile {
+        inspectah_core::types::rpm::RepoFile {
+            path: path.into(),
+            content: content.into(),
+            is_default_repo: false,
+            disposition: FindingKind::from_bool(included),
+            locked: false,
+            aggregate: None,
+        }
+    }
+
+    fn owns(package: &str, paths: &[&str]) -> inspectah_core::types::rpm::FileOwnershipEntry {
+        inspectah_core::types::rpm::FileOwnershipEntry {
+            package_name: package.into(),
+            paths: paths.iter().map(|p| (*p).to_string()).collect(),
+        }
+    }
+
+    /// Make `name` repo-enabling the way a scan records it: installed
+    /// `@commandline`, served by `[epel]`, owning the `epel.repo` and key
+    /// this export is carrying.
+    fn make_epel_repo_enabling(snap: &mut InspectionSnapshot, name: &str) {
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm.packages_added.iter_mut().filter(|p| p.name == name) {
+            pkg.source_repo = "@commandline".into();
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+        }
+        rpm.repo_files
+            .push(repo_file(EPEL_REPO_PATH, EPEL_REPO_CONTENT, true));
+        rpm.gpg_keys.push(repo_file(EPEL_KEY_PATH, "", true));
+        rpm.file_ownership
+            .push(owns(name, &[EPEL_REPO_PATH, EPEL_KEY_PATH]));
+    }
+
+    /// The other half of the double render: a `@commandline` package the
+    /// scan left repo-less got an active `dnf install` from `source_repo`
+    /// alone, next to its own MANUAL block. `@commandline` is not a repo,
+    /// and nothing proves one serves this package.
+    #[test]
+    fn a_repoless_commandline_package_is_never_an_active_install() {
+        let mut snap = snapshot_with_packages(&["vendor-release", "htop"]);
+        for pkg in snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.source_repo = "@commandline".into();
+            pkg.repoless_annotation = "No repo source \u{2014} manual resolution needed".into();
+        }
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            output.contains("# MANUAL: vendor-release"),
+            "the repo-less block is where it belongs:\n{output}"
+        );
+        assert!(
+            !output.contains("    vendor-release \\"),
+            "and it must not also be installed by name:\n{output}"
+        );
+        assert!(
+            output.contains("    htop \\"),
+            "the control: an ordinary package still installs:\n{output}"
+        );
+    }
+
+    #[test]
+    fn repo_enabling_block_replaces_the_duplicate_manual_block() {
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        snap.os_release = Some(inspectah_core::types::os::OsRelease {
+            version_id: "9.6".into(),
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None, None);
+
+        // § 5.2's block text, hand-transcribed, through the active install.
+        let expected = r"# === Repo-enabling packages (1) ===
+# epel-release was installed outside any repo on the source host; the host's
+# enabled repos served it, and its repo files and key are copied above, so it
+# installs from the copied definition. The build needs those repo endpoints
+# reachable with any credentials and CA trust they require. Installing after the
+# COPY may leave a cosmetic epel.repo.rpmnew. Alternative, when
+# dl.fedoraproject.org is reachable:
+# RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
+RUN dnf install -y \
+    epel-release \";
+        assert!(
+            output.contains(expected),
+            "§ 5.2 block text:\nexpected:\n{expected}\ngot:\n{output}"
+        );
+
+        // § 8.3's active lines, in order.
+        let repos_at = output
+            .find("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/")
+            .expect("the repo files are copied");
+        let keys_at = output
+            .find("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/")
+            .expect("the GPG keys are copied");
+        let install_at = output.find(expected).expect("checked above");
+        assert!(
+            repos_at < keys_at && keys_at < install_at,
+            "the COPYs must precede the install:\n{output}"
+        );
+
+        // The permalink is advice, never an instruction.
+        for line in output
+            .lines()
+            .filter(|l| l.contains("dl.fedoraproject.org"))
+        {
+            assert!(
+                line.starts_with('#'),
+                "the permalink reached an active line: {line}"
+            );
+        }
+        assert!(
+            !output.contains("# MANUAL: epel-release"),
+            "the package that used to render twice still does:\n{output}"
+        );
+        assert!(
+            !output.contains("# TODO: 'epel-release"),
+            "a repo-enabling package needs no manual follow-up:\n{output}"
+        );
+    }
+
+    /// `vendor-release` owns `vendor.repo` but is served by `[bootstrap]`
+    /// from a file it does not own -- the two-repository case, where
+    /// losing either half is a demotion.
+    fn two_repository_snapshot() -> InspectionSnapshot {
+        let mut snap = snapshot_with_packages(&["vendor-release", "htop"]);
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.source_repo = "@commandline".into();
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("bootstrap")];
+        }
+        rpm.repo_files.push(repo_file(
+            "/etc/yum.repos.d/vendor.repo",
+            "[vendor]\nbaseurl=https://example.invalid/vendor\nenabled=1\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR\n",
+            true,
+        ));
+        rpm.repo_files.push(repo_file(
+            "/etc/yum.repos.d/bootstrap.repo",
+            "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=1\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP\n",
+            true,
+        ));
+        rpm.gpg_keys
+            .push(repo_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR", "", true));
+        rpm.gpg_keys.push(repo_file(
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-BOOTSTRAP",
+            "",
+            true,
+        ));
+        rpm.file_ownership.push(owns(
+            "vendor-release",
+            &[
+                "/etc/yum.repos.d/vendor.repo",
+                "/etc/pki/rpm-gpg/RPM-GPG-KEY-VENDOR",
+            ],
+        ));
+        snap
+    }
+
+    fn repo_file_mut<'a>(
+        snap: &'a mut InspectionSnapshot,
+        path: &str,
+    ) -> &'a mut inspectah_core::types::rpm::RepoFile {
+        snap.rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .iter_mut()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("fixture carries {path}"))
+    }
+
+    /// One way the export can lose a repo-enabling package's proof, and
+    /// the section and file the FIXME must then name.
+    struct DemotionCase {
+        label: &'static str,
+        mutate: fn(&mut InspectionSnapshot),
+        id: &'static str,
+        file: &'static str,
+    }
+
+    #[test]
+    fn losing_the_serving_repo_demotes_the_package() {
+        const ACTIVE_INSTALL: &str = "    vendor-release \\";
+        const FIXME_TAIL: &str = "vendor-release installs from that repo definition, \
+                                  which this export does not carry";
+
+        // The control: everything carried, so the demotion half below can
+        // fail. Re-including bootstrap.repo is this same state.
+        let served = render_containerfile(&two_repository_snapshot(), None, None);
+        assert!(
+            served.contains(ACTIVE_INSTALL),
+            "the carried case must install by name, or every case below is vacuous:\n{served}"
+        );
+        assert!(
+            !served.contains("# FIXME:"),
+            "the carried case must not warn:\n{served}"
+        );
+
+        // Each way the export can lose the proof, and the file the FIXME
+        // names for it.
+        let cases = [
+            DemotionCase {
+                label: "bootstrap.repo excluded",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/bootstrap.repo").disposition =
+                        FindingKind::excluded();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "[bootstrap] carried with enabled=0",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/bootstrap.repo").content =
+                        "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=0\n"
+                            .into();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "[bootstrap]'s gpgkey excluded",
+                mutate: |s| {
+                    let rpm = s.rpm.as_mut().expect("fixture has an rpm section");
+                    for key in rpm
+                        .gpg_keys
+                        .iter_mut()
+                        .filter(|k| k.path.ends_with("RPM-GPG-KEY-BOOTSTRAP"))
+                    {
+                        key.disposition = FindingKind::excluded();
+                    }
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/bootstrap.repo",
+            },
+            DemotionCase {
+                label: "the vendor.repo the package owns is excluded",
+                mutate: |s| {
+                    repo_file_mut(s, "/etc/yum.repos.d/vendor.repo").disposition =
+                        FindingKind::excluded();
+                },
+                id: "bootstrap",
+                file: "/etc/yum.repos.d/vendor.repo",
+            },
+        ];
+
+        for DemotionCase {
+            label,
+            mutate,
+            id,
+            file,
+        } in cases
+        {
+            let mut snap = two_repository_snapshot();
+            mutate(&mut snap);
+            let output = render_containerfile(&snap, None, None);
+            let expected = format!(
+                "# FIXME: include {file} under Configuration Files, or re-include repo {id}, \
+                 or upload the RPM; {FIXME_TAIL}"
+            );
+            assert!(
+                output.contains(&expected),
+                "{label}:\nexpected:\n{expected}\ngot:\n{output}"
+            );
+            assert!(
+                !output.contains(ACTIVE_INSTALL),
+                "{label}: the renderer kept an active install:\n{output}"
+            );
+
+            // The projection half: the annotation is what returns the
+            // upload control, and what makes the repo-less block render.
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            let demoted = snap
+                .rpm
+                .as_ref()
+                .expect("fixture has an rpm section")
+                .packages_added
+                .iter()
+                .find(|p| p.name == "vendor-release")
+                .expect("fixture has vendor-release");
+            assert_eq!(
+                demoted.repoless_annotation,
+                format!(
+                    "No repo source: the repo that served vendor-release ({id}) \
+                     is not carried by this export"
+                ),
+                "{label}"
+            );
+            let after = render_containerfile(&snap, None, None);
+            assert!(
+                after.contains("# MANUAL: vendor-release"),
+                "{label}: the demoted package must reach the repo-less block:\n{after}"
+            );
+            assert!(
+                !after.contains(ACTIVE_INSTALL),
+                "{label}: still no active install after demotion:\n{after}"
+            );
+        }
+
+        // A serving id no captured file defines: there is no file to name,
+        // so the advice that names one is dropped rather than invented.
+        let mut snap = two_repository_snapshot();
+        for pkg in snap
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .packages_added
+            .iter_mut()
+            .filter(|p| p.name == "vendor-release")
+        {
+            pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("mirror")];
+        }
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains(&format!(
+                "# FIXME: re-include repo mirror, or upload the RPM; {FIXME_TAIL}"
+            )),
+            "an undefined serving id:\n{output}"
+        );
+        assert!(
+            !output.contains("under Configuration Files"),
+            "no file exists to name:\n{output}"
+        );
+    }
+
+    #[test]
+    fn crb_flags_every_dnf_transaction() {
+        use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
+
+        const CRB_MATCHED: &str = "codeready-builder-for-rhel-9-aarch64-rpms";
+        const CRB_VERBATIM: &str = "codeready-builder-rhel9-internal";
+        const CRB_REPO_PATH: &str = "/etc/yum.repos.d/crb.repo";
+        // The last section is the input the `$(arch)` assertion needs: an
+        // id carrying a command substitution reaches the filter and has
+        // to be refused there, or "no line contains $(arch)" is satisfied
+        // by the fixture rather than by the code.
+        const CRB_CONTENT: &str = "[codeready-builder-for-rhel-9-aarch64-rpms]\nenabled=1\n\
+             [codeready-builder-rhel9-internal]\nenabled=1\n\
+             [crb-mirror-rhel9]\nenabled=1\n\
+             [codeready-builder-for-rhel-9-aarch64-debug-rpms]\nenabled=1\n\
+             [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n\
+             [codeready-builder-$(arch)-rpms]\nenabled=1\n";
+
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.repo_files
+                .push(repo_file(CRB_REPO_PATH, CRB_CONTENT, true));
+            rpm.module_streams
+                .push(inspectah_core::types::rpm::EnabledModuleStream {
+                    module_name: "nodejs".into(),
+                    stream: "18".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                });
+            rpm.installed_groups = Some(vec![InstalledGroup {
+                name: "Development Tools".into(),
+                members: vec!["make".into()],
+                ..Default::default()
+            }]);
+        }
+        // An SELinux block, so § 3.1's precondition is in the output and
+        // the exclusion below is reachable rather than vacuous.
+        snap.selinux = Some(SelinuxSection {
+            port_labels: vec![SelinuxPortLabel {
+                protocol: "tcp".into(),
+                port: "8443".into(),
+                label_type: "http_port_t".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+            }],
+            ..Default::default()
+        });
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert("Development Tools".into(), GroupRenderState::Renderable);
+        let output = render_containerfile(&snap, None, Some(&ctx));
+
+        // Identify the precondition by the package it installs, not by
+        // equality with the const: a line that gained a flag stops being
+        // equal to the const, which would take an equality-based filter
+        // or guard out of the picture exactly when it should fire.
+        const PRECONDITION_PACKAGE: &str = "policycoreutils-python-utils";
+        let transactions: Vec<&str> = output
+            .lines()
+            .filter(|l| l.starts_with("RUN dnf ") && !l.contains(PRECONDITION_PACKAGE))
+            .collect();
+        assert_eq!(
+            transactions.len(),
+            4,
+            "bootstrap, module stream, group and package list:\n{output}"
+        );
+        for line in &transactions {
+            assert!(
+                line.contains(&format!("--enablerepo={CRB_MATCHED}"))
+                    && line.contains(&format!("--enablerepo={CRB_VERBATIM}")),
+                "transaction missing a CRB flag: {line}"
+            );
+        }
+        assert_eq!(
+            output
+                .matches("# CRB was enabled on the source host; EPEL packages may depend on it.")
+                .count(),
+            1,
+            "the comment appears once:\n{output}"
+        );
+        // § 3.1's exclusion, in one assertion: the precondition renders,
+        // and it renders verbatim -- so any flag it acquired shows up as
+        // the difference rather than as an unsatisfiable predicate that
+        // passes.
+        let precondition_line = output
+            .lines()
+            .find(|l| l.starts_with("RUN dnf ") && l.contains(PRECONDITION_PACKAGE))
+            .unwrap_or_else(|| {
+                panic!("the precondition must render, or the exclusion is vacuous:\n{output}")
+            });
+        assert_eq!(
+            precondition_line,
+            super::super::selinux::INSTALL_PRECONDITION[2],
+            "§ 3.1's precondition must carry no --enablerepo"
+        );
+        assert!(
+            !output.contains("crb-mirror-rhel9"),
+            "a name that merely contains crb is not a CRB section:\n{output}"
+        );
+        assert!(
+            !output.contains("-debug-rpms") && !output.contains("-source-rpms"),
+            "debug and source mirrors are not enabled:\n{output}"
+        );
+        assert!(
+            !output.contains("$(arch)"),
+            "no id is reconstructed:\n{output}"
+        );
+
+        // The debug and source sections alone emit nothing.
+        let mut only_excluded = snapshot_with_packages(&["htop"]);
+        only_excluded
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .push(repo_file(
+                CRB_REPO_PATH,
+                "[codeready-builder-for-rhel-9-aarch64-debug-rpms]\nenabled=1\n\
+                 [codeready-builder-for-rhel-9-aarch64-source-rpms]\nenabled=1\n",
+                true,
+            ));
+        let output = render_containerfile(&only_excluded, None, None);
+        assert!(
+            !output.contains("--enablerepo") && !output.contains("# CRB was enabled"),
+            "debug and source sections alone emit nothing:\n{output}"
+        );
+
+        // A section the export is not carrying does not reach a RUN line.
+        let mut dropped = snapshot_with_packages(&["htop"]);
+        dropped
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .push(repo_file(CRB_REPO_PATH, CRB_CONTENT, false));
+        let output = render_containerfile(&dropped, None, None);
+        assert!(
+            !output.contains("--enablerepo"),
+            "an excluded repo file enables nothing:\n{output}"
+        );
     }
 
     #[test]
@@ -3197,23 +4124,37 @@ mod tests {
         );
     }
 
+    /// § 3.5: the custom profile travels under `config/etc/tuned/` with
+    /// the rest of the config tree, so the Containerfile's tuned block is
+    /// the activation decision and nothing else.
+    ///
+    /// The earlier form of this test asserted the
+    /// `COPY tuned/etc/tuned/ /etc/tuned/` line, which came from the
+    /// `tuned/` promoted root: a second copy path for a file the config
+    /// tree already carries.
     #[test]
-    fn test_containerfile_tuned_included_with_custom_profile() {
-        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+    fn test_containerfile_tuned_activation_without_a_promoted_root() {
+        use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::kernelboot::KernelBootSection;
         let mut snap = InspectionSnapshot::new();
         snap.kernel_boot = Some(KernelBootSection {
             tuned_active: "my-profile".into(),
             tuned_disposition: FindingKind::included(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".into(),
-                content: "[main]\nsummary=Custom".into(),
-            }],
             ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("COPY tuned/etc/tuned/ /etc/tuned/"),
-            "included tuned with custom profile must COPY profile files, got:\n{output}"
+            !output.contains("COPY tuned/"),
+            "the tuned/ promoted root is gone, got:\n{output}"
         );
         assert!(
             output.contains("RUN echo \"my-profile\" > /etc/tuned/active_profile"),
@@ -3222,6 +4163,48 @@ mod tests {
         assert!(
             output.contains("RUN systemctl enable tuned.service"),
             "must enable tuned.service"
+        );
+    }
+
+    /// § 3.5: activation and the profile file are two decisions on two
+    /// entities, so they can disagree. Activating a profile whose file the
+    /// operator excluded would bake a reference to a file the image does
+    /// not carry, so the renderer names the contradiction instead.
+    #[test]
+    fn test_containerfile_tuned_activation_without_the_profile_file() {
+        use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snap = InspectionSnapshot::new();
+        snap.kernel_boot = Some(KernelBootSection {
+            tuned_active: "my-profile".into(),
+            tuned_disposition: FindingKind::included(),
+            ..Default::default()
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::excluded(),
+                ..Default::default()
+            }],
+        });
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            output.contains(
+                "# FIXME: include /etc/tuned/my-profile/tuned.conf under Configuration Files \
+                 or activate a stock profile; the active profile is custom and its file is \
+                 excluded"
+            ),
+            "an excluded custom profile with activation included must render the FIXME, got:\n{output}"
+        );
+        assert!(
+            !output.contains("active_profile"),
+            "the activation lines must not render alongside the FIXME, got:\n{output}"
+        );
+        assert!(
+            !output.contains("COPY tuned/"),
+            "the tuned/ promoted root is gone, got:\n{output}"
         );
     }
 
@@ -3362,7 +4345,11 @@ mod tests {
 
     #[test]
     fn test_containerfile_repo_enabling_packages_split() {
-        let snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
+        // The basis is `repo_enabling_from`, not the name: this fixture
+        // used to pass on the `-release` suffix alone, and would pass that
+        // way again if the suffix came back.
+        let mut snap = snapshot_with_packages(&["bat", "epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
         let output = render_containerfile(&snap, None, None);
 
         // epel-release must appear in its own install step before the other packages
@@ -3396,22 +4383,32 @@ mod tests {
 
     #[test]
     fn test_containerfile_no_repo_packages_single_block() {
-        let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git"]);
+        // `vendor-release` is the whole point of this fixture: its name
+        // ends in `-release` and nothing records a serving repo for it, so
+        // a single block is correct *because* no package carries
+        // `repo_enabling_from`. Before, the fixture simply had no
+        // `-release` name in it and this assertion was true for a reason
+        // that no longer exists.
+        let snap = snapshot_with_packages(&["httpd", "vim-enhanced", "git", "vendor-release"]);
         let output = render_containerfile(&snap, None, None);
 
         // No repo-enabling section should exist
         assert!(
             !output.contains("Repo-enabling packages"),
-            "must not have a repo-enabling section when no -release packages"
+            "a name ending in -release is not the basis; only repo_enabling_from is:\n{output}"
         );
-        // Single packages section with all 3
+        // Single packages section with all 4
         assert!(
-            output.contains("Packages (3)"),
-            "must have a single packages section with all 3 packages"
+            output.contains("Packages (4)"),
+            "must have a single packages section with all 4 packages:\n{output}"
         );
         assert!(output.contains("httpd"), "must contain httpd");
         assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
         assert!(output.contains("git"), "must contain git");
+        assert!(
+            output.contains("vendor-release"),
+            "must contain vendor-release"
+        );
     }
 
     // --- Group install rendering tests ---
@@ -4332,7 +5329,6 @@ mod tests {
             owner_gid: Some(gid),
             owner_name: owner.map(String::from),
             group_name: group.map(String::from),
-            ..Default::default()
         }
     }
 
@@ -4342,11 +5338,33 @@ mod tests {
         assert!(render_tmpfiles_conf(&snap).is_none());
     }
 
+    /// A backed directory produces no conf only when the export can
+    /// prove it carries the creator. The same directory with nothing to
+    /// prove it by is unresolved, not carried: an earlier version of
+    /// this test asserted the absence outright, which is the defect
+    /// `effective_var_backing` exists to fix.
     #[test]
-    fn tmpfiles_conf_none_when_no_unbacked_dirs() {
+    fn tmpfiles_conf_none_when_the_owning_package_is_in_the_base() {
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
-            var_directories: vec![var_dir("/var/log", VarDirBacking::RpmOwned)],
+            var_directories: vec![var_dir(
+                "/var/log",
+                VarDirBacking::RpmOwned {
+                    package: "filesystem".into(),
+                },
+            )],
+            ..Default::default()
+        });
+
+        // No rpm section: the owner can be neither placed nor ruled out.
+        let content = render_tmpfiles_conf(&snap).expect("unresolved produces a FIXME");
+        assert!(content.contains("# FIXME: confirm the base image creates /var/log;"));
+        assert!(content.contains("#d /var/log 0755 root root -"));
+        assert!(!content.lines().any(|l| l.starts_with("d /var/log")));
+
+        // A baseline naming the owner proves the base creates it.
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["filesystem".into()]),
             ..Default::default()
         });
         assert!(render_tmpfiles_conf(&snap).is_none());
@@ -4481,7 +5499,6 @@ mod tests {
                 owner_gid: Some(999),
                 owner_name: None,
                 group_name: None,
-                ..Default::default()
             }],
             ..Default::default()
         });
@@ -4566,7 +5583,6 @@ mod tests {
                     owner_gid: Some(500),
                     owner_name: None,
                     group_name: None,
-                    ..Default::default()
                 },
                 // Dir 3: no mode -> mkdir fallback
                 var_dir("/var/lib/nomode", VarDirBacking::Unbacked),
@@ -4657,25 +5673,253 @@ mod tests {
         assert!(output.contains("RUN mkdir -p /var/lib/b"));
     }
 
+    /// A `/var` path the export has to provision reaches two emissions
+    /// nothing validated: a shell-form `RUN mkdir -p` when the scan
+    /// captured no mode, and a tmpfiles.d `d` line when it did. The
+    /// first is the dangerous one -- `/bin/sh -c` reads `;` as a command
+    /// separator at image build time, as root -- and the second lets a
+    /// newline add a directive of its own. Neither emission may carry a
+    /// path the allowlist refuses.
     #[test]
-    fn var_dir_backed_dirs_excluded_from_both() {
+    fn var_dir_refused_path_reaches_neither_emission() {
+        const SHELL_PATH: &str = "/var/lib/app;id";
+        const CONF_PATH: &str = "/var/lib/two\nd /etc/shadow 0777 root root -";
+
         let mut snap = InspectionSnapshot::new();
         snap.storage = Some(StorageSection {
             var_directories: vec![
-                var_dir("/var/log", VarDirBacking::LogsDirectory),
-                var_dir("/var/cache", VarDirBacking::CacheDirectory),
+                var_dir(SHELL_PATH, VarDirBacking::Unbacked),
+                var_dir_with_mode(CONF_PATH, "0755", 0, 0, Some("root"), Some("root")),
+            ],
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None, None);
+        assert!(
+            !output
+                .lines()
+                .any(|l| l.starts_with("RUN ") && l.contains("app;id")),
+            "a path with a command separator must not reach a RUN: {output}"
+        );
+        assert!(
+            output.contains("# FIXME: create /var/lib/app;id by hand"),
+            "the refusal must name the directory it skipped: {output}"
+        );
+
+        let conf = render_tmpfiles_conf(&snap).expect("the refusal lines are content");
+        assert!(
+            !conf.lines().any(|l| l.starts_with("d /etc/shadow")),
+            "a newline in a path must not add a directive: {conf}"
+        );
+        assert!(
+            conf.contains("# FIXME: create /var/lib/two"),
+            "the refusal must name the directory it skipped: {conf}"
+        );
+    }
+
+    /// The active (non-comment, non-blank) lines of an artifact are the
+    /// instructions it executes. Asserting on that set, rather than on
+    /// the absence of one bad string, is the only assertion that holds
+    /// when the injection arrives through a field nobody thought of.
+    fn active_lines(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .collect()
+    }
+
+    /// `d {path} {mode} {owner} {group} -` has four host-sourced fields
+    /// and a newline in any of them ends the record and starts a
+    /// directive of its own. Each directory below poisons a different
+    /// one: the mode, the owner, the group, the creator a `Provision`
+    /// names, and the creator an `Unresolved` names. The assertion is
+    /// the whole active-line set of each artifact, because that is the
+    /// only form that covers the field nobody listed.
+    ///
+    /// The owner and the group need separate directories, which is the
+    /// correction to the first version of this test. Poisoning both at
+    /// once proves less than it looks: the refused owner falls through
+    /// to the numeric branch, which emits a numeric group too, and the
+    /// group's own check is never reached. `/var/lib/bad-group` keeps a
+    /// guaranteed owner so that the group is the only field in doubt.
+    #[test]
+    fn var_dir_hostile_fields_add_no_directive() {
+        // The age field the format string appends lands on the injected
+        // line, so this payload leaves no dangling token behind it.
+        const PAYLOAD: &str = "\nd /etc/shadow 0777 root root";
+
+        let unbacked =
+            |path: &str, mode: String, uid: u32, owner: &str, group: &str| VarDirectory {
+                path: path.into(),
+                backing: Some(VarDirBacking::Unbacked),
+                mode: Some(mode),
+                owner_uid: Some(uid),
+                owner_gid: Some(uid),
+                owner_name: Some(owner.into()),
+                group_name: Some(group.into()),
+            };
+
+        use inspectah_core::types::users::UserGroupSection;
+
+        let mut snap = InspectionSnapshot::new();
+        // `appone` reaches case 2 of `resolve_tmpfiles_ownership`, which
+        // is the only path on which the group field is read at all.
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "appone",
+                "uid": 1001,
+                "gid": 1001,
+                "include": true,
+                "containerfile_strategy": "useradd"
+            })],
+            ..Default::default()
+        });
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                unbacked(
+                    "/var/lib/bad-mode",
+                    format!("0755{PAYLOAD}"),
+                    0,
+                    "root",
+                    "root",
+                ),
+                unbacked(
+                    "/var/lib/bad-owner",
+                    "0750".into(),
+                    1001,
+                    &format!("appone -{PAYLOAD}"),
+                    "appone",
+                ),
+                unbacked(
+                    "/var/lib/bad-group",
+                    "0751".into(),
+                    1001,
+                    "appone",
+                    &format!("appone -{PAYLOAD}"),
+                ),
+                VarDirectory {
+                    path: "/var/lib/bad-creator".into(),
+                    backing: Some(VarDirBacking::Tmpfiles {
+                        conf: format!("/etc/tmpfiles.d/appone.conf{PAYLOAD}"),
+                        line: "d /var/lib/bad-creator 0700 root root -".into(),
+                    }),
+                    mode: Some("0700".into()),
+                    owner_uid: Some(0),
+                    owner_gid: Some(0),
+                    owner_name: Some("root".into()),
+                    group_name: Some("root".into()),
+                },
+                VarDirectory {
+                    path: "/var/lib/bad-unit".into(),
+                    backing: Some(VarDirBacking::StateDirectory {
+                        unit: format!("appone.service{PAYLOAD}"),
+                    }),
+                    mode: Some("0755".into()),
+                    owner_uid: Some(0),
+                    owner_gid: Some(0),
+                    owner_name: Some("root".into()),
+                    group_name: Some("root".into()),
+                },
+            ],
+            ..Default::default()
+        });
+
+        let conf = render_tmpfiles_conf(&snap).expect("three of the five produce lines");
+        assert_eq!(
+            active_lines(&conf),
+            vec![
+                // The refused mode takes the whole line with it; a
+                // substituted default would be a guess the operator
+                // could not tell from a reading.
+                //
+                // A refused owner degrades both fields, because the
+                // numeric branch is what the renderer already uses when
+                // it has no name. A refused group degrades only itself,
+                // and that is the case the first version of this test
+                // could not reach.
+                "d /var/lib/bad-owner 0750 1001 1001 -",
+                "d /var/lib/bad-group 0751 appone 1001 -",
+                "d /var/lib/bad-creator 0700 root root -",
+            ],
+            "the conf executes exactly the three directives it intends: {conf}"
+        );
+
+        let output = render_containerfile(&snap, None, None);
+        let active = active_lines(&output);
+        assert!(
+            !active.iter().any(|l| l.starts_with("d ")),
+            "a tmpfiles directive is never an active Containerfile line: {output}"
+        );
+        assert!(
+            !active.iter().any(|l| l.contains("shadow")),
+            "no payload reaches an active line: {output}"
+        );
+    }
+
+    /// A unit-backed directory is excluded from active provisioning in
+    /// both artifacts, but only when the export carries the unit. With
+    /// no evidence either way it renders a commented line and a FIXME —
+    /// never an active one. An earlier version of this test asserted the
+    /// unconditional exclusion, which is the defect
+    /// `effective_var_backing` exists to fix.
+    #[test]
+    fn var_dir_unit_backed_dirs_are_never_actively_provisioned() {
+        use inspectah_core::types::config::{
+            ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+        };
+
+        let mut snap = InspectionSnapshot::new();
+        snap.storage = Some(StorageSection {
+            var_directories: vec![
+                var_dir(
+                    "/var/log",
+                    VarDirBacking::LogsDirectory {
+                        unit: "rsyslog.service".into(),
+                    },
+                ),
+                var_dir(
+                    "/var/cache",
+                    VarDirBacking::CacheDirectory {
+                        unit: "dnf-makecache.service".into(),
+                    },
+                ),
                 var_dir_with_mode("/var/lib/app", "0755", 0, 0, Some("root"), Some("root")),
             ],
             ..Default::default()
         });
 
+        // Neither unit is a config entry or RPM-owned: unresolved.
         let content = render_tmpfiles_conf(&snap).expect("should produce content");
-        assert!(!content.contains("/var/log"), "backed dir excluded");
-        assert!(!content.contains("/var/cache"), "backed dir excluded");
-
+        for path in ["/var/log", "/var/cache"] {
+            assert!(content.contains(&format!("#d {path} 0755 root root -")));
+            assert!(
+                !content
+                    .lines()
+                    .any(|l| l.starts_with(&format!("d {path} ")))
+            );
+        }
         let output = render_containerfile(&snap, None, None);
         assert!(!output.contains("RUN mkdir -p /var/log"));
         assert!(!output.contains("RUN mkdir -p /var/cache"));
+
+        // Both units carried as included config entries: neither
+        // artifact mentions the directories at all.
+        snap.config = Some(ConfigSection {
+            files: ["rsyslog.service", "dnf-makecache.service"]
+                .iter()
+                .map(|unit| ConfigFileEntry {
+                    path: format!("/etc/systemd/system/{unit}"),
+                    kind: ConfigFileKind::Unowned,
+                    category: ConfigCategory::Other,
+                    content: "[Unit]\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+        });
+        let content = render_tmpfiles_conf(&snap).expect("should produce content");
+        assert!(!content.contains("/var/log"), "carried dir excluded");
+        assert!(!content.contains("/var/cache"), "carried dir excluded");
     }
 
     // --- tmpfiles ownership resolution tests ---

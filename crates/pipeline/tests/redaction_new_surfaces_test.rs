@@ -5,7 +5,8 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind as SnapshotFindingKind;
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::redaction::{FindingKind, RedactionState};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
@@ -191,23 +192,28 @@ fn test_cmdline_password_redacted() {
 // Test 6: Dracut config snippet with secret scanned
 // ---------------------------------------------------------------------------
 
+/// The dracut config is a `config.files` entry now, so the config pass
+/// is what redacts it. The earlier form of this test planted the file on
+/// `KernelBootSection::dracut_conf`, the second copy that gave the same
+/// file two rows.
 #[test]
 fn test_dracut_config_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
-    snapshot.kernel_boot = Some(KernelBootSection {
-        dracut_conf: vec![ConfigSnippet {
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
             path: "/etc/dracut.conf.d/iscsi.conf".into(),
+            category: ConfigCategory::Initramfs,
             content: "iscsi_password=mysecret\n".into(),
+            ..Default::default()
         }],
-        ..Default::default()
     });
 
     redact(&mut snapshot, &RedactOptions::default());
 
     // Secret must be redacted inline
-    let kb = snapshot.kernel_boot.as_ref().unwrap();
+    let config = snapshot.config.as_ref().unwrap();
     assert!(
-        !kb.dracut_conf[0].content.contains("mysecret"),
+        !config.files[0].content.contains("mysecret"),
         "secret must be redacted from dracut config"
     );
 
@@ -224,19 +230,20 @@ fn test_dracut_config_secret_scanned() {
 #[test]
 fn test_modprobe_config_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
-    snapshot.kernel_boot = Some(KernelBootSection {
-        modprobe_d: vec![ConfigSnippet {
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
             path: "/etc/modprobe.d/custom.conf".into(),
+            category: ConfigCategory::KernelModule,
             content: "options mymod secret=topSecret42\n".into(),
+            ..Default::default()
         }],
-        ..Default::default()
     });
 
     redact(&mut snapshot, &RedactOptions::default());
 
-    let kb = snapshot.kernel_boot.as_ref().unwrap();
+    let config = snapshot.config.as_ref().unwrap();
     assert!(
-        !kb.modprobe_d[0].content.contains("topSecret42"),
+        !config.files[0].content.contains("topSecret42"),
         "secret must be redacted from modprobe config"
     );
     assert!(
@@ -252,21 +259,20 @@ fn test_modprobe_config_secret_scanned() {
 #[test]
 fn test_tuned_profile_secret_scanned() {
     let mut snapshot = InspectionSnapshot::new();
-    snapshot.kernel_boot = Some(KernelBootSection {
-        tuned_custom_profiles: vec![ConfigSnippet {
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
             path: "/etc/tuned/custom/tuned.conf".into(),
+            category: ConfigCategory::Tuned,
             content: "[main]\napi_key=sk-12345abcde\n".into(),
+            ..Default::default()
         }],
-        ..Default::default()
     });
 
     redact(&mut snapshot, &RedactOptions::default());
 
-    let kb = snapshot.kernel_boot.as_ref().unwrap();
+    let config = snapshot.config.as_ref().unwrap();
     assert!(
-        !kb.tuned_custom_profiles[0]
-            .content
-            .contains("sk-12345abcde"),
+        !config.files[0].content.contains("sk-12345abcde"),
         "secret must be redacted from tuned profile"
     );
     assert!(
@@ -313,14 +319,18 @@ fn test_secrets_review_reports_all_findings() {
         ..Default::default()
     });
 
-    // Kernelboot: cmdline password + dracut secret
+    // Kernelboot: cmdline password. The dracut secret is a config entry.
     snapshot.kernel_boot = Some(KernelBootSection {
         cmdline: "quiet password=bootpass".into(),
-        dracut_conf: vec![ConfigSnippet {
-            path: "/etc/dracut.conf.d/net.conf".into(),
-            content: "token=abc123\n".into(),
-        }],
         ..Default::default()
+    });
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/dracut.conf.d/net.conf".into(),
+            category: ConfigCategory::Initramfs,
+            content: "token=abc123\n".into(),
+            ..Default::default()
+        }],
     });
 
     redact(&mut snapshot, &RedactOptions::default());
@@ -379,11 +389,15 @@ fn test_clean_surfaces_no_false_positives() {
 
     snapshot.kernel_boot = Some(KernelBootSection {
         cmdline: "quiet crashkernel=auto rd.lvm.lv=vg/root".into(),
-        dracut_conf: vec![ConfigSnippet {
-            path: "/etc/dracut.conf.d/lvm.conf".into(),
-            content: "add_dracutmodules+=\" lvm \"\n".into(),
-        }],
         ..Default::default()
+    });
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/dracut.conf.d/lvm.conf".into(),
+            category: ConfigCategory::Initramfs,
+            content: "add_dracutmodules+=\" lvm \"\n".into(),
+            ..Default::default()
+        }],
     });
 
     redact(&mut snapshot, &RedactOptions::default());

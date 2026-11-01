@@ -39,7 +39,7 @@ export interface PackageListProps {
   /** Current section search text. Groups with matching members auto-expand. */
   searchQuery?: string;
   onToggle: (packageName: string) => void;
-  onRepoToggle: (sectionId: string) => void;
+  onRepoToggle: (sectionId: string, include: boolean) => void;
   /** Called when a group's include toggle changes. */
   onGroupToggle?: (groupName: string, include: boolean) => void;
   /** Called when a group is ungrouped (dissolved into individual packages). */
@@ -159,10 +159,14 @@ export function PackageList({
   // Split packages: included vs excluded
   const { includedPackages, excludedPackages } = useMemo(() => {
     const included: PackageListPackage[] = [];
-    const excluded: { name: string; repo: string }[] = [];
+    const excluded: { name: string; repo: string; include: boolean }[] = [];
     for (const pkg of packages) {
       if (disabledRepos.has(pkg.source_repo)) {
-        excluded.push({ name: pkg.name, repo: pkg.source_repo });
+        excluded.push({
+          name: pkg.name,
+          repo: pkg.source_repo,
+          include: pkg.include,
+        });
       } else {
         included.push(pkg);
       }
@@ -499,7 +503,10 @@ export function PackageList({
               key={group.name}
               group={group}
               searchQuery={searchQuery}
-              isIncluded={group.render_state !== "excluded"}
+              isIncluded={
+                group.render_state !== "excluded" &&
+                group.render_state !== "inert"
+              }
               forceExpanded={autoExpandedGroups.has(group.name)}
               defaultExpanded={userExpandedGroups.has(group.name)}
               onExpandChange={handleGroupExpandChange}
@@ -548,6 +555,9 @@ export function PackageList({
       <ExcludedZone
         packages={excludedPackages}
         hasEverToggled={hasEverToggled}
+        onToggle={onToggle}
+        rpmRowStates={rpmRowStates}
+        onUploadClick={onUploadClick}
       />
     </div>
   );

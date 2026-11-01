@@ -1270,39 +1270,9 @@ fn build_reference_sections(
         }
     }
 
-    // Kernel & Boot
-    // NOTE: Sysctls moved to build_aggregate_sections() as decision items.
-    if let Some(ref kb) = snap.kernel_boot {
-        let mut items: Vec<AggregateItem> = Vec::new();
-        for module in &kb.loaded_modules {
-            let item_id = ItemId::KernelModule {
-                name: module.name.clone(),
-            };
-            let fp = module.aggregate.as_ref();
-            items.push(AggregateItem {
-                item_id,
-                include: module.disposition.is_included(),
-                locked: module.locked,
-                attention_reason: None,
-                triage: default_context_triage(fp, ctx),
-                prevalence: aggregate_prevalence_dto(fp, ctx),
-                variants: None,
-                source_repo: String::new(),
-                repo_conflict: None,
-                section_metadata: None,
-                variant_payload: None,
-            });
-        }
-        if !items.is_empty() {
-            sections.push(build_section(
-                "kernel_boot",
-                "Kernel & Boot",
-                false,
-                &items,
-                ctx,
-            ));
-        }
-    }
+    // Kernel & Boot has no item list of its own: sysctls are decision
+    // items in build_aggregate_sections(), and loaded modules are
+    // inventory, which carries no decision to aggregate.
 
     // Non-RPM Software
     if let Some(ref nonrpm) = snap.non_rpm_software {

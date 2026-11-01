@@ -12,7 +12,7 @@ fn pkg_stat(view: &serde_json::Value, field: &str) -> i64 {
 /// Create a minimal test tarball with a FullyRedacted snapshot.
 fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let snap = serde_json::json!({
-        "schema_version": 21,
+        "schema_version": 23,
         "rpm": {
             "packages_added": [
                 {
@@ -34,7 +34,6 @@ fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
             "module_stream_conflicts": [],
             "multiarch_packages": [],
             "duplicate_packages": [],
-            "repo_providing_packages": [],
             "ostree_overrides": [],
             "ostree_removals": [],
             "file_ownership": []
@@ -79,7 +78,6 @@ async fn refine_server_lifecycle() {
     let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
     let state = std::sync::Arc::new(inspectah_web::handlers::AppState {
         session: std::sync::Arc::new(std::sync::Mutex::new(session)),
-        sections_cache: std::sync::OnceLock::new(),
     });
 
     // Bind to ephemeral port

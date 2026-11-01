@@ -9,6 +9,8 @@ const mockGroup: GroupInfo = {
   added_count: 8,
   locked_count: 2,
   optional_spillover_count: 0,
+  effective_member_count: 6,
+  effective_included: 6,
   render_state: "renderable",
   degradation_reason: null,
   members: [
@@ -49,6 +51,8 @@ const smallGroup: GroupInfo = {
   added_count: 0,
   locked_count: 0,
   optional_spillover_count: 0,
+  effective_member_count: 3,
+  effective_included: 3,
   render_state: "renderable",
   degradation_reason: null,
   members: [
@@ -69,6 +73,8 @@ const degradedGroup: GroupInfo = {
   added_count: 0,
   locked_count: 0,
   optional_spillover_count: 0,
+  effective_member_count: 0,
+  effective_included: 0,
   render_state: "degraded",
   degradation_reason: "overlap with another group",
   members: [
@@ -88,11 +94,39 @@ const excludedWithSpillover: GroupInfo = {
   added_count: 0,
   locked_count: 0,
   optional_spillover_count: 3,
+  effective_member_count: 5,
+  effective_included: 0,
   render_state: "excluded",
   degradation_reason: null,
   members: [
     { name: "ffmpeg", locked: false, overlap_groups: [], in_base_image: false },
     { name: "vlc", locked: false, overlap_groups: [], in_base_image: false },
+  ],
+};
+
+const inertGroup: GroupInfo = {
+  name: "legacy-fonts",
+  member_count: 2,
+  added_count: 1,
+  locked_count: 1,
+  optional_spillover_count: 0,
+  effective_member_count: 0,
+  effective_included: 0,
+  render_state: "inert",
+  degradation_reason: null,
+  members: [
+    {
+      name: "dejavu-fonts",
+      locked: true,
+      overlap_groups: [],
+      in_base_image: false,
+    },
+    {
+      name: "liberation-fonts",
+      locked: false,
+      overlap_groups: [],
+      in_base_image: true,
+    },
   ],
 };
 
@@ -589,5 +623,76 @@ describe("GroupRow", () => {
     expect(
       screen.getByRole("button", { name: /show all 8 members/i }),
     ).toBeInTheDocument();
+  });
+
+  // --- Task 9b: Inert group gating ---
+
+  it("inert group shows 'nothing to decide' state text and no control", () => {
+    render(
+      <GroupRow group={inertGroup} onToggle={vi.fn()} onUngroup={vi.fn()} />,
+    );
+    // Discriminates on the pre-task code: `render_state: "inert"` had no
+    // dedicated branch, so this text did not render at all. Checks the
+    // state text appears...
+    expect(
+      screen.getByText(
+        "nothing to decide: all members are locked or from base",
+      ),
+    ).toBeInTheDocument();
+    // ...and that no control renders in its place. On today's GroupRow this
+    // is true for every state (the group-level toggle was removed entirely
+    // upstream of this task, see "no group-level toggle switch is rendered"
+    // above), so this half does not by itself discriminate pre/post-task —
+    // it guards against a future toggle being reintroduced without the
+    // inert gate.
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("inert group row is described by its state text via aria-describedby", () => {
+    // Parameterized over a spaced name: aria-describedby is a space-
+    // separated id-reference list, so an id built from a raw group name
+    // (e.g. a template string) silently breaks for any multi-word group —
+    // "legacy-fonts" alone can't catch that class of bug.
+    for (const name of ["legacy-fonts", "Legacy Fonts"]) {
+      const { unmount } = render(
+        <GroupRow
+          group={{ ...inertGroup, name }}
+          onToggle={vi.fn()}
+          onUngroup={vi.fn()}
+        />,
+      );
+      // Discriminates against pre-task code two ways: against no `isInert`
+      // branch at all, `aria-describedby` is unset. Against an id built
+      // from a raw (unescaped) group name, `aria-describedby` is a
+      // space-separated id-reference list, so a spaced name splits into
+      // multiple tokens that resolve to nothing -- reproduced here by
+      // splitting on whitespace the way assistive tech would, rather than
+      // looking up the raw (possibly multi-token) attribute value directly.
+      const row = screen.getByRole("group", { name: new RegExp(name) });
+      const describedBy = row.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const ids = describedBy!.trim().split(/\s+/);
+      expect(ids).toHaveLength(1);
+      const stateText = document.getElementById(ids[0]);
+      expect(stateText).toHaveTextContent(
+        "nothing to decide: all members are locked or from base",
+      );
+      unmount();
+    }
+  });
+
+  it("non-inert groups do not show the inert state text", () => {
+    for (const group of [mockGroup, excludedWithSpillover, degradedGroup]) {
+      const { unmount } = render(
+        <GroupRow group={group} onToggle={vi.fn()} onUngroup={vi.fn()} />,
+      );
+      expect(
+        screen.queryByText(
+          "nothing to decide: all members are locked or from base",
+        ),
+      ).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });

@@ -30,11 +30,26 @@ fn package_state_label(pkg: &PackageEntry) -> String {
         .to_string()
 }
 
+/// The recorded source repo of a package installed by local RPM path.
+const COMMANDLINE_REPO: &str = "@commandline";
+
 fn manual_follow_up_reason(pkg: &PackageEntry) -> Option<ManualFollowUpReason> {
     match pkg.state {
         PackageState::LocalInstall => Some(ManualFollowUpReason::LocalInstall),
         PackageState::NoRepo => Some(ManualFollowUpReason::NoRepo),
         _ if pkg.source_repo.is_empty() => Some(ManualFollowUpReason::MissingSourceRepo),
+        // `@commandline` is not a repo: the package arrived by local RPM
+        // path, so `dnf install <name>` has nothing to resolve against.
+        // Carrying a non-empty `source_repo` used to be enough on its own,
+        // which rendered a `*-release` package as an active install *and*
+        // as a repo-less MANUAL block for the same package. The one thing
+        // that lifts the refusal is proof that a repo serves it by name,
+        // and `repo_enabling_from` is that proof.
+        _ if pkg.source_repo.eq_ignore_ascii_case(COMMANDLINE_REPO)
+            && pkg.repo_enabling_from.is_empty() =>
+        {
+            Some(ManualFollowUpReason::NoRepo)
+        }
         _ => None,
     }
 }

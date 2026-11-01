@@ -927,60 +927,38 @@ fn test_selinux_semanage_unavailable_degraded() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. SELinux: PermissionDenied on audit rules → Degraded
+// 6. Config: PermissionDenied on an /etc subtree the walker owns → Degraded
 // ---------------------------------------------------------------------------
 
+/// An unreadable directory below `/etc` degrades the config section even
+/// when the rest of the tree reads fine.
+///
+/// This replaces a SELinux test. Until § 3.6 the SELinux inspector read
+/// `/etc/audit/rules.d` itself and pushed "permission denied reading
+/// /etc/audit/rules.d", and the test here asserted the SELinux section
+/// was degraded. Moving the tree to the config walker moved that signal
+/// to a walker that **discarded** per-directory permission failures
+/// unless the whole walk came back empty, so an unreadable subtree
+/// reported Complete while its files were silently missing from the
+/// export. The old test did not catch the loss: it kept passing, because
+/// the same fixture leaves `semanage boolean -l` empty and case 5 above
+/// degrades on that.
+///
+/// The fixture therefore makes `/etc/audit/rules.d` the only thing wrong:
+/// every file read succeeds, so a degraded verdict can only come from the
+/// directory.
 #[test]
-fn test_selinux_audit_permission_denied_degraded() {
-    // Audit rules dir exists but is unreadable → Degraded.
+fn test_config_unreadable_subtree_degrades() {
     let exec = wave2_rpm_mock(MockExecutor::new())
-        // getenforce succeeds so mode detection is fine
-        .with_command(
-            "getenforce",
-            ExecResult {
-                stdout: "Enforcing\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_file(
-            "/etc/selinux/config",
-            "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
-        )
-        // semanage boolean works
-        .with_command(
-            "chroot / semanage boolean -l",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "chroot / semanage fcontext -l -C",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "chroot / semanage port -l -C",
-            ExecResult {
-                stdout: String::new(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        // Audit rules dir: PermissionDenied
+        .with_dir("/etc", vec!["audit", "myapp.conf"])
+        .with_dir("/etc/audit", vec!["rules.d"])
         .with_dir_error("/etc/audit/rules.d", std::io::ErrorKind::PermissionDenied)
-        // FIPS mode check
-        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+        .with_file("/etc/myapp.conf", "port=8080\n");
 
     let source = package_based_source();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
-        Box::new(SelinuxInspector::new()),
+        Box::new(ConfigInspector::new()),
     ];
 
     let pipeline = collect(
@@ -998,19 +976,26 @@ fn test_selinux_audit_permission_denied_degraded() {
             degraded_sections, ..
         } => {
             assert!(
-                degraded_sections.contains(&InspectorId::Selinux),
-                "Selinux should be degraded when audit rules dir is unreadable"
+                degraded_sections.contains(&InspectorId::Config),
+                "Config must be degraded when a subtree it owns is unreadable"
             );
         }
         other => panic!(
-            "Expected Completeness::Partial for audit PermissionDenied, got {:?}",
+            "Expected Completeness::Partial for an unreadable /etc subtree, got {:?}",
             other
         ),
     }
 
+    // The readable part of the walk still lands: a degraded section is a
+    // partial one, not an empty one.
+    let config = snapshot
+        .config
+        .as_ref()
+        .expect("Config section must be present even when degraded");
     assert!(
-        snapshot.selinux.is_some(),
-        "Selinux section should be present even when degraded"
+        config.files.iter().any(|f| f.path == "/etc/myapp.conf"),
+        "the readable file must still be collected, got {:?}",
+        config.files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 }
 

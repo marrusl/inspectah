@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::verified_upload::VerifiedUploads;
+
 /// The rendering state of an installed DNF group in the refine session.
 /// Computed from the session timeline and the effective projected snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +17,9 @@ pub enum GroupRenderState {
     Ungrouped,
     /// Group cannot be rendered atomically -- individual member rendering required.
     Degraded { reason: DegradationReason },
+    /// No effective member exists (all locked, all base-image, or none
+    /// present) -- nothing to render and nothing to decide (§ 3.7).
+    Inert,
 }
 
 /// Why a group cannot be rendered as a single `dnf group install` command.
@@ -30,16 +35,21 @@ pub enum DegradationReason {
     MultilibConflict,
 }
 
-/// Carries group rendering state alongside the projected snapshot.
-/// Kept separate from InspectionSnapshot to preserve snapshot purity.
+/// Carries render-time state the projected snapshot cannot hold alongside
+/// it. Kept separate from InspectionSnapshot to preserve snapshot purity.
 #[derive(Debug, Clone, Default)]
 pub struct RenderContext {
     /// Map from group name to its computed rendering state.
     pub group_states: HashMap<String, GroupRenderState>,
+    /// The staged uploads this render may name. Empty by default, which is
+    /// the safe answer: a `uploaded: true` entry the snapshot carries gets
+    /// no `COPY` until an export or a preview proves the file.
+    pub verified_uploads: VerifiedUploads,
 }
 
 impl RenderContext {
-    /// Returns true if the named group is in the Renderable state.
+    /// Returns true if the named group is in the Renderable state. `Inert`
+    /// (no effective member) is not renderable, same as every other variant.
     pub fn is_renderable(&self, group_name: &str) -> bool {
         matches!(
             self.group_states.get(group_name),

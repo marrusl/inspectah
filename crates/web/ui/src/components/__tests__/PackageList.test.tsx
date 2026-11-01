@@ -46,6 +46,9 @@ const distroRepo: RepoGroupInfo = {
   is_distro: true,
   tier: "distro",
   package_count: 10,
+  effective_member_count: 10,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
@@ -55,6 +58,9 @@ const officialRepo: RepoGroupInfo = {
   is_distro: false,
   tier: "official_optional",
   package_count: 3,
+  effective_member_count: 3,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
@@ -64,6 +70,9 @@ const thirdPartyRepo: RepoGroupInfo = {
   is_distro: false,
   tier: "third_party",
   package_count: 2,
+  effective_member_count: 2,
+  effective_included: 0,
+  effective_unlisted: 0,
   enabled: true,
 };
 
@@ -229,8 +238,8 @@ describe("PackageList", () => {
     const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
     const pkgs = [
       makePkg("bash", "baseos"),
-      makePkg("nginx", "epel"),
-      makePkg("jq", "epel"),
+      makePkg("nginx", "epel", false),
+      makePkg("jq", "epel", true),
     ];
     render(
       <PackageList
@@ -244,6 +253,55 @@ describe("PackageList", () => {
     const excluded = screen.getByTestId("excluded-zone");
     expect(within(excluded).getByText("nginx")).toBeInTheDocument();
     expect(within(excluded).getByText("jq")).toBeInTheDocument();
+    // Pin both polarities of the include pass-through at component level.
+    expect(
+      within(excluded).getByRole("checkbox", { name: "nginx" }),
+    ).not.toBeChecked();
+    expect(
+      within(excluded).getByRole("checkbox", { name: "jq" }),
+    ).toBeChecked();
+  });
+
+  it("re-includes an excluded repo's member by clicking its ExcludedZone checkbox", () => {
+    const onToggle = vi.fn();
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    const pkgs = [makePkg("nginx", "epel", false)];
+    render(
+      <PackageList
+        mode="single"
+        packages={pkgs}
+        repoGroups={[distroRepo, officialRepo, disabledEpel]}
+        onToggle={onToggle}
+        onRepoToggle={vi.fn()}
+      />,
+    );
+    const excluded = screen.getByTestId("excluded-zone");
+    const checkbox = within(excluded).getByRole("checkbox", { name: "nginx" });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(onToggle).toHaveBeenCalledWith("nginx");
+  });
+
+  it("passes the upload gate through to ExcludedZone", () => {
+    const onUploadClick = vi.fn();
+    const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
+    render(
+      <PackageList
+        mode="single"
+        packages={[makePkg("nginx", "epel", false)]}
+        repoGroups={[distroRepo, officialRepo, disabledEpel]}
+        onToggle={vi.fn()}
+        onRepoToggle={vi.fn()}
+        rpmRowStates={{ nginx: "needs_upload" }}
+        onUploadClick={onUploadClick}
+      />,
+    );
+    const excluded = screen.getByTestId("excluded-zone");
+    expect(within(excluded).queryByRole("checkbox")).not.toBeInTheDocument();
+    const uploadBtn = within(excluded).getByLabelText("Upload RPM for nginx");
+    expect(uploadBtn).toBeInTheDocument();
+    fireEvent.click(uploadBtn);
+    expect(onUploadClick).toHaveBeenCalledWith("nginx");
   });
 
   // --- Repo text styling ---
@@ -473,7 +531,7 @@ describe("PackageList", () => {
     expect(screen.queryByTestId("excluded-zone")).not.toBeInTheDocument();
   });
 
-  it("excluded zone stays visible with 'No excluded packages' after repo re-enabled (latched)", () => {
+  it("excluded zone stays visible with 'No packages from excluded repos' after repo re-enabled (latched)", () => {
     const disabledEpel: RepoGroupInfo = { ...thirdPartyRepo, enabled: false };
     const pkgs = [makePkg("bash", "baseos"), makePkg("nginx", "epel")];
     // Render with repo disabled — excluded zone appears
@@ -498,8 +556,10 @@ describe("PackageList", () => {
         onRepoToggle={vi.fn()}
       />,
     );
-    // Zone stays visible, showing "No excluded packages" message
-    expect(screen.getByText("No excluded packages")).toBeInTheDocument();
+    // Zone stays visible, showing "No packages from excluded repos" message
+    expect(
+      screen.getByText("No packages from excluded repos"),
+    ).toBeInTheDocument();
   });
 
   // --- Aggregate conflict popover in rows ---
@@ -660,6 +720,8 @@ describe("PackageList", () => {
     added_count: 0,
     locked_count: 2,
     optional_spillover_count: 0,
+    effective_member_count: 6,
+    effective_included: 6,
     render_state: "renderable",
     degradation_reason: null,
     members: [
@@ -705,6 +767,8 @@ describe("PackageList", () => {
     added_count: 0,
     locked_count: 0,
     optional_spillover_count: 2,
+    effective_member_count: 3,
+    effective_included: 3,
     render_state: "renderable",
     degradation_reason: null,
     members: [
@@ -725,6 +789,8 @@ describe("PackageList", () => {
     added_count: 0,
     locked_count: 0,
     optional_spillover_count: 0,
+    effective_member_count: 5,
+    effective_included: 0,
     render_state: "excluded",
     degradation_reason: null,
     members: [],
@@ -736,6 +802,8 @@ describe("PackageList", () => {
     added_count: 0,
     locked_count: 0,
     optional_spillover_count: 0,
+    effective_member_count: 0,
+    effective_included: 0,
     render_state: "degraded",
     degradation_reason: "insufficient_members",
     members: [
@@ -755,6 +823,8 @@ describe("PackageList", () => {
     added_count: 0,
     locked_count: 0,
     optional_spillover_count: 0,
+    effective_member_count: 0,
+    effective_included: 0,
     render_state: "ungrouped",
     degradation_reason: null,
     members: [
@@ -1335,6 +1405,8 @@ describe("PackageList", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1400,6 +1472,8 @@ describe("PackageList", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 1,
+      effective_included: 1,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1543,6 +1617,8 @@ describe("PackageList", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1610,6 +1686,8 @@ describe("PackageList", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1666,6 +1744,8 @@ describe("PackageList", () => {
       added_count: 3,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 3,
+      effective_included: 3,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1695,6 +1775,8 @@ describe("PackageList", () => {
       added_count: 2,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 2,
+      effective_included: 2,
       render_state: "renderable",
       degradation_reason: null,
       members: [
@@ -1734,7 +1816,9 @@ describe("PackageList", () => {
       added_count: 0,
       locked_count: 0,
       optional_spillover_count: 0,
-      render_state: "renderable",
+      effective_member_count: 0,
+      effective_included: 0,
+      render_state: "inert",
       degradation_reason: null,
       members: [
         {
@@ -1778,6 +1862,8 @@ describe("PackageList", () => {
       added_count: 2,
       locked_count: 0,
       optional_spillover_count: 0,
+      effective_member_count: 2,
+      effective_included: 2,
       render_state: "renderable",
       degradation_reason: null,
       members: [

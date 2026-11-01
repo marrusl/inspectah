@@ -4,7 +4,7 @@ import type { RepoGroupInfo } from "../api/types";
 
 export interface RepoBarProps {
   repos: RepoGroupInfo[];
-  onToggle: (sectionId: string) => void;
+  onToggle: (sectionId: string, include: boolean) => void;
   conflictCount?: number;
   dismissedCount?: number;
   onRestoreDismissed?: () => void;
@@ -16,6 +16,45 @@ const tierColors: Record<string, string> = {
   third_party: "var(--pf-t--global--text--color--status--warning--default)",
 };
 
+/** Non-distro repos with verified or incomplete provenance and at least one
+ *  effective (actionable, unlocked) member are toggleable. Everything else
+ *  -- disabled, stale, unknown, or a verified/incomplete repo with nothing
+ *  left to decide -- gets state text instead (§ 6.3). */
+const canToggleRepo = (repo: RepoGroupInfo): boolean =>
+  !repo.is_distro &&
+  (repo.provenance === "verified" || repo.provenance === "incomplete") &&
+  repo.effective_member_count > 0;
+
+/** § 6.3 state text for the badge cell when no control is shown. */
+function noControlStateText(repo: RepoGroupInfo): string {
+  switch (repo.provenance) {
+    case "disabled":
+      return "disabled on host";
+    case "stale":
+      return "repo id not found in any .repo file";
+    case "unknown":
+      return "installed outside any repo";
+    default:
+      // verified or incomplete, effective_member_count === 0
+      return "nothing to decide: all members are locked";
+  }
+}
+
+/** § 6.3 badge-cell count text for a toggleable repo's Switch label:
+ *  "<N> of <M> packages included" (or "<M> packages excluded" when N is 0),
+ *  followed by ", <K> not listed" when effective_unlisted is non-zero. */
+function repoCountText(repo: RepoGroupInfo): string {
+  const { effective_included: included, effective_member_count: total } =
+    repo;
+  const base =
+    included === 0
+      ? `${total} packages excluded`
+      : `${included} of ${total} packages included`;
+  return repo.effective_unlisted > 0
+    ? `${base}, ${repo.effective_unlisted} not listed`
+    : base;
+}
+
 export function RepoBar({
   repos,
   onToggle,
@@ -24,13 +63,11 @@ export function RepoBar({
   onRestoreDismissed,
 }: RepoBarProps) {
   const distroRepos = repos.filter((r) => r.is_distro);
-  // Repos with unknown provenance (e.g. @commandline / locally installed) are
-  // not toggleable — they represent packages installed outside any repo.
+  const toggleableRepos = repos.filter(canToggleRepo);
+  // Non-distro repos the server refuses to toggle: disabled, stale, unknown
+  // provenance, or a verified/incomplete repo with nothing left to decide.
   const nonToggleableRepos = repos.filter(
-    (r) => !r.is_distro && r.provenance === "unknown" && r.package_count > 0,
-  );
-  const toggleableRepos = repos.filter(
-    (r) => !r.is_distro && r.provenance !== "unknown",
+    (r) => !r.is_distro && !canToggleRepo(r),
   );
 
   const visibleConflicts = (conflictCount ?? 0) - (dismissedCount ?? 0);
@@ -71,6 +108,10 @@ export function RepoBar({
       ))}
 
       {nonToggleableRepos.map((repo) => (
+        // No aria-describedby here: this row is a bare div with no role or
+        // tabindex (maps to `generic`), so the attribute would be inert --
+        // not exposed in the accessibility tree. The association lands in
+        // phase 1 when these rows join PackageList's list/listitem tree.
         <div key={repo.section_id} className="inspectah-repo-bar__row">
           <div className="inspectah-repo-bar__name">
             <span style={{ color: tierColors.distro }}>
@@ -83,32 +124,43 @@ export function RepoBar({
             </span>
           </div>
           <span className="inspectah-repo-bar__always">
-            {repo.section_id === "@commandline"
-              ? "not included"
-              : "always included"}
+            {noControlStateText(repo)}
           </span>
         </div>
       ))}
 
-      {toggleableRepos.map((repo) => (
-        <div key={repo.section_id} className="inspectah-repo-bar__row">
-          <div className="inspectah-repo-bar__name">
-            <span style={{ color: tierColors[repo.tier] ?? tierColors.distro }}>
-              {repo.section_id}
-            </span>
-            <span className="inspectah-repo-bar__count">
-              {repo.package_count}
-            </span>
+      {toggleableRepos.map((repo) => {
+        const isChecked =
+          repo.effective_included === repo.effective_member_count;
+        const countText = repoCountText(repo);
+        return (
+          <div key={repo.section_id} className="inspectah-repo-bar__row">
+            <div className="inspectah-repo-bar__name">
+              <span
+                style={{ color: tierColors[repo.tier] ?? tierColors.distro }}
+              >
+                {repo.section_id}
+              </span>
+            </div>
+            {repo.provenance === "incomplete" && (
+              <span className="inspectah-repo-bar__incomplete">
+                repo definition incomplete
+              </span>
+            )}
+            <Switch
+              id={`repo-toggle-${repo.section_id}`}
+              label={countText}
+              // aria-label overrides the visible repo name, so the id has
+              // to be in here too: two repos with equal counts would
+              // otherwise announce identically when navigating by control.
+              aria-label={`${repo.section_id}: ${countText}`}
+              isChecked={isChecked}
+              onChange={() => onToggle(repo.section_id, !isChecked)}
+              isReversed
+            />
           </div>
-          <Switch
-            id={`repo-toggle-${repo.section_id}`}
-            aria-label={`${repo.section_id} (${repo.package_count})`}
-            isChecked={repo.enabled}
-            onChange={() => onToggle(repo.section_id)}
-            isReversed
-          />
-        </div>
-      ))}
+        );
+      })}
 
       {(visibleConflicts > 0 || (dismissedCount ?? 0) > 0) && (
         <div className="inspectah-repo-bar__controls">

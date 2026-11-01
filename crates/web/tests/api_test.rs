@@ -3,11 +3,13 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{
+    ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
+};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
 };
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{
     FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry,
 };
@@ -15,7 +17,9 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackag
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
-use inspectah_core::types::selinux::SelinuxSection;
+use inspectah_core::types::selinux::{
+    FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
+};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
 };
@@ -25,7 +29,7 @@ use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
 use inspectah_web::adapter::build_web_sections;
 use inspectah_web::handlers::AppState;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
@@ -52,7 +56,6 @@ fn test_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -161,7 +164,6 @@ fn advisory_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -268,7 +270,6 @@ async fn api_op_accepts_ungroup_directive() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -285,6 +286,63 @@ async fn api_op_accepts_ungroup_directive() {
     assert_eq!(status, StatusCode::OK);
     // The response should include a generation bump
     assert_eq!(json["generation"], 1);
+}
+
+/// § 8.12: `SetInclude(Group, false)` on a group whose sole effective member
+/// is already excluded is refused with 422, not silently accepted with 200
+/// and no recorded change (item 1.9).
+#[tokio::test]
+async fn set_include_group_already_excluded_returns_422_and_records_nothing() {
+    use inspectah_core::types::rpm::InstalledGroup;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "podman".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            disposition: FindingKind::excluded(),
+            locked: false,
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: "Container Management".into(),
+            members: vec!["podman".into()],
+            ..Default::default()
+        }]),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    });
+    let app = app(state);
+
+    let (_, ops_before) = get_json(&app, "/api/ops").await;
+
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Group", "key": {"name": "Container Management"}},
+                "include": false
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 1 effective members of 'Container Management' are already excluded"
+    );
+
+    let (_, ops_after) = get_json(&app, "/api/ops").await;
+    assert_eq!(
+        ops_before, ops_after,
+        "a refused op must not appear in the timeline"
+    );
 }
 
 #[tokio::test]
@@ -651,11 +709,20 @@ fn rich_snapshot() -> InspectionSnapshot {
             source: "/etc/sysctl.d/99-custom.conf".into(),
             ..Default::default()
         }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/custom.conf".into(),
-            content: "br_netfilter".into(),
-        }],
         ..Default::default()
+    });
+
+    // The kernel module config is a `config.files` entry; the Kernel &
+    // Boot section points at it.
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/modules-load.d/custom.conf".into(),
+            kind: ConfigFileKind::Unowned,
+            category: ConfigCategory::KernelModule,
+            content: "br_netfilter".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
     });
 
     snap.non_rpm_software = Some(NonRpmSoftwareSection {
@@ -697,7 +764,18 @@ fn rich_snapshot() -> InspectionSnapshot {
         mode: "enforcing".into(),
         fips_mode: true,
         custom_modules: vec!["my_policy".into()],
-        fcontext_rules: vec!["/opt/app(/.*)? system_u:object_r:httpd_sys_content_t:s0".into()],
+        fcontext_rules: vec![FcontextRule::Label {
+            spec: "/opt/app(/.*)?".into(),
+            file_type: FcontextFileType::All,
+            context: SelinuxContext {
+                user: "system_u".into(),
+                role: "object_r".into(),
+                type_: "httpd_sys_content_t".into(),
+                level: Some("s0".into()),
+            },
+            disposition: FindingKind::included(),
+            aggregate: None,
+        }],
         ..Default::default()
     });
 
@@ -707,7 +785,6 @@ fn rich_snapshot() -> InspectionSnapshot {
 fn rich_state() -> Arc<AppState> {
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(rich_snapshot()))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -757,28 +834,12 @@ async fn sections_items_have_required_fields() {
 }
 
 #[tokio::test]
-async fn sections_cached_across_calls() {
-    let state = rich_state();
-    let app = app(state.clone());
-
-    let (_, json1) = get_json(&app, "/api/snapshot/sections").await;
-    let (_, json2) = get_json(&app, "/api/snapshot/sections").await;
-
-    assert_eq!(json1, json2, "cached sections must be identical");
-    assert!(
-        state.sections_cache.get().is_some(),
-        "cache must be populated"
-    );
-}
-
-#[tokio::test]
 async fn sections_empty_snapshot_returns_empty_items() {
     // A bare snapshot with no sections set — all 9 sections should exist
     // but with empty items vecs.
     let snap = InspectionSnapshot::new();
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/snapshot/sections").await;
@@ -954,7 +1015,6 @@ async fn view_response_repo_groups_include_tier() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (status, json) = get_json(&app, "/api/view").await;
@@ -984,13 +1044,258 @@ async fn view_response_excludes_leaf_dep_tree() {
     );
 }
 
+// -- Task 7: the member-based repo no-op rule, wire-level (§ 3.2, § 8.8) -----
+
+/// A `Verified` "vendor" repo with two actionable, unlocked members ("a",
+/// "b"), included by default. A baseline (even empty) is required so both
+/// normalize to Site -> leaf -> included (no `leaf_packages` means every
+/// Site package defaults to leaf) rather than Investigate -> excluded with
+/// no baseline at all.
+fn vendor_repo_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+async fn post_set_include_pkg(
+    app: &axum::Router,
+    name: &str,
+    arch: &str,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": name, "arch": arch}},
+                "include": include
+            }
+        }),
+    )
+    .await
+}
+
+async fn post_set_include_repo(
+    app: &axum::Router,
+    path: &str,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Repo", "key": {"path": path}},
+                "include": include
+            }
+        }),
+    )
+    .await
+}
+
+async fn ops_len(app: &axum::Router) -> usize {
+    let (_, json) = get_json(app, "/api/ops").await;
+    json.as_array().expect("/api/ops is an array").len()
+}
+
+/// § 8.8 state (a): enabled history (no repo op), both members individually
+/// excluded. The counts derive `include: true` as the accepted direction;
+/// `include: false`, the direction a history-reading switch would post
+/// (the repo-exclusion history here is empty, i.e. "enabled"), is refused.
+#[tokio::test]
+async fn set_include_repo_state_a_accepted_and_refused() {
+    let app = app(vendor_repo_state());
+    post_set_include_pkg(&app, "a", "x86_64", false).await;
+    post_set_include_pkg(&app, "b", "x86_64", false).await;
+    let before = ops_len(&app).await;
+
+    // Refused direction first: must not record.
+    let (status, json) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 2 effective members of 'vendor' are already excluded"
+    );
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+
+    // Accepted direction: one new /api/ops entry.
+    let (status, _) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+}
+
+/// § 8.8 state (b): excluded history (a recorded repo exclude), both members
+/// individually included. The counts derive `include: false` as the
+/// accepted direction; `include: true`, the direction a history-reading
+/// switch would post (the history here is "excluded"), is refused.
+#[tokio::test]
+async fn set_include_repo_state_b_accepted_and_refused() {
+    let app = app(vendor_repo_state());
+    post_set_include_repo(&app, "vendor", false).await;
+    post_set_include_pkg(&app, "a", "x86_64", true).await;
+    post_set_include_pkg(&app, "b", "x86_64", true).await;
+    let before = ops_len(&app).await;
+
+    // Refused direction first: must not record.
+    let (status, json) = post_set_include_repo(&app, "vendor", true).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json["error"],
+        "nothing to change: all 2 effective members of 'vendor' are already included"
+    );
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+
+    // Accepted direction: one new /api/ops entry.
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ops_len(&app).await, before + 1);
+}
+
+/// § 8.8 + position 26: a repo the index knows and accepts, whose effective
+/// set is empty (both declared members present and locked), is refused in
+/// both directions with the "nothing to decide" reason -- never silently
+/// accepted, and never recorded. The wire `error` is the error.rs prefix
+/// ("nothing to change: ") plus the `NoopTarget` message in full: the brief
+/// describes the client-visible text as starting "nothing to decide", but
+/// `error.rs`'s existing, out-of-scope-for-this-task mapping always adds
+/// that prefix first, so the full string is asserted here rather than a
+/// `starts_with` check that the actual prefix would fail.
+#[tokio::test]
+async fn set_include_repo_with_no_effective_member_returns_422_in_both_directions() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "a".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "b".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "vendor".into(),
+                disposition: FindingKind::included(),
+                locked: true,
+                ..Default::default()
+            },
+        ],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\nbaseurl=http://example.invalid/vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    });
+    let app = app(state);
+    let before = ops_len(&app).await;
+
+    for include in [true, false] {
+        let (status, json) = post_set_include_repo(&app, "vendor", include).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            json["error"],
+            "nothing to change: nothing to decide in 'vendor': all 2 members are locked"
+        );
+    }
+    assert_eq!(ops_len(&app).await, before, "a refused op must not record");
+}
+
+/// § 8.12's second API line, owned by this task: `SetInclude(Repo)` on an
+/// `Incomplete` repo with at least one effective member returns 200 --
+/// Task 5 made `validate_target` accept `Incomplete`, and this is the
+/// wire-level proof that the new provenance value is not refused.
+#[tokio::test]
+async fn set_include_repo_on_incomplete_provenance_with_effective_member_returns_200() {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "a".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "vendor".into(),
+            disposition: FindingKind::included(),
+            locked: false,
+            ..Default::default()
+        }],
+        // No baseurl/metalink/mirrorlist -> Incomplete, not Verified.
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/vendor.repo".into(),
+            content: "[vendor]\nname=Vendor\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    });
+    let app = app(state);
+
+    let (status, _) = post_set_include_repo(&app, "vendor", false).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 // --- build_web_sections unit tests --------------------------------------------
 
 #[test]
 fn normalize_services_maps_state_changes_with_dropins() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
 
     // httpd.service state_change (with folded drop-in detail)
@@ -1034,7 +1339,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
 fn normalize_containers_maps_all_types() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let ctr = sections.iter().find(|s| s.id == "containers").unwrap();
 
     assert_eq!(ctr.items.len(), 4, "quadlet + compose + running + flatpak");
@@ -1073,7 +1378,7 @@ fn build_web_sections_excludes_users_groups() {
     // Users & groups data moved to ViewResponse.users_groups_decisions.
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     assert!(
         sections.iter().all(|s| s.id != "users_groups"),
         "users_groups section should no longer appear in build_web_sections"
@@ -1084,7 +1389,7 @@ fn build_web_sections_excludes_users_groups() {
 fn normalize_network_maps_connections_and_firewall() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let net = sections.iter().find(|s| s.id == "network").unwrap();
 
     // Top-level items should be empty (using subsections)
@@ -1131,7 +1436,7 @@ fn normalize_network_maps_connections_and_firewall() {
 fn normalize_storage_maps_fstab() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let stor = sections.iter().find(|s| s.id == "storage").unwrap();
 
     let boot = stor.items.iter().find(|i| i.id == "/boot").unwrap();
@@ -1143,7 +1448,7 @@ fn normalize_storage_maps_fstab() {
 fn normalize_scheduled_tasks_maps_cron_and_timers() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let sched = sections.iter().find(|s| s.id == "scheduled_tasks").unwrap();
 
     assert_eq!(sched.items.len(), 2, "1 cron + 1 timer");
@@ -1167,7 +1472,7 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
 fn normalize_selinux_includes_mode_and_modules() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let se = sections.iter().find(|s| s.id == "selinux").unwrap();
 
     // Mode item
@@ -1192,7 +1497,7 @@ fn normalize_selinux_includes_mode_and_modules() {
 fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let kb = sections.iter().find(|s| s.id == "kernel_boot").unwrap();
 
     // Items are now in subsections
@@ -1218,19 +1523,30 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
         .unwrap();
     assert!(sysctl.subtitle.as_ref().unwrap().contains("16"));
 
+    // The modules-load.d row points at the Configuration Files row that
+    // decides the file. Its title is the whole path: two files named
+    // `custom.conf` read alike as basenames.
     let modload = customizations
         .items
         .iter()
         .find(|i| i.id.contains("custom.conf"))
         .unwrap();
-    assert_eq!(modload.subtitle.as_deref(), Some("modules-load.d"));
+    assert_eq!(modload.title, "/etc/modules-load.d/custom.conf");
+    assert_eq!(
+        modload.subtitle.as_deref(),
+        Some("decided under Configuration Files")
+    );
+    assert!(
+        modload.detail.is_none(),
+        "the content belongs to the row that can be decided"
+    );
 }
 
 #[test]
 fn normalize_non_rpm_maps_packages_and_version() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1274,7 +1590,7 @@ fn normalize_non_rpm_empty_section() {
     // Snapshot with no non-rpm data
     let snap = InspectionSnapshot::new();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
@@ -1286,7 +1602,7 @@ fn normalize_non_rpm_empty_section() {
 fn build_web_sections_section_count_and_ids() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
     // Users & groups moved to ViewResponse, version_changes retired — 8 sections remain.
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
@@ -1313,7 +1629,7 @@ fn build_web_sections_section_count_and_ids() {
 fn build_web_sections_item_counts() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
-    let sections = build_web_sections(session.reference());
+    let sections = build_web_sections(&session.reference());
 
     // Verify non-zero item counts for sections with data
     let svc = sections.iter().find(|s| s.id == "services").unwrap();
@@ -1329,24 +1645,6 @@ fn build_web_sections_item_counts() {
     assert_eq!(nrpm.items.len(), 2, "non_rpm_software should have 2 items");
 }
 
-#[test]
-fn sections_cache_returns_same_pointer() {
-    use std::ptr;
-    let state = rich_state();
-
-    // First call populates cache
-    let sections1 = state.sections_cache.get_or_init(|| {
-        let session = state.session.lock().unwrap();
-        build_web_sections(session.reference())
-    });
-    // Second call returns cached value
-    let sections2 = state.sections_cache.get().unwrap();
-    assert!(
-        ptr::eq(sections1, sections2),
-        "OnceLock must return the same allocation"
-    );
-}
-
 #[tokio::test]
 async fn health_pretty_name_fallback_to_name() {
     // When pretty_name is empty, os_name should fall back to name
@@ -1360,7 +1658,6 @@ async fn health_pretty_name_fallback_to_name() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
     let (_, json) = get_json(&app, "/api/health").await;
@@ -1430,7 +1727,6 @@ fn service_subsection_state() -> Arc<AppState> {
     });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -1620,7 +1916,6 @@ fn locked_package_state() -> Arc<AppState> {
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     })
 }
 
@@ -1712,7 +2007,6 @@ async fn api_view_includes_package_groups() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -1777,7 +2071,6 @@ async fn api_view_populates_optional_spillover_provenance() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -1817,7 +2110,6 @@ async fn api_view_populates_ungrouped_member_provenance() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -1880,7 +2172,6 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
     });
     let state = Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
-        sections_cache: OnceLock::new(),
     });
     let app = app(state);
 
@@ -1947,4 +2238,1325 @@ async fn api_ops_returns_timeline_entries_with_active_flag() {
 
     // Entry now inactive (in redo tail)
     assert_eq!(view_entry["active"], false);
+}
+
+// -- /api/upload-rpm -------------------------------------------------------
+
+const UPLOAD_BOUNDARY: &str = "inspectah-test-boundary";
+
+/// The upload directory's name under the test's temporary directory. It is
+/// a subdirectory so a test can prove nothing escaped into the parent.
+const UPLOAD_SUBDIR: &str = "snap-uploads";
+
+/// One repo-less `epel-release` at 9-11.el9 and one repo-less
+/// `custom-tool`, staging into a directory that does not exist yet.
+fn upload_state() -> (Arc<AppState>, tempfile::TempDir) {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "epel-release".into(),
+                version: "9".into(),
+                release: "11.el9".into(),
+                arch: "noarch".into(),
+                disposition: FindingKind::included(),
+                repoless_annotation: "No repo source".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "custom-tool".into(),
+                version: "1.0".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+                disposition: FindingKind::included(),
+                repoless_annotation: "No repo source".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    let tmp = tempfile::tempdir().unwrap();
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    (
+        Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+        }),
+        tmp,
+    )
+}
+
+/// One multipart part: the `Content-Disposition` value verbatim, and the
+/// body bytes.
+type MultipartPart = (Vec<u8>, Vec<u8>);
+
+fn part(disposition: &str, content: &[u8]) -> MultipartPart {
+    (disposition.as_bytes().to_vec(), content.to_vec())
+}
+
+/// A `file` part whose filename is `name`, quoted as a browser sends it.
+fn file_part(name: &str, content: &[u8]) -> MultipartPart {
+    part(
+        &format!("form-data; name=\"file\"; filename=\"{name}\""),
+        content,
+    )
+}
+
+fn multipart_body(parts: &[MultipartPart]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (disposition, content) in parts {
+        body.extend_from_slice(format!("--{UPLOAD_BOUNDARY}\r\nContent-Disposition: ").as_bytes());
+        body.extend_from_slice(disposition);
+        body.extend_from_slice(b"\r\nContent-Type: application/x-rpm\r\n\r\n");
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{UPLOAD_BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn upload_request(body: Body) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/upload-rpm")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={UPLOAD_BOUNDARY}"),
+        )
+        .body(body)
+        .unwrap()
+}
+
+async fn post_upload_body(app: &axum::Router, body: Body) -> (StatusCode, serde_json::Value) {
+    let response = app.clone().oneshot(upload_request(body)).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+async fn post_upload(
+    app: &axum::Router,
+    parts: &[MultipartPart],
+) -> (StatusCode, serde_json::Value) {
+    post_upload_body(app, Body::from(multipart_body(parts))).await
+}
+
+/// Every entry in `dir`, sorted. Empty when the directory does not exist.
+fn dir_entries(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+fn part_files(dir: &std::path::Path) -> Vec<String> {
+    dir_entries(dir)
+        .into_iter()
+        .filter(|n| n.starts_with(".upload-") && n.ends_with(".part"))
+        .collect()
+}
+
+async fn view(app: &axum::Router) -> serde_json::Value {
+    let (status, body) = get_json(app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    body
+}
+
+/// The `PackageEntry` the view carries for a package name.
+fn view_package(view: &serde_json::Value, name: &str) -> serde_json::Value {
+    view["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["entry"]["name"] == name)
+        .unwrap_or_else(|| panic!("no package {name} in the view"))["entry"]
+        .clone()
+}
+
+#[tokio::test]
+async fn upload_filename_rule_at_the_handler() {
+    // § 8.2: each name is refused with 400 naming the rule, with nothing
+    // in the upload directory and the view generation unchanged.
+    let over_long = format!("{}.rpm", "a".repeat(197)); // 201 bytes
+    let rejected = [
+        "epel-release-9$(id)-1.noarch.rpm",
+        "epel-release 9-1.noarch.rpm",
+        "epel-release-9-1.noarch (1).rpm",
+        "../x.rpm",
+        "..\\x.rpm",
+        "/etc/x.rpm",
+        ".epel-release-9-1.noarch.rpm",
+        over_long.as_str(),
+    ];
+    for name in rejected {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let generation_before = view(&app).await["generation"].clone();
+
+        let (status, body) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("filename rejected: staged filename "),
+            "{name}: {body}"
+        );
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{name}");
+        assert_eq!(view(&app).await["generation"], generation_before, "{name}");
+    }
+
+    // The header forms a browser can send that carry no usable filename,
+    // and the field-count and field-name rules. Each is 400 with nothing
+    // staged; the reason differs, so only the status and the filesystem
+    // are asserted here.
+    let mut invalid_utf8 = b"form-data; name=\"file\"; filename=\"a".to_vec();
+    invalid_utf8.push(0xFF);
+    invalid_utf8.extend_from_slice(b"-1-1.noarch.rpm\"");
+    let malformed: Vec<(&str, Vec<MultipartPart>)> = vec![
+        (
+            "a percent-encoded newline",
+            vec![part(
+                "form-data; name=\"file\"; filename*=UTF-8''epel-release-9-1%0ARUN%20id.noarch.rpm",
+                b"an rpm",
+            )],
+        ),
+        (
+            "a percent-encoded carriage return",
+            vec![part(
+                "form-data; name=\"file\"; filename*=UTF-8''epel-release-9-1%0D.noarch.rpm",
+                b"an rpm",
+            )],
+        ),
+        (
+            "an invalid UTF-8 filename",
+            vec![(invalid_utf8, b"an rpm".to_vec())],
+        ),
+        (
+            "two fields",
+            vec![
+                file_part("epel-release-9-12.el9.noarch.rpm", b"first"),
+                file_part("epel-release-latest-9.noarch.rpm", b"second"),
+            ],
+        ),
+        (
+            "a field not named file",
+            vec![part(
+                "form-data; name=\"rpm\"; filename=\"epel-release-9-12.el9.noarch.rpm\"",
+                b"an rpm",
+            )],
+        ),
+        (
+            "a file field with no filename",
+            vec![part("form-data; name=\"file\"", b"an rpm")],
+        ),
+        ("no field at all", vec![]),
+    ];
+    for (label, parts) in malformed {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let generation_before = view(&app).await["generation"].clone();
+
+        let (status, body) = post_upload(&app, &parts).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {body}");
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{label}");
+        assert_eq!(view(&app).await["generation"], generation_before, "{label}");
+    }
+
+    // Accepted (200): the seven names of § 8.2, each staged under the name
+    // it was sent with.
+    let accepted = [
+        "epel-release-9-12.el9.noarch.rpm",
+        "epel-release-latest-9.noarch.rpm",
+        "google-chrome-stable_current_x86_64.rpm",
+        "libstdc++-devel-11-1.el9.x86_64.rpm",
+        "foo-1.0~rc1-1.fc40.x86_64.rpm",
+        "foo-1.2^20240101git1-1.fc40.x86_64.rpm",
+        "X-1-1.noarch.RPM",
+    ];
+    for name in accepted {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+
+        let (status, body) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+        assert_eq!(body["staged_as"], name, "{name}");
+        assert_eq!(dir_entries(&dir), vec![name.to_string()], "{name}");
+    }
+}
+
+#[tokio::test]
+async fn rejected_name_reaches_neither_the_filesystem_nor_the_containerfile() {
+    // The assertion at the staging boundary: a name the allowlist refuses
+    // must not reach disk by any route, and must leave the Containerfile
+    // naming nothing. `commit` takes a `StagedName`, so the rename cannot
+    // be reached with an unvalidated name at all; this proves it through
+    // the one route a real rejected name arrives by.
+    for name in ["epel-release-9$(id)-1.noarch.rpm", "../x.rpm"] {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        let app = app(state);
+        let before = view(&app).await;
+
+        let (status, _) = post_upload(&app, &[file_part(name, b"an rpm")]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+
+        // Nothing staged, no part file, and nothing written beside the
+        // directory either: `../x.rpm` is rejected, never stripped to
+        // `x.rpm` and never placed one level up.
+        assert_eq!(dir_entries(&dir), Vec::<String>::new(), "{name}");
+        assert_eq!(
+            dir_entries(tmp.path()),
+            vec![UPLOAD_SUBDIR.to_string()],
+            "{name}"
+        );
+
+        // Nothing recorded on the package, so nothing can render.
+        let after = view(&app).await;
+        assert_eq!(after["generation"], before["generation"], "{name}");
+        let pkg = view_package(&after, "epel-release");
+        assert_eq!(pkg["uploaded"], serde_json::Value::Null, "{name}");
+        assert_eq!(pkg["cache_path"], serde_json::Value::Null, "{name}");
+
+        let containerfile = after["containerfile_preview"].as_str().unwrap();
+        assert!(
+            !containerfile.contains("COPY repoless-packages/"),
+            "{name}: {containerfile}"
+        );
+        assert!(!containerfile.contains("$("), "{name}");
+        assert!(!containerfile.contains("x.rpm"), "{name}");
+        assert!(
+            containerfile.contains("# MANUAL: epel-release"),
+            "{name}: the package is still waiting for an RPM"
+        );
+    }
+
+    // The control: the same assertions against an accepted name, so the
+    // Containerfile half of this test can fail. The `COPY` names the
+    // staged filename, which is what makes the half above mean anything:
+    // before the export verified staged names, no staged name reached a
+    // `COPY` at all and "a rejected one does not" was true for free.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+    let (status, _) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()]
+    );
+    include_package(&app, "epel-release", "noarch").await;
+    let after = view(&app).await;
+    let pkg = view_package(&after, "epel-release");
+    assert_eq!(pkg["uploaded"], true);
+    assert_eq!(
+        pkg["cache_path"],
+        dir.join("epel-release-9-12.el9.noarch.rpm")
+            .to_string_lossy()
+            .as_ref()
+    );
+    // Full-line equality, not `contains`: the pre-excluded form of this
+    // same package renders `# COPY repoless-packages/... /tmp/`, which
+    // contains the substring, so a substring search cannot tell a build
+    // step from advice about one.
+    let preview = after["containerfile_preview"].as_str().unwrap();
+    assert!(
+        preview
+            .lines()
+            .any(|l| l == "COPY repoless-packages/epel-release-9-12.el9.noarch.rpm /tmp/"),
+        "{preview}"
+    );
+}
+
+/// Include a repo-less package, which refine pre-excludes.
+async fn include_package(app: &axum::Router, name: &str, arch: &str) {
+    let (status, _) = post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": name, "arch": arch}},
+                "include": true
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn export_copies_a_staged_upload_from_the_canonical_directory() {
+    // The one production reader of `upload_dir_canon()` is the export at
+    // `handlers.rs`, and until this test nothing in the suite exercised
+    // it with a staged upload -- the confinement it passes had no reader
+    // outside an assertion. This drives the real route: upload, include,
+    // export, and read the member out of the tarball the response body
+    // carries.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let name = "epel-release-9-12.el9.noarch.rpm";
+    let (status, _) = post_upload(&app, &[file_part(name, b"staged rpm bytes")]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(dir_entries(&dir), vec![name.to_string()]);
+    include_package(&app, "epel-release", "noarch").await;
+
+    let (status, headers, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("x-export-warnings")
+            .and_then(|v| v.to_str().ok()),
+        Some("[]")
+    );
+
+    let member = tarball_member(&body, &format!("repoless-packages/{name}"))
+        .expect("the staged upload must be in the export");
+    assert_eq!(member, b"staged rpm bytes".to_vec());
+
+    // And the Containerfile in the same tarball names it as a build
+    // step, by full line: the pre-excluded form of this package renders
+    // the same text behind a `#`.
+    let containerfile = String::from_utf8(tarball_member(&body, "Containerfile").unwrap()).unwrap();
+    assert!(
+        containerfile
+            .lines()
+            .any(|l| l == format!("COPY repoless-packages/{name} /tmp/")),
+        "{containerfile}"
+    );
+}
+
+#[tokio::test]
+async fn export_warns_when_a_staged_upload_cannot_be_verified() {
+    // The same route, with the staged file removed behind the session's
+    // back: the export demotes rather than failing, and says so on the
+    // response. Without this the warnings header is a surface nobody can
+    // tell is working.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let name = "epel-release-9-12.el9.noarch.rpm";
+    let (status, _) = post_upload(&app, &[file_part(name, b"staged rpm bytes")]).await;
+    assert_eq!(status, StatusCode::OK);
+    include_package(&app, "epel-release", "noarch").await;
+    std::fs::remove_file(dir.join(name)).unwrap();
+
+    let (status, headers, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("x-export-warnings")
+            .and_then(|v| v.to_str().ok()),
+        Some(r#"["epel-release.noarch: staged RPM not verified, not exported"]"#)
+    );
+    assert!(tarball_member(&body, &format!("repoless-packages/{name}")).is_none());
+
+    let containerfile = String::from_utf8(tarball_member(&body, "Containerfile").unwrap()).unwrap();
+    assert!(
+        containerfile.lines().any(|l| l
+            == "# FIXME: upload the RPM for epel-release.noarch again in refine; \
+                the staged file could not be verified for export"),
+        "{containerfile}"
+    );
+}
+
+/// `POST /api/tarball` at the current generation: status, headers, body.
+async fn post_tarball(app: &axum::Router) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let generation = view(app).await["generation"].as_u64().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/tarball")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "generation": generation }).to_string(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, body.to_vec())
+}
+
+/// One member's bytes from a gzipped export tarball, by its path below
+/// the top-level directory.
+fn tarball_member(tarball: &[u8], rel: &str) -> Option<Vec<u8>> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(tarball));
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let full = entry.path().unwrap().to_string_lossy().into_owned();
+        if full.split_once('/').map(|(_, rest)| rest) == Some(rel) {
+            let mut bytes = Vec::new();
+            std::io::copy(&mut entry, &mut bytes).unwrap();
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn upload_response_carries_the_server_verdict() {
+    // § 8.6 + § 8.13.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-latest-9.noarch.RPM", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "matched");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(body["match_kind"], "version_differs");
+    assert_eq!(body["host_version"], "9-11.el9");
+    assert_eq!(body["uploaded_version"], "9");
+    assert_eq!(body["parsed"]["name"], "epel-release-latest");
+    assert_eq!(body["parsed"]["arch"], "noarch");
+    assert_eq!(body["parsed"]["version_release"], "9");
+    assert_eq!(body["staged_as"], "epel-release-latest-9.noarch.RPM");
+    assert_eq!(body["uploaded"], 1);
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-latest-9.noarch.RPM".to_string()]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("epel-release-latest-9.noarch.RPM")).unwrap(),
+        b"an rpm".as_slice()
+    );
+}
+
+#[tokio::test]
+async fn unmatched_upload_is_staged_and_changes_no_package() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+    let before = view(&app).await;
+
+    let (status, body) =
+        post_upload(&app, &[file_part("nginx-1.0-1.el9.x86_64.rpm", b"an rpm")]).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "unmatched");
+    assert_eq!(body["matched"], serde_json::Value::Null);
+    assert_eq!(body["match_kind"], serde_json::Value::Null);
+    assert_eq!(body["staged_as"], "nginx-1.0-1.el9.x86_64.rpm");
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["nginx-1.0-1.el9.x86_64.rpm".to_string()],
+        "an unmatched file is still staged for the modal's remove-or-retry"
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(after["packages"], before["packages"]);
+}
+
+#[tokio::test]
+async fn upload_refuses_a_filename_another_package_has_staged() {
+    // `cache_path` deserializes from the snapshot, so a resumed session
+    // can hold a staged name for a package the uploaded file does not
+    // match. No rename ever replaces another package's staged file.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    let contested = dir.join("epel-release-9-12.el9.noarch.rpm");
+    std::fs::write(&contested, b"custom-tool's file").unwrap();
+    {
+        let mut session = state.session.lock().unwrap();
+        session.set_uploaded(
+            "custom-tool.x86_64",
+            contested.clone(),
+            Some("9-12.el9".into()),
+        );
+    }
+    let app = app(state);
+    let before = view(&app).await;
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            b"epel's file",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-9-12.el9.noarch.rpm is already staged for custom-tool.x86_64"
+    );
+    assert_eq!(
+        std::fs::read(&contested).unwrap(),
+        b"custom-tool's file".as_slice()
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()],
+        "the refused upload's part file is dropped"
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(
+        view_package(&after, "epel-release")["uploaded"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn upload_replacing_an_upload_removes_the_superseded_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    for name in [
+        "epel-release-9-12.el9.noarch.rpm",
+        "epel-release-9-13.el9.noarch.rpm",
+    ] {
+        let (status, body) = post_upload(&app, &[file_part(name, name.as_bytes())]).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+    }
+
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-13.el9.noarch.rpm".to_string()],
+        "the superseded file is deleted after the record step"
+    );
+    let pkg = view_package(&view(&app).await, "epel-release");
+    assert_eq!(
+        pkg["cache_path"],
+        dir.join("epel-release-9-13.el9.noarch.rpm")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(pkg["uploaded_version"], "9-13.el9");
+}
+
+/// A session whose package state was **deserialized**, the way refine
+/// loads a scan. `uploaded` and `cache_path` are `#[serde(default)]`
+/// fields that arrive from the scanned host, so "uploaded implies
+/// `set_uploaded` wrote this path" is not something the collector or the
+/// type system enforces.
+fn upload_state_from_scan(tmp: &tempfile::TempDir, package: serde_json::Value) -> Arc<AppState> {
+    let snap: InspectionSnapshot = serde_json::from_value(serde_json::json!({
+        "schema_version": inspectah_core::snapshot::SCHEMA_VERSION,
+        "rpm": { "packages_added": [package] },
+    }))
+    .expect("the scan snapshot deserializes");
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(session)),
+    })
+}
+
+const SNAPSHOT_SUPPLIED_SECRET: &[u8] = b"a private key the operator can unlink";
+
+#[tokio::test]
+async fn upload_does_not_unlink_a_snapshot_supplied_path_outside_the_upload_directory() {
+    // A scanned host sets `uploaded: true` with a `cache_path` pointing
+    // anywhere the operator can write. One ordinary upload for that
+    // package used to make the superseded-file deletion unlink it.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let outside = tmp.path().join("id_ed25519");
+    std::fs::write(&outside, SNAPSHOT_SUPPLIED_SECRET).unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "foo",
+            "version": "1",
+            "release": "1",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "uploaded": true,
+            "cache_path": outside.to_string_lossy(),
+        }),
+    ));
+
+    let (status, body) = post_upload(&app, &[file_part("foo-1-1.noarch.rpm", b"an rpm")]).await;
+
+    assert!(
+        outside.exists(),
+        "an upload must not unlink a file outside the upload directory"
+    );
+    assert_eq!(
+        std::fs::read(&outside).unwrap(),
+        SNAPSHOT_SUPPLIED_SECRET,
+        "the file outside the upload directory is untouched"
+    );
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "foo.noarch records a staged file outside the upload directory; nothing was staged"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "a refused upload places nothing"
+    );
+}
+
+#[tokio::test]
+async fn first_upload_for_a_dnf_cached_package_keeps_the_host_rpm() {
+    // `superseded_upload` filters on `uploaded`, so the first upload for
+    // a package the collector found in the host's dnf cache supersedes
+    // nothing: that file is the one `prior_cache` records for removal to
+    // restore, and deleting it would make the restore name a file that
+    // is gone. epel-release arrives this way on the basis scan.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let host_cached = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+    std::fs::write(&host_cached, b"the host's cached rpm").unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "epel-release",
+            "version": "9",
+            "release": "11.el9",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "cache_path": host_cached.to_string_lossy(),
+        }),
+    ));
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        std::fs::read(&host_cached).unwrap(),
+        b"the host's cached rpm".as_slice(),
+        "the host's cached RPM is not this upload's to delete"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()]
+    );
+}
+
+/// Two repo-less packages whose NEVRA filenames overlap the matcher:
+/// `epel-release-extras` is cached from the host's dnf cache and
+/// classified (empty `repoless_annotation`, so the matcher never offers
+/// it), and `epel-release` is the one an upload named for the first will
+/// match, because the matcher shortens `epel-release-extras` to
+/// `epel-release` before it gives up.
+///
+/// `extras_rpm` is where `epel-release-extras` keeps its RPM, and
+/// `extras_uploaded` says whether that is a staged upload rather than the
+/// host's dnf cache. An uploaded package's export name is its staged
+/// basename, so it no longer owns its NEVRA and the collision is gone.
+fn colliding_nevra_state(
+    tmp: &tempfile::TempDir,
+    extras_rpm: &std::path::Path,
+    extras_uploaded: bool,
+) -> Arc<AppState> {
+    let snap: InspectionSnapshot = serde_json::from_value(serde_json::json!({
+        "schema_version": inspectah_core::snapshot::SCHEMA_VERSION,
+        "rpm": { "packages_added": [
+            {
+                "name": "epel-release-extras",
+                "version": "9",
+                "release": "11.el9",
+                "arch": "noarch",
+                "repoless_cached": true,
+                "uploaded": extras_uploaded,
+                "cache_path": extras_rpm.to_string_lossy(),
+            },
+            {
+                "name": "epel-release",
+                "version": "9",
+                "release": "11.el9",
+                "arch": "noarch",
+                "repoless_annotation": "No repo source",
+            },
+        ] },
+    }))
+    .expect("the scan snapshot deserializes");
+    let mut session = RefineSession::new(snap);
+    session.set_upload_dir(tmp.path().join(UPLOAD_SUBDIR));
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(session)),
+    })
+}
+
+#[tokio::test]
+async fn upload_refuses_a_filename_a_cached_package_already_owns() {
+    // The collision the export discovers at `create_new`, refused where
+    // the operator can still act on it. The cached package's `cache_path`
+    // is its dnf-cache path, not this destination, so the staged-file
+    // check sees nothing; what collides is the NEVRA filename the export
+    // extracts for it from the source tarball.
+    //
+    // `a_destination_another_step_already_wrote_fails_the_export` in the
+    // refine crate is the other end: that is what this prevents.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let dnf_cache = tmp.path().join("epel-release-extras-9-11.el9.noarch.rpm");
+    std::fs::write(&dnf_cache, b"the host's cached rpm").unwrap();
+    let app = app(colliding_nevra_state(&tmp, &dnf_cache, false));
+    let before = view(&app).await;
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-extras-9-11.el9.noarch.rpm",
+            b"an rpm",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-extras-9-11.el9.noarch.rpm is the cached RPM filename of \
+         epel-release-extras.noarch; upload it under a different name or remove \
+         epel-release-extras.noarch from the export"
+    );
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "a refused upload places nothing"
+    );
+    assert_eq!(
+        std::fs::read(&dnf_cache).unwrap(),
+        b"the host's cached rpm".as_slice()
+    );
+    let after = view(&app).await;
+    assert_eq!(after["generation"], before["generation"]);
+    assert_eq!(after["packages"], before["packages"]);
+
+    // The same bytes under a name nothing else owns are accepted, so the
+    // refusal is about the name and not about the pair of packages.
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+}
+
+#[tokio::test]
+async fn a_nevra_whose_owner_is_itself_an_upload_is_not_a_collision() {
+    // The reaching input for `CachedNevra`'s `!pkg.uploaded`. Once
+    // `epel-release-extras` is an upload, the export writes it under its
+    // staged basename and stops writing its NEVRA, so the name is free.
+    // Without the condition this upload is refused for a collision that
+    // no longer exists.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    let staged = dir.join("epel-release-extras-latest-9.noarch.rpm");
+    std::fs::write(&staged, b"the extras upload").unwrap();
+    let app = app(colliding_nevra_state(&tmp, &staged, true));
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-extras-9-11.el9.noarch.rpm",
+            b"an rpm",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(
+        dir_entries(&dir),
+        vec![
+            "epel-release-extras-9-11.el9.noarch.rpm".to_string(),
+            "epel-release-extras-latest-9.noarch.rpm".to_string(),
+        ],
+        "and the extras package's own upload is still there"
+    );
+}
+
+/// An upload directory the session reaches by a different spelling from
+/// the canonical one: `<tmp>/link` is a symlink to `<tmp>/real`.
+///
+/// `prepare_upload_dir` refuses a symlink at the final component, so the
+/// link is one level up -- which is where a real one would be, in a home
+/// directory or a `/var` reached through one. Every `cache_path` the
+/// handler records goes in under the `link` spelling while every
+/// confinement check resolves to the `real` one.
+fn symlinked_upload_dir(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+    let given = tmp.path().join("link").join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&given).unwrap();
+    assert_ne!(
+        given,
+        real.canonicalize().unwrap().join(UPLOAD_SUBDIR),
+        "the fixture is only a fixture if the two spellings differ"
+    );
+    given
+}
+
+/// A session over `upload_dir` holding `epel-release` and `custom-tool`,
+/// both repo-less.
+fn state_over_upload_dir(upload_dir: &std::path::Path) -> Arc<AppState> {
+    let (state, _tmp) = upload_state();
+    state
+        .session
+        .lock()
+        .unwrap()
+        .set_upload_dir(upload_dir.to_path_buf());
+    state
+}
+
+#[tokio::test]
+async fn upload_refuses_a_contested_name_through_a_symlinked_directory() {
+    // The 409's `Staged` arm, with the two spellings that defeat a text
+    // comparison. `custom-tool` holds the file under the `link`
+    // spelling; the destination this upload builds is the same spelling,
+    // but nothing in the code may rely on that -- a snapshot carries
+    // whichever spelling the session that wrote it was given.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = symlinked_upload_dir(&tmp);
+    let contested = dir.join("epel-release-9-12.el9.noarch.rpm");
+    std::fs::write(&contested, b"custom-tool's file").unwrap();
+    let state = state_over_upload_dir(&dir);
+    {
+        let mut session = state.session.lock().unwrap();
+        let canonical = contested.canonicalize().unwrap();
+        session.set_uploaded("custom-tool.x86_64", canonical, Some("9-12.el9".into()));
+    }
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            b"epel's file",
+        )],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "epel-release-9-12.el9.noarch.rpm is already staged for custom-tool.x86_64"
+    );
+    assert_eq!(
+        std::fs::read(&contested).unwrap(),
+        b"custom-tool's file".as_slice(),
+        "and the file it names is untouched"
+    );
+}
+
+#[tokio::test]
+async fn replacing_an_upload_recorded_under_another_spelling_keeps_the_file() {
+    // The worse half of the same mistake. `superseded_upload` compares
+    // `cache_path` to the destination; `resolve_staged_file`, which runs
+    // next, resolves. When the comparison said "different file" and the
+    // resolution said "this one", the handler staged the upload and then
+    // deleted it, answering 200 with `uploaded: true` and nothing on
+    // disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = symlinked_upload_dir(&tmp);
+    const FILENAME: &str = "epel-release-9-12.el9.noarch.rpm";
+    let staged = dir.join(FILENAME);
+    std::fs::write(&staged, b"the first upload").unwrap();
+    let state = state_over_upload_dir(&dir);
+    {
+        let mut session = state.session.lock().unwrap();
+        let canonical = staged.canonicalize().unwrap();
+        session.set_uploaded("epel-release.noarch", canonical, Some("9-12.el9".into()));
+    }
+    let app = app(state);
+
+    let (status, body) = post_upload(&app, &[file_part(FILENAME, b"the replacement")]).await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["matched"], "epel-release.noarch");
+    assert_eq!(
+        std::fs::read(&staged).expect("the file the response says is staged exists"),
+        b"the replacement".as_slice()
+    );
+    assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
+}
+
+#[tokio::test]
+async fn deleting_a_dnf_cached_package_is_refused_not_reported_missing() {
+    // § 3.3: the precondition is `uploaded`, and a package whose RPM the
+    // host's dnf cache supplies has one -- the row shows it. 404 would
+    // read as "that package is not here"; 409 says the file is not
+    // refine's to unlink.
+    let tmp = tempfile::tempdir().unwrap();
+    let dnf_cache = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+    std::fs::write(&dnf_cache, b"the host's cached rpm").unwrap();
+    let app = app(upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "epel-release",
+            "version": "9",
+            "release": "11.el9",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "cache_path": dnf_cache.to_string_lossy(),
+        }),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/upload-rpm/epel-release.noarch")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "only uploads can be removed; epel-release.noarch is cached from the host's dnf cache"
+    );
+    assert!(dnf_cache.exists(), "and nothing is deleted");
+    assert_eq!(
+        view_package(&view(&app).await, "epel-release")["repoless_cached"],
+        true
+    );
+
+    // A package with no RPM at all is still 404: there is nothing to
+    // refuse, which is a different answer from refusing.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/upload-rpm/nothing.noarch")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+/// Stage one part file through the real `stage`, without committing it.
+async fn stage_part(
+    dir: &std::path::Path,
+    filename: &str,
+    content: &[u8],
+) -> inspectah_web::upload::StagedPart {
+    use axum::extract::{FromRequest, Multipart};
+    let body = Body::from(multipart_body(&[file_part(filename, content)]));
+    let mut multipart = Multipart::from_request(upload_request(body), &())
+        .await
+        .unwrap();
+    let mut field = multipart.next_field().await.unwrap().unwrap();
+    inspectah_web::upload::stage(dir, &mut field).await.unwrap()
+}
+
+#[tokio::test]
+async fn overlapping_uploads_are_decided_by_the_last_commit() {
+    // § 8.2: `stage` and `commit` are split so two uploads can be
+    // interleaved deterministically. Both are staged before either
+    // commits, which is the state two concurrent requests reach.
+    const FILENAME: &str = "epel-release-9-12.el9.noarch.rpm";
+
+    for (first, second) in [(&b"AAAA"[..], &b"BBBB"[..]), (&b"BBBB"[..], &b"AAAA"[..])] {
+        let (state, tmp) = upload_state();
+        let dir = tmp.path().join(UPLOAD_SUBDIR);
+        {
+            state.session.lock().unwrap().ensure_upload_dir().unwrap();
+        }
+        let a = stage_part(&dir, FILENAME, first).await;
+        let b = stage_part(&dir, FILENAME, second).await;
+        assert_eq!(
+            part_files(&dir).len(),
+            2,
+            "each request stages its own part file"
+        );
+
+        let name = inspectah_core::rpm_filename::StagedName::parse(FILENAME).unwrap();
+        {
+            let mut session = state.session.lock().unwrap();
+            inspectah_web::upload::commit(&mut session, a, &name).unwrap();
+            inspectah_web::upload::commit(&mut session, b, &name).unwrap();
+        }
+
+        assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
+        assert_eq!(
+            std::fs::read(dir.join(FILENAME)).unwrap(),
+            second,
+            "the commit that ran last wins"
+        );
+    }
+
+    // A dropped part takes only its own file: the other upload is
+    // untouched and still commits.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    {
+        state.session.lock().unwrap().ensure_upload_dir().unwrap();
+    }
+    let a = stage_part(&dir, FILENAME, b"AAAA").await;
+    let b = stage_part(&dir, FILENAME, b"BBBB").await;
+    drop(a);
+    assert_eq!(part_files(&dir).len(), 1, "only A's part file is gone");
+    let name = inspectah_core::rpm_filename::StagedName::parse(FILENAME).unwrap();
+    {
+        let mut session = state.session.lock().unwrap();
+        inspectah_web::upload::commit(&mut session, b, &name).unwrap();
+    }
+    assert_eq!(dir_entries(&dir), vec![FILENAME.to_string()]);
+    assert_eq!(
+        std::fs::read(dir.join(FILENAME)).unwrap(),
+        b"BBBB".as_slice()
+    );
+}
+
+/// A request body that yields `prologue`, then `chunk` `full` times, then
+/// a `rest`-byte tail, and then either ends or stalls forever -- the
+/// client that stops sending. Lazy, so a 500 MiB body costs one chunk of
+/// memory.
+struct ChunkStream {
+    prologue: Option<axum::body::Bytes>,
+    chunk: axum::body::Bytes,
+    full: usize,
+    rest: usize,
+    stall: bool,
+}
+
+impl futures_core::Stream for ChunkStream {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if let Some(prologue) = self.prologue.take() {
+            return Poll::Ready(Some(Ok(prologue)));
+        }
+        if self.full > 0 {
+            self.full -= 1;
+            return Poll::Ready(Some(Ok(self.chunk.clone())));
+        }
+        if self.rest > 0 {
+            let rest = self.rest;
+            self.rest = 0;
+            return Poll::Ready(Some(Ok(self.chunk.slice(..rest))));
+        }
+        if self.stall {
+            return Poll::Pending;
+        }
+        Poll::Ready(None)
+    }
+}
+
+/// Chunk size the oversize-body test streams with: large enough that 500
+/// MiB is a few hundred polls, small enough that the test holds one of
+/// them in memory.
+const TEST_CHUNK_BYTES: usize = 1024 * 1024;
+
+#[tokio::test]
+async fn upload_over_the_route_limit_is_413_and_leaves_no_part_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    // A 2 MiB body goes through, which the router's 1 MiB default limit
+    // would refuse: the route's own UPLOAD_LIMIT_BYTES is the one in
+    // force.
+    let (status, body) = post_upload(
+        &app,
+        &[file_part(
+            "epel-release-9-12.el9.noarch.rpm",
+            &vec![b'x'; 2 * TEST_CHUNK_BYTES],
+        )],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    std::fs::remove_file(dir.join("epel-release-9-12.el9.noarch.rpm")).unwrap();
+
+    // One byte over the limit, counting the multipart framing.
+    let header = format!(
+        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; \
+         filename=\"epel-release-9-12.el9.noarch.rpm\"\r\n\r\n"
+    );
+    let truncated_body = |total: usize| {
+        let filler = total - header.len();
+        Body::from_stream(ChunkStream {
+            prologue: Some(axum::body::Bytes::from(header.clone())),
+            chunk: axum::body::Bytes::from(vec![b'x'; TEST_CHUNK_BYTES]),
+            full: filler / TEST_CHUNK_BYTES,
+            rest: filler % TEST_CHUNK_BYTES,
+            stall: false,
+        })
+    };
+
+    // Exactly at the limit the body is not refused for its size: it runs
+    // out of multipart framing instead, which is the 400 below. Without
+    // this case the 413 above could be any failure on a large body.
+    let (status, body) =
+        post_upload_body(&app, truncated_body(inspectah_web::UPLOAD_LIMIT_BYTES)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(dir_entries(&dir), Vec::<String>::new());
+
+    let (status, body) =
+        post_upload_body(&app, truncated_body(inspectah_web::UPLOAD_LIMIT_BYTES + 1)).await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "the part file of a body that overran the limit does not survive"
+    );
+}
+
+/// How long a test waits for a concurrent upload to make progress
+/// before it calls the server stuck.
+const UPLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often it looks.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// A body that sends a complete multipart header and the first bytes of
+/// the file, then stops: the client that goes away mid-transfer.
+fn stalled_upload_body(filename: &str) -> Body {
+    let mut first = format!(
+        "--{UPLOAD_BOUNDARY}\r\nContent-Disposition: form-data; \
+         name=\"file\"; filename=\"{filename}\"\r\n\r\n"
+    )
+    .into_bytes();
+    first.extend_from_slice(b"the first half of an rpm");
+    Body::from_stream(ChunkStream {
+        prologue: Some(axum::body::Bytes::from(first)),
+        chunk: axum::body::Bytes::new(),
+        full: 0,
+        rest: 0,
+        stall: true,
+    })
+}
+
+/// Wait until the stalled upload's part file is on disk, so what follows
+/// is measuring a transfer in flight rather than one that never started.
+async fn await_part_file(dir: &std::path::Path) {
+    tokio::time::timeout(UPLOAD_WAIT, async {
+        while part_files(dir).len() != 1 {
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("the upload never reached its part file");
+}
+
+#[tokio::test]
+async fn upload_abandoned_mid_body_leaves_no_part_file() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let body = stalled_upload_body("epel-release-9-12.el9.noarch.rpm");
+    let handle = tokio::spawn(async move { app.oneshot(upload_request(body)).await });
+
+    // The part file exists while the transfer is in flight.
+    await_part_file(&dir).await;
+
+    // The client goes away: axum drops the handler future.
+    handle.abort();
+    let _ = handle.await;
+
+    assert_eq!(
+        dir_entries(&dir),
+        Vec::<String>::new(),
+        "an abandoned transfer leaves nothing behind"
+    );
+}
+
+// Two workers, so that a `stage` moved inside the lock hold blocks one
+// of them and leaves the other free to fire the timeout. On the
+// single-threaded runtime the other tests use, that mutation would hang
+// the suite instead of failing this test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_upload_does_not_block_another_request() {
+    // What the stage/commit split exists for: the streaming happens
+    // outside the session lock, so a client that stops sending holds its
+    // own part file and nothing else. The interleaving test cannot show
+    // this, because it takes the lock itself.
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    let app = app(state);
+
+    let stalled = tokio::spawn({
+        let app = app.clone();
+        let body = stalled_upload_body("epel-release-latest-9.noarch.rpm");
+        async move { app.oneshot(upload_request(body)).await }
+    });
+    await_part_file(&dir).await;
+
+    let (status, body) = tokio::time::timeout(
+        UPLOAD_WAIT,
+        post_upload(
+            &app,
+            &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+        ),
+    )
+    .await
+    .expect("a stalled upload must not hold the session lock");
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        dir_entries(&dir).len(),
+        2,
+        "the staged file, and the stalled request's part file beside it"
+    );
+    stalled.abort();
+}
+
+#[tokio::test]
+async fn upload_directory_is_swept_of_dead_part_files_on_first_open() {
+    let (state, tmp) = upload_state();
+    let dir = tmp.path().join(UPLOAD_SUBDIR);
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+    let app = app(state);
+
+    let (status, body) = post_upload(
+        &app,
+        &[file_part("epel-release-9-12.el9.noarch.rpm", b"an rpm")],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        dir_entries(&dir),
+        vec!["epel-release-9-12.el9.noarch.rpm".to_string()],
+        "the part file a dead process left is gone, and this upload's is too"
+    );
 }

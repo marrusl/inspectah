@@ -8,7 +8,7 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
-use inspectah_core::types::config::{ConfigFileKind, ConfigSection};
+use inspectah_core::types::config::{ConfigCategory, ConfigFileKind, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::RpmVaEntry;
 use inspectah_core::types::system::SourceSystem;
@@ -253,6 +253,75 @@ fn test_config_inspector_happy_path() {
     assert_eq!(paths, sorted, "files should be sorted by path");
 }
 
+/// `file_contexts.local`/`file_contexts.subs` are derived SELinux
+/// policy-store state, collected separately as typed `FcontextRule`s (task
+/// 10, item 1.4). Even when `rpm -Va` reports one as RPM-owned-modified
+/// (true on a host where policycoreutils owns and ships it), it must not
+/// also enter `config.files` -- that would be the same fact represented
+/// twice, once correctly typed and once as an opaque config blob.
+#[test]
+fn test_config_inspector_excludes_selinux_fcontext_store_file() {
+    let exec = MockExecutor::new()
+        // An empty but present /etc -- ConfigInspector early-exits on a
+        // missing /etc, which would make this test pass vacuously
+        // regardless of the fcontext-store skip under test.
+        .with_dir("/etc", vec![])
+        .with_file(
+            "/etc/selinux/targeted/contexts/files/file_contexts.local",
+            "/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0\n",
+        )
+        // Positive control (round 1 review, item 5): an ordinary modified
+        // config with the same rpm -Va flags, so a future change that
+        // empties the whole section fails on this assertion instead of
+        // passing quietly on the absence check alone.
+        .with_file("/etc/ssh/sshd_config", "Port 22\n");
+
+    let rpm_state = RpmState {
+        verification_results: vec![
+            RpmVaEntry {
+                path: "/etc/selinux/targeted/contexts/files/file_contexts.local".into(),
+                flags: "S.5....T.".into(),
+                package: Some("policycoreutils".into()),
+            },
+            RpmVaEntry {
+                path: "/etc/ssh/sshd_config".into(),
+                flags: "S.5....T.".into(),
+                package: Some("openssh-server".into()),
+            },
+        ],
+        ..Default::default()
+    };
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path.contains("file_contexts.local")),
+        "file_contexts.local is derived policy-store state, not config"
+    );
+    assert!(
+        section.files.iter().any(|f| f.path.contains("sshd_config")),
+        "an ordinary RPM-modified config must still be collected"
+    );
+}
+
 /// No /etc directory -- produces empty section.
 #[test]
 fn test_config_inspector_no_etc() {
@@ -347,5 +416,268 @@ fn test_config_inspector_json_roundtrip() {
     assert_eq!(
         json, roundtrip_json,
         "inspector output must round-trip faithfully through ConfigSection"
+    );
+}
+
+/// § 3.6 and § 8.11: the config walker owns `/etc/pam.d/`,
+/// `/etc/audit/rules.d/` and the custom tuned profiles. Each file arrives
+/// as an ordinary `ConfigFileEntry` carrying the category that names it,
+/// which is what gives it a disposition.
+///
+/// The three tuned runtime-state files stay excluded (`walk.rs`'s
+/// `UNOWNED_EXCLUDE_EXACT`) because `tuned_disposition` renders them;
+/// `active_profile` is in the fixture so that a change deleting that
+/// exclusion along with the profile glob fails here.
+///
+/// `/etc/audit/rules.d/audit.rules` is RPM-owned and unmodified, which is
+/// the filter item 1.2 needs and the reason no `SnippetOrigin` exists. It
+/// is in the fixture because the walker's uniform treatment of these three
+/// trees is new: a tree-specific exclusion re-added inside the ownership
+/// check would otherwise pass unnoticed.
+#[test]
+fn pam_audit_and_tuned_are_config_entries() {
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["pam.d", "audit", "tuned"])
+        .with_dir("/etc/pam.d", vec!["custom-sshd", "su-l"])
+        .with_dir("/etc/audit", vec!["rules.d"])
+        .with_dir("/etc/audit/rules.d", vec!["audit.rules", "driftify.rules"])
+        .with_dir("/etc/tuned", vec!["myapp", "active_profile"])
+        .with_dir("/etc/tuned/myapp", vec!["tuned.conf"])
+        .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n")
+        .with_file("/etc/pam.d/su-l", "auth include su\n")
+        .with_file("/etc/audit/rules.d/audit.rules", "-D\n-b 8192\n")
+        .with_file(
+            "/etc/audit/rules.d/driftify.rules",
+            "-w /etc/shadow -p wa -k shadow_changes\n",
+        )
+        .with_file("/etc/tuned/myapp/tuned.conf", "[main]\nsummary=myapp\n")
+        .with_file("/etc/tuned/active_profile", "myapp\n");
+
+    let rpm_state = RpmState {
+        owned_paths: HashSet::from([PathBuf::from("/etc/audit/rules.d/audit.rules")]),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    let category_of = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} must be a config entry; got {:?}",
+                    section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
+            .category
+            .clone()
+    };
+
+    assert_eq!(
+        category_of("/etc/pam.d/custom-sshd"),
+        ConfigCategory::Pam,
+        "a custom PAM config is categorized Pam"
+    );
+    assert_eq!(
+        category_of("/etc/audit/rules.d/driftify.rules"),
+        ConfigCategory::Audit,
+        "a custom audit rule file is categorized Audit"
+    );
+    assert_eq!(
+        category_of("/etc/tuned/myapp/tuned.conf"),
+        ConfigCategory::Tuned,
+        "a custom tuned profile is categorized Tuned"
+    );
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/tuned/active_profile"),
+        "tuned runtime state stays excluded: tuned_disposition renders it"
+    );
+    assert!(
+        !section.files.iter().any(|f| f.path == "/etc/pam.d/su-l"),
+        "the eight base PAM configs stay excluded by exact match"
+    );
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/audit/rules.d/audit.rules"),
+        "an RPM-owned unmodified audit rule stays out: the walker's \
+         ownership check is the filter, not a per-tree exclusion"
+    );
+}
+
+/// § 3.6's authselect rule. `rpm -Va` reports `....L....` on the five
+/// `/etc/pam.d/` files authselect owns: RPM-owned symlinks whose target
+/// changed. The customization lives in `/etc/authselect/`, which the walker
+/// collects on its own, so the symlink must produce no entry of its own.
+///
+/// The custom file in the same fixture is the sibling control: it differs
+/// unaided, so an empty section cannot pass this test.
+#[test]
+fn an_authselect_symlink_is_not_a_local_pam_file() {
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["pam.d", "authselect"])
+        .with_dir("/etc/pam.d", vec!["system-auth", "custom-sshd"])
+        .with_dir("/etc/authselect", vec!["system-auth"])
+        .with_link("/etc/pam.d/system-auth", "/etc/authselect/system-auth")
+        .with_file("/etc/pam.d/system-auth", "# authselect-generated\n")
+        .with_file("/etc/authselect/system-auth", "# authselect-generated\n")
+        .with_file("/etc/pam.d/custom-sshd", "auth required pam_faillock.so\n");
+
+    let rpm_state = RpmState {
+        verification_results: vec![RpmVaEntry {
+            path: "/etc/pam.d/system-auth".into(),
+            flags: "....L....".into(),
+            package: Some("authselect-libs".into()),
+        }],
+        ..Default::default()
+    };
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    assert!(
+        !section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/pam.d/system-auth"),
+        "an authselect symlink is not a local PAM file; got {:?}",
+        section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+    );
+    assert!(
+        section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/pam.d/custom-sshd"),
+        "the sibling custom PAM file must still be collected"
+    );
+    assert!(
+        section
+            .files
+            .iter()
+            .any(|f| f.path == "/etc/authselect/system-auth"),
+        "the customization itself is collected from /etc/authselect/"
+    );
+}
+
+/// The kernel/boot config directories are the walker's, same as every
+/// other `/etc` tree: it reads them, categorizes them, and gives each
+/// file one decision. The kernel/boot inspector collected them into
+/// `KernelBootSection` lists before, which is how the same file came to
+/// hold two rows and one decision.
+///
+/// `50-nouveau-blacklist.conf` is in the fixture because
+/// `UNOWNED_EXCLUDE_GLOBS` used to carry `/etc/modprobe.d/*-blacklist.conf`
+/// "for the distro files". The glob is only ever reached in the unowned
+/// branch, after both ownership checks, so a distro file never saw it and
+/// the only files it could drop were admin-authored. It is gone; this
+/// case is the guard against it coming back.
+#[test]
+fn kernel_module_and_initramfs_directories_are_config_entries() {
+    let exec = MockExecutor::new()
+        .with_dir(
+            "/etc",
+            vec!["modprobe.d", "modules-load.d", "dracut.conf.d"],
+        )
+        .with_dir(
+            "/etc/modprobe.d",
+            vec!["myapp.conf", "50-nouveau-blacklist.conf"],
+        )
+        .with_dir("/etc/modules-load.d", vec!["br_netfilter.conf"])
+        .with_dir("/etc/dracut.conf.d", vec!["50-custom.conf"])
+        .with_file("/etc/modprobe.d/myapp.conf", "options myapp debug=1\n")
+        .with_file(
+            "/etc/modprobe.d/50-nouveau-blacklist.conf",
+            "blacklist nouveau\n",
+        )
+        .with_file("/etc/modules-load.d/br_netfilter.conf", "br_netfilter\n")
+        .with_file(
+            "/etc/dracut.conf.d/50-custom.conf",
+            "add_dracutmodules+=\" lvm \"\n",
+        );
+
+    let source = pkg_source();
+    let rpm_state = RpmState::default();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let section = match &output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {:?}", other),
+    };
+
+    let category_of = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} must be a config entry; got {:?}",
+                    section.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
+            .category
+            .clone()
+    };
+
+    assert_eq!(
+        category_of("/etc/modprobe.d/myapp.conf"),
+        ConfigCategory::KernelModule
+    );
+    assert_eq!(
+        category_of("/etc/modules-load.d/br_netfilter.conf"),
+        ConfigCategory::KernelModule
+    );
+    assert_eq!(
+        category_of("/etc/dracut.conf.d/50-custom.conf"),
+        ConfigCategory::Initramfs
+    );
+    assert_eq!(
+        category_of("/etc/modprobe.d/50-nouveau-blacklist.conf"),
+        ConfigCategory::KernelModule,
+        "an unowned blacklist file is the admin's own: no package owns it, \
+         so nothing else will put it in the image"
     );
 }

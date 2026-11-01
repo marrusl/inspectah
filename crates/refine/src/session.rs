@@ -1,11 +1,12 @@
 use inspectah_core::types::FindingKind;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::aggregate::classify_zone;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
+use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -13,7 +14,7 @@ use inspectah_pipeline::render::containerfile::{
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
-use crate::group_state::{GroupEvalContext, derive_group_state};
+use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
     normalize_package_defaults,
@@ -21,12 +22,13 @@ use crate::normalize::{
 use crate::repo_index::RepoIndex;
 use crate::types::{
     AggregateContext, AnnotatedOp, AnnotatedTimelineEntry, ChangesSummary, ContentHash, ItemId,
-    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoProvenance,
+    RefineError, RefineMode, RefineStats, RefinedView, RefinementOp, RepoEffective, RepoProvenance,
     SectionChangeSummary, SectionKind, SectionStats, TimelineEntry, TriageBucket, TriageReason,
     UserPasswordOp, ViewDirective,
 };
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 use inspectah_core::util::{
     METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
@@ -41,7 +43,6 @@ pub struct RefineSession {
     cached_view: Option<RefinedView>,
     cached_render_context: Option<RenderContext>,
     cached_decisions: Option<crate::projection::DecisionProjection>,
-    cached_reference: std::sync::OnceLock<crate::projection::ReferenceProjection>,
     generation: u64,
     /// Tracks which context items the user has viewed in the UI.
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
@@ -54,6 +55,19 @@ pub struct RefineSession {
     /// endpoint). Export reads from both the source tarball AND this dir,
     /// merging uploads into `repoless-packages/`.
     upload_dir: Option<PathBuf>,
+    /// `upload_dir` canonicalized, computed once by `ensure_upload_dir`
+    /// after it has proved the directory is ours. `Some` means the
+    /// directory has been prepared and swept this process; the staging
+    /// paths and the export's confinement checks compare against this.
+    upload_dir_canon: Option<PathBuf>,
+    /// For a package whose upload replaced a dnf-cache RPM: the cache state
+    /// the upload displaced, keyed by `name.arch`. Removal restores it.
+    prior_cache: HashMap<String, PriorCache>,
+    /// What the upload-directory rescan skipped, in filename order, from
+    /// the one pass `ensure_upload_dir` runs when it first prepares the
+    /// directory. Kept on the session so every later caller is told the
+    /// same thing as the one that triggered the rescan.
+    rescan_warnings: Vec<String>,
     /// Set to true when auto-save encounters a permanent I/O failure
     /// (EROFS, EACCES). Suppresses further save attempts for this session.
     durability_degraded: bool,
@@ -61,6 +75,212 @@ pub struct RefineSession {
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
+}
+
+/// The cache state an upload displaced on a package that was
+/// `repoless_cached` from the host's dnf cache. Removing the upload
+/// restores these three fields rather than clearing them, so a package the
+/// host could already supply does not lose that RPM to an upload and a
+/// removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorCache {
+    pub repoless_cached: bool,
+    pub cache_path: Option<String>,
+    pub uploaded_version: Option<String>,
+}
+
+/// What a removal request for one `name.arch` found.
+///
+/// The three cases carry different HTTP statuses, and the enum is what
+/// keeps them apart: the `bool` this replaces collapsed "there is no such
+/// upload" and "that RPM is the host's, not yours" into one `false` that
+/// the handler could only report as 404.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemovalOutcome {
+    /// The staged file was deleted and the entry's prior cache state
+    /// restored or cleared.
+    Removed,
+    /// The package's RPM came from the host's dnf cache, not from an
+    /// upload here. Nothing changed.
+    CachedOnly,
+    /// No package of that `name.arch`, or one with no RPM at all.
+    NotFound,
+}
+
+/// Whether an uploaded filename's version-release matches the host's.
+///
+/// inspectah does not compare RPM versions: `VersionDiffers` says the
+/// uploaded version is not the one the host had, and nothing about which
+/// is newer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadMatchKind {
+    Exact,
+    VersionDiffers,
+}
+
+/// The package an uploaded filename matched, and how.
+///
+/// Produced by [`RefineSession::match_uploaded_rpm`], which mutates
+/// nothing: the caller decides whether to record it with
+/// [`RefineSession::set_uploaded`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UploadMatch {
+    /// `name.arch` of the matched package.
+    pub canonical: String,
+    pub match_kind: UploadMatchKind,
+    /// `version-release` of the entry on the host.
+    pub host_version: String,
+    /// `version-release` parsed out of the uploaded filename, when it
+    /// differs from `host_version`.
+    pub uploaded_version: Option<String>,
+}
+
+/// Filename prefix of an in-flight upload's part file. The staging
+/// tempfile, the startup sweep, and the rescan's skip rule all key on this
+/// pair, and the staged-name allowlist bans a leading dot, so a part file
+/// can never collide with a staged RPM.
+pub const UPLOAD_PART_PREFIX: &str = ".upload-";
+/// Filename suffix of an in-flight upload's part file.
+pub const UPLOAD_PART_SUFFIX: &str = ".part";
+/// Random bytes in a part file's name, enough that two concurrent uploads
+/// of one filename cannot collide.
+pub const UPLOAD_PART_RAND_BYTES: usize = 16;
+/// Mode the upload directory is created with: nothing for group or other.
+const UPLOAD_DIR_MODE: u32 = 0o700;
+/// Group-write and other-write bits. An existing upload directory carrying
+/// either lets another local user replace a staged file, and is refused.
+/// A merely readable one (0755) is accepted: staged files are created 0600
+/// and `rename` keeps the mode, so what an onlooker gets is the filenames,
+/// not the contents.
+const SHARED_WRITE_BITS: u32 = 0o022;
+
+/// Create the upload directory with mode 0700, or prove an existing one is
+/// a directory (not a symlink) owned by us that no one else can write to,
+/// and return its canonical path.
+///
+/// `create_dir_all` accepted whatever was there, including a symlink to a
+/// directory another local user pre-created; refusing is what makes
+/// "staged under this path" mean anything later.
+fn prepare_upload_dir(dir: &Path) -> Result<PathBuf, RefineError> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    match std::fs::symlink_metadata(dir) {
+        Ok(md) => {
+            if md.file_type().is_symlink() {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is a symlink, not a directory",
+                    dir.display()
+                )));
+            }
+            if !md.file_type().is_dir() {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is not a directory",
+                    dir.display()
+                )));
+            }
+            let euid = rustix::process::geteuid().as_raw();
+            if md.uid() != euid {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is owned by uid {}, not {euid}",
+                    dir.display(),
+                    md.uid()
+                )));
+            }
+            if md.mode() & SHARED_WRITE_BITS != 0 {
+                return Err(RefineError::TarballError(format!(
+                    "upload directory {} is writable by group or other (mode {:04o})",
+                    dir.display(),
+                    md.mode() & 0o7777
+                )));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(UPLOAD_DIR_MODE)
+                .create(dir)
+                .map_err(|e| {
+                    RefineError::TarballError(format!("create upload dir {}: {e}", dir.display()))
+                })?;
+        }
+        Err(e) => {
+            return Err(RefineError::TarballError(format!(
+                "stat upload dir {}: {e}",
+                dir.display()
+            )));
+        }
+    }
+
+    dir.canonicalize().map_err(|e| {
+        RefineError::TarballError(format!("resolve upload dir {}: {e}", dir.display()))
+    })
+}
+
+/// Remove the part files a process that died mid-transfer left behind.
+///
+/// Runs once, when this process first prepares the directory. A running
+/// server never removes a part file by name pattern: every in-flight
+/// upload removes only its own, through `Drop`.
+fn sweep_part_files(dir: &Path) -> Result<(), RefineError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        RefineError::TarballError(format!("read upload dir {}: {e}", dir.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            RefineError::TarballError(format!("read upload dir {}: {e}", dir.display()))
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(UPLOAD_PART_PREFIX) || !name.ends_with(UPLOAD_PART_SUFFIX) {
+            continue;
+        }
+        let path = entry.path();
+        // Regular files only, by symlink_metadata: a symlink wearing a part
+        // file's name is not one of ours and is left where it is.
+        match std::fs::symlink_metadata(&path) {
+            Ok(md) if md.file_type().is_file() => std::fs::remove_file(&path).map_err(|e| {
+                RefineError::TarballError(format!("remove part file {}: {e}", path.display()))
+            })?,
+            _ => continue,
+        }
+    }
+    Ok(())
+}
+
+/// Whether a package's `source_repo` resolves to the given repo section's
+/// `RepoId` -- `Exact` or `Resolved` attribution (§ 3.2). Attribution
+/// classification (`normalize_source_repos`) already rewrites `source_repo`
+/// to the matched section's own spelling for `Exact`/`Resolved`; every other
+/// attribution variant leaves `source_repo` as the recorded value, which
+/// cannot case-fold-equal any section id (an exact match against all
+/// sections is checked first during normalization, so a value that matched
+/// would already be `Exact`). A case-insensitive compare is therefore
+/// equivalent to checking the attribution kind directly, and is what the
+/// existing repo-toggle cascade (`session.rs`'s `ItemId::Repo` projection
+/// arm) already uses.
+fn package_attributed_to_repo(pkg: &PackageEntry, id: &RepoId) -> bool {
+    pkg.source_repo.eq_ignore_ascii_case(id.as_str())
+}
+
+/// The package half of the `ItemId::Repo` cascade (§ 3.2): set every
+/// package attributed to `section_id` to `include`, skipping locked
+/// packages -- they are outside both the effective-member counts
+/// (`group_state::is_effective_member`) and this cascade. Extracted so it
+/// can be unit-tested directly: `project_snapshot`'s final
+/// `clamp_locked_items` pass unconditionally forces every locked RPM
+/// package's disposition to excluded in every snapshot the session ever
+/// returns, which makes a locked package's disposition after this cascade
+/// indistinguishable from before it when observed through `view()` /
+/// `snapshot_projected()` -- this function's own `rpm.packages_added` is
+/// the only place the behavior this fixes is actually visible.
+fn cascade_repo_packages(rpm: &mut RpmSection, section_id: &str, include: bool) {
+    let disposition = FindingKind::from_bool(include);
+    for pkg in &mut rpm.packages_added {
+        if pkg.source_repo.eq_ignore_ascii_case(section_id) && !pkg.locked {
+            pkg.disposition = disposition.clone();
+        }
+    }
 }
 
 /// Check whether an item is locked in the original (normalized) snapshot.
@@ -216,16 +436,8 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 s.disposition = FindingKind::excluded();
             }
         }
-        for m in &mut kb.loaded_modules {
-            if m.locked {
-                m.disposition = FindingKind::excluded();
-            }
-        }
-        for m in &mut kb.non_default_modules {
-            if m.locked {
-                m.disposition = FindingKind::excluded();
-            }
-        }
+        // Loaded modules are inventory: no surface toggles them, so a
+        // lock has nothing to hold shut.
     }
     if let Some(ref mut net) = snapshot.network {
         for c in &mut net.connections {
@@ -444,11 +656,13 @@ impl RefineSession {
             cached_view: None,
             cached_render_context: None,
             cached_decisions: None,
-            cached_reference: std::sync::OnceLock::new(),
             generation: 0,
             viewed: HashSet::new(),
             tarball_path: None,
             upload_dir: None,
+            upload_dir_canon: None,
+            prior_cache: HashMap::new(),
+            rescan_warnings: Vec::new(),
             durability_degraded: false,
         };
         session.recompute_view();
@@ -579,29 +793,238 @@ impl RefineSession {
         self.upload_dir = Some(path);
     }
 
-    /// Return the upload directory, creating it if necessary.
+    /// Return the upload directory, preparing it on first use.
     /// Derives the path from `tarball_path` when `upload_dir` is not
     /// explicitly set: `<tarball_stem>-uploads/`.
-    pub fn ensure_upload_dir(&mut self) -> Result<&Path, RefineError> {
-        if self.upload_dir.is_none() {
-            let base = self
-                .tarball_path
-                .as_ref()
-                .ok_or_else(|| {
-                    RefineError::TarballError(
-                        "cannot derive upload dir: no tarball path set".into(),
-                    )
-                })?
-                .clone();
-            let mut dir = base;
-            dir.set_extension(""); // strip .gz
-            dir.set_extension(""); // strip .tar
-            let dir = PathBuf::from(format!("{}-uploads", dir.display()));
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| RefineError::TarballError(format!("create upload dir: {e}")))?;
-            self.upload_dir = Some(dir);
+    ///
+    /// The first call creates the directory with mode 0700 or, when it
+    /// already exists, proves it is ours (see [`prepare_upload_dir`]),
+    /// sweeps the part files a previous process died holding, re-marks the
+    /// staged files an earlier session left there (see
+    /// [`RefineSession::rescan_upload_dir`]), and keeps the canonical path
+    /// on the session. Later calls return the path without touching the
+    /// filesystem, so a running server never sweeps while a request holds
+    /// a part file.
+    ///
+    /// The second return value is what the rescan skipped, which is the
+    /// same list on every call: a caller that did not trigger the rescan
+    /// is told what it found rather than an empty list.
+    pub fn ensure_upload_dir(&mut self) -> Result<(&Path, &[String]), RefineError> {
+        if self.upload_dir_canon.is_none() {
+            let dir = match self.upload_dir.clone() {
+                Some(dir) => dir,
+                None => {
+                    let mut dir = self.tarball_path.clone().ok_or_else(|| {
+                        RefineError::TarballError(
+                            "cannot derive upload dir: no tarball path set".into(),
+                        )
+                    })?;
+                    dir.set_extension(""); // strip .gz
+                    dir.set_extension(""); // strip .tar
+                    PathBuf::from(format!("{}-uploads", dir.display()))
+                }
+            };
+            let canon = prepare_upload_dir(&dir)?;
+            sweep_part_files(&canon)?;
+            // Before the rescan, which records staged paths and needs the
+            // session to already know where staged files live.
+            self.upload_dir = Some(dir.clone());
+            self.upload_dir_canon = Some(canon.clone());
+            self.rescan_warnings = self.rescan_upload_dir(&canon, &dir)?;
         }
-        Ok(self.upload_dir.as_ref().unwrap())
+        Ok((self.upload_dir.as_ref().unwrap(), &self.rescan_warnings))
+    }
+
+    /// Re-mark the staged files an earlier session left in the upload
+    /// directory, and report what was skipped.
+    ///
+    /// A session is in-memory: `uploaded` and `cache_path` live on the
+    /// snapshot, but the files outlive the process that staged them, so a
+    /// resumed session over the same tarball starts with a directory full
+    /// of uploads no package points at. This runs steps 2 and 4 of the
+    /// upload lifecycle on each of them -- the match, then the record --
+    /// and never step 3: the files are already in place and nothing here
+    /// renames, copies, or deletes one.
+    ///
+    /// A file some package's `cache_path` already names is left as it is,
+    /// matcher untouched: `uploaded` and `cache_path` deserialize with the
+    /// snapshot, so a resumed session can arrive already knowing who a
+    /// staged file belongs to, and that is a better answer than a guess
+    /// from the filename.
+    ///
+    /// Entries are taken in filename order, so two files matching one
+    /// package resolve the same way on every resume: the later one is
+    /// marked and the earlier stays staged with a warning. An entry that
+    /// is not a regular file, or whose name the staged-name allowlist
+    /// rejects, is skipped with a warning naming it; a regular file whose
+    /// name no package matches is left staged and warned about by nothing,
+    /// because the operator may be about to upload the package it belongs
+    /// to.
+    ///
+    /// The part files of a process that died mid-transfer are gone by the
+    /// time this runs -- `ensure_upload_dir` sweeps before it rescans --
+    /// so they are removed rather than reported. One that survives the
+    /// sweep is a directory or a symlink, and the allowlist is what
+    /// rejects it -- the leading dot and the `.part` suffix both fail
+    /// before the regular-file check is reached, so the warning names the
+    /// suffix.
+    ///
+    /// Entries are listed and proved through `canon`, and recorded as
+    /// `staged_dir.join(name)`, which is the spelling the upload handler
+    /// records: one session holding two spellings of one directory is
+    /// what [`RefineSession::packages_staged_in`] exists to survive, and
+    /// not creating the condition is cheaper than surviving it.
+    ///
+    /// One cache invalidation for the whole pass, not one per file: each
+    /// is a full `recompute_view`, which re-proves every staged upload by
+    /// opening it, so N matched files cost N passes over N files under
+    /// the session lock. A resume is also one state change from the
+    /// client's side, so one generation bump is the honest count.
+    fn rescan_upload_dir(
+        &mut self,
+        canon: &Path,
+        staged_dir: &Path,
+    ) -> Result<Vec<String>, RefineError> {
+        let read_err = |e: std::io::Error| {
+            RefineError::TarballError(format!("read upload dir {}: {e}", canon.display()))
+        };
+        // A `BTreeSet` rather than a sorted `Vec`: filename order is a
+        // correctness property here -- which of two files matching one
+        // package ends up marked -- and `read_dir` order is the
+        // filesystem's business. A `names.sort()` call can be deleted
+        // and, on a filesystem whose listing is hashed rather than
+        // ordered by creation, no test can tell. Iteration order that
+        // comes from the container's type cannot be deleted.
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        for entry in std::fs::read_dir(canon).map_err(read_err)? {
+            let entry = entry.map_err(read_err)?;
+            match entry.file_name().into_string() {
+                Ok(name) => {
+                    names.insert(name);
+                }
+                // A non-UTF-8 name cannot pass the allowlist, and naming
+                // it in a warning means lossy-converting it, which would
+                // print a name no `rm` would take.
+                Err(_) => continue,
+            }
+        }
+
+        // The snapshot's own claims come first: they are about what
+        // arrived, not about what the listing below found, and the
+        // per-entry warnings after them stay in filename order.
+        let (spoken_for, mut warnings) = self.packages_staged_in(canon);
+        let mut marked = 0usize;
+        let mut claimed: HashMap<String, String> = HashMap::new();
+        for name in names {
+            let mut skip = |why: String| {
+                warnings.push(format!("skipped {name} in the upload directory: {why}"))
+            };
+            if let Err(e) = inspectah_core::rpm_filename::validate_staged_name(&name) {
+                skip(e.to_string());
+                continue;
+            }
+            match std::fs::symlink_metadata(canon.join(&name)) {
+                Ok(md) if md.file_type().is_file() => {}
+                Ok(_) => {
+                    skip("not a regular file".into());
+                    continue;
+                }
+                Err(e) => {
+                    skip(e.to_string());
+                    continue;
+                }
+            }
+            // A file a package already points at is already decided, and a
+            // resume re-derives nothing the snapshot carries: the matcher
+            // would hand it to whichever package its name parses to, which
+            // need not be the one the operator staged it for.
+            let owner = match spoken_for.get(&name) {
+                Some(canonical) => canonical.clone(),
+                None => {
+                    let Some(matched) = self.match_uploaded_rpm(&name) else {
+                        continue;
+                    };
+                    let canonical = matched.canonical.clone();
+                    self.record_uploaded(
+                        &canonical,
+                        staged_dir.join(&name),
+                        matched.uploaded_version,
+                    );
+                    marked += 1;
+                    canonical
+                }
+            };
+            if let Some(earlier) = claimed.insert(owner.clone(), name.clone()) {
+                warnings.push(format!(
+                    "{earlier} in the upload directory also matches {owner}, \
+                     which {name} now holds; it stays staged and unmarked"
+                ));
+            }
+        }
+        if marked > 0 {
+            self.invalidate_caches();
+        }
+        Ok(warnings)
+    }
+
+    /// The packages that already claim a file directly in `canon`, by
+    /// that file's basename, and a warning for every basename two of
+    /// them claim.
+    ///
+    /// The parent is resolved rather than compared as text: `cache_path`
+    /// is recorded with whatever spelling of the upload directory the
+    /// session was given, which on a path through a symlinked parent is
+    /// not the canonical one. Comparing the two as strings loses the
+    /// claim, and the rescan then re-assigns the file by filename.
+    ///
+    /// `uploaded` is required, not just `cache_path`. The pair
+    /// deserializes from the scan, so a snapshot can name a path in this
+    /// directory without claiming to have staged it; honouring that would
+    /// let a crafted entry take a basename out of the rescan's reach, and
+    /// the rescan's skip is silent -- no row, no warning, the real owner
+    /// simply showing no upload.
+    ///
+    /// Two packages claiming one basename is not resolvable here: moving
+    /// a staged file is not the rescan's job. Left alone it surfaces at
+    /// the export, where both verify against the same file and the second
+    /// `create_new` fails the whole export by path rather than by cause,
+    /// which is the lateness the staging-time 409 exists to avoid. So it
+    /// is named here instead.
+    fn packages_staged_in(&self, canon: &Path) -> (HashMap<String, String>, Vec<String>) {
+        let mut out: HashMap<String, String> = HashMap::new();
+        let mut warnings = Vec::new();
+        let Some(rpm) = self.original.rpm.as_ref() else {
+            return (out, warnings);
+        };
+        for pkg in &rpm.packages_added {
+            if !pkg.uploaded {
+                continue;
+            }
+            let Some(cache_path) = pkg.cache_path.as_deref().map(Path::new) else {
+                continue;
+            };
+            let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let parent = cache_path.parent().and_then(|p| p.canonicalize().ok());
+            if parent.as_deref() != Some(canon) {
+                continue;
+            }
+            let canonical = canonical_package_id(&pkg.name, &pkg.arch);
+            if let Some(first) = out.insert(basename.to_string(), canonical.clone()) {
+                warnings.push(format!(
+                    "{basename} in the upload directory is claimed by both {first} \
+                     and {canonical}; the export cannot write it for both"
+                ));
+            }
+        }
+        (out, warnings)
+    }
+
+    /// The canonicalized upload directory, once `ensure_upload_dir` has
+    /// prepared it. Export and removal confine themselves to this path.
+    pub fn upload_dir_canon(&self) -> Option<&Path> {
+        self.upload_dir_canon.as_deref()
     }
 
     /// Returns the source tarball path, if set.
@@ -609,11 +1032,7 @@ impl RefineSession {
         self.tarball_path.as_deref()
     }
 
-    /// Mark a repo-less PackageEntry as cached after an RPM upload.
-    ///
-    /// Matches the uploaded filename against repo-less packages by name and
-    /// architecture. Returns the canonical `name.arch` of the matched package,
-    /// or `None` if no match was found.
+    /// Find the repo-less PackageEntry an uploaded filename belongs to.
     ///
     /// Matching strategy:
     /// 1. Try exact NEVRA filename (`name-version-release.arch.rpm`)
@@ -621,13 +1040,14 @@ impl RefineSession {
     ///    name is everything before the first `-\d` (version start) or before
     ///    the arch suffix.
     ///
-    /// When matched with a different version than installed, populates
-    /// `uploaded_version` on the PackageEntry.
-    pub fn mark_uploaded_rpm(&mut self, filename: &str, staged_path: &str) -> Option<String> {
-        let rpm = self.original.rpm.as_mut()?;
+    /// Mutates nothing: the caller places the file and then records the
+    /// result with [`RefineSession::set_uploaded`], so a match that is never
+    /// placed leaves the session exactly as it was.
+    pub fn match_uploaded_rpm(&self, filename: &str) -> Option<UploadMatch> {
+        let rpm = self.original.rpm.as_ref()?;
 
         // Try exact NEVRA match first (backwards compat)
-        for pkg in &mut rpm.packages_added {
+        for pkg in &rpm.packages_added {
             if pkg.repoless_annotation.is_empty() {
                 continue;
             }
@@ -636,11 +1056,12 @@ impl RefineSession {
                 pkg.name, pkg.version, pkg.release, pkg.arch
             );
             if filename == expected {
-                pkg.repoless_cached = true;
-                pkg.cache_path = Some(staged_path.to_string());
-                let canonical = format!("{}.{}", pkg.name, pkg.arch);
-                self.invalidate_caches();
-                return Some(canonical);
+                return Some(UploadMatch {
+                    canonical: canonical_package_id(&pkg.name, &pkg.arch),
+                    match_kind: UploadMatchKind::Exact,
+                    host_version: format!("{}-{}", pkg.version, pkg.release),
+                    uploaded_version: None,
+                });
             }
         }
 
@@ -649,7 +1070,11 @@ impl RefineSession {
         // filenames like "epel-release-latest-10.noarch.rpm" where the
         // heuristic name ("epel-release-latest") doesn't match the real
         // package name ("epel-release").
-        let (extracted_name, extracted_arch, extracted_ver) = parse_rpm_filename(filename)?;
+        let inspectah_core::rpm_filename::RpmFilename {
+            name: extracted_name,
+            arch: extracted_arch,
+            version_release: extracted_ver,
+        } = inspectah_core::rpm_filename::RpmFilename::parse_untrusted(filename)?;
 
         // Build candidate names: full extracted name, then progressively
         // shorter prefixes by stripping trailing `-segment` pieces.
@@ -663,28 +1088,91 @@ impl RefineSession {
         }
 
         for candidate in &candidates {
-            for pkg in &mut rpm.packages_added {
+            for pkg in &rpm.packages_added {
                 if pkg.repoless_annotation.is_empty() {
                     continue;
                 }
                 if pkg.name == *candidate && pkg.arch == extracted_arch {
-                    pkg.repoless_cached = true;
-                    pkg.cache_path = Some(staged_path.to_string());
-                    // Track version mismatch if the uploaded version differs
-                    let installed_ver = format!("{}-{}", pkg.version, pkg.release);
-                    if let Some(ref ver) = extracted_ver
-                        && *ver != installed_ver
-                    {
-                        pkg.uploaded_version = Some(ver.clone());
-                    }
-                    let canonical = format!("{}.{}", pkg.name, pkg.arch);
-                    self.invalidate_caches();
-                    return Some(canonical);
+                    let host_version = format!("{}-{}", pkg.version, pkg.release);
+                    let differs = extracted_ver.as_ref().is_some_and(|v| *v != host_version);
+                    return Some(UploadMatch {
+                        canonical: canonical_package_id(&pkg.name, &pkg.arch),
+                        match_kind: if differs {
+                            UploadMatchKind::VersionDiffers
+                        } else {
+                            UploadMatchKind::Exact
+                        },
+                        host_version,
+                        uploaded_version: if differs { extracted_ver.clone() } else { None },
+                    });
                 }
             }
         }
 
         None
+    }
+
+    /// Record a staged upload against the package `match_uploaded_rpm`
+    /// named.
+    ///
+    /// In-memory only, and called after the rename has already put the file
+    /// in place, so the session never reports `uploaded` for a file that is
+    /// not there. When the entry was `repoless_cached` from the host's dnf
+    /// cache and not yet `uploaded`, the cache state the upload displaces is
+    /// kept in `prior_cache` for removal to restore.
+    pub fn set_uploaded(
+        &mut self,
+        canonical: &str,
+        staged_path: PathBuf,
+        uploaded_version: Option<String>,
+    ) {
+        self.record_uploaded(canonical, staged_path, uploaded_version);
+        self.invalidate_caches();
+    }
+
+    /// The mutation half of [`RefineSession::set_uploaded`], without the
+    /// invalidation.
+    ///
+    /// Split out for the rescan, which records a whole directory in one
+    /// pass and pays for a `recompute_view` once at the end rather than
+    /// once per file. Every other caller wants `set_uploaded`: leaving
+    /// the caches stale is only safe while nothing between the calls can
+    /// read the view, which inside one pass of `rescan_upload_dir` is a
+    /// property of a function short enough to read whole.
+    fn record_uploaded(
+        &mut self,
+        canonical: &str,
+        staged_path: PathBuf,
+        uploaded_version: Option<String>,
+    ) {
+        let prior_cache = &mut self.prior_cache;
+        if let Some(rpm) = self.original.rpm.as_mut() {
+            for pkg in &mut rpm.packages_added {
+                if canonical_package_id(&pkg.name, &pkg.arch) != canonical {
+                    continue;
+                }
+                if pkg.repoless_cached && !pkg.uploaded {
+                    prior_cache.insert(
+                        canonical.to_string(),
+                        PriorCache {
+                            repoless_cached: pkg.repoless_cached,
+                            cache_path: pkg.cache_path.clone(),
+                            uploaded_version: pkg.uploaded_version.clone(),
+                        },
+                    );
+                }
+                pkg.uploaded = true;
+                pkg.repoless_cached = true;
+                pkg.cache_path = Some(staged_path.to_string_lossy().into_owned());
+                pkg.uploaded_version = uploaded_version;
+                break;
+            }
+        }
+    }
+
+    /// The dnf-cache state an upload for `canonical` displaced, if any.
+    pub fn prior_cache(&self, canonical: &str) -> Option<&PriorCache> {
+        self.prior_cache.get(canonical)
     }
 
     /// Invalidate cached views after a mutation.
@@ -696,50 +1184,133 @@ impl RefineSession {
         self.recompute_view();
     }
 
-    /// Reverse the effect of `mark_uploaded_rpm` for a given `name.arch`.
+    /// Resolve a `cache_path` to the staged file it names inside this
+    /// session's upload directory, or refuse it.
     ///
-    /// Clears `repoless_cached` and `cache_path` on the matching PackageEntry,
-    /// deletes the staged RPM file from the upload directory, and invalidates
-    /// cached views so subsequent renders and exports reflect the removal.
+    /// `cache_path` is a snapshot field: it is `#[serde(default)]` and
+    /// arrives from the scanned host, so it can name any file the
+    /// operator can unlink. Nothing may be deleted on its say-so. A path
+    /// resolves only when its basename passes the staged-name allowlist
+    /// and its parent resolves to the prepared upload directory, and the
+    /// path returned is `<upload_dir_canon>/<basename>` rather than
+    /// `cache_path` itself, so the caller unlinks the proved path and not
+    /// the given one.
     ///
-    /// Returns `Ok(true)` if a matching upload was found and removed,
-    /// `Ok(false)` if no matching uploaded RPM existed.
-    pub fn unmark_uploaded_rpm(&mut self, name: &str, arch: &str) -> Result<bool, RefineError> {
-        let mut found = false;
+    /// `Ok(None)` means there is nothing there to remove, which is not an
+    /// error. `Err` means a confinement check failed, which the caller
+    /// must not treat as nothing to do.
+    pub fn resolve_staged_file(&self, cache_path: &Path) -> Result<Option<PathBuf>, RefineError> {
+        let refuse = |why: &str| {
+            Err(RefineError::TarballError(format!(
+                "refusing to remove a staged file: {why}"
+            )))
+        };
+        let Some(canon) = self.upload_dir_canon.as_deref() else {
+            return refuse("no upload directory has been prepared");
+        };
+        let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
+            return refuse("its path names no file");
+        };
+        if let Err(e) = inspectah_core::rpm_filename::validate_staged_name(basename) {
+            return refuse(&format!("{e}"));
+        }
+        let resolved_parent = cache_path
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok());
+        if resolved_parent.as_deref() != Some(canon) {
+            return refuse(&format!("{basename} is not in {}", canon.display()));
+        }
 
-        if let Some(ref mut rpm) = self.original.rpm {
+        let target = canon.join(basename);
+        match std::fs::symlink_metadata(&target) {
+            Ok(md) if md.file_type().is_file() => Ok(Some(target)),
+            Ok(_) => refuse(&format!("{basename} is not a regular file")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => refuse(&format!("{basename}: {e}")),
+        }
+    }
+
+    /// Reverse the effect of `set_uploaded` for a given `name.arch`.
+    ///
+    /// Deletes the staged RPM file, hands `(repoless_cached, cache_path,
+    /// uploaded_version)` back to whatever the upload displaced, and
+    /// invalidates cached views so subsequent renders and exports reflect
+    /// the removal. The precondition is `uploaded`, not `repoless_cached`:
+    /// a package the collector found in the host's dnf cache was never
+    /// staged here, and its `cache_path` is a host path this has no
+    /// business unlinking, so that case is
+    /// [`RemovalOutcome::CachedOnly`] and nothing changes.
+    ///
+    /// `Err` means the recorded path failed
+    /// [`RefineSession::resolve_staged_file`], and the session is exactly
+    /// as it was.
+    pub fn unmark_uploaded_rpm(
+        &mut self,
+        name: &str,
+        arch: &str,
+    ) -> Result<RemovalOutcome, RefineError> {
+        let staged = {
+            let Some(rpm) = self.original.rpm.as_ref() else {
+                return Ok(RemovalOutcome::NotFound);
+            };
+            let Some(pkg) = rpm
+                .packages_added
+                .iter()
+                .find(|pkg| pkg.name == name && pkg.arch == arch)
+            else {
+                return Ok(RemovalOutcome::NotFound);
+            };
+            if !pkg.uploaded {
+                return Ok(if pkg.repoless_cached {
+                    RemovalOutcome::CachedOnly
+                } else {
+                    RemovalOutcome::NotFound
+                });
+            }
+            pkg.cache_path.clone()
+        };
+
+        // Confine before unlinking, and before the entry is cleared: a
+        // refusal leaves the session exactly as it was.
+        if let Some(cache_path) = staged
+            && let Some(target) = self.resolve_staged_file(Path::new(&cache_path))?
+        {
+            std::fs::remove_file(&target).map_err(|e| {
+                RefineError::TarballError(format!("remove staged file {}: {e}", target.display()))
+            })?;
+        }
+
+        // Taken, not read: the displacement is over, and a second removal
+        // must not restore a cache path this one already handed back.
+        let prior = self.prior_cache.remove(&canonical_package_id(name, arch));
+        if let Some(rpm) = self.original.rpm.as_mut() {
             for pkg in &mut rpm.packages_added {
-                if pkg.name == name && pkg.arch == arch && pkg.repoless_cached {
-                    // Delete the staged file if it exists
-                    if let Some(ref cache_path) = pkg.cache_path {
-                        let path = std::path::Path::new(cache_path);
-                        if path.exists() {
-                            std::fs::remove_file(path)?;
-                        }
-                    }
-
-                    pkg.repoless_cached = false;
-                    pkg.cache_path = None;
-                    found = true;
+                if pkg.name == name && pkg.arch == arch && pkg.uploaded {
+                    // `set_uploaded` records `prior` only for an entry the
+                    // host's dnf cache already supplied, so `None` here is
+                    // a package that had no RPM before the upload and has
+                    // none after it. Clearing `uploaded_version` is part
+                    // of that: the row renders it, and the version of an
+                    // upload that is gone is not a fact about anything.
+                    let (repoless_cached, cache_path, uploaded_version) = match prior {
+                        Some(prior) => (
+                            prior.repoless_cached,
+                            prior.cache_path,
+                            prior.uploaded_version,
+                        ),
+                        None => (false, None, None),
+                    };
+                    pkg.repoless_cached = repoless_cached;
+                    pkg.cache_path = cache_path;
+                    pkg.uploaded_version = uploaded_version;
+                    pkg.uploaded = false;
                     break;
                 }
             }
         }
+        self.invalidate_caches();
 
-        if found {
-            self.cached_view = None;
-            self.cached_render_context = None;
-            self.cached_decisions = None;
-            self.generation += 1;
-            self.recompute_view();
-        }
-
-        Ok(found)
-    }
-
-    /// Returns the upload directory path, if set.
-    pub fn upload_dir_path(&self) -> Option<&Path> {
-        self.upload_dir.as_deref()
+        Ok(RemovalOutcome::Removed)
     }
 
     pub fn repo_index(&self) -> &RepoIndex {
@@ -759,6 +1330,21 @@ impl RefineSession {
         self.cached_view
             .as_ref()
             .expect("view is always computed after new() or mutation")
+    }
+
+    /// The effective-member counts for one repo section (§ 3.2), computed
+    /// once per `recompute_view` pass. A section absent from the map has no
+    /// effective member -- the zero `RepoEffective` default is exactly that
+    /// case, whether because no package is attributed to it or because
+    /// every attributed package is locked. The repo no-op rule
+    /// (`check_repo_noop`) and `RepoGroupInfo`'s counts both read this one
+    /// accessor, so they can never compute a different effective set.
+    pub fn repo_effective(&self, id: &RepoId) -> RepoEffective {
+        self.view()
+            .repo_effective
+            .get(id)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Returns the render context computed alongside the view.
@@ -783,6 +1369,32 @@ impl RefineSession {
             && is_item_locked(&self.original, item_id)
         {
             return Ok(()); // silent no-op — op never recorded
+        }
+
+        // Groups are refused, not silently no-opped, when the op would
+        // change nothing: a 200 that records nothing reads as "the button
+        // does nothing" to the client (item 1.9). This runs before the
+        // generic idempotency shortcut below, which still silently no-ops
+        // single items (§ 3.7).
+        if let RefinementOp::SetInclude {
+            item_id: ItemId::Group { name },
+            include,
+        } = &op
+        {
+            self.check_group_noop(name, *include)?;
+        }
+
+        // Repos are refused on the same § 3.7 rule, applied to the repo's
+        // effective member set (§ 3.2, position 29): a history-reading
+        // no-op check cannot tell whether an op changes a member, and a
+        // control that derives its direction from the counts must never
+        // have that direction refused.
+        if let RefinementOp::SetInclude {
+            item_id: ItemId::Repo { path: section_id },
+            include,
+        } = &op
+        {
+            self.check_repo_noop(section_id, *include)?;
         }
 
         // Check idempotency
@@ -1032,7 +1644,9 @@ impl RefineSession {
         let repos_excluded_set = self.excluded_sections_at(&projected);
         let repo_excluded: Vec<ItemId> = repos_excluded_set
             .into_iter()
-            .map(|s| ItemId::Repo { path: s })
+            .map(|id| ItemId::Repo {
+                path: id.to_string(),
+            })
             .collect();
 
         // --- Build sections vec (only non-empty sections) ---
@@ -1355,8 +1969,13 @@ impl RefineSession {
             Some(&orig_inc),
             self.cached_render_context.as_ref(),
             self.tarball_path.as_deref(),
-            self.upload_dir.as_deref(),
+            // The canonical path, for the same reason the HTTP export
+            // passes it: what the export proves against must be the
+            // directory `ensure_upload_dir` prepared, not one that can
+            // still resolve somewhere else.
+            self.upload_dir_canon.as_deref(),
         )
+        .map(|_warnings| ())
     }
 
     // --- Private helpers ---
@@ -1397,6 +2016,14 @@ impl RefineSession {
                         if entry.disposition.is_advisory() {
                             return Err(RefineError::AdvisoryNotToggleable(path.clone()));
                         }
+                        // A shadowed entry's content travels under another
+                        // section's decision (a sysctl source file reaches
+                        // the image through its keys). `with_include()`
+                        // discards the flag for Inventory, so accepting the
+                        // op would report success and change nothing.
+                        if entry.disposition.is_inventory() {
+                            return Err(RefineError::InventoryNotToggleable(path.clone()));
+                        }
                     }
                     ItemId::Repo { path: section_id } => {
                         if RepoIndex::is_distro_repo(section_id) {
@@ -1404,8 +2031,10 @@ impl RefineSession {
                                 "cannot toggle distro repo: {section_id}"
                             )));
                         }
-                        let prov = self.repo_index.provenance(section_id);
-                        if !matches!(prov, RepoProvenance::Verified) {
+                        let prov = self
+                            .repo_index
+                            .provenance(&RepoId::new(section_id.as_str()));
+                        if !matches!(prov, RepoProvenance::Verified | RepoProvenance::Incomplete) {
                             let verb = if *include { "include" } else { "exclude" };
                             return Err(RefineError::BadRequest(format!(
                                 "cannot {verb} repo '{section_id}': provenance is {prov:?}"
@@ -1518,7 +2147,6 @@ impl RefineSession {
                     }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
-                    | ItemId::KernelModule { .. }
                     | ItemId::CronJob { .. }
                     | ItemId::SystemdTimer { .. }
                     | ItemId::AtJob { .. }
@@ -1803,37 +2431,14 @@ impl RefineSession {
                     .and_then(|c| c.files.iter().find(|e| e.path == *path))
                     .map(|e| e.disposition.is_included() == *include)
                     .unwrap_or(false),
-                ItemId::Repo { path: section_id } => {
-                    let excluded = self.excluded_sections_at(&projected);
-                    if *include {
-                        // Noop if the section is NOT in the excluded set
-                        !excluded.contains(section_id)
-                    } else {
-                        // Noop if the section is already in the excluded set
-                        excluded.contains(section_id)
-                    }
-                }
-                ItemId::Group { name } => {
-                    // Noop if ALL non-locked members already have the
-                    // requested include state.
-                    let member_names: Vec<String> = self
-                        .installed_groups()
-                        .iter()
-                        .find(|g| g.name == *name)
-                        .map(|g| g.members.clone())
-                        .unwrap_or_default();
-                    projected
-                        .rpm
-                        .as_ref()
-                        .map(|r| {
-                            r.packages_added
-                                .iter()
-                                .filter(|e| member_names.contains(&e.name))
-                                .filter(|e| !(*include && e.locked))
-                                .all(|e| e.disposition.is_included() == *include)
-                        })
-                        .unwrap_or(true)
-                }
+                // ItemId::Group and ItemId::Repo are handled by
+                // `check_group_noop`/`check_repo_noop`, called from `apply`
+                // before this idempotency shortcut: a no-op on either is
+                // refused (NoopTarget), never silently swallowed here (§ 3.2,
+                // § 3.7). A history-reading check here (the former
+                // `excluded_sections_at` lookup) cannot tell whether an op
+                // changes a repo's members, which is exactly position 29's
+                // bug (include-all-on-partial reads as already satisfied).
                 // Other item kinds: never noop for now
                 _ => false,
             },
@@ -1880,6 +2485,111 @@ impl RefineSession {
                 .map(|item| item.packages.iter().all(|p| p.pinned == *pinned))
                 .unwrap_or(false),
         }
+    }
+
+    /// Refuses a group `SetInclude` that would change nothing (§ 3.7). The
+    /// effective set is `packages_added` members that are actionable and not
+    /// locked — the same definition `GroupInfo`'s effective counts and group
+    /// render-state evaluation use (`group_state::effective_members`). An
+    /// empty effective set and a set already at the requested state are both
+    /// refused rather than silently accepted: `is_op_noop`'s old behavior of
+    /// treating a missing rpm section (no members at all) as a no-op success
+    /// is folded into this refusal too, via the empty-set branch below.
+    fn check_group_noop(&self, name: &str, include: bool) -> Result<(), RefineError> {
+        let Some(group) = self
+            .installed_groups()
+            .iter()
+            .find(|g| g.name == name)
+            .cloned()
+        else {
+            // Unknown group — validate_target already rejects this op.
+            return Ok(());
+        };
+
+        let projected = self.project_snapshot();
+        let packages_added: &[PackageEntry] = projected
+            .rpm
+            .as_ref()
+            .map(|r| r.packages_added.as_slice())
+            .unwrap_or(&[]);
+
+        let effective = group_state::effective_members(packages_added, &group.members);
+
+        if effective.is_empty() {
+            let present_count = packages_added
+                .iter()
+                .filter(|p| group.members.contains(&p.name))
+                .filter(|p| group_state::is_actionable(p))
+                .count();
+            let reason = if present_count > 0 {
+                format!("all {present_count} members are locked")
+            } else {
+                "no package is attributed to it".to_string()
+            };
+            return Err(RefineError::NoopTarget(format!(
+                "nothing to decide in '{name}': {reason}"
+            )));
+        }
+
+        if effective
+            .iter()
+            .all(|p| p.disposition.is_included() == include)
+        {
+            let state = if include { "included" } else { "excluded" };
+            return Err(RefineError::NoopTarget(format!(
+                "all {} effective members of '{name}' are already {state}",
+                effective.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Refuses a repo `SetInclude` that would change nothing (§ 3.2),
+    /// mirroring `check_group_noop`'s § 3.7 rule but over `repo_effective`,
+    /// computed once by `recompute_view`, rather than recomputed here --
+    /// this is the one place the no-op rule and `RepoGroupInfo`'s counts
+    /// both read, so they cannot diverge. `excluded_sections_at`'s
+    /// repo-exclusion history plays no part: a history bit cannot say
+    /// whether an op changes a member (position 29).
+    fn check_repo_noop(&self, section_id: &str, include: bool) -> Result<(), RefineError> {
+        let id = RepoId::new(section_id);
+        let effective = self.repo_effective(&id);
+
+        if effective.member_count == 0 {
+            let projected = self.project_snapshot();
+            let present_count = projected
+                .rpm
+                .as_ref()
+                .map(|r| {
+                    r.packages_added
+                        .iter()
+                        .filter(|p| package_attributed_to_repo(p, &id))
+                        .filter(|p| group_state::is_actionable(p))
+                        .count()
+                })
+                .unwrap_or(0);
+            let reason = if present_count > 0 {
+                format!("all {present_count} members are locked")
+            } else {
+                "no package is attributed to it".to_string()
+            };
+            return Err(RefineError::NoopTarget(format!(
+                "nothing to decide in '{section_id}': {reason}"
+            )));
+        }
+
+        let all_included = effective.included == effective.member_count;
+        let all_excluded = effective.included == 0;
+        if (include && all_included) || (!include && all_excluded) {
+            let state = if include { "included" } else { "excluded" };
+            return Err(RefineError::NoopTarget(format!(
+                "all {} effective members of '{section_id}' are already {state}",
+                effective.member_count
+            )));
+        }
+
+        Ok(())
     }
 
     /// Check whether a view directive is already active in the timeline
@@ -1957,27 +2667,25 @@ impl RefineSession {
                                 }
                             }
                             ItemId::Repo { path: section_id } => {
+                                let id = RepoId::new(section_id.as_str());
                                 if !*include {
                                     // Exclude repo: cascade to packages, repo files, GPG keys
                                     let excluded_sections = self.excluded_sections_at(&snap);
 
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Exclude all packages from this repo (case-insensitive)
-                                        for pkg in &mut rpm.packages_added {
-                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                                pkg.disposition = FindingKind::excluded();
-                                            }
-                                        }
+                                        // 1. Exclude all packages from this repo (case-insensitive),
+                                        // skipping locked members (§ 3.2).
+                                        cascade_repo_packages(rpm, section_id, false);
 
                                         // 2. For repo files: exclude only if ALL sections
                                         // defined in that file are now excluded
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section.get(section_id)
+                                            self.repo_index.repo_file_by_section().get(&id)
                                         {
                                             for file_path in file_paths {
                                                 let all_sections_excluded = self
                                                     .repo_index
-                                                    .repo_file_by_section
+                                                    .repo_file_by_section()
                                                     .iter()
                                                     .filter(|(_, paths)| paths.contains(file_path))
                                                     .all(|(sid, _)| {
@@ -1997,12 +2705,12 @@ impl RefineSession {
                                         // 3. For GPG keys: exclude only if ALL sections
                                         // that reference this key are excluded
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                            self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
                                                 if let Some(referencing_sections) = self
                                                     .repo_index
-                                                    .sections_by_gpg_key
+                                                    .sections_by_gpg_key()
                                                     .get(key_path)
                                                 {
                                                     let all_excluded = referencing_sections
@@ -2023,16 +2731,13 @@ impl RefineSession {
                                 } else {
                                     // Include repo: re-enable packages, repo files, GPG keys
                                     if let Some(ref mut rpm) = snap.rpm {
-                                        // 1. Include all packages from this repo (case-insensitive)
-                                        for pkg in &mut rpm.packages_added {
-                                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
-                                                pkg.disposition = FindingKind::included();
-                                            }
-                                        }
+                                        // 1. Include all packages from this repo (case-insensitive),
+                                        // skipping locked members (§ 3.2).
+                                        cascade_repo_packages(rpm, section_id, true);
 
                                         // 2. Re-enable repo files for this section
                                         if let Some(file_paths) =
-                                            self.repo_index.repo_file_by_section.get(section_id)
+                                            self.repo_index.repo_file_by_section().get(&id)
                                         {
                                             for file_path in file_paths {
                                                 if let Some(rf) = rpm
@@ -2047,7 +2752,7 @@ impl RefineSession {
 
                                         // 3. Re-enable GPG keys for this section
                                         if let Some(key_paths) =
-                                            self.repo_index.gpg_keys_by_section.get(section_id)
+                                            self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
                                                 if let Some(k) = rpm
@@ -2356,12 +3061,22 @@ impl RefineSession {
         // locked item with include=true.
         clamp_locked_items(&mut snap);
 
+        // § 3.3: a repo-enabling package whose serving repo definition
+        // this export no longer carries is demoted to the repo-less
+        // rendering. It runs here because the include decisions it reads
+        // are the projection's, and because the view keys the upload
+        // control off the annotation it sets.
+        inspectah_pipeline::render::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+
         snap
     }
 
     /// Compute the set of section IDs that are currently excluded based on the
     /// active op stack. A SetInclude(Repo, false) adds to the set, SetInclude(Repo, true) removes.
-    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<String> {
+    ///
+    /// Keyed by `RepoId` so a mixed-case `SetInclude` target still matches
+    /// an already-excluded section of a different case.
+    fn excluded_sections_at(&self, _snap: &InspectionSnapshot) -> HashSet<RepoId> {
         let mut excluded = HashSet::new();
         for entry in &self.timeline[..self.cursor] {
             let ops: &[RefinementOp] = match entry {
@@ -2375,10 +3090,11 @@ impl RefineSession {
                     include,
                 } = op
                 {
+                    let id = RepoId::new(section_id.as_str());
                     if *include {
-                        excluded.remove(section_id);
+                        excluded.remove(&id);
                     } else {
-                        excluded.insert(section_id.clone());
+                        excluded.insert(id);
                     }
                 }
             }
@@ -2649,12 +3365,56 @@ impl RefineSession {
             }
         }
 
-        // Build RenderContext from the *filtered* package set (baseline-
-        // suppressed + leaf-filtered) so group state reflects the actual
-        // render surface. A group member that was filtered out must not
-        // make the group look Renderable.
-        let effective_packages: Vec<PackageEntry> =
-            packages.iter().map(|p| p.entry.clone()).collect();
+        // Build RenderContext from the group's effective members: present in
+        // `packages_added` and effective (`group_state::is_effective_member`
+        // — actionable and not locked), evaluated BEFORE any display filter
+        // (baseline-suppressed, leaf), so a member hidden from the view by
+        // those filters still counts toward group state. This is the same
+        // predicate `check_group_noop` and `GroupInfo`'s effective counts use
+        // via `group_state::effective_members` (`derive_group_state` below
+        // does its own per-group name match over this shared pool). Without
+        // this, a group whose only members are filtered out of the view
+        // reads as Renderable instead of Inert (item 1.9).
+        let effective_packages: Vec<PackageEntry> = projected
+            .rpm
+            .as_ref()
+            .map(|r| {
+                r.packages_added
+                    .iter()
+                    .filter(|p| group_state::is_effective_member(p))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Repo effective-member counts (§ 3.2): one definition for both
+        // `check_repo_noop` and `RepoGroupInfo`'s counts (`build_repo_groups`),
+        // computed from the same `effective_packages` pool groups use above
+        // -- present, actionable, not locked, before any display filter.
+        // `unlisted` compares against `packages`, the filtered list the view
+        // actually shows, so a member hidden by the leaf/baseline filters
+        // still counts in `member_count` but not in what's "listed".
+        let visible_ids: HashSet<String> = packages
+            .iter()
+            .map(|p| canonical_package_id(&p.entry.name, &p.entry.arch))
+            .collect();
+        let mut repo_effective: BTreeMap<RepoId, RepoEffective> = BTreeMap::new();
+        for pkg in &effective_packages {
+            if pkg.source_repo.is_empty() {
+                continue;
+            }
+            let entry = repo_effective
+                .entry(RepoId::new(pkg.source_repo.clone()))
+                .or_default();
+            entry.member_count += 1;
+            if pkg.disposition.is_included() {
+                entry.included += 1;
+            }
+            if !visible_ids.contains(&canonical_package_id(&pkg.name, &pkg.arch)) {
+                entry.unlisted += 1;
+            }
+        }
+
         let mut group_states = HashMap::new();
 
         for group in self.installed_groups() {
@@ -2731,7 +3491,15 @@ impl RefineSession {
             group_states.insert(group.name.clone(), derive_group_state(&ctx));
         }
 
-        self.cached_render_context = Some(RenderContext { group_states });
+        // The preview runs the same verification the export runs, minus
+        // the copy, so the two cannot disagree about which packages get a
+        // `COPY`. The handles are dropped with `proved` on the next line.
+        let (proved, _warnings) =
+            prove_staged_uploads(self.upload_dir_canon.as_deref(), &projected);
+        self.cached_render_context = Some(RenderContext {
+            group_states,
+            verified_uploads: verified_uploads(&proved),
+        });
 
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer
@@ -2786,6 +3554,7 @@ impl RefineSession {
             config_files,
             containerfile_preview,
             stats,
+            repo_effective,
             generation: self.generation,
         });
 
@@ -2800,33 +3569,20 @@ impl RefineSession {
             .expect("decisions projection is always computed after new() or mutation")
     }
 
-    /// Returns the reference projection, computing it lazily on first access.
-    /// The reference projection is derived solely from the original snapshot
-    /// and is immutable across mutations.
-    pub fn reference(&self) -> &crate::projection::ReferenceProjection {
-        self.cached_reference
-            .get_or_init(|| crate::projection::project_reference(&self.original))
+    /// Projects the reference sections from the current session state,
+    /// computed on every call.
+    ///
+    /// The source is `snapshot_projected()`, the same state
+    /// `render_refine_export` renders from, so a row that shows a
+    /// decision shows the one the export acts on (§ 3.9). It is not
+    /// cached: the value changes with every mutation, and a cache here
+    /// is what let a Kernel & Boot row keep reporting an include state
+    /// the export had already dropped.
+    pub fn reference(&self) -> crate::projection::ReferenceProjection {
+        crate::projection::project_reference(&self.snapshot_projected())
     }
 }
 
-/// Render exactly the approved refine export file set to a tarball.
-///
-/// This is NOT `render_all()`. The pipeline's `render_all()` writes 8
-/// artifacts (including report.html, README.md, secrets-review.md,
-/// kickstart-suggestion.ks) that are outside the approved refine export
-/// contract. This function materializes only the contracted set:
-///
-/// Required: inspection-snapshot.json, Containerfile, audit-report.md,
-///           schema/snapshot.schema.json
-/// Conditional: config/ (when snapshot has included config files),
-///              env-files/ (when snapshot has env-file data),
-///              compose/ (when snapshot has compose files with raw content)
-/// Excluded: report.html, README.md, secrets-review.md,
-///           kickstart-suggestion.ks, original-inspection-snapshot.json
-///
-/// Preview/export fidelity: both paths use `render_containerfile(snap,
-/// Some(&materialized_roots))` with the same materialized root set, so
-/// the exported Containerfile is byte-identical to what the preview shows.
 /// Write `aggregate/variants/<path>/<hash>.content` files for every Alternative
 /// config entry, drop-in, and quadlet unit in an aggregate snapshot.  Selected and
 /// Only variants are materialized in the normal config tree; alternatives are
@@ -3154,6 +3910,22 @@ fn write_language_package_manifests(
     Ok(())
 }
 
+/// The one directory in the export that carries RPM payload, named once
+/// because step 2e, step 2f and the top-level allowlist must agree on it.
+const REPOLESS_DIR: &str = "repoless-packages";
+
+/// The source tarball prefix that routes an entry into [`REPOLESS_DIR`].
+const REPOLESS_PREFIX: &str = "repoless-packages/";
+
+/// True when `rel` is exactly one ordinary path component: no `..`, no
+/// root, no nesting, nothing that changes meaning when joined onto a
+/// directory.
+fn is_single_normal_component(rel: &str) -> bool {
+    let mut components = Path::new(rel).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
 /// Extract `unmanaged/` and `repoless-packages/` from the source scan
 /// tarball into the export directory, filtering by include flags from the
 /// projected snapshot. Only files whose corresponding snapshot entry has
@@ -3183,22 +3955,37 @@ fn extract_payload_dirs_from_tarball(
         .unwrap_or_default();
 
     // Build set of included repo-less RPM filenames.
+    //
+    // `uploaded` is excluded, and that is the ownership rule (position 31):
+    // an uploaded package's `repoless-packages/` entry is written by step
+    // 2f from the staged file, so nothing here may write that path first,
+    // whatever entry type the source tarball holds at it. `set_uploaded`
+    // leaves `repoless_cached` true as well, so the filter has to name
+    // `uploaded` to say this.
+    //
+    // A NEVRA built from four snapshot fields is only a filename when the
+    // allowlist says so; one that is not never reaches the allowlist, and
+    // the renderer refuses it on the same test.
     let included_repoless: HashSet<String> = snap
         .rpm
         .as_ref()
         .map(|r| {
             r.packages_added
                 .iter()
-                .filter(|p| p.disposition.is_included() && p.repoless_cached)
+                .filter(|p| p.disposition.is_included() && p.repoless_cached && !p.uploaded)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
+                .filter(|n| inspectah_core::rpm_filename::validate_staged_name(n).is_ok())
                 .collect()
         })
         .unwrap_or_default();
 
-    if included_unmanaged.is_empty() && included_repoless.is_empty() {
-        return Ok(());
-    }
-
+    // No early return when both sets are empty, which this used to have.
+    // The `repoless-packages/` component check below refuses an entry
+    // allowlisted or not, and skipping the scan when nothing is
+    // allowlisted would have made "or not" unreachable: the one snapshot
+    // that names a traversal is also the one whose NEVRA the allowlist
+    // refuses, so it emptied the set and skipped its own check. The cost
+    // is reading a source tarball an export takes nothing from.
     for entry in archive
         .entries()
         .map_err(|e| RefineError::TarballError(e.to_string()))?
@@ -3216,23 +4003,50 @@ fn extract_payload_dirs_from_tarball(
             .map(|i| &path_str[i + 1..])
             .unwrap_or(&path_str);
 
+        let mut in_repoless = false;
         let should_extract = if let Some(file_rel) = rel.strip_prefix("unmanaged/") {
             !file_rel.is_empty() && included_unmanaged.contains(file_rel)
-        } else if let Some(filename) = rel.strip_prefix("repoless-packages/") {
+        } else if let Some(filename) = rel.strip_prefix(REPOLESS_PREFIX) {
+            in_repoless = true;
+            // `tar::Entry::path()` does not clean `..` -- only `unpack_in`
+            // does (tar 0.4.45, `entry.rs:415`) -- so the remainder after
+            // the prefix is checked here, before anything is joined onto
+            // the export directory. Allowlisted or not: an entry that
+            // names more than one ordinary component fails the export
+            // rather than being skipped, because a source tarball holding
+            // one is not a tarball this wrote.
+            if !filename.is_empty() && !is_single_normal_component(filename) {
+                return Err(RefineError::TarballError(format!(
+                    "source tarball entry escapes {REPOLESS_DIR}: {}",
+                    sanitize_path_for_log(&path_str)
+                )));
+            }
             !filename.is_empty() && included_repoless.contains(filename)
         } else {
             false
         };
 
         if should_extract {
+            let entry_type = entry.header().entry_type();
+            // A cached RPM is a regular file. A link at an allowlisted name
+            // would make the export's member a pointer at something the
+            // scan chose, so it fails the export rather than being
+            // followed or silently dropped. `unmanaged/` keeps its link
+            // handling below: an unmanaged file legitimately can be one.
+            if in_repoless
+                && (entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link)
+            {
+                return Err(RefineError::TarballError(format!(
+                    "source tarball entry in {REPOLESS_DIR} is a link, not a regular file: {}",
+                    sanitize_path_for_log(&path_str)
+                )));
+            }
             let dest = out.join(rel);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| RefineError::TarballError(e.to_string()))?;
             }
-            if entry.header().entry_type() == tar::EntryType::Symlink
-                || entry.header().entry_type() == tar::EntryType::Link
-            {
+            if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
                 // Preserve symlinks rather than dereferencing them.
                 if let Ok(Some(target)) = entry.link_name() {
                     #[cfg(unix)]
@@ -3250,47 +4064,279 @@ fn extract_payload_dirs_from_tarball(
     Ok(())
 }
 
-/// Copy uploaded RPMs from the upload staging directory into
-/// `repoless-packages/` in the export directory.
+/// Why a staged upload could not be proved fit to export.
 ///
-/// Only copies RPMs whose corresponding PackageEntry has `include == true`
-/// in the projected snapshot. This prevents excluded uploads from leaking
-/// into the export.
-fn copy_uploaded_rpms(
-    upload_dir: &Path,
-    out: &Path,
-    snap: &InspectionSnapshot,
-) -> Result<(), RefineError> {
-    if !upload_dir.exists() {
-        return Ok(());
+/// Every variant is a refusal to export, never a reason to fall back on
+/// something else: the package demotes, and the export response says so.
+/// None of them carries any part of `cache_path` -- the snapshot supplied
+/// that string and the export does not echo it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    #[error("the entry records no staged path")]
+    NoCachePath,
+    #[error("the staged path names no file, or its name is not UTF-8")]
+    NoBasename,
+    #[error("the staged filename is not one the allowlist admits: {0}")]
+    Name(#[from] inspectah_core::rpm_filename::NameError),
+    #[error("the staged path's parent is not the prepared upload directory")]
+    OutsideUploadDir,
+    #[error("nothing is staged under that name")]
+    Missing,
+    #[error("what is staged under that name is not a regular file")]
+    NotRegularFile,
+    #[error("the staged file was replaced between the check and the open")]
+    Replaced,
+    #[error("the staged file could not be read")]
+    Unreadable,
+}
+
+/// A staged upload proved fit to export, with the handle the copy reads.
+///
+/// The handle, not the path, is what makes step 5 of the verification
+/// worth anything: re-opening by name at copy time would reopen whatever
+/// arrived in the gap.
+struct ProvedUpload {
+    upload: VerifiedUpload,
+    file: std::fs::File,
+}
+
+/// Whether `opened` is a regular file and the same one `before`
+/// described, by `(dev, ino)`.
+///
+/// Step 5 of [`verify_staged_upload`] is the only caller, and the input
+/// that makes it say `false` -- a rename landing between the
+/// `symlink_metadata` and the `open` -- cannot be staged by a test. The
+/// predicate is extracted so that the comparison itself can be: a branch
+/// no test reaches is a branch nobody can tell is working, and deleting
+/// this check used to leave the whole suite green.
+fn is_same_regular_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.file_type().is_file() && (opened.dev(), opened.ino()) == (before.dev(), before.ino())
+}
+
+/// Prove that `pkg`'s recorded staged upload is a regular file inside the
+/// prepared upload directory, under a name the allowlist admits.
+///
+/// The order matters and § 3.3 fixes it:
+///
+/// 1. the entry records a staged path at all;
+/// 2. its basename passes the staged-name allowlist, yielding the
+///    [`StagedName`] the renderer and the copy both name;
+/// 3. the *parent* canonicalizes to the prepared upload directory --
+///    the parent only, since canonicalizing the whole path would follow a
+///    final symlink and prove a claim about the wrong file;
+/// 4. the path is rebuilt as `upload_dir_canon/basename`, from two
+///    independently proved pieces rather than from the snapshot's string,
+///    and `symlink_metadata` must report a regular file there;
+/// 5. the file is opened and the *handle* is `fstat`ed: same `(dev, ino)`
+///    as step 4 and still a regular file, which is what closes the
+///    check-to-copy race on the final component.
+///
+/// **Step 3's `canonicalize` result is never used as a path.** It is a
+/// predicate and nothing else: the path steps 4 and 5 act on is rebuilt
+/// from `upload_dir_canon`, which the session proved, and `basename`,
+/// which the allowlist proved. That is what makes the 3-to-4 window a
+/// non-issue -- whatever the recorded parent resolves to between the two,
+/// no part of it reaches the rebuilt path, so the only thing a race there
+/// can change is whether the entry is refused, never which file is
+/// copied. The 4-to-5 window is the one that needed closing, and step 5
+/// is what closes it.
+///
+/// Steps 4 and 5 overlap, and it is worth saying where they do not: a
+/// symlink at the staged name is caught twice, since step 5's `(dev, ino)`
+/// comparison sees the target's pair rather than the link's (verified by
+/// removing step 4's check and watching the symlink case still refuse).
+/// What step 4 catches alone is a *non-symlink* that is not a regular
+/// file -- a fifo planted under a staged name would make step 5's
+/// `File::open` block, so the refusal has to happen before the open, not
+/// after it. Step 5's own unique input is a replacement inside the
+/// 4-to-5 window, which no test can stage; [`is_same_regular_file`] is
+/// extracted so that the logic is testable even though the race is not.
+fn verify_staged_upload(
+    upload_dir_canon: &Path,
+    pkg: &PackageEntry,
+) -> Result<ProvedUpload, Refusal> {
+    let recorded = Path::new(pkg.cache_path.as_deref().ok_or(Refusal::NoCachePath)?);
+
+    let basename = recorded
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or(Refusal::NoBasename)?;
+    let basename = inspectah_core::rpm_filename::StagedName::parse(basename)?;
+
+    // FIXME: this `canonicalize` runs on the path the *snapshot* chose,
+    // so a `cache_path` under a hung network mount blocks here and step
+    // 4 never runs -- the same class of defect as a fifo at the staged
+    // name, reachable without needing anywhere writable. The small fix
+    // (compare the recorded parent lexically against the two spellings
+    // the session itself writes) changes what § 3.3 fixed as a
+    // "resolves to" test into an "is spelled as" one and makes the
+    // refusal depend on `upload_dir` never being reassigned, so it is
+    // filed rather than taken here. See the Task 14 fix round.
+    let parent = recorded
+        .parent()
+        .and_then(|p| p.canonicalize().ok())
+        .ok_or(Refusal::OutsideUploadDir)?;
+    if parent != upload_dir_canon {
+        return Err(Refusal::OutsideUploadDir);
     }
 
-    // Build allowlist of included repo-less package NEVRA filenames.
-    let included_nevras: std::collections::HashSet<String> = snap
-        .rpm
-        .as_ref()
-        .map(|rpm| {
-            rpm.packages_added
-                .iter()
-                .filter(|p| p.disposition.is_included() && p.repoless_cached)
-                .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
-                .collect()
-        })
-        .unwrap_or_default();
+    let proved = upload_dir_canon.join(basename.as_str());
+    let before = match std::fs::symlink_metadata(&proved) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Refusal::Missing),
+        Err(_) => return Err(Refusal::Unreadable),
+    };
+    if !before.file_type().is_file() {
+        return Err(Refusal::NotRegularFile);
+    }
 
-    let dest_dir = out.join("repoless-packages");
-    // Create destination once before the loop instead of per-iteration
-    std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
-    for entry in
-        std::fs::read_dir(upload_dir).map_err(|e| RefineError::TarballError(e.to_string()))?
-    {
-        let entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.ends_with(".rpm") && included_nevras.contains(name_str.as_ref()) {
-            std::fs::copy(entry.path(), dest_dir.join(&name))
-                .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    let file = std::fs::File::open(&proved).map_err(|_| Refusal::Unreadable)?;
+    let opened = file.metadata().map_err(|_| Refusal::Unreadable)?;
+    if !is_same_regular_file(&before, &opened) {
+        return Err(Refusal::Replaced);
+    }
+
+    // Re-derived from the proved basename, never read from the snapshot's
+    // `uploaded_version`, which arrives from the scanned host and is not
+    // evidence of what the staged file actually is.
+    let host_version = format!("{}-{}", pkg.version, pkg.release);
+    let uploaded_version =
+        inspectah_core::rpm_filename::RpmFilename::parse_untrusted(basename.as_str())
+            .and_then(|parsed| parsed.version_release)
+            .filter(|v| *v != host_version);
+
+    Ok(ProvedUpload {
+        upload: VerifiedUpload {
+            canonical: canonical_package_id(&pkg.name, &pkg.arch),
+            basename,
+            uploaded_version,
+        },
+        file,
+    })
+}
+
+/// The warning an export response carries for a package that claimed a
+/// staged upload the export could not prove.
+fn not_verified_warning(pkg: &PackageEntry) -> String {
+    format!(
+        "{}: staged RPM not verified, not exported",
+        sanitize_package_id(&canonical_package_id(&pkg.name, &pkg.arch))
+    )
+}
+
+/// Reduce a package id to the bytes a staged filename may carry, mapping
+/// everything else to `_`.
+///
+/// The id comes from a scanned snapshot and the warning built from it ends
+/// up in an HTTP response header, where a newline is header injection.
+/// Mapping every other byte makes the result printable ASCII by
+/// construction, rather than leaving the header boundary to check.
+fn sanitize_package_id(id: &str) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '~' | '^' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Prove the staged upload of every included package that claims one.
+///
+/// Returns the proved uploads and one warning per package that claimed an
+/// upload this could not prove. The Containerfile preview runs this too
+/// and keeps only the map, which is what stops the preview promising a
+/// `COPY` the export will not write.
+///
+/// `upload_dir_canon` is `None` when no upload directory has been
+/// prepared, and then nothing verifies: a snapshot that arrives with
+/// `uploaded: true` already set gets no `COPY` on that say-so.
+fn prove_staged_uploads(
+    upload_dir_canon: Option<&Path>,
+    snap: &InspectionSnapshot,
+) -> (Vec<ProvedUpload>, Vec<String>) {
+    let mut proved = Vec::new();
+    let mut warnings = Vec::new();
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return (proved, warnings);
+    };
+    for pkg in &rpm.packages_added {
+        if !pkg.uploaded || !pkg.disposition.is_included() {
+            continue;
         }
+        match upload_dir_canon.ok_or(Refusal::OutsideUploadDir) {
+            Ok(canon) => match verify_staged_upload(canon, pkg) {
+                Ok(p) => proved.push(p),
+                Err(_) => warnings.push(not_verified_warning(pkg)),
+            },
+            Err(_) => warnings.push(not_verified_warning(pkg)),
+        }
+    }
+    (proved, warnings)
+}
+
+/// The map the renderer reads, keyed by `name.arch`.
+fn verified_uploads(proved: &[ProvedUpload]) -> VerifiedUploads {
+    proved
+        .iter()
+        .map(|p| (p.upload.canonical.clone(), p.upload.clone()))
+        .collect()
+}
+
+/// Copy the proved uploads into `repoless-packages/` in the export
+/// directory, as the only writer of each of those paths (§ 3.3,
+/// position 31).
+///
+/// Each destination is created with `create_new`, so a path something else
+/// already wrote fails the export rather than being overwritten or
+/// silently demoted. The reaching input is real: step 2e extracts a cached
+/// RPM at its NEVRA for a package that is not uploaded, and nothing stops
+/// a *different* package's staged upload from having been given that same
+/// basename.
+///
+/// The source is the handle [`verify_staged_upload`] proved, not a path,
+/// so there is no second resolution for a rename to win -- which is also
+/// why this does not use `fs::copy`, whose source open follows symlinks
+/// where step 4 refused them.
+fn copy_proved_uploads(proved: Vec<ProvedUpload>, out: &Path) -> Result<(), RefineError> {
+    if proved.is_empty() {
+        return Ok(());
+    }
+    let dest_dir = out.join(REPOLESS_DIR);
+    std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
+    // `create_dir_all` succeeds on a symlink that resolves to a directory,
+    // so it is not the check. The reaching input is the `unmanaged/`
+    // extraction branch, which joins snapshot-supplied paths onto the
+    // export directory without a traversal check of its own.
+    let dir_meta = std::fs::symlink_metadata(&dest_dir)
+        .map_err(|e| RefineError::TarballError(format!("{REPOLESS_DIR}: {e}")))?;
+    if !dir_meta.file_type().is_dir() {
+        return Err(RefineError::TarballError(format!(
+            "{REPOLESS_DIR} in the export directory is not a directory"
+        )));
+    }
+
+    for mut p in proved {
+        let dest = dest_dir.join(p.upload.basename.as_str());
+        let mut outfile = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+            .map_err(|e| {
+                RefineError::TarballError(format!(
+                    "{REPOLESS_DIR}/{} already has a writer: {e}",
+                    p.upload.basename.as_str()
+                ))
+            })?;
+        std::io::copy(&mut p.file, &mut outfile).map_err(|e| {
+            RefineError::TarballError(format!(
+                "copy staged upload to {REPOLESS_DIR}/{}: {e}",
+                p.upload.basename.as_str()
+            ))
+        })?;
     }
     Ok(())
 }
@@ -3305,14 +4351,48 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
     matches!(disposition, FindingKind::Actionable { include: true })
 }
 
+/// Render exactly the approved refine export file set to a tarball at
+/// `tarball_path`.
+///
+/// This is NOT `render_all()`. The pipeline's `render_all()` writes 8
+/// artifacts (including report.html, README.md, secrets-review.md,
+/// kickstart-suggestion.ks) that are outside the approved refine export
+/// contract. This function materializes only the contracted set:
+///
+/// Required: inspection-snapshot.json, Containerfile, audit-report.md,
+///           schema/snapshot.schema.json
+/// Conditional: config/ (when snapshot has included config files),
+///              env-files/ (when snapshot has env-file data),
+///              compose/ (when snapshot has compose files with raw content)
+/// Excluded: report.html, README.md, secrets-review.md,
+///           kickstart-suggestion.ks, original-inspection-snapshot.json
+///
+/// Preview/export fidelity is conditional on `render_ctx`. Both paths
+/// call `render_containerfile` with the same materialized root set, so
+/// the Containerfile matches the preview byte for byte **only when the
+/// caller passes the `RenderContext` the preview was rendered with**.
+/// `RefineSession::export_tarball` passes `cached_render_context` and
+/// does match; `POST /api/tarball` passes `None`, and the Containerfile
+/// in that download drops every `dnf group install` and installs the
+/// members individually instead. Backlog:
+/// `inspectah-nothing-tests-the-tarball-route-or-the-byte-identity-claim`.
+///
+/// `upload_dir_canon` must be the *canonical* upload directory the session
+/// prepared, not a path that can still resolve somewhere else; `None`
+/// means no directory has been prepared and so nothing can be proved.
+///
+/// Returns one warning per package that claimed a staged upload the export
+/// could not prove. Those packages are demoted, not fatal: the export
+/// succeeds, the Containerfile carries a FIXME instead of a `COPY`, and
+/// nothing is written for them under `repoless-packages/`.
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
     original_includes: Option<&std::collections::HashMap<String, bool>>,
     render_ctx: Option<&RenderContext>,
     source_tarball: Option<&Path>,
-    upload_dir: Option<&Path>,
-) -> Result<(), RefineError> {
+    upload_dir_canon: Option<&Path>,
+) -> Result<Vec<String>, RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
 
@@ -3323,6 +4403,12 @@ pub fn render_refine_export(
 
     // 2. Materialize env-files (conditional)
     inspectah_pipeline::render::configtree::write_env_files(snap, out)
+        .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
+
+    // 2a. Stage the /var provisioning fragment, before the Containerfile
+    //     is rendered: its Storage block COPYs this member on the same
+    //     condition the writer produces it under.
+    inspectah_pipeline::render::write_tmpfiles_conf(snap, out)
         .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
     // 2b. User artifacts (conditional — only when users_groups has data)
@@ -3354,12 +4440,13 @@ pub fn render_refine_export(
         extract_payload_dirs_from_tarball(source, snap, out)?;
     }
 
-    // 2f. Copy uploaded RPMs (from refine UI upload endpoint) alongside
-    //     cached RPMs from the source tarball. Filtered by include state
-    //     so excluded uploads don't leak into export.
-    if let Some(uploads) = upload_dir {
-        copy_uploaded_rpms(uploads, out, snap)?;
-    }
+    // 2f. Copy staged uploads (from the refine UI upload endpoint)
+    //     alongside cached RPMs from the source tarball. Every one is
+    //     proved first; a package whose upload cannot be proved is demoted
+    //     to a FIXME and a warning rather than exported.
+    let (proved, warnings) = prove_staged_uploads(upload_dir_canon, snap);
+    let verified = verified_uploads(&proved);
+    copy_proved_uploads(proved, out)?;
 
     // 2g. Materialize compose files (conditional — only when compose files
     //     have raw_content populated by the collector).
@@ -3451,10 +4538,20 @@ pub fn render_refine_export(
     //    tree write that populated the tarball's config/ directory.
     //    Preview also materializes to a tempdir for the same roots,
     //    guaranteeing byte-identical output.
+    //
+    //    The render context the renderer sees is the caller's with the
+    //    uploads 2f proved folded in, so the only names a `COPY` can carry
+    //    are the ones 2f actually wrote.
+    let ctx = RenderContext {
+        group_states: render_ctx
+            .map(|c| c.group_states.clone())
+            .unwrap_or_default(),
+        verified_uploads: verified,
+    };
     let containerfile = if let Some(orig) = original_includes {
-        render_containerfile_with_originals(snap, Some(&materialized_roots), orig, render_ctx)
+        render_containerfile_with_originals(snap, Some(&materialized_roots), orig, Some(&ctx))
     } else {
-        render_containerfile(snap, Some(&materialized_roots), render_ctx)
+        render_containerfile(snap, Some(&materialized_roots), Some(&ctx))
     };
     std::fs::write(out.join("Containerfile"), containerfile)?;
 
@@ -3515,7 +4612,7 @@ pub fn render_refine_export(
     inspectah_pipeline::render::tarball::create_tarball(out, tarball_path, prefix)
         .map_err(|e| RefineError::TarballError(e.to_string()))?;
 
-    Ok(())
+    Ok(warnings)
 }
 
 /// Check whether a compose file path is safe for export writes.
@@ -3548,78 +4645,6 @@ fn sanitize_path_for_log(path: &str) -> String {
     path.chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
-}
-
-/// Known RPM architectures for filename parsing.
-const KNOWN_ARCHES: &[&str] = &[
-    "x86_64", "aarch64", "ppc64le", "s390x", "i686", "i386", "armv7hl", "noarch", "src",
-];
-
-/// Parse an RPM filename into (name, arch, optional version string).
-///
-/// Tries two strategies:
-/// 1. Standard NEVRA: `name-version-release.arch.rpm` — split on the arch
-///    segment and extract version-release from between name and arch.
-/// 2. Non-standard: scan for a known arch before `.rpm` and treat everything
-///    before the version-start (`-\d`) as the package name.
-///
-/// Returns `None` if the filename has no recognizable arch or name.
-fn parse_rpm_filename(filename: &str) -> Option<(String, String, Option<String>)> {
-    let stem = filename.strip_suffix(".rpm")?;
-
-    // Find the arch: last dot-separated segment that is a known arch.
-    // E.g. "epel-release-latest-10.noarch" → arch = "noarch"
-    // E.g. "google-chrome-stable_current_x86_64" → need underscore check too
-    let arch = KNOWN_ARCHES.iter().find(|&&a| {
-        // Check `.arch` suffix (standard)
-        stem.ends_with(&format!(".{a}"))
-            // Check `_arch` suffix (vendor convention like google-chrome)
-            || stem.ends_with(&format!("_{a}"))
-    })?;
-
-    // Strip the arch suffix to get name-version-release (or just name)
-    let before_arch = if stem.ends_with(&format!(".{arch}")) {
-        &stem[..stem.len() - arch.len() - 1]
-    } else {
-        // underscore separator
-        &stem[..stem.len() - arch.len() - 1]
-    };
-
-    if before_arch.is_empty() {
-        return None;
-    }
-
-    // Extract name: everything before the first `-\d` pattern (version start).
-    // E.g. "epel-release-latest-10" → name = "epel-release-latest", ver = "10"
-    // E.g. "google-chrome-stable_current" → name = "google-chrome-stable_current", ver = None
-    let mut name_end = None;
-    let bytes = before_arch.as_bytes();
-    for i in 0..bytes.len().saturating_sub(1) {
-        if bytes[i] == b'-' && bytes[i + 1].is_ascii_digit() {
-            name_end = Some(i);
-            break;
-        }
-    }
-
-    match name_end {
-        Some(pos) => {
-            let name = &before_arch[..pos];
-            let version = &before_arch[pos + 1..]; // skip the leading '-'
-            if name.is_empty() {
-                None
-            } else {
-                Some((
-                    name.to_string(),
-                    arch.to_string(),
-                    Some(version.to_string()),
-                ))
-            }
-        }
-        None => {
-            // No version detected — use the whole thing as the name
-            Some((before_arch.to_string(), arch.to_string(), None))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -4847,7 +5872,7 @@ mod tests {
     #[test]
     fn export_tarball_includes_promoted_roots() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
-        use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
+        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 
         let mut snap = test_snapshot();
@@ -4888,7 +5913,6 @@ mod tests {
         });
 
         // Sysctl → sysctl/ root
-        // Tuned → tuned/ root
         snap.kernel_boot = Some(KernelBootSection {
             sysctl_overrides: vec![SysctlOverride {
                 key: "net.ipv4.ip_forward".into(),
@@ -4900,11 +5924,19 @@ mod tests {
             }],
             tuned_disposition: FindingKind::included(),
             tuned_active: "my-profile".into(),
-            tuned_custom_profiles: vec![ConfigSnippet {
-                path: "etc/tuned/my-profile/tuned.conf".into(),
-                content: "[main]\nsummary=Custom".into(),
-            }],
             ..Default::default()
+        });
+
+        // The custom tuned profile is plain config now (§ 3.5), so it
+        // travels under config/etc/ rather than a tuned/ promoted root.
+        snap.config = Some(inspectah_core::types::config::ConfigSection {
+            files: vec![inspectah_core::types::config::ConfigFileEntry {
+                path: "/etc/tuned/my-profile/tuned.conf".into(),
+                category: inspectah_core::types::config::ConfigCategory::Tuned,
+                content: "[main]\nsummary=Custom".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
         });
 
         let tmpdir = tempfile::tempdir().unwrap();
@@ -4942,9 +5974,13 @@ mod tests {
             entries.iter().any(|e| e.starts_with("export/sysctl/")),
             "tarball must contain sysctl/ root. entries: {entries:?}"
         );
+        // The tuned/ promoted root is gone (§ 3.5). The earlier form of
+        // this test asserted both its presence and the absence of
+        // config/etc/tuned/, which was item 1.7's defect: a file the
+        // export carried on a path rule instead of on a decision.
         assert!(
-            entries.iter().any(|e| e.starts_with("export/tuned/")),
-            "tarball must contain tuned/ root. entries: {entries:?}"
+            !entries.iter().any(|e| e.starts_with("export/tuned/")),
+            "the tuned/ promoted root is gone. entries: {entries:?}"
         );
 
         // Verify specific files within promoted roots
@@ -4973,8 +6009,8 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .any(|e| e.contains("tuned/etc/tuned/my-profile/tuned.conf")),
-            "tuned profile must be present. entries: {entries:?}"
+                .any(|e| e == "export/config/etc/tuned/my-profile/tuned.conf"),
+            "the tuned profile travels as plain config. entries: {entries:?}"
         );
 
         // Promoted artifacts must NOT appear under config/
@@ -4989,12 +6025,6 @@ mod tests {
                 .iter()
                 .any(|e| e.starts_with("export/config/etc/containers/systemd/")),
             "quadlets must NOT be under config/. entries: {entries:?}"
-        );
-        assert!(
-            !entries
-                .iter()
-                .any(|e| e.starts_with("export/config/etc/tuned/")),
-            "tuned profiles must NOT be under config/. entries: {entries:?}"
         );
     }
 
@@ -5118,9 +6148,6 @@ mod tests {
             "httpd.service should start excluded"
         );
 
-        // Capture reference pointer before mutation
-        let ref_before = session.reference() as *const crate::projection::ReferenceProjection;
-
         // Mutate: flip httpd.service include false -> true
         session
             .apply(RefinementOp::SetInclude {
@@ -5152,15 +6179,10 @@ mod tests {
             })
             .unwrap();
 
-        // Reference should be pointer-identical (OnceLock, never recomputed)
-        let ref_after = session.reference() as *const crate::projection::ReferenceProjection;
-        assert!(
-            std::ptr::eq(ref_before as *const (), ref_after as *const ()),
-            "reference projection pointer must be stable across mutations"
-        );
-
-        // Verify reference field stability: version_changes should still
-        // have the same counts regardless of mutations
+        // `reference()` is recomputed on every call, so the fields that
+        // are genuinely reference-only have to come out of the projected
+        // snapshot unchanged rather than out of a frozen copy: these
+        // version_changes counts hold across both mutations above.
         let ref_proj = session.reference();
         assert_eq!(ref_proj.version_changes.downgrades.len(), 1);
         assert_eq!(ref_proj.version_changes.upgrades.len(), 1);
@@ -5311,6 +6333,69 @@ mod tests {
         assert!(
             sshd.disposition.is_included(),
             "clamp must not affect unlocked items"
+        );
+    }
+
+    /// Review round 1, item 1: the `ItemId::Repo` cascade matched packages
+    /// on `source_repo` alone, with no `locked` guard -- a repo op would
+    /// flip a locked member's disposition exactly like an unlocked one.
+    /// `project_snapshot`'s final `clamp_locked_items` pass unconditionally
+    /// re-forces every locked RPM package back to excluded afterward, so
+    /// this is invisible through `view()`/`snapshot_projected()` (confirmed
+    /// empirically: reverting the `!pkg.locked` guard and rerunning an
+    /// integration-level assertion against `install_list`/
+    /// `snapshot_projected()` fails identically with or without the guard,
+    /// because the locked package already reads excluded before any op
+    /// even runs). `cascade_repo_packages` is tested directly here,
+    /// bypassing `project_snapshot`/clamp entirely, which is the only point
+    /// in the pipeline where the fixed behavior is actually observable.
+    #[test]
+    fn repo_package_cascade_skips_locked_members_in_both_directions() {
+        fn pkg(name: &str, locked: bool, included: bool) -> PackageEntry {
+            PackageEntry {
+                name: name.into(),
+                arch: "x86_64".into(),
+                source_repo: "vendor".into(),
+                disposition: FindingKind::from_bool(included),
+                locked,
+                ..Default::default()
+            }
+        }
+
+        // Exclude-all: both members start included. Against code without
+        // the `!pkg.locked` guard, the locked member's disposition flips to
+        // excluded right alongside the unlocked one -- this is a fresh
+        // scenario per direction specifically so each block independently
+        // catches a guard missing from only that one branch.
+        let mut rpm = RpmSection {
+            packages_added: vec![pkg("locked", true, true), pkg("free", false, true)],
+            ..Default::default()
+        };
+        cascade_repo_packages(&mut rpm, "vendor", false);
+        assert!(
+            rpm.packages_added[0].disposition.is_included(),
+            "exclude-all must not touch the locked member"
+        );
+        assert!(
+            !rpm.packages_added[1].disposition.is_included(),
+            "exclude-all must still exclude the unlocked member"
+        );
+
+        // Include-all: both members start excluded. Against code without
+        // the guard, the locked member's disposition flips to included
+        // right alongside the unlocked one.
+        let mut rpm = RpmSection {
+            packages_added: vec![pkg("locked", true, false), pkg("free", false, false)],
+            ..Default::default()
+        };
+        cascade_repo_packages(&mut rpm, "vendor", true);
+        assert!(
+            !rpm.packages_added[0].disposition.is_included(),
+            "include-all must not touch the locked member"
+        );
+        assert!(
+            rpm.packages_added[1].disposition.is_included(),
+            "include-all must include the unlocked member"
         );
     }
 
@@ -5838,16 +6923,20 @@ mod tests {
     fn set_include_group_noop_when_all_members_already_match() {
         let snap = test_snapshot_with_groups();
         let mut session = RefineSession::new(snap);
-        // All members start included — setting include=true should be noop
-        session
-            .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Group {
-                    name: "Container Management".into(),
-                },
-                include: true,
-            })
-            .unwrap();
-        assert_eq!(session.timeline_len(), 0, "noop should not add to timeline");
+        // All members start included — setting include=true changes nothing,
+        // so it's refused (§ 3.7) rather than silently accepted.
+        let result = session.apply(RefinementOp::SetInclude {
+            item_id: ItemId::Group {
+                name: "Container Management".into(),
+            },
+            include: true,
+        });
+        assert!(matches!(result, Err(RefineError::NoopTarget(_))));
+        assert_eq!(
+            session.timeline_len(),
+            0,
+            "refused op must not add to timeline"
+        );
     }
 
     #[test]
@@ -6160,33 +7249,29 @@ mod tests {
 
     // ── Truth-boundary proof tests ──────────────────────────────────
     //
-    // These verify that group state derivation uses the *filtered* render
-    // surface (baseline-suppressed + leaf-filtered), not the raw projected
-    // snapshot. Before the fix, effective_packages came from
-    // projected.rpm.packages_added, which could include packages the view
-    // never shows.
+    // § 3.7 (Task 6): group state derivation uses the effective set built
+    // from the raw `packages_added` (present, actionable, not locked),
+    // evaluated BEFORE the leaf/baseline-suppressed display filter. A member
+    // absent from `packages_added` entirely is in the base and is not
+    // evaluated; a member that's merely hidden from the individual view by
+    // the leaf filter is still present and still counts. The leaf filter
+    // governs the individual install list, not group evaluation.
 
     #[test]
     fn baseline_suppressed_member_excluded_from_group_eval() {
-        // Setup: group "Web Server" has members httpd and mod_ssl.
-        // httpd is baseline-suppressed (present in target image).
-        // mod_ssl has include=false (user excluded it).
+        // Setup: group "Web Server" has members httpd and mod_ssl. httpd is
+        // present in `packages_added` (included, unlocked) AND flagged
+        // `baseline_suppressed`, which hides it from the individual
+        // Packages view but does NOT remove it from `packages_added` — so
+        // under § 3.7's rule, httpd IS in the effective set. mod_ssl is
+        // present and include=false (user excluded it).
         //
-        // OLD behavior (bug): effective_packages includes httpd (from raw
-        //   projection). httpd has include=true, mod_ssl has include=false.
-        //   derive_group_state sees one included + one excluded non-locked
-        //   member => Degraded(MemberExcluded). This is WRONG because httpd
-        //   isn't on the render surface at all.
-        //
-        // NEW behavior (fix): effective_packages comes from filtered packages.
-        //   httpd is baseline-suppressed and absent. Only mod_ssl remains,
-        //   with include=false => Degraded(MemberExcluded). The group state
-        //   now matches what the view actually shows.
-        //
-        // The key assertion: the group state reflects the filtered surface.
-        // We verify by checking that only 1 package appears in the view
-        // (mod_ssl) and the group IS Degraded — but for the right reason
-        // (the visible member is excluded, not a phantom baseline member).
+        // The effective set is {httpd, mod_ssl}: this fixture does not
+        // exercise the "absent from packages_added entirely" baseline
+        // exemption (see the host-example comment above) — it shows that
+        // `baseline_suppressed` alone does not exempt a present member.
+        // mod_ssl's exclusion degrades the group regardless of httpd's
+        // inclusion.
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6255,32 +7340,35 @@ mod tests {
             "mod_ssl must be visible in view"
         );
 
-        // Group state must reflect the filtered surface: mod_ssl excluded
-        // means Degraded(MemberExcluded). Before the fix, httpd would have
-        // polluted effective_packages from the raw projection.
+        // httpd is in the effective set (present, actionable, unlocked) but
+        // included, so it doesn't itself trigger Degraded; mod_ssl's
+        // exclusion does: Degraded(MemberExcluded).
         let ctx = session.render_context();
         assert!(
             ctx.is_degraded("Web Server"),
-            "group with baseline-suppressed member must derive state from filtered surface"
+            "an excluded effective member must degrade the group even when a \
+             baseline-suppressed, included member is also in the effective set"
         );
     }
 
     #[test]
-    fn leaf_filtered_member_excluded_from_group_eval() {
+    fn leaf_filtered_member_still_counted_in_group_eval() {
         // Setup: group "Core Libs" has members vim and glibc.
-        // glibc is a transitive dep (not a leaf), so leaf filtering removes it.
-        // vim is a leaf and remains visible with include=true.
+        // glibc is a transitive dep (not a leaf), so leaf filtering hides it
+        // from the individual Packages view and construction-time
+        // normalization excludes it (non-leaf, Site bucket). vim is a leaf
+        // and remains visible with include=true.
         //
-        // OLD behavior (bug): effective_packages includes glibc (from raw
-        //   projection). Both have include=true => Renderable. But the view
-        //   only shows vim. If the user exports, `dnf group install` would
-        //   try to install glibc explicitly, which is wasteful — it's a dep.
-        //
-        // NEW behavior (fix): effective_packages comes from filtered packages.
-        //   glibc is absent (leaf-filtered). Only vim remains, include=true.
-        //   derive_group_state sees 1 member, included => Renderable. The
-        //   result is the same in this case, but the derivation is honest:
-        //   it's Renderable because the *visible* members are all included.
+        // § 3.7: group evaluation uses the effective set built from the raw
+        // `packages_added` (present, actionable, not locked), BEFORE the
+        // leaf/display filter — the leaf filter governs the individual
+        // install list, not group evaluation. glibc is present (not absent
+        // from `packages_added`, merely hidden from the individual view), so
+        // its excluded state degrades the group even though the view only
+        // shows vim. The two filters answer different questions: the display
+        // filter says what the user sees per-package; group evaluation says
+        // whether the group's members, in full, are safe to install as one
+        // `dnf group install`.
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection {
@@ -6338,17 +7426,18 @@ mod tests {
             "vim must be visible in view"
         );
 
-        // Group state should reflect only the visible member (vim, included).
-        // With the fix, glibc is absent from effective_packages, so the
-        // group state is based solely on vim. Before the fix, glibc would
-        // have been in effective_packages from the raw projection.
+        // glibc is present, actionable, not locked, and excluded (normalized
+        // non-leaf) — it's in the effective set despite being leaf-filtered
+        // out of the individual view, so the group is Degraded, not
+        // Renderable, even though vim (the only visible member) is included.
         let ctx = session.render_context();
         assert!(
-            ctx.is_renderable("Core Libs"),
-            "group with only visible members included should be Renderable"
+            ctx.is_degraded("Core Libs"),
+            "a present-but-leaf-filtered excluded member must still degrade the group"
         );
 
-        // Now exclude vim to prove the filtered surface drives group state.
+        // Excluding vim too leaves both effective members excluded: still
+        // Degraded (MemberExcluded), now for both reasons at once.
         let mut session2 = RefineSession::new({
             let mut s = InspectionSnapshot {
                 schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -6689,54 +7778,7 @@ mod tests {
         assert!(!is_safe_compose_path("foo\x00bar.yml"));
     }
 
-    // -- RPM filename parsing tests ---------------------------------------------
-
-    #[test]
-    fn parse_rpm_filename_standard_nevra() {
-        let result = parse_rpm_filename("httpd-2.4.57-5.el9.x86_64.rpm");
-        assert_eq!(
-            result,
-            Some(("httpd".into(), "x86_64".into(), Some("2.4.57-5.el9".into())))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_epel_release() {
-        let result = parse_rpm_filename("epel-release-latest-10.noarch.rpm");
-        assert_eq!(
-            result,
-            Some((
-                "epel-release-latest".into(),
-                "noarch".into(),
-                Some("10".into())
-            ))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_google_chrome_underscore_arch() {
-        let result = parse_rpm_filename("google-chrome-stable_current_x86_64.rpm");
-        assert_eq!(
-            result,
-            Some(("google-chrome-stable_current".into(), "x86_64".into(), None))
-        );
-    }
-
-    #[test]
-    fn parse_rpm_filename_no_version() {
-        // Filename with arch but no version digits after a dash
-        let result = parse_rpm_filename("my-tool.noarch.rpm");
-        assert_eq!(result, Some(("my-tool".into(), "noarch".into(), None)));
-    }
-
-    #[test]
-    fn parse_rpm_filename_unparseable() {
-        assert_eq!(parse_rpm_filename("(1).rpm"), None);
-        assert_eq!(parse_rpm_filename("random-file.txt"), None);
-        assert_eq!(parse_rpm_filename(""), None);
-    }
-
-    // -- mark_uploaded_rpm tests ------------------------------------------------
+    // -- upload matching, recording, and staging directory tests ----------------
 
     /// Helper: build a snapshot with a single repo-less package.
     fn snapshot_with_repoless(name: &str, ver: &str, rel: &str, arch: &str) -> InspectionSnapshot {
@@ -6758,94 +7800,351 @@ mod tests {
         }
     }
 
+    /// The single package of a `snapshot_with_repoless` session.
+    fn only_package(session: &RefineSession) -> &PackageEntry {
+        &session.original.rpm.as_ref().unwrap().packages_added[0]
+    }
+
+    /// Step 5's predicate, against real files.
+    ///
+    /// The window it guards -- a rename between the `symlink_metadata`
+    /// and the `open` -- cannot be staged by a test, so before this the
+    /// whole check could be deleted with all 39 tests still passing:
+    /// every input the suite had was refused by step 4 first. The race
+    /// stays untestable; the comparison does not have to.
     #[test]
-    fn mark_uploaded_rpm_exact_nevra_still_works() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "httpd-2.4.57-5.el9.x86_64.rpm",
-            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
-        );
-        assert_eq!(result, Some("httpd.x86_64".into()));
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
-        assert!(pkg.repoless_cached);
-        assert!(pkg.uploaded_version.is_none()); // exact match, no version mismatch
+    fn is_same_regular_file_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one");
+        let two = dir.path().join("two");
+        std::fs::write(&one, b"same bytes").unwrap();
+        // Identical contents, so a comparison that read the file instead
+        // of its identity would call these the same.
+        std::fs::write(&two, b"same bytes").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&one, &link).unwrap();
+
+        let one_md = std::fs::metadata(&one).unwrap();
+        let one_again = std::fs::File::open(&one).unwrap().metadata().unwrap();
+        let two_md = std::fs::metadata(&two).unwrap();
+        let dir_md = std::fs::metadata(dir.path()).unwrap();
+        // What step 4 saw for a symlink, against what the open returns:
+        // the link's own identity versus its target's. This is the pair
+        // step 5 compares when a symlink is planted at the staged name.
+        let link_md = std::fs::symlink_metadata(&link).unwrap();
+        let link_opened = std::fs::File::open(&link).unwrap().metadata().unwrap();
+
+        let cases: &[(&str, &std::fs::Metadata, &std::fs::Metadata, bool)] = &[
+            ("one file, stat then fstat", &one_md, &one_again, true),
+            ("two files with equal bytes", &one_md, &two_md, false),
+            ("a file replaced by another", &two_md, &one_md, false),
+            ("a directory at the open", &one_md, &dir_md, false),
+            ("a symlink and its target", &link_md, &link_opened, false),
+        ];
+        for (label, before, opened, want) in cases {
+            assert_eq!(is_same_regular_file(before, opened), *want, "{label}");
+        }
+    }
+
+    /// Every byte class the export's warnings can carry.
+    ///
+    /// The id comes from a scanned snapshot and the warning built from
+    /// it ends up in an HTTP response header.
+    #[test]
+    fn sanitize_package_id_table() {
+        let cases: &[(&str, &str)] = &[
+            ("epel-release.noarch", "epel-release.noarch"),
+            ("libstdc++-devel.x86_64", "libstdc++-devel.x86_64"),
+            ("foo~rc1^git1.noarch", "foo~rc1^git1.noarch"),
+            // The header-injection shape, and the two bytes that carry it.
+            ("evil\r\nX-Evil: 1.noarch", "evil__X-Evil__1.noarch"),
+            // DEL is the one `serde_json::to_string` does not escape on
+            // the way into the response header, so this row is not
+            // redundant with that layer -- it is the only thing keeping
+            // a byte `HeaderValue` rejects out of the value.
+            ("evil\u{7f}.noarch", "evil_.noarch"),
+            // Non-ASCII: serde_json emits these raw, and a header value
+            // may not hold them. One `_` per *char*, not per byte:
+            // '\u{20ac}' is three bytes and becomes one underscore.
+            // `validate_staged_name` next door scans bytes, so the two
+            // do not agree on granularity -- which does not matter for
+            // either one's purpose, but is worth a reader knowing before
+            // they assume it does.
+            ("\u{03c0}kg.noarch", "_kg.noarch"),
+            ("a\u{20ac}b.noarch", "a_b.noarch"),
+            ("evil$(id).noarch", "evil__id_.noarch"),
+            ("", ""),
+        ];
+        for (input, want) in cases {
+            assert_eq!(sanitize_package_id(input), *want, "{input:?}");
+        }
+    }
+
+    /// Each refusal [`verify_staged_upload`] can make, paired with an
+    /// input that produces it.
+    ///
+    /// The export tests assert the demotion end to end, which a function
+    /// that refused everything for one reason would also satisfy. This is
+    /// the table that tells those cases apart, and it is what names the
+    /// reaching input for every branch of the verification order.
+    #[test]
+    fn verify_staged_upload_refusal_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let canon = dir.path().canonicalize().unwrap();
+        let outside = canon.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let sub = canon.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(canon.join("good-1-1.noarch.rpm"), b"ok").unwrap();
+        std::fs::write(outside.join("good-1-1.noarch.rpm"), b"elsewhere").unwrap();
+        std::fs::write(sub.join("good-1-1.noarch.rpm"), b"nested").unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("good-1-1.noarch.rpm"),
+            canon.join("link-1-1.noarch.rpm"),
+        )
+        .unwrap();
+        std::fs::create_dir(canon.join("adir-1-1.noarch.rpm")).unwrap();
+
+        let entry = |cache_path: Option<PathBuf>| PackageEntry {
+            name: "good".into(),
+            version: "1".into(),
+            release: "1".into(),
+            arch: "noarch".into(),
+            disposition: FindingKind::included(),
+            uploaded: true,
+            cache_path: cache_path.map(|p| p.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+
+        let cases: Vec<(&str, Option<PathBuf>, Refusal)> = vec![
+            ("no recorded path", None, Refusal::NoCachePath),
+            (
+                "a path that names no file",
+                Some(PathBuf::from("/")),
+                Refusal::NoBasename,
+            ),
+            (
+                "a basename that would be a hidden file",
+                Some(canon.join(".good-1-1.noarch.rpm")),
+                Refusal::Name(inspectah_core::rpm_filename::NameError::BadFirstByte),
+            ),
+            (
+                "a basename carrying a shell metacharacter",
+                Some(canon.join("good-1$(id)-1.noarch.rpm")),
+                Refusal::Name(inspectah_core::rpm_filename::NameError::BadByte { at: 6 }),
+            ),
+            // Not `Refusal::Name`: `Path::file_name` of
+            // `<canon>/../x.rpm` is already `x.rpm`, which the allowlist
+            // admits, so a traversal inside `cache_path` is caught by
+            // the parent check rather than the name check.
+            (
+                "a traversal inside the recorded path",
+                Some(canon.join("../x.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a parent that is not the upload directory",
+                Some(outside.join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a subdirectory of the upload directory",
+                Some(sub.join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "a parent that does not resolve at all",
+                Some(canon.join("gone").join("good-1-1.noarch.rpm")),
+                Refusal::OutsideUploadDir,
+            ),
+            (
+                "nothing staged under that name",
+                Some(canon.join("absent-1-1.noarch.rpm")),
+                Refusal::Missing,
+            ),
+            (
+                "a symlink at the staged name",
+                Some(canon.join("link-1-1.noarch.rpm")),
+                Refusal::NotRegularFile,
+            ),
+            (
+                "a directory at the staged name",
+                Some(canon.join("adir-1-1.noarch.rpm")),
+                Refusal::NotRegularFile,
+            ),
+        ];
+
+        for (label, cache_path, want) in cases {
+            let mut pkg = entry(cache_path);
+            // The basename drives the lookup, so the refusals that are
+            // about the name need their own package name to match it.
+            if let Some(ref cp) = pkg.cache_path {
+                if cp.ends_with("link-1-1.noarch.rpm") {
+                    pkg.name = "link".into();
+                } else if cp.ends_with("adir-1-1.noarch.rpm") {
+                    pkg.name = "adir".into();
+                } else if cp.ends_with("absent-1-1.noarch.rpm") {
+                    pkg.name = "absent".into();
+                }
+            }
+            let got = verify_staged_upload(&canon, &pkg).err();
+            assert_eq!(got, Some(want), "{label}");
+        }
+
+        // And the one input that is not a refusal, so the table above
+        // cannot be satisfied by a function that refuses everything.
+        let ok = verify_staged_upload(&canon, &entry(Some(canon.join("good-1-1.noarch.rpm"))))
+            .expect("a regular file in the upload directory under a valid name");
+        assert_eq!(ok.upload.basename.as_str(), "good-1-1.noarch.rpm");
+        assert_eq!(ok.upload.canonical, "good.noarch");
+        // The filename's version-release equals the host's, so there is
+        // no difference to report.
+        assert_eq!(ok.upload.uploaded_version, None);
     }
 
     #[test]
-    fn mark_uploaded_rpm_matches_epel_release_by_name_arch() {
-        // "epel-release-latest-10.noarch.rpm" — heuristic extracts name
-        // "epel-release-latest" which doesn't match "epel-release" directly.
-        // Progressive prefix matching tries shorter prefixes until it finds
-        // "epel-release" which matches the package.
-        let snap = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "epel-release-latest-10.noarch.rpm",
-            "/tmp/epel-release-latest-10.noarch.rpm",
-        );
-        assert_eq!(result, Some("epel-release.noarch".into()));
+    fn match_uploaded_rpm_table() {
+        // (package name, version, release, arch, uploaded filename) against
+        // (canonical, kind, host_version, uploaded_version).
+        type Expected<'a> = Option<(&'a str, UploadMatchKind, &'a str, Option<&'a str>)>;
+        let cases: &[(&str, &str, &str, &str, &str, Expected)] = &[
+            // Exact NEVRA, the first branch.
+            (
+                "httpd",
+                "2.4.57",
+                "5.el9",
+                "x86_64",
+                "httpd-2.4.57-5.el9.x86_64.rpm",
+                Some(("httpd.x86_64", UploadMatchKind::Exact, "2.4.57-5.el9", None)),
+            ),
+            (
+                "google-chrome-stable",
+                "126.0",
+                "1",
+                "x86_64",
+                "google-chrome-stable-126.0-1.x86_64.rpm",
+                Some((
+                    "google-chrome-stable.x86_64",
+                    UploadMatchKind::Exact,
+                    "126.0-1",
+                    None,
+                )),
+            ),
+            // The Fedora permalink filename: the heuristic name
+            // "epel-release-latest" is not the package name, and a
+            // progressively shorter prefix finds it.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release-latest-9.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::VersionDiffers,
+                    "9-11.el9",
+                    Some("9"),
+                )),
+            ),
+            // Relaxed branch with the host's own version-release: the kind
+            // is computed from the comparison, not from which branch
+            // matched.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release-latest-9-11.el9.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::Exact,
+                    "9-11.el9",
+                    None,
+                )),
+            ),
+            // Relaxed branch with no version in the filename at all.
+            (
+                "epel-release",
+                "9",
+                "11.el9",
+                "noarch",
+                "epel-release.noarch.rpm",
+                Some((
+                    "epel-release.noarch",
+                    UploadMatchKind::Exact,
+                    "9-11.el9",
+                    None,
+                )),
+            ),
+            // A different version of the same package.
+            (
+                "custom-tool",
+                "1.0.0",
+                "1.el9",
+                "x86_64",
+                "custom-tool-2.0.0-1.el9.x86_64.rpm",
+                Some((
+                    "custom-tool.x86_64",
+                    UploadMatchKind::VersionDiffers,
+                    "1.0.0-1.el9",
+                    Some("2.0.0-1.el9"),
+                )),
+            ),
+            // Another package's RPM matches nothing.
+            (
+                "httpd",
+                "2.4.57",
+                "5.el9",
+                "x86_64",
+                "nginx-1.0-1.el9.x86_64.rpm",
+                None,
+            ),
+            // Unparseable: no arch, so no relaxed match either.
+            ("httpd", "2.4.57", "5.el9", "x86_64", "(1).rpm", None),
+        ];
 
-        // Standard NEVRA filename also still works:
-        let snap2 = snapshot_with_repoless("epel-release", "10", "1.el10", "noarch");
-        let mut session2 = RefineSession::new(snap2);
-        let result2 = session2.mark_uploaded_rpm(
-            "epel-release-10-1.el10.noarch.rpm",
-            "/tmp/epel-release-10-1.el10.noarch.rpm",
-        );
-        assert_eq!(result2, Some("epel-release.noarch".into()));
+        for (name, ver, rel, arch, filename, want) in cases {
+            let session = RefineSession::new(snapshot_with_repoless(name, ver, rel, arch));
+            let got = session.match_uploaded_rpm(filename);
+            let got = got.as_ref().map(|m| {
+                (
+                    m.canonical.as_str(),
+                    m.match_kind,
+                    m.host_version.as_str(),
+                    m.uploaded_version.as_deref(),
+                )
+            });
+            assert_eq!(got, *want, "{filename}");
+        }
     }
 
     #[test]
-    fn mark_uploaded_rpm_matches_google_chrome() {
-        let snap = snapshot_with_repoless("google-chrome-stable", "126.0", "1", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "google-chrome-stable-126.0-1.x86_64.rpm",
-            "/tmp/google-chrome-stable-126.0-1.x86_64.rpm",
-        );
-        assert_eq!(result, Some("google-chrome-stable.x86_64".into()));
-    }
+    fn match_uploaded_rpm_mutates_nothing() {
+        // The matcher is the step the handler runs before it has decided to
+        // place anything; a match that is never committed has to leave the
+        // package exactly as it was.
+        let session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        let generation_before = session.generation();
+        let matched = session
+            .match_uploaded_rpm("epel-release-latest-9.noarch.rpm")
+            .expect("the permalink filename matches epel-release");
+        assert_eq!(matched.canonical, "epel-release.noarch");
 
-    #[test]
-    fn mark_uploaded_rpm_populates_uploaded_version_on_mismatch() {
-        let snap = snapshot_with_repoless("custom-tool", "1.0.0", "1.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        // Upload a file with version 2.0.0 instead of 1.0.0
-        let result = session.mark_uploaded_rpm(
-            "custom-tool-2.0.0-1.el9.x86_64.rpm",
-            "/tmp/custom-tool-2.0.0-1.el9.x86_64.rpm",
-        );
-        assert_eq!(result, Some("custom-tool.x86_64".into()));
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
-        assert!(pkg.repoless_cached);
-        assert_eq!(pkg.uploaded_version, Some("2.0.0-1.el9".into()));
-    }
-
-    #[test]
-    fn mark_uploaded_rpm_returns_none_when_no_match() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "nginx-1.0-1.el9.x86_64.rpm",
-            "/tmp/nginx-1.0-1.el9.x86_64.rpm",
-        );
-        assert_eq!(result, None);
-        let pkg = &session.original.rpm.as_ref().unwrap().packages_added[0];
+        let pkg = only_package(&session);
         assert!(!pkg.repoless_cached);
+        assert!(!pkg.uploaded);
+        assert_eq!(pkg.cache_path, None);
+        assert_eq!(pkg.uploaded_version, None);
+        assert_eq!(session.generation(), generation_before);
     }
 
     #[test]
-    fn mark_uploaded_rpm_unparseable_filename_returns_none() {
-        let snap = snapshot_with_repoless("httpd", "2.4.57", "5.el9", "x86_64");
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm("(1).rpm", "/tmp/(1).rpm");
-        assert_eq!(result, None);
-        // No panic, no match
-    }
-
-    #[test]
-    fn mark_uploaded_rpm_skips_non_repoless_packages() {
+    fn match_uploaded_rpm_skips_non_repoless_packages() {
         // Package has a source_repo (not repo-less), should not match
         let snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
@@ -6864,12 +8163,371 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut session = RefineSession::new(snap);
-        let result = session.mark_uploaded_rpm(
-            "httpd-2.4.57-5.el9.x86_64.rpm",
-            "/tmp/httpd-2.4.57-5.el9.x86_64.rpm",
+        let session = RefineSession::new(snap);
+        assert_eq!(
+            session.match_uploaded_rpm("httpd-2.4.57-5.el9.x86_64.rpm"),
+            None
         );
-        assert_eq!(result, None);
+    }
+
+    /// A session whose only package is already `repoless_cached` from the
+    /// host's dnf cache.
+    fn session_with_dnf_cached_epel() -> RefineSession {
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(DNF_CACHE_PATH.into());
+        RefineSession::new(snap)
+    }
+
+    const DNF_CACHE_PATH: &str =
+        "/var/cache/dnf/epel-1234/packages/epel-release-9-11.el9.noarch.rpm";
+    const FIRST_UPLOAD_PATH: &str = "/tmp/uploads/epel-release-9-12.el9.noarch.rpm";
+    const SECOND_UPLOAD_PATH: &str = "/tmp/uploads/epel-release-9-13.el9.noarch.rpm";
+
+    #[test]
+    fn set_uploaded_records_the_dnf_cache_it_displaced() {
+        let mut session = session_with_dnf_cached_epel();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+
+        assert_eq!(
+            session.prior_cache("epel-release.noarch"),
+            Some(&PriorCache {
+                repoless_cached: true,
+                cache_path: Some(DNF_CACHE_PATH.into()),
+                uploaded_version: None,
+            })
+        );
+        let pkg = only_package(&session);
+        assert!(pkg.uploaded);
+        assert!(pkg.repoless_cached);
+        assert_eq!(pkg.cache_path.as_deref(), Some(FIRST_UPLOAD_PATH));
+        assert_eq!(pkg.uploaded_version.as_deref(), Some("9-12.el9"));
+    }
+
+    #[test]
+    fn set_uploaded_records_nothing_for_a_package_with_no_cache() {
+        // The first half of the condition: an entry that was never
+        // `repoless_cached` has no cache state to restore, so removal
+        // clears rather than restores.
+        let mut session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+
+        assert_eq!(session.prior_cache("epel-release.noarch"), None);
+        let pkg = only_package(&session);
+        assert!(pkg.uploaded);
+        assert!(pkg.repoless_cached);
+        assert_eq!(pkg.cache_path.as_deref(), Some(FIRST_UPLOAD_PATH));
+    }
+
+    #[test]
+    fn set_uploaded_twice_keeps_the_dnf_cache_it_first_displaced() {
+        // The second half of the condition: a replacing upload must not
+        // overwrite the saved dnf-cache state with the first upload's own
+        // staged path, or removal would restore a file it had deleted.
+        let mut session = session_with_dnf_cached_epel();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            Some("9-12.el9".into()),
+        );
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(SECOND_UPLOAD_PATH),
+            Some("9-13.el9".into()),
+        );
+
+        assert_eq!(
+            session.prior_cache("epel-release.noarch"),
+            Some(&PriorCache {
+                repoless_cached: true,
+                cache_path: Some(DNF_CACHE_PATH.into()),
+                uploaded_version: None,
+            })
+        );
+        let pkg = only_package(&session);
+        assert_eq!(pkg.cache_path.as_deref(), Some(SECOND_UPLOAD_PATH));
+        assert_eq!(pkg.uploaded_version.as_deref(), Some("9-13.el9"));
+    }
+
+    #[test]
+    fn set_uploaded_bumps_the_generation() {
+        let mut session = session_with_dnf_cached_epel();
+        let generation_before = session.generation();
+        session.set_uploaded(
+            "epel-release.noarch",
+            PathBuf::from(FIRST_UPLOAD_PATH),
+            None,
+        );
+        assert_eq!(session.generation(), generation_before + 1);
+    }
+
+    /// A session over `dir`, with an epel-release entry to match against.
+    fn session_over_upload_dir(dir: &Path) -> RefineSession {
+        let mut session = RefineSession::new(snapshot_with_repoless(
+            "epel-release",
+            "9",
+            "11.el9",
+            "noarch",
+        ));
+        session.set_upload_dir(dir.to_path_buf());
+        session
+    }
+
+    #[test]
+    fn ensure_upload_dir_creates_a_private_directory() {
+        use std::os::unix::fs::MetadataExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let mut session = session_over_upload_dir(&dir);
+
+        session.ensure_upload_dir().expect("fresh directory");
+
+        let md = std::fs::symlink_metadata(&dir).unwrap();
+        assert!(md.file_type().is_dir());
+        assert_eq!(
+            md.mode() & 0o777,
+            0o700,
+            "upload directory must not be readable or writable by anyone else"
+        );
+        assert_eq!(
+            session.upload_dir_canon(),
+            Some(dir.canonicalize().unwrap().as_path())
+        );
+    }
+
+    #[test]
+    fn ensure_upload_dir_sweeps_part_files_once_per_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+        std::fs::write(dir.join("epel-release-9-11.el9.noarch.rpm"), b"an rpm").unwrap();
+        let mut session = session_over_upload_dir(&dir);
+
+        session.ensure_upload_dir().expect("existing directory");
+
+        assert!(
+            !dir.join(".upload-dead.part").exists(),
+            "a part file from a process that died mid-transfer must not survive"
+        );
+        assert!(
+            dir.join("epel-release-9-11.el9.noarch.rpm").exists(),
+            "the sweep removes part files only"
+        );
+        assert!(
+            only_package(&session).uploaded,
+            "and the rescan behind it takes the file the sweep left as an upload"
+        );
+
+        // A running server never removes a part file by name pattern: the
+        // sweep belongs to opening the directory, not to serving a request.
+        std::fs::write(dir.join(".upload-live.part"), b"in flight").unwrap();
+        session.ensure_upload_dir().expect("already prepared");
+        assert!(dir.join(".upload-live.part").exists());
+    }
+
+    #[test]
+    fn ensure_upload_dir_sweeps_only_regular_part_files() {
+        // The `is_file()` guard, with an input for each half: a
+        // directory wearing a part file's name turns `remove_file` into
+        // an error that would 500 every upload for the life of the
+        // process, and a symlink wearing one belongs to whoever made it.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        std::fs::create_dir(&dir).unwrap();
+        let link_target = tmp.path().join("target.rpm");
+        std::fs::write(&link_target, b"not ours to remove").unwrap();
+        std::fs::write(dir.join(".upload-dead.part"), b"half an rpm").unwrap();
+        std::fs::create_dir(dir.join(".upload-busy.part")).unwrap();
+        std::os::unix::fs::symlink(&link_target, dir.join(".upload-link.part")).unwrap();
+
+        let mut session = session_over_upload_dir(&dir);
+        let (_, warnings) = session
+            .ensure_upload_dir()
+            .expect("the sweep does not fail on entries it will not remove");
+
+        // The two the sweep leaves behind are the two the rescan then
+        // refuses to treat as staged RPMs, which is what it reports. The
+        // suffix is what they fail on, not the leading dot: the allowlist
+        // checks `.rpm` first, and a part file is outside the rule twice
+        // over.
+        assert_eq!(
+            warnings,
+            [
+                "skipped .upload-busy.part in the upload directory: \
+                 staged filename does not end in .rpm",
+                "skipped .upload-link.part in the upload directory: \
+                 staged filename does not end in .rpm",
+            ]
+        );
+        assert!(!dir.join(".upload-dead.part").exists());
+        assert!(
+            dir.join(".upload-busy.part").is_dir(),
+            "a directory is not a part file"
+        );
+        assert!(
+            std::fs::symlink_metadata(dir.join(".upload-link.part")).is_ok(),
+            "a symlink is not a part file"
+        );
+        assert!(link_target.exists(), "and its target is untouched");
+    }
+
+    #[test]
+    fn ensure_upload_dir_refuses_a_directory_that_is_not_ours() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // A symlink to a directory another local user pre-created.
+        let target = tmp.path().join("elsewhere");
+        std::fs::create_dir(&target).unwrap();
+        let linked = tmp.path().join("linked-uploads");
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+        let err = session_over_upload_dir(&linked)
+            .ensure_upload_dir()
+            .expect_err("a symlinked upload directory is refused");
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "upload directory {} is a symlink, not a directory",
+                linked.display()
+            )
+        );
+
+        // A directory anyone in the group can write to.
+        use std::os::unix::fs::PermissionsExt;
+        let shared = tmp.path().join("shared-uploads");
+        std::fs::create_dir(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let err = session_over_upload_dir(&shared)
+            .ensure_upload_dir()
+            .expect_err("a group-writable upload directory is refused");
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "upload directory {} is writable by group or other (mode 0770)",
+                shared.display()
+            )
+        );
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_clears_uploaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let mut session = session_over_upload_dir(&dir);
+        session.ensure_upload_dir().unwrap();
+        let staged = dir.join("epel-release-9-12.el9.noarch.rpm");
+        std::fs::write(&staged, b"an rpm").unwrap();
+        session.set_uploaded(
+            "epel-release.noarch",
+            staged.clone(),
+            Some("9-12.el9".into()),
+        );
+
+        assert_eq!(
+            session
+                .unmark_uploaded_rpm("epel-release", "noarch")
+                .unwrap(),
+            RemovalOutcome::Removed
+        );
+
+        let pkg = only_package(&session);
+        assert!(!pkg.uploaded, "a removed upload is no longer an upload");
+        assert!(!pkg.repoless_cached);
+        assert_eq!(pkg.cache_path, None);
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_leaves_a_dnf_cached_package_alone() {
+        // The precondition is `uploaded`, not `repoless_cached`: a
+        // package the collector found in the host's dnf cache was never
+        // staged here, and `DELETE /api/upload-rpm/<name.arch>` must not
+        // unlink a file under /var/cache/dnf on the strength of it.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let host_cached = tmp.path().join("epel-release-9-11.el9.noarch.rpm");
+        std::fs::write(&host_cached, b"the host's cached rpm").unwrap();
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(host_cached.to_string_lossy().into_owned());
+        let mut session = RefineSession::new(snap);
+        session.set_upload_dir(dir);
+
+        assert_eq!(
+            session
+                .unmark_uploaded_rpm("epel-release", "noarch")
+                .unwrap(),
+            RemovalOutcome::CachedOnly,
+            "a package that was never uploaded has no upload to remove"
+        );
+
+        assert!(host_cached.exists(), "the host's cached RPM survives");
+        let pkg = only_package(&session);
+        assert!(pkg.repoless_cached, "and its cache state is untouched");
+        assert_eq!(
+            pkg.cache_path.as_deref(),
+            Some(host_cached.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn unmark_uploaded_rpm_refuses_a_path_outside_the_upload_directory() {
+        // `uploaded` and `cache_path` both deserialize from the scan, so
+        // the pair proves nothing about where the file is.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("snap-uploads");
+        let outside = tmp.path().join("id_ed25519.rpm");
+        std::fs::write(&outside, b"not a staged rpm").unwrap();
+        let mut snap = snapshot_with_repoless("epel-release", "9", "11.el9", "noarch");
+        let pkg = &mut snap.rpm.as_mut().unwrap().packages_added[0];
+        pkg.uploaded = true;
+        pkg.repoless_cached = true;
+        pkg.cache_path = Some(outside.to_string_lossy().into_owned());
+        let mut session = RefineSession::new(snap);
+        session.set_upload_dir(dir.clone());
+        session.ensure_upload_dir().unwrap();
+
+        let err = session
+            .unmark_uploaded_rpm("epel-release", "noarch")
+            .expect_err("a cache_path outside the upload directory is refused");
+
+        let RefineError::TarballError(message) = err else {
+            panic!("expected TarballError, got {err:?}");
+        };
+        assert_eq!(
+            message,
+            format!(
+                "refusing to remove a staged file: id_ed25519.rpm is not in {}",
+                dir.canonicalize().unwrap().display()
+            )
+        );
+        assert!(outside.exists(), "and nothing is deleted");
+        assert!(
+            only_package(&session).uploaded,
+            "a refusal leaves the entry as it was"
+        );
     }
 
     #[test]

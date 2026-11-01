@@ -728,3 +728,68 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         "aggregate must emit perl-related.service"
     );
 }
+
+/// The input this workstream exists for: a vendor RPM installed by local
+/// path that ships a systemd unit. `owning_package` is set, `source_repo`
+/// is `@commandline`, and `repo_enabling_from` is empty because a vendor
+/// agent is not repo-enabling. It was tier 4 (proven present, clean emit)
+/// before the repo-enabling work, because a non-empty `source_repo` was
+/// enough on its own; it is tier 3 now, which is the conservative answer.
+///
+/// The paired positive is the same entry with a serving repo recorded: a
+/// repo-enabling `@commandline` package *is* installable by name, so it
+/// stays tier 4. Without it this test would pass against a blanket
+/// refusal of every `@commandline` package.
+#[test]
+fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() {
+    let snapshot_with = |repo_enabling_from: Vec<inspectah_core::types::repo::RepoId>| {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["firewalld".into()]),
+            packages_added: vec![PackageEntry {
+                name: "vendor-agent".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                locked: false,
+                source_repo: "@commandline".into(),
+                repo_enabling_from,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.services = Some(ServiceSection {
+            state_changes: vec![state_change(
+                "vendor-agent.service",
+                ServiceUnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("vendor-agent"),
+            )],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        snap
+    };
+
+    let plan = render_service_intent(&snapshot_with(Vec::new()));
+    assert!(plan.omissions.is_empty(), "the unit is still emitted");
+    assert_eq!(plan.advisories.len(), 1, "{:?}", plan.advisories);
+    assert_eq!(plan.advisories[0].unit, "vendor-agent.service");
+    assert_eq!(
+        plan.advisories[0].reasons,
+        vec![AdvisoryReason::PackageUnreachable],
+        "a locally installed vendor RPM is not reachable by name"
+    );
+
+    let served = render_service_intent(&snapshot_with(vec![
+        inspectah_core::types::repo::RepoId::new("vendor"),
+    ]));
+    assert!(
+        served.advisories.is_empty(),
+        "a repo serves it by name, so it is proven present: {:?}",
+        served.advisories
+    );
+    assert!(served.omissions.is_empty());
+}

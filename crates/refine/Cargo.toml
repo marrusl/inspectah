@@ -16,6 +16,9 @@ tempfile = "3"
 tar = "0.4"
 flate2 = "1"
 walkdir = "2"
+# geteuid() for the upload directory's ownership check, without an unsafe
+# libc call. Already in the tree: tempfile depends on it.
+rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,13 +2,17 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
+use inspectah_core::types::selinux::FcontextRule;
 use inspectah_pipeline::render::service_intent::render_service_intent;
+use inspectah_pipeline::render::var_dirs::effective_var_backing;
 
+use super::types::DECIDED_UNDER_CONFIG_FILES;
 use super::types::{
-    ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry, RefComposeItem,
-    RefConfigSnippet, RefContainers, RefCredentialRef, RefDropInItem, RefFirewallDirectRule,
-    RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot, RefKernelModule,
+    CollectedSections, ContainerMount, EmptyReason, GenericRefItem, RefAlternativeEntry,
+    RefComposeItem, RefConfigRef, RefContainers, RefCredentialRef, RefDropInItem,
+    RefFirewallDirectRule, RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot,
     RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
     RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
     RefServices, RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory,
@@ -340,18 +344,49 @@ pub fn project_ref_containers(snap: &InspectionSnapshot) -> RefContainers {
     }
 }
 
+/// The config categories whose files are kernel and boot subject matter.
+///
+/// This reads the walker's own classification rather than re-asking the
+/// path: the walker owns `/etc`, and a second path test here would be a
+/// second answer to a question its owner already answered.
+const KERNEL_BOOT_CONFIG_CATEGORIES: &[ConfigCategory] = &[
+    ConfigCategory::KernelModule,
+    ConfigCategory::Initramfs,
+    ConfigCategory::Sysctl,
+    ConfigCategory::Tuned,
+];
+
 /// Project kernel/boot data from snapshot into reference format.
 ///
-/// Extracts kernel command line, GRUB defaults, tuned profile, locale/timezone,
-/// sysctl overrides, non-default modules, and config snippets (modules-load.d,
-/// modprobe.d, dracut.conf.d, custom tuned profiles, alternatives).
+/// Extracts kernel command line, GRUB defaults, tuned profile,
+/// locale/timezone, sysctl overrides, alternatives, and pointers at the
+/// `config.files` entries that carry kernel and boot configuration.
 ///
 /// String fields use `Option<String>` with `None` for empty values so the web
 /// adapter can distinguish "not collected" from "collected but empty".
 pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
+    let customizations_from_config: Vec<RefConfigRef> = snap
+        .config
+        .iter()
+        .flat_map(|config| &config.files)
+        .filter(|entry| KERNEL_BOOT_CONFIG_CATEGORIES.contains(&entry.category))
+        .map(|entry| RefConfigRef {
+            path: entry.path.clone(),
+            category: entry.category.clone(),
+            disposition: entry.disposition.clone(),
+            locked: entry.locked,
+            shadowed_by: entry.shadowed_by.clone(),
+        })
+        .collect();
+
     let kb = match &snap.kernel_boot {
         Some(k) => k,
-        None => return RefKernelBoot::default(),
+        None => {
+            return RefKernelBoot {
+                customizations_from_config,
+                ..Default::default()
+            };
+        }
     };
 
     let non_empty = |s: &str| -> Option<String> {
@@ -370,42 +405,20 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
             runtime: s.runtime.clone(),
             default: s.default.clone(),
             source: s.source.clone(),
+            disposition: s.disposition.clone(),
+            locked: s.locked,
         })
         .collect();
-
-    let non_default_modules = kb
-        .non_default_modules
-        .iter()
-        .map(|m| RefKernelModule {
-            name: m.name.clone(),
-            size: m.size.clone(),
-            used_by: m.used_by.clone(),
-        })
-        .collect();
-
-    let map_snippets =
-        |snippets: &[inspectah_core::types::kernelboot::ConfigSnippet]| -> Vec<RefConfigSnippet> {
-            snippets
-                .iter()
-                .map(|s| RefConfigSnippet {
-                    path: s.path.clone(),
-                    content: s.content.clone(),
-                })
-                .collect()
-        };
 
     RefKernelBoot {
         cmdline: non_empty(&kb.cmdline),
         grub_defaults: non_empty(&kb.grub_defaults),
         tuned_active: non_empty(&kb.tuned_active),
+        tuned_disposition: kb.tuned_disposition.clone(),
         locale: kb.locale.clone(),
         timezone: kb.timezone.clone(),
         sysctl_overrides,
-        non_default_modules,
-        modules_load_d: map_snippets(&kb.modules_load_d),
-        modprobe_d: map_snippets(&kb.modprobe_d),
-        dracut_conf: map_snippets(&kb.dracut_conf),
-        custom_tuned_profiles: map_snippets(&kb.tuned_custom_profiles),
+        customizations_from_config,
         alternatives: kb
             .alternatives
             .iter()
@@ -541,16 +554,33 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
         })
         .collect();
 
+    // `effective_var_backing` answers in `storage.var_directories`
+    // order, so the outcome is zipped onto the directory it belongs to
+    // rather than looked up by path. `zip` truncates to the shorter
+    // side in silence, so the lengths are checked first and in release
+    // too: the first filter anyone adds to `effective_var_backing`
+    // would otherwise drop the tail of this projection, in the web view
+    // and the TUI both, with nothing saying so.
+    let outcomes = effective_var_backing(snap);
+    assert_eq!(
+        st.var_directories.len(),
+        outcomes.len(),
+        "effective_var_backing must answer once per /var directory, in order"
+    );
     let var_directories = st
         .var_directories
         .iter()
-        .map(|d| RefVarDirectory {
-            path: d.path.clone(),
-            size_estimate: d.size_estimate.clone(),
-            recommendation: d.recommendation.clone(),
-            mode: d.mode.clone(),
-            owner_name: d.owner_name.clone(),
-            group_name: d.group_name.clone(),
+        .zip(outcomes)
+        .map(|(d, outcome)| {
+            debug_assert_eq!(d.path, outcome.path);
+            RefVarDirectory {
+                path: d.path.clone(),
+                mode: d.mode.clone(),
+                owner_name: d.owner_name.clone(),
+                group_name: d.group_name.clone(),
+                source: outcome.source,
+                outcome: outcome.outcome,
+            }
         })
         .collect();
 
@@ -770,9 +800,12 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
 /// - **SelinuxPortLabel**: key = `protocol/port`, summary = label type, tags = `["port-label"]`
 /// - **boolean_overrides**: key = boolean name, summary = value/state, tags = `["boolean"]`
 /// - **custom_modules**: key = module name, tags = `["module"]`
-/// - **fcontext_rules**: key = rule text, tags = `["fcontext"]`
-/// - **audit_rules** (CarryForwardFile): key = file basename, content = file content, tags = `["audit-rule"]`
-/// - **pam_configs** (CarryForwardFile): key = file basename, content = file content, tags = `["pam"]`
+/// - **fcontext_rules**: key = rule identity (spec, or `subject = labeled_like`
+///   for an equivalence, or the raw text for an unparsed line), tags = `["fcontext"]`
+/// - **PAM and audit files**: one pointer row per `config.files` entry with
+///   category `Pam` or `Audit`, keyed by its path and carrying no content,
+///   because the decision and the content both live under Configuration
+///   Files (§ 3.6)
 fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
     let se = match &snap.selinux {
         Some(s) => s,
@@ -848,52 +881,45 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
         });
     }
 
-    // Fcontext rules
+    // Fcontext rules. The rule's own identity (spec, equivalence pair, or
+    // raw unparsed text) -- not a Debug dump, which would leak Rust struct
+    // syntax into a user-visible row title (round 1 review, item 1).
     for rule in &se.fcontext_rules {
+        let text = match rule {
+            FcontextRule::Label { spec, .. } | FcontextRule::Unlabel { spec, .. } => spec.clone(),
+            FcontextRule::Equivalence {
+                subject,
+                labeled_like,
+                ..
+            } => format!("{subject} = {labeled_like}"),
+            FcontextRule::Unparsed { raw } => raw.clone(),
+        };
         items.push(GenericRefItem {
-            id: rule.clone(),
-            key: rule.clone(),
+            id: text.clone(),
+            key: text,
             summary: Some("fcontext".into()),
             content: None,
             tags: vec!["fcontext".into()],
         });
     }
 
-    // Audit rules (CarryForwardFile)
-    for cf in &se.audit_rules {
-        let basename = Path::new(&cf.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cf.path.clone());
+    // PAM and audit files. These are `config.files` entries now, so this
+    // section points at them rather than restating them: the title is the
+    // whole path (item 1.14 -- two profiles named `tuned.conf` read alike
+    // as basenames), and the content is not repeated here because the row
+    // that can be decided holds it.
+    for entry in snap.config.iter().flat_map(|config| &config.files) {
+        let tag = match entry.category {
+            ConfigCategory::Pam => "pam",
+            ConfigCategory::Audit => "audit-rule",
+            _ => continue,
+        };
         items.push(GenericRefItem {
-            id: cf.path.clone(),
-            key: basename,
-            summary: Some("audit rule".into()),
-            content: if cf.content.is_empty() {
-                None
-            } else {
-                Some(cf.content.clone())
-            },
-            tags: vec!["audit-rule".into(), cf.path.clone()],
-        });
-    }
-
-    // PAM configs (CarryForwardFile)
-    for cf in &se.pam_configs {
-        let basename = Path::new(&cf.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| cf.path.clone());
-        items.push(GenericRefItem {
-            id: cf.path.clone(),
-            key: basename,
-            summary: Some("PAM config".into()),
-            content: if cf.content.is_empty() {
-                None
-            } else {
-                Some(cf.content.clone())
-            },
-            tags: vec!["pam".into(), cf.path.clone()],
+            id: entry.path.clone(),
+            key: entry.path.clone(),
+            summary: Some(DECIDED_UNDER_CONFIG_FILES.into()),
+            content: None,
+            tags: vec![tag.into()],
         });
     }
 
@@ -914,6 +940,16 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
         scheduled_tasks: project_ref_scheduled_tasks(snap),
         non_rpm_software: project_ref_non_rpm(snap),
         selinux: project_ref_selinux(snap),
+        collected: CollectedSections {
+            services: snap.services.is_some(),
+            containers: snap.containers.is_some(),
+            network: snap.network.is_some(),
+            storage: snap.storage.is_some(),
+            scheduled_tasks: snap.scheduled_tasks.is_some(),
+            non_rpm_software: snap.non_rpm_software.is_some(),
+            kernel_boot: snap.kernel_boot.is_some(),
+            selinux: snap.selinux.is_some(),
+        },
     }
 }
 
@@ -922,13 +958,15 @@ mod tests {
     use super::*;
     use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::FindingKind;
-    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
     use inspectah_core::types::rpm::{RpmSection, VersionChange};
     use inspectah_core::types::scheduled::{
         AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
-    use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+    use inspectah_core::types::selinux::{
+        FcontextFileType, SelinuxContext, SelinuxPortLabel, SelinuxSection,
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -1569,9 +1607,8 @@ mod tests {
 
     // ── project_ref_kernel_boot tests ───────────────────────────────
 
-    use inspectah_core::types::kernelboot::{
-        AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
-    };
+    use inspectah_core::types::config::ConfigShadow;
+    use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, SysctlOverride};
 
     #[test]
     fn test_no_kernel_boot_returns_default() {
@@ -1588,12 +1625,40 @@ mod tests {
         assert!(result.locale.is_none());
         assert!(result.timezone.is_none());
         assert!(result.sysctl_overrides.is_empty());
-        assert!(result.non_default_modules.is_empty());
-        assert!(result.modules_load_d.is_empty());
-        assert!(result.modprobe_d.is_empty());
-        assert!(result.dracut_conf.is_empty());
-        assert!(result.custom_tuned_profiles.is_empty());
+        assert!(result.customizations_from_config.is_empty());
         assert!(result.alternatives.is_empty());
+    }
+
+    /// A deliberate consequence of building the pointer rows before the
+    /// `kernel_boot` early return: the files exist in `config.files`
+    /// whether or not the kernel/boot inspector ran, so the section
+    /// still points at them on a source system where it is not
+    /// applicable. The rows are truthful, but it does mean an empty
+    /// Kernel & Boot section is no longer a proxy for "the inspector
+    /// did not run".
+    #[test]
+    fn test_pointer_rows_survive_an_absent_kernel_boot_section() {
+        let snap = InspectionSnapshot {
+            kernel_boot: None,
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/modprobe.d/myapp.conf".into(),
+                    category: ConfigCategory::KernelModule,
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_kernel_boot(&snap);
+
+        assert!(result.cmdline.is_none(), "nothing the inspector owns");
+        assert_eq!(result.customizations_from_config.len(), 1);
+        assert_eq!(
+            result.customizations_from_config[0].path,
+            "/etc/modprobe.d/myapp.conf"
+        );
     }
 
     #[test]
@@ -1665,72 +1730,118 @@ mod tests {
         assert_eq!(result.sysctl_overrides[1].key, "net.ipv4.ip_forward");
     }
 
+    /// The kernel/boot section points at the `config.files` entries
+    /// whose category says they are its subject matter. It reads the
+    /// walker's category rather than re-testing the path, so the set
+    /// cannot drift from what the walker decided.
+    ///
+    /// The last two fixture entries are the whole point: every other
+    /// entry has a path and a category that agree, so a path-prefix
+    /// filter returns the same answer for them and the test proves
+    /// nothing about which question is being asked. Substituting the
+    /// brief's five prefixes for `KERNEL_BOOT_CONFIG_CATEGORIES` must
+    /// fail both of the assertions below.
+    ///
+    /// The two tests this replaces read `non_default_modules` and the
+    /// four `ConfigSnippet` lists, which were the second copies.
     #[test]
-    fn test_non_default_modules_extracted() {
+    fn test_customizations_come_from_config_by_category() {
+        let entry = |path: &str, category: ConfigCategory| ConfigFileEntry {
+            path: path.into(),
+            category,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
         let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                non_default_modules: vec![KernelModule {
-                    name: "overlay".into(),
-                    size: "151552".into(),
-                    used_by: "".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
+            kernel_boot: Some(KernelBootSection::default()),
+            config: Some(ConfigSection {
+                files: vec![
+                    entry(
+                        "/etc/modules-load.d/br_netfilter.conf",
+                        ConfigCategory::KernelModule,
+                    ),
+                    entry(
+                        "/etc/modprobe.d/blacklist.conf",
+                        ConfigCategory::KernelModule,
+                    ),
+                    entry("/etc/dracut.conf.d/custom.conf", ConfigCategory::Initramfs),
+                    entry("/etc/sysctl.d/99-custom.conf", ConfigCategory::Sysctl),
+                    entry("/etc/tuned/myprofile/tuned.conf", ConfigCategory::Tuned),
+                    entry("/etc/pam.d/sshd", ConfigCategory::Pam),
+                    entry("/etc/httpd/conf/httpd.conf", ConfigCategory::Other),
+                    // The two cases where path and category disagree, and
+                    // the only two that can tell the filters apart.
+                    // `/etc/sysctl.conf` is a sysctl source the walker
+                    // matches exactly, not by the `/etc/sysctl.d/` prefix.
+                    entry("/etc/sysctl.conf", ConfigCategory::Sysctl),
+                    // A path under a kernel directory that the walker did
+                    // *not* classify as kernel configuration. Only the
+                    // walker knows why; this surface takes its answer.
+                    entry("/etc/modprobe.d/not-ours.conf", ConfigCategory::Other),
+                ],
             }),
             ..Default::default()
         };
 
         let result = project_ref_kernel_boot(&snap);
 
-        assert_eq!(result.non_default_modules.len(), 1);
-        assert_eq!(result.non_default_modules[0].name, "overlay");
-        assert_eq!(result.non_default_modules[0].size, "151552");
+        let paths: Vec<&str> = result
+            .customizations_from_config
+            .iter()
+            .map(|c| c.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/etc/modules-load.d/br_netfilter.conf",
+                "/etc/modprobe.d/blacklist.conf",
+                "/etc/dracut.conf.d/custom.conf",
+                "/etc/sysctl.d/99-custom.conf",
+                "/etc/tuned/myprofile/tuned.conf",
+                "/etc/sysctl.conf",
+            ],
+            "a PAM file and an uncategorized one are not kernel/boot subject matter"
+        );
+        assert!(
+            paths.contains(&"/etc/sysctl.conf"),
+            "right category, wrong prefix: a path filter on /etc/sysctl.d/ \
+             would drop a real sysctl source"
+        );
+        assert!(
+            !paths.contains(&"/etc/modprobe.d/not-ours.conf"),
+            "right prefix, wrong category: re-asking the path would \
+             overrule the walker, which is the classification's owner"
+        );
     }
 
+    /// A shadowed entry carries the shadow onto the pointer row, so the
+    /// row can say where the content went instead of offering a second
+    /// decision on it.
     #[test]
-    fn test_config_snippets_extracted() {
+    fn test_shadowed_entry_is_carried_onto_the_pointer_row() {
         let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                modules_load_d: vec![ConfigSnippet {
-                    path: "/etc/modules-load.d/br_netfilter.conf".into(),
-                    content: "br_netfilter".into(),
+            kernel_boot: Some(KernelBootSection::default()),
+            config: Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path: "/etc/sysctl.d/99-driftify.conf".into(),
+                    category: ConfigCategory::Sysctl,
+                    disposition: FindingKind::inventory(),
+                    shadowed_by: Some(ConfigShadow::Sysctl),
+                    ..Default::default()
                 }],
-                modprobe_d: vec![ConfigSnippet {
-                    path: "/etc/modprobe.d/blacklist.conf".into(),
-                    content: "blacklist nouveau".into(),
-                }],
-                dracut_conf: vec![ConfigSnippet {
-                    path: "/etc/dracut.conf.d/custom.conf".into(),
-                    content: "add_drivers+=\" iscsi \"".into(),
-                }],
-                tuned_custom_profiles: vec![ConfigSnippet {
-                    path: "/etc/tuned/myprofile/tuned.conf".into(),
-                    content: "[main]\ninclude=throughput-performance".into(),
-                }],
-                ..Default::default()
             }),
             ..Default::default()
         };
 
         let result = project_ref_kernel_boot(&snap);
 
-        assert_eq!(result.modules_load_d.len(), 1);
+        assert_eq!(result.customizations_from_config.len(), 1);
+        let row = &result.customizations_from_config[0];
+        assert_eq!(row.shadowed_by, Some(ConfigShadow::Sysctl));
+        assert!(row.disposition.is_inventory());
         assert_eq!(
-            result.modules_load_d[0].path,
-            "/etc/modules-load.d/br_netfilter.conf"
-        );
-        assert_eq!(result.modules_load_d[0].content, "br_netfilter");
-
-        assert_eq!(result.modprobe_d.len(), 1);
-        assert_eq!(result.modprobe_d[0].content, "blacklist nouveau");
-
-        assert_eq!(result.dracut_conf.len(), 1);
-        assert_eq!(result.dracut_conf[0].content, "add_drivers+=\" iscsi \"");
-
-        assert_eq!(result.custom_tuned_profiles.len(), 1);
-        assert_eq!(
-            result.custom_tuned_profiles[0].path,
-            "/etc/tuned/myprofile/tuned.conf"
+            super::super::types::config_ref_summary(row),
+            "merged into 99-inspectah-migrated.conf"
         );
     }
 
@@ -1776,19 +1887,6 @@ mod tests {
                     source: "/etc/sysctl.d/swap.conf".into(),
                     ..Default::default()
                 }],
-                non_default_modules: vec![KernelModule {
-                    name: "vfio".into(),
-                    size: "32768".into(),
-                    used_by: "vfio-pci".into(),
-                    ..Default::default()
-                }],
-                modules_load_d: vec![ConfigSnippet {
-                    path: "/etc/modules-load.d/vfio.conf".into(),
-                    content: "vfio\nvfio-pci".into(),
-                }],
-                modprobe_d: Vec::new(),
-                dracut_conf: Vec::new(),
-                tuned_custom_profiles: Vec::new(),
                 alternatives: vec![AlternativeEntry {
                     name: "java".into(),
                     path: "/usr/lib/jvm/java-17".into(),
@@ -1807,12 +1905,7 @@ mod tests {
         assert_eq!(result.locale.as_deref(), Some("C.UTF-8"));
         assert_eq!(result.timezone.as_deref(), Some("UTC"));
         assert_eq!(result.sysctl_overrides.len(), 1);
-        assert_eq!(result.non_default_modules.len(), 1);
-        assert_eq!(result.non_default_modules[0].used_by, "vfio-pci");
-        assert_eq!(result.modules_load_d.len(), 1);
-        assert!(result.modprobe_d.is_empty());
-        assert!(result.dracut_conf.is_empty());
-        assert!(result.custom_tuned_profiles.is_empty());
+        assert!(result.customizations_from_config.is_empty());
         assert_eq!(result.alternatives.len(), 1);
         assert_eq!(result.alternatives[0].status, "manual");
     }
@@ -2217,9 +2310,10 @@ mod tests {
             storage: Some(StorageSection {
                 var_directories: vec![VarDirectory {
                     path: "/var/lib/pgsql".into(),
-                    size_estimate: "12G".into(),
-                    recommendation: "mount as separate volume".into(),
                     backing: None,
+                    mode: Some("0700".into()),
+                    owner_name: Some("postgres".into()),
+                    group_name: Some("postgres".into()),
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -2231,10 +2325,14 @@ mod tests {
 
         assert_eq!(result.var_directories.len(), 1);
         assert_eq!(result.var_directories[0].path, "/var/lib/pgsql");
-        assert_eq!(result.var_directories[0].size_estimate, "12G");
+        assert_eq!(result.var_directories[0].mode.as_deref(), Some("0700"));
         assert_eq!(
-            result.var_directories[0].recommendation,
-            "mount as separate volume"
+            result.var_directories[0].owner_name.as_deref(),
+            Some("postgres")
+        );
+        assert_eq!(
+            result.var_directories[0].group_name.as_deref(),
+            Some("postgres")
         );
     }
 
@@ -2296,8 +2394,6 @@ mod tests {
                 }],
                 var_directories: vec![VarDirectory {
                     path: "/var/log".into(),
-                    size_estimate: "2G".into(),
-                    recommendation: "keep on root".into(),
                     backing: None,
                     ..Default::default()
                 }],
@@ -2320,7 +2416,7 @@ mod tests {
         assert_eq!(result.lvm_volumes.len(), 1);
         assert_eq!(result.lvm_volumes[0].lv_name, "swap");
         assert_eq!(result.var_directories.len(), 1);
-        assert_eq!(result.var_directories[0].recommendation, "keep on root");
+        assert_eq!(result.var_directories[0].path, "/var/log");
         assert_eq!(result.credential_refs.len(), 1);
         assert_eq!(result.credential_refs[0].credential_path, "/etc/cifs-creds");
     }
@@ -2733,18 +2829,105 @@ mod tests {
     }
 
     #[test]
-    fn test_selinux_audit_rules_and_pam() {
+    fn test_selinux_fcontext_rules_key_is_not_debug_syntax() {
+        // `GenericRefItem.key` becomes a user-visible row title (round 1
+        // review, item 1) -- it must be the rule's own identity, not a
+        // `{:?}` dump of the Rust struct.
         let snap = InspectionSnapshot {
             selinux: Some(SelinuxSection {
-                audit_rules: vec![CarryForwardFile {
-                    path: "etc/audit/rules.d/custom.rules".into(),
-                    content: "-w /etc/shadow -p wa".into(),
-                }],
-                pam_configs: vec![CarryForwardFile {
-                    path: "etc/pam.d/custom-sshd".into(),
-                    content: "auth required pam_unix.so".into(),
-                }],
+                fcontext_rules: vec![
+                    FcontextRule::Label {
+                        spec: "/opt/app(/.*)?".into(),
+                        file_type: FcontextFileType::All,
+                        context: SelinuxContext {
+                            user: "system_u".into(),
+                            role: "object_r".into(),
+                            type_: "httpd_sys_content_t".into(),
+                            level: Some("s0".into()),
+                        },
+                        disposition: FindingKind::included(),
+                        aggregate: None,
+                    },
+                    FcontextRule::Unlabel {
+                        spec: "/opt/private".into(),
+                        file_type: FcontextFileType::RegularFile,
+                        disposition: FindingKind::included(),
+                        aggregate: None,
+                    },
+                    FcontextRule::Equivalence {
+                        subject: "/home1".into(),
+                        labeled_like: "/home".into(),
+                        disposition: FindingKind::included(),
+                        aggregate: None,
+                    },
+                    FcontextRule::Unparsed {
+                        raw: "garbage line".into(),
+                    },
+                ],
                 ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let result = project_ref_selinux(&snap);
+        let fcontext_items: Vec<&GenericRefItem> = result
+            .iter()
+            .filter(|i| i.tags == vec!["fcontext".to_string()])
+            .collect();
+        assert_eq!(fcontext_items.len(), 4);
+
+        let keys: Vec<&str> = fcontext_items.iter().map(|i| i.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "/opt/app(/.*)?",
+                "/opt/private",
+                "/home1 = /home",
+                "garbage line",
+            ]
+        );
+        for key in &keys {
+            assert!(
+                !key.contains('{') && !key.contains("spec:") && !key.contains("disposition:"),
+                "key leaked Debug struct syntax: {key}"
+            );
+        }
+    }
+
+    /// § 3.6's reference section: one pointer row per PAM or audit
+    /// `config.files` entry, keyed by the whole path and carrying no
+    /// content.
+    ///
+    /// The earlier form of this test asserted a basename key and a copy
+    /// of the file content on a `SelinuxSection` carry-forward list. Both
+    /// were the defect: the basename collided across directories (item
+    /// 1.14) and the copy was a second place the same bytes lived, on a
+    /// row no one could decide.
+    #[test]
+    fn test_selinux_pam_and_audit_point_at_configuration_files() {
+        let snap = InspectionSnapshot {
+            selinux: Some(SelinuxSection::default()),
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/audit/rules.d/custom.rules".into(),
+                        category: ConfigCategory::Audit,
+                        content: "-w /etc/shadow -p wa".into(),
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/pam.d/custom-sshd".into(),
+                        category: ConfigCategory::Pam,
+                        content: "auth required pam_unix.so".into(),
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/myapp/app.conf".into(),
+                        category: ConfigCategory::Other,
+                        content: "port=8080".into(),
+                        ..Default::default()
+                    },
+                ],
             }),
             ..Default::default()
         };
@@ -2753,24 +2936,32 @@ mod tests {
 
         let audit = result
             .iter()
-            .find(|i| i.id == "etc/audit/rules.d/custom.rules")
-            .unwrap();
-        assert_eq!(audit.key, "custom.rules");
-        assert_eq!(audit.summary, Some("audit rule".into()));
-        assert_eq!(audit.content, Some("-w /etc/shadow -p wa".into()));
+            .find(|i| i.id == "/etc/audit/rules.d/custom.rules")
+            .expect("the audit rule must have a pointer row");
+        assert_eq!(audit.key, "/etc/audit/rules.d/custom.rules");
         assert_eq!(
-            audit.tags,
-            vec!["audit-rule", "etc/audit/rules.d/custom.rules"]
+            audit.summary,
+            Some("decided under Configuration Files".into())
         );
+        assert_eq!(audit.content, None);
+        assert_eq!(audit.tags, vec!["audit-rule"]);
 
         let pam = result
             .iter()
-            .find(|i| i.id == "etc/pam.d/custom-sshd")
-            .unwrap();
-        assert_eq!(pam.key, "custom-sshd");
-        assert_eq!(pam.summary, Some("PAM config".into()));
-        assert_eq!(pam.content, Some("auth required pam_unix.so".into()));
-        assert_eq!(pam.tags, vec!["pam", "etc/pam.d/custom-sshd"]);
+            .find(|i| i.id == "/etc/pam.d/custom-sshd")
+            .expect("the PAM config must have a pointer row");
+        assert_eq!(pam.key, "/etc/pam.d/custom-sshd");
+        assert_eq!(
+            pam.summary,
+            Some("decided under Configuration Files".into())
+        );
+        assert_eq!(pam.content, None);
+        assert_eq!(pam.tags, vec!["pam"]);
+
+        assert!(
+            !result.iter().any(|i| i.id == "/etc/myapp/app.conf"),
+            "an ordinary config file does not belong to this section"
+        );
     }
 
     // ── project_reference orchestrator tests ───────────────────────

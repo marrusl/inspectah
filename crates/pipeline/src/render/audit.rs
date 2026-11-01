@@ -6,9 +6,11 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::finding::ShadowType;
+use inspectah_core::types::selinux::FcontextSource;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
+use super::selinux;
 use crate::section_group::SectionGroup;
 
 /// Advisory entry for the Advisories section within a group.
@@ -389,6 +391,39 @@ fn render_packages_section(rpm: &inspectah_core::types::rpm::RpmSection, lines: 
         lines.push(String::new());
     }
 
+    // Repo-enabling packages: the sections the scan proved serve each one,
+    // and whether this export still carries a definition for any of them.
+    // A "no" is the § 3.3 demotion — the package renders repo-less and
+    // wants an upload or a re-included repo.
+    let repo_enabling: Vec<_> = rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.disposition.is_included() && !p.repo_enabling_from.is_empty())
+        .collect();
+    if !repo_enabling.is_empty() {
+        lines.push(format!(
+            "### Repo-enabling Packages ({})",
+            repo_enabling.len()
+        ));
+        lines.push(String::new());
+        lines.push("| Package | Serving Repos | Carried by Export |".into());
+        lines.push("|---------|---------------|-------------------|".into());
+        for p in &repo_enabling {
+            let serving = p
+                .repo_enabling_from
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let carried = match super::repo_enabling::repo_enabling_export(rpm, p) {
+                super::repo_enabling::RepoEnablingExport::Served => "yes",
+                _ => "no",
+            };
+            lines.push(format!("| {} | {} | {} |", p.name, serving, carried));
+        }
+        lines.push(String::new());
+    }
+
     // Group overlap annotations
     if let Some(ref groups) = rpm.installed_groups {
         let overlaps = find_package_overlaps(groups);
@@ -505,12 +540,7 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
 
     // Kernel & Boot
     if let Some(kb) = &snap.kernel_boot {
-        let has_content = !kb.cmdline.is_empty()
-            || !kb.sysctl_overrides.is_empty()
-            || !kb.modules_load_d.is_empty()
-            || !kb.modprobe_d.is_empty()
-            || !kb.dracut_conf.is_empty()
-            || !kb.non_default_modules.is_empty();
+        let has_content = !kb.cmdline.is_empty() || !kb.sysctl_overrides.is_empty();
 
         if has_content {
             lines.push("### Kernel & Boot".into());
@@ -544,50 +574,6 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                 }
                 lines.push(String::new());
             }
-
-            if !kb.modules_load_d.is_empty() {
-                lines.push(format!(
-                    "#### Loaded Module Configs ({})",
-                    kb.modules_load_d.len()
-                ));
-                lines.push(String::new());
-                for m in &kb.modules_load_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.modprobe_d.is_empty() {
-                lines.push(format!("#### Modprobe Configs ({})", kb.modprobe_d.len()));
-                lines.push(String::new());
-                for m in &kb.modprobe_d {
-                    lines.push(format!("- `{}`", m.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.dracut_conf.is_empty() {
-                lines.push(format!("#### Dracut Configs ({})", kb.dracut_conf.len()));
-                lines.push(String::new());
-                for d in &kb.dracut_conf {
-                    lines.push(format!("- `{}`", d.path));
-                }
-                lines.push(String::new());
-            }
-
-            if !kb.non_default_modules.is_empty() {
-                lines.push(format!(
-                    "#### Non-Default Kernel Modules ({})",
-                    kb.non_default_modules.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Module | Size | Used By |".into());
-                lines.push("|--------|------|---------|".into());
-                for m in &kb.non_default_modules {
-                    lines.push(format!("| {} | {} | {} |", m.name, m.size, m.used_by));
-                }
-                lines.push(String::new());
-            }
         }
     }
 
@@ -614,15 +600,85 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
                     "- **Non-default booleans:** {non_default_booleans}"
                 ));
             }
+            // § 4: decision-bearing rules only. This will not match the
+            // Containerfile's own count and must not be made to: the audit
+            // lists dispositions, so it counts the excluded rules too, while
+            // the Containerfile introduces the block it actually carries.
+            // Neither counts an `Unparsed` line, which nothing decided.
+            let decisions = sel
+                .fcontext_rules
+                .iter()
+                .filter(|r| selinux::is_decision_bearing(r))
+                .count();
+            if decisions > 0 {
+                lines.push(format!("- **File context rules:** {decisions}"));
+            }
             if !sel.fcontext_rules.is_empty() {
                 lines.push(format!(
-                    "- **File context rules:** {}",
-                    sel.fcontext_rules.len()
+                    "- **File context source:** {}",
+                    fcontext_source_text(sel.fcontext_source)
                 ));
             }
             if sel.fips_mode {
                 lines.push("- **FIPS mode:** enabled".into());
             }
+            lines.push(String::new());
+            render_fcontext_rules(snap, lines);
+        }
+    }
+}
+
+/// Where the collected rule order came from, and what that costs the reader.
+fn fcontext_source_text(source: FcontextSource) -> &'static str {
+    match source {
+        FcontextSource::PolicyStore => "policy store, in insertion order",
+        FcontextSource::SemanageList => {
+            "semanage listing, sorted by expression rather than insertion order; where two \
+             expressions overlap, the intended winner has to be last"
+        }
+    }
+}
+
+/// § 4's fcontext section: every collected rule and every equivalence the
+/// renderer added, each with what the Containerfile's SELinux block does
+/// about it.
+///
+/// The commands are quoted whole rather than summarized. A summary of a
+/// guarded command is a claim about behaviour the guard may not perform, and
+/// the gap between what the build does and what this report says it does is
+/// the only defect this section can have.
+fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    let rows = selinux::fcontext_summaries(snap);
+    if rows.is_empty() {
+        return;
+    }
+
+    lines.push("#### File Context Rules".into());
+    lines.push(String::new());
+    // The per-rule cost is measured, not estimated: on
+    // `registry.redhat.io/rhel9/rhel-bootc:9.8` (2026-10-28) three rules
+    // added 21.4, 21.0 and 21.0 MB, one layer each. It is inherent to the
+    // approach, since each rule is its own `RUN`, so the sentence states it
+    // and stops there.
+    lines.push(
+        "What the Containerfile's SELinux block does with each rule. Every rule it replays \
+         runs its own `semanage` command in its own build layer, which costs roughly 21 MB \
+         of image size per rule."
+            .into(),
+    );
+    lines.push(String::new());
+
+    for row in &rows {
+        lines.push(format!(
+            "**`{}`** ({})",
+            selinux::summary_label(&row.rule),
+            selinux::summary_disposition(row)
+        ));
+        lines.push(String::new());
+        if let Some(command) = selinux::summary_command(row) {
+            lines.push("```sh".into());
+            lines.extend(command.lines().map(str::to_string));
+            lines.push("```".into());
             lines.push(String::new());
         }
     }
@@ -864,9 +920,11 @@ fn render_network_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
 fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
     if let Some(storage) = &snap.storage {
+        let var_dir_rows = var_dir_outcome_rows(snap);
         let has_content = !storage.fstab_entries.is_empty()
             || !storage.lvm_info.is_empty()
-            || !storage.credential_refs.is_empty();
+            || !storage.credential_refs.is_empty()
+            || !var_dir_rows.is_empty();
 
         if has_content {
             lines.push("### Storage".into());
@@ -917,8 +975,65 @@ fn render_storage_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
                 }
                 lines.push(String::new());
             }
+
+            if !var_dir_rows.is_empty() {
+                lines.push(format!("#### /var Directories ({})", var_dir_rows.len()));
+                lines.push(String::new());
+                // Two /var lists reach the operator and they answer
+                // different questions. Say which this one is, so the
+                // difference is visible rather than inferred.
+                lines.push(
+                    "As the export resolves them. The Storage advisory lists them as found \
+                     on the host."
+                        .into(),
+                );
+                lines.push(String::new());
+                lines.push("| Directory | Source verdict | Export outcome |".into());
+                lines.push("|-----------|----------------|----------------|".into());
+                lines.extend(var_dir_rows);
+                lines.push(String::new());
+            }
         }
     }
+}
+
+/// One row per provisioned or unresolved `/var` directory, giving the
+/// source host's verdict beside what the export does about it. A
+/// `Carried` directory needs no action and gets no row.
+fn var_dir_outcome_rows(snap: &InspectionSnapshot) -> Vec<String> {
+    use super::var_dirs::{EffectiveBacking, effective_var_backing};
+    use inspectah_core::types::storage::VarDirBacking;
+
+    effective_var_backing(snap)
+        .into_iter()
+        .filter_map(|o| {
+            let verdict = match &o.source {
+                None | Some(VarDirBacking::Unbacked) => "unbacked on host".to_string(),
+                Some(VarDirBacking::Tmpfiles { conf, .. }) => {
+                    format!("created on host by {conf}")
+                }
+                Some(
+                    VarDirBacking::StateDirectory { unit }
+                    | VarDirBacking::CacheDirectory { unit }
+                    | VarDirBacking::LogsDirectory { unit },
+                ) => format!("created on host by {unit}"),
+                Some(VarDirBacking::RpmOwned { package }) => {
+                    format!("created on host by {package}")
+                }
+            };
+            let outcome = match &o.outcome {
+                EffectiveBacking::Carried => return None,
+                EffectiveBacking::Provision { lost: None } => "provisioned".to_string(),
+                EffectiveBacking::Provision { lost: Some(_) } => {
+                    "not carried, provisioned".to_string()
+                }
+                EffectiveBacking::Unresolved { reason, .. } => {
+                    format!("unresolved: {}", reason.reason_text())
+                }
+            };
+            Some(format!("| `{}` | {verdict} | {outcome} |", o.path))
+        })
+        .collect()
 }
 
 /// Render Software sections (non_rpm_software, unmanaged_files).
@@ -1099,6 +1214,57 @@ mod tests {
             ..Default::default()
         });
         snap
+    }
+
+    /// The § 4 row: each repo-enabling package, the sections the scan
+    /// proved serve it, and whether the export still carries one.
+    #[test]
+    fn audit_reports_whether_the_export_still_serves_each_repo_enabling_package() {
+        use inspectah_core::types::repo::RepoId;
+        use inspectah_core::types::rpm::RepoFile;
+
+        let repo_file = |included: bool| RepoFile {
+            path: "/etc/yum.repos.d/epel.repo".into(),
+            content: "[epel]\nbaseurl=https://example.invalid/epel\nenabled=1\n".into(),
+            is_default_repo: false,
+            disposition: FindingKind::from_bool(included),
+            locked: false,
+            aggregate: None,
+        };
+        let snapshot_with = |included: bool| {
+            let mut snap = InspectionSnapshot::new();
+            snap.rpm = Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "epel-release".into(),
+                    state: PackageState::Added,
+                    source_repo: "@commandline".into(),
+                    disposition: FindingKind::included(),
+                    repo_enabling_from: vec![RepoId::new("epel")],
+                    ..Default::default()
+                }],
+                repo_files: vec![repo_file(included)],
+                ..Default::default()
+            });
+            snap
+        };
+
+        for (included, carried) in [(true, "yes"), (false, "no")] {
+            let md = render_audit(&snapshot_with(included));
+            assert!(
+                md.contains("### Repo-enabling Packages (1)"),
+                "carried={carried}:\n{md}"
+            );
+            assert!(
+                md.contains(&format!("| epel-release | epel | {carried} |")),
+                "carried={carried}:\n{md}"
+            );
+        }
+
+        // No row at all when nothing is repo-enabling.
+        assert!(
+            !render_audit(&test_snapshot()).contains("Repo-enabling Packages"),
+            "an ordinary package gets no row"
+        );
     }
 
     #[test]

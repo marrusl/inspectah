@@ -279,7 +279,7 @@ export function MainContent({
 
   // Repo toggle: build SetInclude op for repos
   const handleRepoToggle = useCallback(
-    (sectionId: string) => {
+    (sectionId: string, include: boolean) => {
       const repo = viewData?.repo_groups.find(
         (r) => r.section_id === sectionId,
       );
@@ -288,7 +288,7 @@ export function MainContent({
         op: "SetInclude",
         target: {
           item_id: { kind: "Repo", key: { path: sectionId } },
-          include: !repo.enabled,
+          include,
         },
       };
       applyOp(op)

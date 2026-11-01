@@ -1,0 +1,153 @@
+{
+  "packages": [
+    {
+      "entry": {
+        "name": "a",
+        "epoch": "0",
+        "version": "1.0",
+        "release": "1",
+        "arch": "x86_64",
+        "state": "added",
+        "disposition": {
+          "kind": "actionable",
+          "include": false
+        },
+        "source_repo": "vendor",
+        "aggregate": null
+      },
+      "triage": {
+        "triage": {
+          "mode": "single_host",
+          "baseline": null
+        },
+        "primary_reason": "package_baseline_match",
+        "annotations": []
+      }
+    },
+    {
+      "entry": {
+        "name": "b",
+        "epoch": "0",
+        "version": "1.0",
+        "release": "1",
+        "arch": "x86_64",
+        "state": "added",
+        "disposition": {
+          "kind": "actionable",
+          "include": false
+        },
+        "source_repo": "vendor",
+        "aggregate": null
+      },
+      "triage": {
+        "triage": {
+          "mode": "single_host",
+          "baseline": null
+        },
+        "primary_reason": "package_baseline_match",
+        "annotations": []
+      }
+    }
+  ],
+  "config_files": [],
+  "stats": {
+    "sections": [
+      {
+        "kind": "package",
+        "total": 2,
+        "included": 0,
+        "excluded": 2
+      }
+    ],
+    "needs_review_count": 0,
+    "ops_applied": 0,
+    "can_undo": false,
+    "can_redo": false,
+    "baseline_available": false
+  },
+  "version_changes": [],
+  "service_states": [],
+  "service_dropins": [],
+  "quadlets": [],
+  "flatpaks": [],
+  "sysctls": [],
+  "tuned": [],
+  "users_groups_decisions": [],
+  "can_undo": false,
+  "can_redo": false,
+  "summary": {
+    "host_count": 3,
+    "actionable_variant_items": [],
+    "informational_variant_count": 0
+  },
+  "sections": [
+    {
+      "id": "packages",
+      "display_name": "Packages",
+      "is_decision_section": true,
+      "items": [
+        {
+          "item_id": {
+            "kind": "Package",
+            "key": {
+              "name": "a",
+              "arch": "x86_64"
+            }
+          },
+          "include": false,
+          "triage": {
+            "bucket": "universal",
+            "prevalence": {
+              "count": 3,
+              "total": 3
+            }
+          },
+          "prevalence": {
+            "count": 3,
+            "total": 3
+          },
+          "source_repo": "vendor"
+        },
+        {
+          "item_id": {
+            "kind": "Package",
+            "key": {
+              "name": "b",
+              "arch": "x86_64"
+            }
+          },
+          "include": false,
+          "triage": {
+            "bucket": "universal",
+            "prevalence": {
+              "count": 3,
+              "total": 3
+            }
+          },
+          "prevalence": {
+            "count": 3,
+            "total": 3
+          },
+          "source_repo": "vendor"
+        }
+      ]
+    }
+  ],
+  "repo_conflict_count": 0,
+  "generation": 1,
+  "containerfile_preview": "",
+  "session_is_sensitive": false,
+  "repo_groups": [
+    {
+      "section_id": "vendor",
+      "provenance": "verified",
+      "is_distro": false,
+      "tier": "third_party",
+      "package_count": 2,
+      "effective_member_count": 2,
+      "effective_included": 0,
+      "effective_unlisted": 0,
+      "enabled": true
+    }
+  ]
+}

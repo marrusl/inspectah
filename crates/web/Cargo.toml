@@ -21,6 +21,9 @@ regex = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
+# Lazy request bodies for the upload tests: a 500 MiB body streamed a
+# chunk at a time, and one that stalls mid-transfer.
+futures-core = "0.3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 insta = { workspace = true }

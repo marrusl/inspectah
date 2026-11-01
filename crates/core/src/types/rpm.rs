@@ -1,5 +1,6 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
+use super::repo::{RepoAttribution, RepoId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,12 +44,36 @@ pub struct PackageEntry {
     pub acknowledged: bool,
     #[serde(default)]
     pub source_repo: String,
+    /// How `source_repo` relates to the host's `.repo` sections. See
+    /// [`RepoAttribution`]; `source_repo` keeps its historical meaning
+    /// (the resolved id for `Exact`/`Resolved`, the recorded value
+    /// otherwise).
+    #[serde(default)]
+    pub repo_attribution: RepoAttribution,
+    /// The repo sections that serve this package by name, when it also
+    /// provides the repository configuration those sections come from.
+    /// Non-empty means repo-enabling: the host's enabled repos proved
+    /// they serve it, so the scan leaves it out of the repo-less set.
+    ///
+    /// It does *not* on its own mean the export will install it by name.
+    /// Includes are decided after the scan, and an export that drops the
+    /// serving definition demotes the package back to the repo-less
+    /// rendering -- keeping this field, which stays true, and gaining a
+    /// `repoless_annotation` beside it. `render::repo_enabling` is the
+    /// one place that decides between the two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repo_enabling_from: Vec<RepoId>,
     /// Triage annotation for repo-less packages.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub repoless_annotation: String,
     /// True if a cached RPM was found in /var/cache/dnf/.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub repoless_cached: bool,
+    /// Set when the refine session staged an upload for this package;
+    /// distinct from `repoless_cached`, which also covers RPMs found in the
+    /// dnf cache.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub uploaded: bool,
     /// Path to the cached RPM file in /var/cache/dnf/.
     /// Survives serialization into the snapshot so the CLI bundler
     /// can read it when creating the tarball.
@@ -228,8 +253,6 @@ pub struct RpmSection {
     pub multiarch_packages: Vec<String>,
     #[serde(default)]
     pub duplicate_packages: Vec<String>,
-    #[serde(default)]
-    pub repo_providing_packages: Vec<String>,
     #[serde(default)]
     pub ostree_overrides: Vec<OstreePackageOverride>,
     #[serde(default)]

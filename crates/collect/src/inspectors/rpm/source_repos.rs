@@ -9,6 +9,9 @@
 //! NeedsReview.
 
 use inspectah_core::traits::executor::Executor;
+use inspectah_core::types::repo::{
+    PseudoRepo, RepoAttribution, RepoId, RepoSectionDef, parse_repo_sections,
+};
 use inspectah_core::types::rpm::{PackageEntry, RepoFile};
 use std::collections::{HashMap, HashSet};
 
@@ -156,53 +159,122 @@ fn try_rpm_source_repo(
     }
 }
 
-/// Extract INI-style section IDs (`[repo-id]`) from `.repo` file content.
-fn extract_section_ids(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                Some(trimmed[1..trimmed.len() - 1].to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Normalize `source_repo` short names to full repo IDs.
+/// Attribute each package's recorded `source_repo` to a `.repo` section.
 ///
-/// `populate_source_repos` stores install-time short names like `AppStream`
-/// or `baseos` (from `%{from_repo}`). The `.repo` config files use full IDs
-/// like `rhel-9-for-aarch64-appstream-rpms`. This function maps short names
-/// to full IDs using case-insensitive substring matching so that package
-/// tables and config trees display the same identifier.
+/// `populate_source_repos` stores the install-time value dnf recorded
+/// (`%{from_repo}`): a full repo id, a short name like `AppStream` or
+/// `baseos`, a pseudo repo (`@commandline`, `anaconda`, `@System`), or
+/// empty. The `.repo` config files define the sections actually on the
+/// host. This function classifies each package's recorded value against
+/// those sections per the § 3.2 normalization rule and records the result
+/// as [`RepoAttribution`], updating `source_repo` only where that rule
+/// says to (the resolved id for `Exact`/`Resolved`; left as recorded
+/// otherwise).
 ///
-/// Packages with empty `source_repo` or no matching full ID are left
-/// unchanged.
+/// Resolution order, applied independently per package so the result never
+/// depends on section order:
+/// 1. Exact case-insensitive match against any section, enabled or not,
+///    wins first (`Exact`) -- dnf recorded that id, so the package keeps
+///    the attribution even if the section is now disabled.
+/// 2. Otherwise, case-insensitive substring match against `enabled = true`
+///    sections only: exactly one match is `Resolved`; more than one is
+///    `Ambiguous` and `source_repo` is left as recorded.
+/// 3. Otherwise: `@commandline`, `anaconda`, `@System` are `Pseudo`; empty
+///    is `Unrecorded`; anything else is `Stale`.
 pub fn normalize_source_repos(packages: &mut [PackageEntry], repo_files: &[RepoFile]) {
-    // Collect all section IDs from repo file content.
-    let full_ids: Vec<String> = repo_files
+    let sections: Vec<RepoSectionDef> = repo_files
         .iter()
-        .flat_map(|rf| extract_section_ids(&rf.content))
+        .flat_map(|rf| parse_repo_sections(&rf.content))
         .collect();
 
-    if full_ids.is_empty() {
-        return;
+    for pkg in packages.iter_mut() {
+        pkg.repo_attribution = classify_recorded_repo(&pkg.source_repo, &sections);
+        match &pkg.repo_attribution {
+            RepoAttribution::Exact { id } | RepoAttribution::Resolved { id, .. } => {
+                pkg.source_repo = id.as_str().to_string();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Classify one package's recorded `source_repo` value against the host's
+/// parsed `.repo` sections. See [`normalize_source_repos`] for the
+/// resolution order.
+fn classify_recorded_repo(recorded: &str, sections: &[RepoSectionDef]) -> RepoAttribution {
+    // `.min_by` over the *raw* spelling (`as_str`), not `RepoId`'s own
+    // `Ord`: that `Ord` folds ASCII case to stay coherent with `Eq`
+    // (Review Focus 1), which means every section surviving the filter
+    // below compares `Equal` to every other -- `min_by` on the folded
+    // `Ord` degenerates to `.find()` and leaves the choice depending on
+    // `read_dir` order. Comparing raw spelling instead gives a real total
+    // order: ties occur only when the spelling is byte-identical, where
+    // either choice writes the same value to `source_repo` anyway.
+    if let Some(section) = sections
+        .iter()
+        .filter(|s| s.id == RepoId::new(recorded))
+        .min_by(|a, b| a.id.as_str().cmp(b.id.as_str()))
+    {
+        return RepoAttribution::Exact {
+            id: section.id.clone(),
+        };
     }
 
-    for pkg in packages.iter_mut() {
-        if pkg.source_repo.is_empty() {
-            continue;
-        }
-        let short = pkg.source_repo.to_lowercase();
-        if let Some(full_id) = full_ids
+    // An empty recorded value has no substring to look for -- treat it as
+    // "no match" rather than letting `str::contains("")` match every
+    // enabled section.
+    let substring_matches: Vec<&RepoId> = if recorded.is_empty() {
+        Vec::new()
+    } else {
+        let lower = recorded.to_lowercase();
+        sections
             .iter()
-            .find(|id| id.to_lowercase().contains(&short))
-        {
-            pkg.source_repo = full_id.clone();
+            .filter(|s| s.enabled && s.id.as_str().to_lowercase().contains(&lower))
+            .map(|s| &s.id)
+            .collect()
+    };
+
+    match substring_matches.len() {
+        1 => RepoAttribution::Resolved {
+            recorded: recorded.to_string(),
+            id: substring_matches[0].clone(),
+        },
+        n if n > 1 => {
+            // Sorted by raw spelling, not `RepoId`'s folded `Ord` (same
+            // reasoning as the exact-match arm above): `Vec::sort` is
+            // stable, so sorting by the folded order would leave
+            // case-variant candidates in `read_dir` order relative to
+            // each other. This list serializes straight into a
+            // byte-pinned contract snapshot.
+            let mut candidates: Vec<RepoId> = substring_matches.into_iter().cloned().collect();
+            candidates.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            RepoAttribution::Ambiguous {
+                recorded: recorded.to_string(),
+                candidates,
+            }
         }
+        // Pseudo repo names are matched case-insensitively, same as the
+        // exact-match rule above: dnf has been observed to record
+        // `@CommandLine` (see repo_tier's `@CommandLine` case), not just
+        // the lowercase spelling.
+        _ => match recorded.to_ascii_lowercase().as_str() {
+            "@commandline" => RepoAttribution::Pseudo {
+                which: PseudoRepo::Commandline,
+                recorded: recorded.to_string(),
+            },
+            "anaconda" => RepoAttribution::Pseudo {
+                which: PseudoRepo::Anaconda,
+                recorded: recorded.to_string(),
+            },
+            "@system" => RepoAttribution::Pseudo {
+                which: PseudoRepo::System,
+                recorded: recorded.to_string(),
+            },
+            "" => RepoAttribution::Unrecorded,
+            _ => RepoAttribution::Stale {
+                recorded: recorded.to_string(),
+            },
+        },
     }
 }
 
@@ -548,7 +620,11 @@ Repository  : baseos
     }
 
     #[test]
-    fn test_normalize_no_repo_files_is_noop() {
+    fn test_normalize_no_repo_files_is_stale() {
+        // With zero sections, a non-empty, non-pseudo recorded value has
+        // nothing to match: § 3.2 calls that Stale, not Unrecorded (the
+        // host did record a value) and not a no-op (source_repo is left
+        // as recorded, but the attribution is a real classification).
         let repo_files: Vec<RepoFile> = Vec::new();
         let mut packages = vec![pkg_with_repo("httpd", "AppStream")];
 
@@ -556,15 +632,138 @@ Repository  : baseos
 
         assert_eq!(
             packages[0].source_repo, "AppStream",
-            "no repo files means no normalization"
+            "no repo files means source_repo is left as recorded"
         );
+        assert!(matches!(
+            &packages[0].repo_attribution,
+            RepoAttribution::Stale { recorded } if recorded == "AppStream"
+        ));
+    }
+
+    /// Four repo files matching the host's real layout, used to prove
+    /// `normalize_source_repos` is order-independent (§ 8.4).
+    fn host_repo_files() -> Vec<RepoFile> {
+        vec![
+            repo_file(
+                "[redhat]\nname=Red Hat\nenabled=1\nbaseurl=https://example.invalid/redhat\n",
+            ),
+            repo_file(
+                "[epel-cisco-openh264]\nname=EPEL openh264\nenabled=1\nbaseurl=https://example.invalid/openh264\n",
+            ),
+            repo_file(
+                "[epel-testing]\nname=EPEL Testing\nenabled=0\nbaseurl=https://example.invalid/epel-testing\n",
+            ),
+            repo_file("[epel]\nname=EPEL\nenabled=1\nbaseurl=https://example.invalid/epel\n"),
+        ]
     }
 
     #[test]
-    fn test_extract_section_ids() {
-        let content =
-            "[rhel-9-baseos]\nname=BaseOS\nenabled=1\n\n[rhel-9-appstream]\nname=AppStream\n";
-        let ids = extract_section_ids(content);
-        assert_eq!(ids, vec!["rhel-9-baseos", "rhel-9-appstream"]);
+    fn normalization_is_order_independent_and_never_relabels() {
+        // § 8.4: the host's four repo files in both orders yield the same answer.
+        let files = host_repo_files(); // redhat.repo, epel-cisco-openh264.repo, epel-testing.repo, epel.repo
+        let mut reversed = files.clone();
+        reversed.reverse();
+        for order in [files, reversed] {
+            let mut pkgs = vec![pkg_with_repo("htop", "epel")];
+            normalize_source_repos(&mut pkgs, &order);
+            assert_eq!(pkgs[0].source_repo, "epel");
+            assert!(
+                matches!(&pkgs[0].repo_attribution, RepoAttribution::Exact { id } if id == &RepoId::new("epel"))
+            );
+        }
+    }
+
+    #[test]
+    fn attribution_table() {
+        // § 8.4, the remaining rows.
+        // exact match on a disabled section -> Exact on that section
+        let disabled_only = vec![repo_file(
+            "[epel-testing]\nname=EPEL Testing\nenabled=0\nbaseurl=https://example.invalid/epel-testing\n",
+        )];
+        let mut pkgs = vec![pkg_with_repo("htop", "epel-testing")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert_eq!(pkgs[0].source_repo, "epel-testing");
+        assert!(
+            matches!(&pkgs[0].repo_attribution, RepoAttribution::Exact { id } if id == &RepoId::new("epel-testing"))
+        );
+
+        // short name whose only substring match is disabled -> Stale
+        let mut pkgs = vec![pkg_with_repo("htop", "testing")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert_eq!(pkgs[0].source_repo, "testing");
+        assert!(
+            matches!(&pkgs[0].repo_attribution, RepoAttribution::Stale { recorded } if recorded == "testing")
+        );
+
+        // short name substring-matching two enabled sections -> Ambiguous, source_repo unchanged
+        let two_enabled = vec![repo_file(
+            "[rhel-9-for-x86_64-baseos-rpms]\nname=BaseOS\nenabled=1\nbaseurl=https://example.invalid/baseos\n[rhel-9-for-x86_64-baseos-debug-rpms]\nname=BaseOS Debug\nenabled=1\nbaseurl=https://example.invalid/baseos-debug\n",
+        )];
+        let mut pkgs = vec![pkg_with_repo("glibc", "baseos")];
+        normalize_source_repos(&mut pkgs, &two_enabled);
+        assert_eq!(pkgs[0].source_repo, "baseos");
+        // Sorted, not read_dir order: proves F4's fix, not just that two
+        // candidates were found.
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Ambiguous { recorded, candidates }
+                if recorded == "baseos" && candidates == &[
+                    RepoId::new("rhel-9-for-x86_64-baseos-debug-rpms"),
+                    RepoId::new("rhel-9-for-x86_64-baseos-rpms"),
+                ]
+        ));
+
+        // "anaconda" -> Pseudo(Anaconda); "" -> Unrecorded
+        let mut pkgs = vec![
+            pkg_with_repo("kernel", "anaconda"),
+            pkg_with_repo("custom-tool", ""),
+        ];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Pseudo { which: PseudoRepo::Anaconda, recorded } if recorded == "anaconda"
+        ));
+        assert!(matches!(
+            &pkgs[1].repo_attribution,
+            RepoAttribution::Unrecorded
+        ));
+
+        // "@CommandLine" (observed casing, see repo_tier's own
+        // "@CommandLine" case) -> Pseudo(Commandline), case-folded like the
+        // lowercase spelling.
+        let mut pkgs = vec![pkg_with_repo("local-tool", "@CommandLine")];
+        normalize_source_repos(&mut pkgs, &disabled_only);
+        assert!(matches!(
+            &pkgs[0].repo_attribution,
+            RepoAttribution::Pseudo { which: PseudoRepo::Commandline, recorded } if recorded == "@CommandLine"
+        ));
+    }
+
+    #[test]
+    fn exact_match_duplicate_sections_is_order_independent() {
+        // F4(a) regression: two files defining the same repo id with
+        // different ASCII case (`[EPEL]`, `[epel]`) are both exact matches
+        // for a recorded value of "epel" -- `RepoId`'s folded `Eq` makes
+        // them equal to each other, so the choice between them cannot be
+        // made via `RepoId`'s own (also folded) `Ord` without degenerating
+        // to "whichever `read_dir` returned first". The written spelling
+        // must be the same regardless of file order.
+        let upper_first = vec![
+            repo_file(
+                "[EPEL]\nname=EPEL upper\nenabled=1\nbaseurl=https://example.invalid/epel-upper\n",
+            ),
+            repo_file(
+                "[epel]\nname=EPEL lower\nenabled=1\nbaseurl=https://example.invalid/epel-lower\n",
+            ),
+        ];
+        let mut lower_first = upper_first.clone();
+        lower_first.reverse();
+
+        let mut pkgs_a = vec![pkg_with_repo("htop", "epel")];
+        normalize_source_repos(&mut pkgs_a, &upper_first);
+        let mut pkgs_b = vec![pkg_with_repo("htop", "epel")];
+        normalize_source_repos(&mut pkgs_b, &lower_first);
+
+        assert_eq!(pkgs_a[0].source_repo, pkgs_b[0].source_repo);
     }
 }

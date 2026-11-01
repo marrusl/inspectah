@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChange;
 use inspectah_core::types::users::UserGroupDecision;
 
@@ -76,17 +77,18 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
     let repos_excluded = changes.repos_excluded();
     let excluded: BTreeSet<&str> = repos_excluded.iter().map(|s| s.as_str()).collect();
 
-    // Count visible packages per source_repo (lowercased for consistency
-    // with RepoIndex, which normalizes section IDs to lowercase).
+    // Count visible packages per source_repo, keeping the package's recorded
+    // spelling as-is -- RepoIndex and RepoId fold ASCII case internally, so
+    // the lookups below match regardless of case.
     let mut repo_counts: BTreeMap<String, usize> = BTreeMap::new();
     for pkg in &view.packages {
-        let section = pkg.entry.source_repo.to_lowercase();
+        let section = pkg.entry.source_repo.clone();
         *repo_counts.entry(section).or_insert(0) += 1;
     }
 
     // Also include repos known to the index but not visible (0-count)
-    for section_id in repo_index.packages_by_repo.keys() {
-        repo_counts.entry(section_id.clone()).or_insert(0);
+    for section_id in repo_index.packages_by_repo().keys() {
+        repo_counts.entry(section_id.to_string()).or_insert(0);
     }
 
     let mut groups: Vec<RepoGroup> = repo_counts
@@ -95,7 +97,7 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
             let provenance = if section_id.is_empty() {
                 crate::types::RepoProvenance::Unknown
             } else {
-                repo_index.provenance(&section_id)
+                repo_index.provenance(&RepoId::new(section_id.as_str()))
             };
             let is_distro = if section_id.is_empty() {
                 false
@@ -286,5 +288,55 @@ mod tests {
             1,
             "anaconda group count should be 1 (grub2-tools filtered)"
         );
+    }
+
+    #[test]
+    fn repo_group_mixed_case_source_repo_collapses_to_one_group() {
+        use inspectah_core::types::rpm::{PackageEntry, RepoFile};
+
+        // dnf repoquery can record source_repo with the .repo section header's
+        // own (often uppercase) spelling. Regression guard: build_repo_groups
+        // used to lowercase the package's source_repo while RepoIndex's
+        // backfill loop used the host's original spelling, producing two
+        // entries (one real, one zero-count) for a single repo.
+        let snap = InspectionSnapshot {
+            schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
+            rpm: Some(RpmSection {
+                packages_added: vec![PackageEntry {
+                    name: "some-pkg".into(),
+                    arch: "x86_64".into(),
+                    disposition: FindingKind::included(),
+                    source_repo: "EPEL_10_Everything_x86_64".into(),
+                    ..Default::default()
+                }],
+                repo_files: vec![RepoFile {
+                    path: "/etc/yum.repos.d/epel.repo".into(),
+                    content: "[EPEL_10_Everything_x86_64]\nname=EPEL\nbaseurl=http://example.invalid/epel10\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let session = RefineSession::new(snap);
+        let proj = project_decisions(&session);
+
+        let matches: Vec<_> = proj
+            .repo_groups
+            .iter()
+            .filter(|rg| {
+                rg.section_id
+                    .eq_ignore_ascii_case("EPEL_10_Everything_x86_64")
+            })
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "mixed-case source_repo must collapse to a single repo group, got {:?}",
+            matches
+        );
+        assert_eq!(matches[0].package_count, 1);
     }
 }

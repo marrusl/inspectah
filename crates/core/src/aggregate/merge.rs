@@ -729,6 +729,152 @@ pub fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
     result
 }
 
+/// Semantic identity for an [`FcontextRule`], used to dedup across hosts:
+/// `Label` and `Unlabel` share one key on `(spec, file_type)` -- they are
+/// the same local-database entry (policycoreutils' `fcontextRecords`
+/// addresses both by this pair), mutually exclusive, and a host replaying
+/// both in sequence would silently let the second overwrite the first with
+/// no record. `Equivalence` keys on `subject`, `Unparsed` on `raw`.
+fn fcontext_rule_key(rule: &FcontextRule) -> (u8, String, String) {
+    match rule {
+        FcontextRule::Label {
+            spec, file_type, ..
+        }
+        | FcontextRule::Unlabel {
+            spec, file_type, ..
+        } => (0, spec.clone(), format!("{file_type:?}")),
+        FcontextRule::Equivalence { subject, .. } => (1, subject.clone(), String::new()),
+        FcontextRule::Unparsed { raw } => (2, raw.clone(), String::new()),
+    }
+}
+
+/// Merges `fcontext_rules` across hosts by semantic key rather than string
+/// equality, preserving order: hostname order (the order `sections` is
+/// given in), then each host's own collected order. Losing that order would
+/// silently change which overlapping local expression the target policy
+/// resolves to by recency (see `collect_fcontext_rules`).
+///
+/// One row survives per key, not one per content variant (spec § 3.1):
+/// "hosts that disagree on the context for one key keep the first in
+/// hostname order." Two surviving `Label` rows on one `(spec, file_type)`
+/// would both render, and under § 3.1 rule 1's `-d`-then-`-a` replay the
+/// second would silently overwrite the first in the built image -- the
+/// precise failure the shared-key merge exists to surface, re-created
+/// through a different door.
+///
+/// A row's disposition is narrowed on content, matching the engine: included
+/// only when every host in the run carries the key with the same content
+/// (`count == total` on the surviving content, not merely on the key). A
+/// content disagreement excludes the row, the same way `narrow_non_universal`
+/// excludes every variant of a contested item in `merge_with_variants` --
+/// an included fcontext rule renders as an active `semanage fcontext -a`, so
+/// shipping a contested row would silently impose one host's label on hosts
+/// that disagree.
+///
+/// A disagreement on content does not vanish, it moves into metadata:
+/// `count`/`hosts` describe the hosts that share the surviving row's exact
+/// content, while `aggregate_count`/`aggregate_hosts` describe every host
+/// carrying the key under any content -- set only when a disagreement
+/// actually exists, per their own doc comments ("only set for items with
+/// content variants"). That gives a future renderer's audit report what it
+/// needs to name both sides of the disagreement, without adding a row that
+/// could itself be replayed.
+fn merge_fcontext_rules(
+    sections: &[Option<SelinuxSection>],
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Vec<FcontextRule> {
+    // Group raw (host_idx, rule) pairs by semantic key, in first-seen key
+    // order.
+    let mut key_order: Vec<(u8, String, String)> = Vec::new();
+    let mut by_key: HashMap<(u8, String, String), Vec<(usize, FcontextRule)>> = HashMap::new();
+
+    for (host_idx, section) in sections.iter().enumerate() {
+        let Some(section) = section else { continue };
+        for rule in &section.fcontext_rules {
+            let key = fcontext_rule_key(rule);
+            if !by_key.contains_key(&key) {
+                key_order.push(key.clone());
+            }
+            by_key
+                .entry(key)
+                .or_default()
+                .push((host_idx, rule.clone()));
+        }
+    }
+
+    let mut result = Vec::new();
+    for key in key_order {
+        let entries = by_key
+            .remove(&key)
+            .expect("key was just recorded in key_order");
+
+        // Universality is evaluated over every host carrying the key under
+        // any content.
+        let mut key_host_idxs: Vec<usize> = entries.iter().map(|(idx, _)| *idx).collect();
+        key_host_idxs.sort_unstable();
+        key_host_idxs.dedup();
+        let mut key_hosts: Vec<String> = key_host_idxs
+            .iter()
+            .map(|&i| hostnames[i].clone())
+            .collect();
+        key_hosts.sort();
+        key_hosts.dedup();
+
+        // Sub-group by exact content, in first-seen order. `entries` was
+        // built host-by-host in ascending index order, preserving each
+        // host's own collected order within that, so `variants[0]` is
+        // exactly the first content seen in hostname order -- the
+        // survivor the spec names.
+        let mut variants: Vec<(FcontextRule, Vec<usize>)> = Vec::new();
+        for (host_idx, rule) in entries {
+            match variants.iter_mut().find(|(r, _)| *r == rule) {
+                Some((_, idxs)) => idxs.push(host_idx),
+                None => variants.push((rule, vec![host_idx])),
+            }
+        }
+
+        let has_disagreement = variants.len() > 1;
+        let (mut rule, rep_idxs) = variants.remove(0);
+        let mut rep_hosts: Vec<String> = rep_idxs.iter().map(|&i| hostnames[i].clone()).collect();
+        rep_hosts.sort();
+        rep_hosts.dedup();
+        let include = rep_hosts.len() == total_hosts;
+
+        let prevalence = AggregatePrevalence {
+            count: rep_hosts.len() as i32,
+            total: total_hosts as i32,
+            hosts: rep_hosts,
+            aggregate_count: has_disagreement.then_some(key_hosts.len() as i32),
+            aggregate_hosts: has_disagreement.then_some(key_hosts),
+        };
+        match &mut rule {
+            FcontextRule::Label {
+                disposition,
+                aggregate,
+                ..
+            }
+            | FcontextRule::Unlabel {
+                disposition,
+                aggregate,
+                ..
+            }
+            | FcontextRule::Equivalence {
+                disposition,
+                aggregate,
+                ..
+            } => {
+                *disposition = disposition.with_include(include);
+                *aggregate = Some(prevalence);
+            }
+            FcontextRule::Unparsed { .. } => {}
+        }
+        result.push(rule);
+    }
+
+    result
+}
+
 /// Deduplicate JSON values by serialized equality.
 pub fn dedup_json_values(lists: Vec<Vec<serde_json::Value>>) -> Vec<serde_json::Value> {
     let mut seen = HashSet::new();
@@ -864,7 +1010,7 @@ use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
-use crate::types::selinux::SelinuxSection;
+use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
 use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
 use crate::types::users::UserGroupSection;
@@ -946,9 +1092,6 @@ pub fn merge_rpm_sections(
         dedup_strings(collect_string_lists(&sections, |s| &s.multiarch_packages));
     let duplicate_packages =
         dedup_strings(collect_string_lists(&sections, |s| &s.duplicate_packages));
-    let repo_providing_packages = dedup_strings(collect_string_lists(&sections, |s| {
-        &s.repo_providing_packages
-    }));
     let ostree_removals = dedup_strings(collect_string_lists(&sections, |s| &s.ostree_removals));
 
     // Dedup version_changes by name.arch
@@ -1263,7 +1406,6 @@ pub fn merge_rpm_sections(
             versionlock_command_output,
             multiarch_packages,
             duplicate_packages,
-            repo_providing_packages,
             ostree_overrides,
             ostree_removals,
             base_image,
@@ -1509,14 +1651,42 @@ pub fn merge_storage_sections(
         result
     };
 
-    // Dedup var_directories by path
+    // Dedup var_directories by path, first host in hostname order wins —
+    // except that a backed verdict beats an `Unbacked` one.
+    //
+    // `Unbacked` is the one verdict carrying no provenance, and one
+    // image serves the whole fleet: any host's carried fragment creates
+    // the directory on every host, so keeping `Unbacked` because its
+    // host sorted first makes the export provision a path the merged
+    // config section already creates — a duplicate `d` line with
+    // order-dependent mode resolution. The preference is conditioned on
+    // the backed verdict naming a creator the export can carry; see
+    // `VarDirBacking::names_a_carryable_creator`. The single-host rule
+    // in the storage inspector points the other way for the reason its
+    // comment gives: there, over-provisioning is free.
     let var_directories = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
+        let mut index: HashMap<&str, usize> = HashMap::new();
+        let mut result: Vec<crate::types::storage::VarDirectory> = Vec::new();
         for s in sections.iter().flatten() {
             for dir in &s.var_directories {
-                if seen.insert(dir.path.clone()) {
-                    result.push(dir.clone());
+                match index.get(dir.path.as_str()) {
+                    None => {
+                        index.insert(dir.path.as_str(), result.len());
+                        result.push(dir.clone());
+                    }
+                    Some(&at) => {
+                        let survivor_unbacked = result[at]
+                            .backing
+                            .as_ref()
+                            .is_none_or(|b| !b.names_a_carryable_creator());
+                        let challenger_carries = dir
+                            .backing
+                            .as_ref()
+                            .is_some_and(|b| b.names_a_carryable_creator());
+                        if survivor_unbacked && challenger_carries {
+                            result[at] = dir.clone();
+                        }
+                    }
                 }
             }
         }
@@ -1606,7 +1776,16 @@ pub fn merge_selinux_sections(
     );
 
     let custom_modules = dedup_strings(collect_string_lists(&sections, |s| &s.custom_modules));
-    let fcontext_rules = dedup_strings(collect_string_lists(&sections, |s| &s.fcontext_rules));
+    let fcontext_rules = merge_fcontext_rules(&sections, total_hosts, hostnames);
+    let fcontext_source = if sections
+        .iter()
+        .flatten()
+        .all(|s| s.fcontext_source == FcontextSource::PolicyStore)
+    {
+        FcontextSource::PolicyStore
+    } else {
+        FcontextSource::SemanageList
+    };
 
     // Dedup boolean_overrides by JSON equality
     let boolean_overrides = dedup_json_values(
@@ -1615,36 +1794,6 @@ pub fn merge_selinux_sections(
             .filter_map(|s| s.as_ref().map(|s| s.boolean_overrides.clone()))
             .collect(),
     );
-
-    // Dedup audit_rules (CarryForwardFile) by path
-    let audit_rules = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for rule in &s.audit_rules {
-                if seen.insert(rule.path.clone()) {
-                    result.push(rule.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| a.path.cmp(&b.path));
-        result
-    };
-
-    // Dedup pam_configs (CarryForwardFile) by path
-    let pam_configs = {
-        let mut seen = HashSet::new();
-        let mut result = Vec::new();
-        for s in sections.iter().flatten() {
-            for cfg in &s.pam_configs {
-                if seen.insert(cfg.path.clone()) {
-                    result.push(cfg.clone());
-                }
-            }
-        }
-        result.sort_by(|a, b| a.path.cmp(&b.path));
-        result
-    };
 
     // Most-prevalent scalar fields
     let mode = most_prevalent_scalar(&sections, |s| &s.mode);
@@ -1655,9 +1804,8 @@ pub fn merge_selinux_sections(
         custom_modules,
         boolean_overrides,
         fcontext_rules,
-        audit_rules,
+        fcontext_source,
         fips_mode,
-        pam_configs,
         port_labels,
     })
 }
@@ -1682,18 +1830,6 @@ pub fn merge_kernelboot_sections(
         total_hosts,
         hostnames,
     );
-    let non_default_modules = merge_items(
-        collect_items(&sections, |s| &s.non_default_modules),
-        total_hosts,
-        hostnames,
-    );
-
-    // Dedup ConfigSnippets by path
-    let modules_load_d = dedup_config_snippets(&sections, |s| &s.modules_load_d);
-    let modprobe_d = dedup_config_snippets(&sections, |s| &s.modprobe_d);
-    let dracut_conf = dedup_config_snippets(&sections, |s| &s.dracut_conf);
-    let tuned_custom_profiles = dedup_config_snippets(&sections, |s| &s.tuned_custom_profiles);
-
     // Dedup alternatives by name
     let alternatives = {
         let mut seen = HashSet::new();
@@ -1732,39 +1868,13 @@ pub fn merge_kernelboot_sections(
         cmdline,
         grub_defaults,
         sysctl_overrides,
-        modules_load_d,
-        modprobe_d,
-        dracut_conf,
         loaded_modules,
-        non_default_modules,
         tuned_disposition: FindingKind::from_bool(tuned_include),
         tuned_active,
-        tuned_custom_profiles,
         locale,
         timezone,
         alternatives,
     })
-}
-
-/// Helper: dedup ConfigSnippet lists by path.
-fn dedup_config_snippets<S, F>(
-    sections: &[Option<S>],
-    extractor: F,
-) -> Vec<crate::types::kernelboot::ConfigSnippet>
-where
-    F: Fn(&S) -> &Vec<crate::types::kernelboot::ConfigSnippet>,
-{
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    for s in sections.iter().flatten() {
-        for snippet in extractor(s) {
-            if seen.insert(snippet.path.clone()) {
-                result.push(snippet.clone());
-            }
-        }
-    }
-    result.sort_by(|a, b| a.path.cmp(&b.path));
-    result
 }
 
 /// Merge non-RPM software sections from multiple hosts.
@@ -2003,6 +2113,107 @@ mod tests {
         assert_eq!(conflict[0].host_count, 2);
         assert_eq!(conflict[1].repo, "appstream");
         assert_eq!(conflict[1].host_count, 1);
+    }
+
+    /// Build a one-package section whose only variable is which repo
+    /// serves `epel-release`. Every host agrees the package is
+    /// repo-enabling and leaves the annotation empty, so
+    /// `repo_enabling_from` is the *only* difference between payloads:
+    /// a fleet behind different mirrors, which is the case this field
+    /// newly splits.
+    #[cfg(test)]
+    fn repo_enabling_section(serving: &str) -> crate::types::rpm::RpmSection {
+        use crate::types::repo::RepoId;
+        use crate::types::rpm::{PackageEntry, PackageState, RpmSection};
+
+        RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "epel-release".into(),
+                arch: "noarch".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                source_repo: "@commandline".into(),
+                repo_enabling_from: vec![RepoId::new(serving)],
+                repoless_annotation: String::new(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_merge_votes_on_repo_enabling_from_alone() {
+        use crate::types::repo::RepoId;
+
+        let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+        let merge_serving = |a: &str, b: &str, c: &str| {
+            merge_rpm_sections(
+                vec![
+                    Some(repo_enabling_section(a)),
+                    Some(repo_enabling_section(b)),
+                    Some(repo_enabling_section(c)),
+                ],
+                3,
+                &hostnames,
+                None,
+            )
+            .expect("merge should succeed")
+            .0
+        };
+
+        let merged = merge_serving("epel", "epel-mirror", "epel");
+        assert_eq!(
+            merged.packages_added[0].repo_enabling_from,
+            vec![RepoId::new("epel")],
+            "the majority's serving repo should land in the aggregate"
+        );
+
+        // Inverting the majority inverts the result: the vote really is
+        // reading this field, not something that happens to vary with it.
+        let merged_inverted = merge_serving("epel-mirror", "epel", "epel-mirror");
+        assert_eq!(
+            merged_inverted.packages_added[0].repo_enabling_from,
+            vec![RepoId::new("epel-mirror")]
+        );
+
+        // Only *which value* lands changes. Prevalence is counted over
+        // the whole identity group, not the winning payload, so the
+        // split costs the package none of its host count.
+        let prevalence = merged.packages_added[0]
+            .aggregate
+            .as_ref()
+            .expect("aggregated package should carry prevalence");
+        assert_eq!(prevalence.count, 3, "every host has the package");
+        assert_eq!(prevalence.total, 3);
+        assert_eq!(prevalence.hosts, hostnames);
+    }
+
+    #[test]
+    fn test_merge_drops_repo_providing_packages() {
+        let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into()];
+        let (merged, _) = merge_rpm_sections(
+            vec![
+                Some(repo_enabling_section("epel")),
+                Some(repo_enabling_section("epel")),
+            ],
+            2,
+            &hostnames,
+            None,
+        )
+        .expect("merge should succeed");
+
+        // The aggregate no longer emits the dead key at all, rather than
+        // emitting the union of empty lists every host reported.
+        let json = serde_json::to_value(&merged).expect("aggregate should serialize");
+        assert!(
+            json.get("repo_providing_packages").is_none(),
+            "repo_providing_packages must not appear in the aggregate"
+        );
+        // The new field does survive the merge into the aggregate JSON.
+        assert_eq!(
+            json["packages_added"][0]["repo_enabling_from"],
+            serde_json::json!(["epel"])
+        );
     }
 
     #[test]

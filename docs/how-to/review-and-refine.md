@@ -174,8 +174,13 @@ export produces a tarball containing:
 - The refined Containerfile reflecting all your include/exclude decisions
 - Updated scan data with your triage overrides applied
 
-The exported Containerfile is byte-identical to what the preview pane shows
-in the UI, so what you see is what you get.
+When you export from the TUI, the generated Containerfile is byte-identical
+to what the preview pane showed before you exported.
+
+When you export from the web UI's Export dialog, one difference exists
+today: package groups render as their individual members instead of a
+single `dnf group install` line. The image that results installs the same
+packages either way; only the Containerfile's wording differs.
 
 ## Work with aggregate data
 

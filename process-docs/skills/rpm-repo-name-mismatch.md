@@ -12,25 +12,59 @@ RHEL systems use two different naming schemes for the same repository:
 Exact string comparison between these two schemes always fails on real
 RHEL systems. This caused ~50% false-positive repo-less flagging.
 
-## Solution
+## Two separate callsites, two different rules
 
-Case-insensitive substring matching: lowercase the short name and check
-if it appears anywhere in the lowercased full repo ID.
+These used to share one plain case-insensitive substring rule. Phase 0
+of the refine UI fixup replaced the rule at one of the two callsites
+with an ordered, multi-outcome classification (§ 3.2); the other
+callsite still runs the original, simpler substring check. They now do
+different things, on purpose, for different questions:
 
-Two callsites implement this:
+1. **`repoless.rs::repo_matches_enabled()`** — unchanged. Answers a
+   yes/no question for repo-less detection: does a package's recorded
+   `source_repo` appear, case-insensitively, as a substring of any repo
+   ID in the host's already-enabled-only list (`dnf repolist --enabled`)?
+   There is no exact-match preference and no distinction among
+   ambiguous, stale, or pseudo values — just a bool.
+2. **`source_repos.rs::classify_recorded_repo()`**, called from
+   `normalize_source_repos()` — replaced. Produces a `RepoAttribution`
+   (`crates/core/src/types/repo.rs`) per package and rewrites
+   `source_repo` to the canonical id where the rule resolves one:
+   - **Exact:** the recorded value equals some `.repo` section id,
+     case-insensitively, whether or not that section is enabled. Wins
+     first, over every other rule, because dnf recorded that exact id.
+   - Otherwise, case-insensitive **substring match against `enabled =
+     true` sections only**: exactly one hit is `Resolved`; more than one
+     is `Ambiguous` (`source_repo` is left as recorded).
+   - Otherwise: `@commandline`, `anaconda`, `@System` (case-insensitive)
+     are `Pseudo`; an empty recorded value is `Unrecorded`; anything
+     else is `Stale`.
 
-1. **`repoless.rs:repo_matches_enabled()`** — determines if a package's
-   `source_repo` matches any enabled repo (repo-less detection).
-2. **`source_repos.rs:normalize_source_repos()`** — rewrites `source_repo`
-   from short name to full ID so package tables and config trees use the
-   same identifier.
+   This resolution order is applied independently per package, so the
+   result never depends on the order `.repo` files were read in —
+   `normalize_source_repos`'s doc comment states this and
+   `normalization_is_order_independent_and_never_relabels` proves it by
+   running the same input through both file orders.
+
+   `RepoId` folds ASCII case for `Eq`, `Hash`, and `Ord` (so
+   `RepoId::new("EPEL") == RepoId::new("epel")` and both hash and sort
+   together), while `Display` prints the id exactly as the host spelled
+   it — `crates/core/src/types/repo.rs`'s own doc comment calls this out
+   because it is the reason `Ord`-based tie-breaking there uses the raw
+   string, not `RepoId`'s own folded `Ord`.
+
+If you touch repo-name matching, decide which of the two questions you
+are answering (repo-less yes/no, or full attribution) before reusing
+either function — they are no longer the same logic wearing two names.
 
 ## Edge case: anaconda
 
 `anaconda` is NOT a real repo. It is the install-time source recorded by
-the Anaconda installer. No RHEL repo ID contains "anaconda", so substring
-matching correctly leaves it unmatched. Packages from `anaconda` are
-properly flagged as repo-less.
+the Anaconda installer. No RHEL repo ID contains "anaconda", so
+`repo_matches_enabled()`'s substring check correctly leaves it unmatched
+and `classify_recorded_repo()` gives it `Pseudo { which: Anaconda, .. }`
+rather than `Stale`. Packages from `anaconda` are properly flagged as
+repo-less.
 
 ## Method constant registry
 

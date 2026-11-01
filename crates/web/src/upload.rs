@@ -1,105 +1,500 @@
-use axum::extract::{Multipart, Path, State};
-use axum::response::Json;
+use axum::extract::multipart::{Field, MultipartError};
+use axum::extract::{Multipart, Path as UrlPath, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json, Response};
+use inspectah_core::rpm_filename::{RpmFilename, StagedName};
+use inspectah_refine::session::{
+    RefineSession, RemovalOutcome, UPLOAD_PART_PREFIX, UPLOAD_PART_RAND_BYTES, UPLOAD_PART_SUFFIX,
+    UploadMatch,
+};
+use inspectah_refine::types::RefineError;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::AppError;
 use crate::handlers::AppState;
 
+/// The one multipart field an upload may carry (`useRpmUpload.ts:113`).
+const UPLOAD_FIELD_NAME: &str = "file";
+
+/// Files staged by one request. Exactly one field is accepted, so this is
+/// always 1; the client's modal counts files with it.
+const FILES_PER_REQUEST: u32 = 1;
+
+/// An upload failure and the status the client sees.
+#[derive(Debug)]
+pub enum UploadError {
+    /// The request itself is wrong, and the status says how.
+    Client(StatusCode, String),
+    /// The session refused, or the filesystem did.
+    Session(RefineError),
+}
+
+impl From<MultipartError> for UploadError {
+    fn from(e: MultipartError) -> Self {
+        // Every MultipartError carries the status it deserves: a
+        // `DefaultBodyLimit` overrun arrives as `StreamReadFailed` wrapping
+        // `LengthLimitError`, which `status()` maps to 413, while malformed
+        // framing is 400. The blanket 400 this replaces reported an
+        // oversize body as a syntax error the client could fix by retrying.
+        UploadError::Client(e.status(), e.body_text())
+    }
+}
+
+impl From<RefineError> for UploadError {
+    fn from(e: RefineError) -> Self {
+        UploadError::Session(e)
+    }
+}
+
+impl IntoResponse for UploadError {
+    fn into_response(self) -> Response {
+        match self {
+            UploadError::Client(status, message) => {
+                (status, Json(serde_json::json!({ "error": message }))).into_response()
+            }
+            UploadError::Session(e) => AppError(e).into_response(),
+        }
+    }
+}
+
+/// A fully written, flushed part file in the upload directory, not yet
+/// under its real name.
+///
+/// Dropping it removes the file, including when axum drops the handler
+/// future on a client disconnect, so an abandoned transfer leaves nothing
+/// behind.
+pub struct StagedPart {
+    file: tempfile::NamedTempFile,
+}
+
+/// What the upload did, as the response reports it.
+pub struct UploadOutcome {
+    /// The package the filename matched, if any.
+    pub matched: Option<UploadMatch>,
+    /// The filename decomposed, for the client to display. Parsing is
+    /// matching, not a safety claim; `staged_as` is the validated name.
+    pub parsed: Option<RpmFilename>,
+    /// The name the file is staged under, which is the name the client
+    /// sent.
+    pub staged_as: String,
+}
+
+impl UploadOutcome {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "status": if self.matched.is_some() { "matched" } else { "unmatched" },
+            "matched": self.matched.as_ref().map(|m| &m.canonical),
+            "match_kind": self.matched.as_ref().map(|m| m.match_kind),
+            "host_version": self.matched.as_ref().map(|m| &m.host_version),
+            "uploaded_version": self.matched.as_ref().and_then(|m| m.uploaded_version.as_ref()),
+            "uploaded": FILES_PER_REQUEST,
+            "parsed": self.parsed,
+            "staged_as": self.staged_as,
+        })
+    }
+}
+
+/// Stream one multipart field into a part file in `upload_dir`.
+///
+/// The `field.chunk()` loop is the only read of the body, so resident
+/// memory per upload is one chunk whatever the file's size. The part file
+/// is opened `O_EXCL` with mode 0600 and a name no staged RPM can wear
+/// (the allowlist bans a leading dot), and `sync_all` runs here rather
+/// than inside the caller's lock hold.
+pub async fn stage(upload_dir: &Path, field: &mut Field<'_>) -> Result<StagedPart, UploadError> {
+    let mut part = tempfile::Builder::new()
+        .prefix(UPLOAD_PART_PREFIX)
+        .suffix(UPLOAD_PART_SUFFIX)
+        .rand_bytes(UPLOAD_PART_RAND_BYTES)
+        .tempfile_in(upload_dir)
+        .map_err(|e| RefineError::TarballError(format!("create upload part file: {e}")))?;
+
+    while let Some(chunk) = field.chunk().await? {
+        part.write_all(&chunk)
+            .map_err(|e| RefineError::TarballError(format!("write upload part file: {e}")))?;
+    }
+    part.as_file()
+        .sync_all()
+        .map_err(|e| RefineError::TarballError(format!("flush upload part file: {e}")))?;
+
+    Ok(StagedPart { file: part })
+}
+
+/// Place a staged part under its real name and record it, in one hold of
+/// the session lock.
+///
+/// In order: match, the 409 check, the rename, the record, then the
+/// deletion of a file this upload superseded. Taking a [`StagedName`]
+/// rather than a `&str` is what keeps an unvalidated name out of the
+/// rename: there is no other way into this function.
+///
+/// Two properties worth keeping if this is ever rewritten. `persist` is
+/// `rename(2)`, which replaces a symlink at the destination rather than
+/// following it, so a symlink pre-planted under a valid RPM name cannot
+/// redirect the staged write; a copy-and-unlink would not have that.
+/// And this function is not `async`, so "no I/O wait inside the lock
+/// hold" is a property the compiler keeps rather than one a reader has
+/// to check.
+pub fn commit(
+    session: &mut RefineSession,
+    part: StagedPart,
+    name: &StagedName,
+) -> Result<UploadOutcome, UploadError> {
+    let dest = {
+        let (upload_dir, _) = session.ensure_upload_dir()?;
+        upload_dir.join(name.as_str())
+    };
+
+    // Under the same hold as the rename below, so the match cannot go
+    // stale between deciding and placing.
+    let matched = session.match_uploaded_rpm(name.as_str());
+    let matched_canonical = matched.as_ref().map(|m| m.canonical.as_str());
+
+    // No rename ever replaces a file that is another package's
+    // `cache_path`, and no upload takes a name the export will write for
+    // another package, matched or unmatched.
+    if let Some(occupant) = occupant_of(session, &dest, matched_canonical) {
+        return Err(UploadError::Client(
+            StatusCode::CONFLICT,
+            occupant.refusal(name.as_str()),
+        ));
+    }
+
+    // Read before the record step rewrites `cache_path`, and resolved
+    // before the rename so a refusal places nothing. `cache_path` is a
+    // snapshot field: a scan can claim this package's upload is the
+    // operator's private key, and deleting it is not this upload's to do.
+    let mut superseded = None;
+    if let Some(m) = &matched
+        && let Some(previous) = superseded_upload(session, &m.canonical, &dest)
+    {
+        superseded = session.resolve_staged_file(&previous).map_err(|_| {
+            UploadError::Client(
+                StatusCode::CONFLICT,
+                format!(
+                    "{} records a staged file outside the upload directory; nothing was staged",
+                    m.canonical
+                ),
+            )
+        })?;
+    }
+
+    part.file.persist(&dest).map_err(|e| {
+        RefineError::TarballError(format!("stage upload as {}: {}", dest.display(), e.error))
+    })?;
+
+    if let Some(m) = &matched {
+        session.set_uploaded(&m.canonical, dest, m.uploaded_version.clone());
+    }
+
+    if let Some(old) = superseded {
+        // Proved to be inside the upload directory above. The record step
+        // has already succeeded and cannot be undone, so a failed unlink
+        // here leaves an unreferenced file rather than a wrong state.
+        let _ = std::fs::remove_file(old);
+    }
+
+    Ok(UploadOutcome {
+        parsed: RpmFilename::parse_untrusted(name.as_str()),
+        matched,
+        staged_as: name.as_str().to_string(),
+    })
+}
+
+/// Why a staged name is not this upload's to take, and which package
+/// holds it.
+///
+/// Both ways end in the same place -- two packages wanting one path under
+/// `repoless-packages/` in the export -- but they are discovered
+/// differently and the operator undoes them differently, so they are one
+/// list rather than one check: any *package* that can own the destination
+/// has to be a variant here, and there are exactly two, which are the two
+/// writers of `repoless-packages/<name>` (the export's step 2e extraction
+/// and its step 2f copy).
+///
+/// Non-package writers are deliberately absent. Nothing here can name one
+/// to an operator as "whose it is", and renaming the upload would not
+/// move it; `create_new` in step 2f is their backstop, and failing the
+/// export by path is the right answer when there is no better sentence to
+/// write.
+enum Occupant {
+    /// Another package's `cache_path` already names the destination.
+    Staged(String),
+    /// The destination's basename is another cached package's NEVRA
+    /// filename, which is the name the export extracts for it from the
+    /// source tarball.
+    CachedNevra(String),
+}
+
+impl Occupant {
+    /// The 409 body, naming the file the client sent.
+    fn refusal(&self, filename: &str) -> String {
+        match self {
+            Occupant::Staged(owner) => format!("{filename} is already staged for {owner}"),
+            Occupant::CachedNevra(owner) => format!(
+                "{filename} is the cached RPM filename of {owner}; \
+                 upload it under a different name or remove {owner} from the export"
+            ),
+        }
+    }
+}
+
+/// Whoever owns `dest` already, other than `exclude`.
+///
+/// The NEVRA arm is the one a staging-time check is easy to leave out,
+/// because the colliding package's `cache_path` points into the host's
+/// dnf cache and so matches nothing here. Without it the collision
+/// surfaces at `create_new` in the export's step 2f, which fails every
+/// export from that point on and names a path, not the upload that caused
+/// it; the only way out is a removal the operator has to work out for
+/// themselves.
+///
+/// Disposition is deliberately not consulted. An excluded cached package
+/// writes nothing today, so the check is stricter than the export needs,
+/// but the alternative is a refusal that appears and disappears as the
+/// operator toggles a row, and a name that is safe to upload only until
+/// someone re-includes the package that owns it.
+fn occupant_of(session: &RefineSession, dest: &Path, exclude: Option<&str>) -> Option<Occupant> {
+    let rpm = session.snapshot().rpm.as_ref()?;
+    let basename = dest.file_name().and_then(|n| n.to_str());
+    let mut cached_nevra = None;
+    for pkg in &rpm.packages_added {
+        let canonical = format!("{}.{}", pkg.name, pkg.arch);
+        if Some(canonical.as_str()) == exclude {
+            continue;
+        }
+        if names_one_file(pkg.cache_path.as_deref().map(Path::new), Some(dest)) {
+            return Some(Occupant::Staged(canonical));
+        }
+        let nevra = format!(
+            "{}-{}-{}.{}.rpm",
+            pkg.name, pkg.version, pkg.release, pkg.arch
+        );
+        if cached_nevra.is_none()
+            && pkg.repoless_cached
+            && !pkg.uploaded
+            && Some(nevra.as_str()) == basename
+        {
+            cached_nevra = Some(Occupant::CachedNevra(canonical));
+        }
+    }
+    cached_nevra
+}
+
+/// The staged file a new upload for `canonical` replaces: its current
+/// `cache_path`, when that is a different file from `dest`.
+///
+/// "Different file" is a filesystem question, not a string one, and this
+/// is the site where getting it wrong costs the most. `cache_path`
+/// carries whatever spelling of the upload directory the session was
+/// given; `resolve_staged_file`, which the caller runs next, resolves it
+/// correctly. When the two spellings of one file compared unequal here,
+/// this returned the path, `resolve_staged_file` turned it back into the
+/// file `dest` names, and the caller unlinked the upload it had just
+/// staged -- 200, `uploaded: true`, nothing on disk.
+///
+/// # Who writes `cache_path`
+///
+/// Recorded here because it has been got wrong twice, and both times in
+/// a review file rather than beside the code. **It is not true that
+/// `set_uploaded` is the only writer of `cache_path`** -- that claim is
+/// easy to re-verify as false, and a seat that checks it will find three
+/// writers and reopen a settled question. In production there are
+/// exactly three, and they divide like this:
+///
+/// - `scan_dnf_cache_for_repoless`
+///   (`crates/collect/src/inspectors/rpm/repoless.rs`) writes the path
+///   it found under the host's dnf cache. It runs on the collecting
+///   host, where no upload directory exists.
+/// - `RefineSession::set_uploaded` writes `upload_dir.join(name)`. It is
+///   the only writer that puts a path inside the upload directory **by
+///   construction**.
+/// - `RefineSession::unmark_uploaded_rpm` writes back what `prior_cache`
+///   saved, and that is a copy of `pkg.cache_path` as it stood at
+///   first-upload time. On a crafted snapshot it can therefore hold
+///   anything, an upload-directory path included. **Do not reason about
+///   what it contains.**
+///
+/// The third writer cannot reach this function at all, and the reason is
+/// the gate rather than the contents: `unmark_uploaded_rpm` assigns
+/// `cache_path` and clears `uploaded` in one operation, and the `find`
+/// below requires `pkg.uploaded`. A restored value is never read here
+/// whatever it holds. That is the form of the argument to keep, because
+/// it survives a crafted `prior_cache` and a contents argument does not.
+///
+/// None of this makes `cache_path` trustworthy: it is `#[serde(default)]`
+/// and a deserialized snapshot can carry any path at all, written by no
+/// one. That is what `resolve_staged_file` is for, and why nothing here
+/// unlinks on the strength of a field.
+///
+/// A fourth writer, or any change that lets a `cache_path` the session
+/// did not build reach a package with `uploaded == true`, invalidates
+/// the paragraph above. That is the tripwire, and it is here rather than
+/// in a review because the last one fired unnoticed.
+fn superseded_upload(session: &RefineSession, canonical: &str, dest: &Path) -> Option<PathBuf> {
+    let rpm = session.snapshot().rpm.as_ref()?;
+    rpm.packages_added
+        .iter()
+        .find(|pkg| format!("{}.{}", pkg.name, pkg.arch) == canonical && pkg.uploaded)
+        .and_then(|pkg| pkg.cache_path.as_deref())
+        .map(PathBuf::from)
+        .filter(|previous| !names_one_file(Some(previous), Some(dest)))
+}
+
+/// Whether two paths name one file: the same basename, under parents
+/// that resolve to one directory.
+///
+/// Comparing a recorded `cache_path` to a path this process built is a
+/// comparison of two spellings, not of two files. The session is given
+/// an upload directory and records `upload_dir.join(name)` under that
+/// spelling, while the directory also has a canonical spelling that
+/// differs whenever any parent component is a symlink. Every other
+/// confinement check in the upload path resolves; these two compared
+/// text, and the mismatch between the two habits is the bug.
+///
+/// Only the parent is resolved. Resolving the whole path would follow a
+/// final symlink, which is the thing `resolve_staged_file` is careful
+/// not to do. A parent that cannot be resolved is not the upload
+/// directory by any spelling, so it is not the same file.
+fn names_one_file(a: Option<&Path>, b: Option<&Path>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    if a.file_name().is_none() || a.file_name() != b.file_name() {
+        return false;
+    }
+    match (
+        a.parent().and_then(|p| p.canonicalize().ok()),
+        b.parent().and_then(|p| p.canonicalize().ok()),
+    ) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// Accept an uploaded RPM file and stage it for export.
 ///
-/// The uploaded file is stored in the session's upload directory.
-/// Export merges these files into repoless-packages/ alongside
-/// cached RPMs from the source tarball.
+/// Exactly one multipart field, named `file`, carrying a filename that
+/// passes the staged-name allowlist. The file is streamed into a part file
+/// in the session's upload directory, then placed under its real name and
+/// recorded in one hold of the session lock. Export merges staged files
+/// into repoless-packages/ alongside cached RPMs from the source tarball.
 ///
-/// Returns match status: `"matched"` with the canonical `name.arch` when the
-/// upload matched a repo-less package, or `"unmatched"` when no match was found
-/// (the file is still staged for manual use).
+/// Returns match status: `"matched"` with the canonical `name.arch` when
+/// the upload matched a repo-less package, or `"unmatched"` when no match
+/// was found (the file is still staged for manual use).
 pub async fn upload_rpm(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let mut uploaded_count = 0u32;
-    let mut matched_canonical: Option<String> = None;
-
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
-            "multipart error: {e}"
-        )))
-    })? {
-        let raw_filename = field
-            .file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown.rpm".to_string());
-        // Sanitize: strip directory components to prevent path traversal
-        let filename = std::path::Path::new(&raw_filename)
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown.rpm".to_string());
-
-        if !filename.ends_with(".rpm") {
-            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
-                format!("only .rpm files accepted, got: {filename}"),
-            )));
-        }
-
-        let data = field.bytes().await.map_err(|e| {
-            AppError(inspectah_refine::types::RefineError::BadRequest(format!(
-                "failed to read upload: {e}"
-            )))
-        })?;
-
+) -> Result<Json<serde_json::Value>, UploadError> {
+    // The guard lives in this block and is dropped before anything below
+    // is awaited. That is not style: a `std::sync::MutexGuard` held
+    // across an `.await` makes this future non-`Send`, and the handler
+    // stops satisfying axum's `Handler` bound, so the compiler is what
+    // keeps the streaming out of the lock hold today. Nothing says so at
+    // the place it would be broken, which is why it says so here:
+    // swapping `session` for a `tokio::sync::Mutex` removes the
+    // objection, and `a_stalled_upload_does_not_block_another_request`
+    // is the test waiting for that day. Neither of those covers blocking
+    // I/O added inside `commit`, which is synchronous and holds the
+    // guard for its whole body; what keeps that honest is that `commit`
+    // is short enough to read whole.
+    let upload_dir = {
         let mut session = state.session.lock().unwrap();
-        let upload_dir = session.ensure_upload_dir().map_err(AppError)?;
-        let dest = upload_dir.join(&filename);
-        std::fs::write(&dest, &data).map_err(|e| {
-            AppError(inspectah_refine::types::RefineError::TarballError(format!(
-                "write uploaded RPM: {e}"
-            )))
-        })?;
-
-        // Mark the matching PackageEntry as cached so the renderer
-        // generates active COPY/localinstall lines instead of MANUAL blocks.
-        matched_canonical = session.mark_uploaded_rpm(&filename, &dest.to_string_lossy());
-
-        uploaded_count += 1;
-    }
-
-    let status = if matched_canonical.is_some() {
-        "matched"
-    } else {
-        "unmatched"
+        session.ensure_upload_dir()?.0.to_path_buf()
     };
 
-    Ok(Json(serde_json::json!({
-        "uploaded": uploaded_count,
-        "matched": matched_canonical,
-        "status": status
-    })))
+    let mut field = multipart.next_field().await?.ok_or_else(|| {
+        UploadError::Client(
+            StatusCode::BAD_REQUEST,
+            format!("expected one multipart field named \"{UPLOAD_FIELD_NAME}\""),
+        )
+    })?;
+    if field.name() != Some(UPLOAD_FIELD_NAME) {
+        return Err(UploadError::Client(
+            StatusCode::BAD_REQUEST,
+            format!("expected one multipart field named \"{UPLOAD_FIELD_NAME}\""),
+        ));
+    }
+    let raw_filename = field
+        .file_name()
+        .ok_or_else(|| {
+            UploadError::Client(
+                StatusCode::BAD_REQUEST,
+                format!("the \"{UPLOAD_FIELD_NAME}\" field carries no filename"),
+            )
+        })?
+        .to_string();
+    // Rejection is rejection: the name that reaches the filesystem is the
+    // one the client sent, never a stripped version of it.
+    let staged_name = StagedName::parse(&raw_filename).map_err(|e| {
+        UploadError::Client(StatusCode::BAD_REQUEST, format!("filename rejected: {e}"))
+    })?;
+
+    let part = stage(&upload_dir, &mut field).await?;
+    drop(field);
+
+    // A second field is 400 and nothing is placed. Multipart is
+    // sequential, so a second field is knowable only after the first has
+    // been read; the part file this drops was never under a staged name
+    // and no package ever pointed at it.
+    if multipart.next_field().await?.is_some() {
+        return Err(UploadError::Client(
+            StatusCode::BAD_REQUEST,
+            format!("expected exactly one multipart field, named \"{UPLOAD_FIELD_NAME}\""),
+        ));
+    }
+
+    let outcome = {
+        let mut session = state.session.lock().unwrap();
+        commit(&mut session, part, &staged_name)?
+    };
+
+    Ok(Json(outcome.to_json()))
 }
 
 /// Remove a previously uploaded RPM file.
 ///
 /// Accepts `name_arch` in canonical `name.arch` format (e.g. `nginx.x86_64`).
-/// Reverses the effect of `upload_rpm`: deletes the staged file and clears
-/// the `repoless_cached` / `cache_path` fields on the matching PackageEntry.
+/// Reverses the effect of `upload_rpm`: deletes the staged file and hands
+/// the matching PackageEntry back to whatever the upload displaced.
+///
+/// A package whose RPM came from the host's dnf cache is 409, not 404: it
+/// has an RPM and the row shows one, so "no uploaded RPM" would read as a
+/// mistake on the client's part rather than a refusal to unlink a file
+/// under `/var/cache/dnf`.
 pub async fn delete_uploaded_rpm(
     State(state): State<Arc<AppState>>,
-    Path(name_arch): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
+    UrlPath(name_arch): UrlPath<String>,
+) -> Result<Json<serde_json::Value>, UploadError> {
     // Split "name.arch" on the last dot to handle package names containing dots
     let (name, arch) = name_arch.rsplit_once('.').ok_or_else(|| {
-        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+        UploadError::Session(inspectah_refine::types::RefineError::BadRequest(format!(
             "invalid name.arch format: {name_arch}"
         )))
     })?;
 
     let mut session = state.session.lock().unwrap();
-    let found = session.unmark_uploaded_rpm(name, arch).map_err(AppError)?;
-
-    if !found {
-        return Err(AppError(inspectah_refine::types::RefineError::NotFound(
-            format!("no uploaded RPM for {name_arch}"),
-        )));
+    match session.unmark_uploaded_rpm(name, arch)? {
+        RemovalOutcome::Removed => {}
+        RemovalOutcome::CachedOnly => {
+            return Err(UploadError::Client(
+                StatusCode::CONFLICT,
+                format!(
+                    "only uploads can be removed; \
+                     {name_arch} is cached from the host's dnf cache"
+                ),
+            ));
+        }
+        RemovalOutcome::NotFound => {
+            return Err(UploadError::Session(
+                inspectah_refine::types::RefineError::NotFound(format!(
+                    "no uploaded RPM for {name_arch}"
+                )),
+            ));
+        }
     }
 
     Ok(Json(serde_json::json!({

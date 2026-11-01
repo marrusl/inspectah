@@ -5,6 +5,7 @@ use inspectah_core::types::completeness::Completeness;
 
 use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
+use super::selinux;
 
 /// Render the README markdown from a snapshot.
 pub fn render_readme(snap: &InspectionSnapshot) -> String {
@@ -246,6 +247,71 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     );
     lines.push(String::new());
 
+    // SELinux file contexts
+    //
+    // § 4 asks the README to repeat the block's restored-data `restorecon`
+    // sentence. There was no SELinux paragraph to add it to: the spec cites
+    // one that has never existed, so this is the paragraph.
+    let fcontext_rules = snap
+        .selinux
+        .as_ref()
+        .map(|sel| sel.fcontext_rules.as_slice())
+        .unwrap_or_default();
+    if !fcontext_rules.is_empty() {
+        lines.push("## SELinux file contexts".into());
+        lines.push(String::new());
+        if fcontext_rules.iter().any(selinux::is_included) {
+            lines.push(
+                "The Containerfile replays the file context rules you included into the \
+                 image's own policy store. Labels for image content are computed when bootc \
+                 pulls the image, so the rules need no `restorecon` at build time. A rule \
+                 that could not be replayed is a `FIXME` comment in the Containerfile: \
+                 search for `FIXME` and resolve each one before you build. Each rule also \
+                 checks the target's own policy as it runs, so the build output can print \
+                 FIXMEs the Containerfile does not contain: read it too."
+                    .into(),
+            );
+        } else {
+            // The section renders on collected rules, not included ones, so
+            // that an operator who excluded all of them still learns the
+            // export has none. Saying the Containerfile "replays this host's
+            // rules" here would describe a block that replays nothing.
+            lines.push(
+                "None of this host's custom file context rules are in the export, so the \
+                 Containerfile carries no `semanage` file context command. The audit report \
+                 lists each rule and why it was left out."
+                    .into(),
+            );
+        }
+        lines.push(String::new());
+        lines.push(
+            "Data you restore into `/var` after deployment, `/var/srv` included, keeps the \
+             labels it arrived with. Run `restorecon -R` on it before starting the services \
+             that use it."
+                .into(),
+        );
+        lines.push(String::new());
+        // A caution, not a claim. Where the rules land was measured; what a
+        // local `semanage` edit does to a later image's rules is an inference
+        // from ostree merge semantics that no install, boot and switch has
+        // been run against.
+        //
+        // The uncertainty is stated in both directions on purpose. "A local
+        // change may not survive the next switch" is not false, but it picks
+        // the less likely side: the reading that fits ostree's merge better
+        // is that the local edit wins and the new image's rules never arrive,
+        // which is also the failure an operator actually meets. A hedge that
+        // picks a side is a weak claim, not a neutral one.
+        lines.push(
+            "Change file contexts by editing the Containerfile and rebuilding, not by \
+             running `semanage` on a deployed machine. How a policy store edited in place \
+             and the rules a later image carries combine has not been tested: the two may \
+             not combine the way you expect, and the mismatch may not fail visibly."
+                .into(),
+        );
+        lines.push(String::new());
+    }
+
     // Artifacts
     lines.push("## Artifacts".into());
     lines.push(String::new());
@@ -254,18 +320,11 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| `Containerfile` | Image definition |".into());
     lines.push("| `config/` | Files to COPY into the image |".into());
 
-    // Conditional: tmpfiles.d artifact for /var directory ownership provisioning
+    // Conditional: tmpfiles.d artifact for /var directory ownership provisioning.
+    // The renderer decides which directories produce a line, so the table
+    // asks it rather than re-deriving the condition.
     {
-        use inspectah_core::types::storage::VarDirBacking;
-        let has_tmpfiles = snap
-            .storage
-            .as_ref()
-            .map(|s| {
-                s.var_directories
-                    .iter()
-                    .any(|d| d.backing == Some(VarDirBacking::Unbacked) && d.mode.is_some())
-            })
-            .unwrap_or(false);
+        let has_tmpfiles = super::containerfile::render_tmpfiles_conf(snap).is_some();
         if has_tmpfiles {
             lines.push(
                 "| `config/usr/lib/tmpfiles.d/inspectah-var.conf` | /var directory ownership provisioning |"

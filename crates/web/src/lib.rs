@@ -14,6 +14,14 @@ use handlers::AppState;
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+/// Largest `/api/upload-rpm` request body accepted, 500 MiB. Multipart
+/// framing counts against it, so the limit is on the request, not on the
+/// RPM; an overrun arrives at the handler as a `MultipartError` whose
+/// `status()` is 413.
+pub const UPLOAD_LIMIT_BYTES: usize = 524_288_000;
+/// Largest body accepted on every other route.
+const DEFAULT_LIMIT_BYTES: usize = 1024 * 1024;
+
 /// Middleware that rejects POST requests with a mismatched Origin header.
 ///
 /// Defense-in-depth beyond CORS preflight: even if a browser somehow
@@ -64,7 +72,12 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderName::from_static(handlers::ACK_SENSITIVE_HEADER),
             axum::http::HeaderName::from_static("x-acknowledge-sensitive"), // legacy
-        ]);
+        ])
+        // A response header a browser cannot read is a warning nobody
+        // sees; the export's demotion warnings travel in one.
+        .expose_headers([axum::http::HeaderName::from_static(
+            handlers::EXPORT_WARNINGS_HEADER,
+        )]);
 
     let served = served_origin.to_string();
 
@@ -107,7 +120,8 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         )
         .route(
             "/api/upload-rpm",
-            post(upload::upload_rpm).layer(axum::extract::DefaultBodyLimit::max(500 * 1024 * 1024)), // 500 MiB for RPM uploads
+            post(upload::upload_rpm)
+                .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_LIMIT_BYTES)),
         )
         .route(
             "/api/upload-rpm/{name_arch}",
@@ -117,7 +131,7 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .layer(axum::middleware::from_fn(move |req, next| {
             origin_guard(served.clone(), req, next)
         }))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1 MiB default
+        .layer(axum::extract::DefaultBodyLimit::max(DEFAULT_LIMIT_BYTES))
         .with_state(state)
         .fallback(assets::serve_fallback)
 }

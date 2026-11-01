@@ -9,7 +9,7 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
 use inspectah_core::types::kernelboot::{
-    AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
+    AlternativeEntry, KernelBootSection, KernelModule, SysctlOverride,
 };
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
@@ -19,7 +19,10 @@ use inspectah_core::types::rpm::{
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{
+    FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
+    SelinuxSection,
+};
 use inspectah_core::types::services::{
     ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
 };
@@ -1462,6 +1465,23 @@ fn test_merge_scheduled_sections_cron_and_timers() {
 // Section adapter: SELinux
 // ===========================================================================
 
+/// An included `Label` rule for a spec, with a fixed context -- content
+/// doesn't matter for the dedup-by-key tests below.
+fn fcontext_label(spec: &str) -> FcontextRule {
+    FcontextRule::Label {
+        spec: spec.into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "httpd_sys_content_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::included(),
+        aggregate: None,
+    }
+}
+
 #[test]
 fn test_merge_selinux_sections_all_none() {
     let result = merge_selinux_sections(vec![None], 1, &["h1".into()]);
@@ -1478,13 +1498,9 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             ..Default::default()
         }],
         custom_modules: vec!["mymodule".into()],
-        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
+        fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/custom.rules".into(),
-            content: "-w /etc/passwd".into(),
-        }],
-        pam_configs: vec![],
         fips_mode: false,
     };
     let s2 = SelinuxSection {
@@ -1495,13 +1511,9 @@ fn test_merge_selinux_sections_dedup_and_merge() {
             ..Default::default()
         }],
         custom_modules: vec!["mymodule".into(), "othermodule".into()],
-        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        fcontext_rules: vec![fcontext_label("/opt/app(/.*)?")],
+        fcontext_source: FcontextSource::PolicyStore,
         boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
-        audit_rules: vec![CarryForwardFile {
-            path: "etc/audit/rules.d/custom.rules".into(),
-            content: "-w /etc/passwd".into(),
-        }],
-        pam_configs: vec![],
         fips_mode: false,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
@@ -1513,16 +1525,236 @@ fn test_merge_selinux_sections_dedup_and_merge() {
 
     // String lists deduped
     assert_eq!(result.custom_modules, vec!["mymodule", "othermodule"]);
-    assert_eq!(result.fcontext_rules, vec!["/opt/app(/.*)?"]);
+    // Fcontext rules deduped by semantic key (same spec + file_type); both
+    // hosts agree on content, so one rule survives, included (count ==
+    // total), naming both hosts.
+    assert_eq!(result.fcontext_rules.len(), 1);
+    match &result.fcontext_rules[0] {
+        FcontextRule::Label {
+            spec,
+            disposition,
+            aggregate,
+            ..
+        } => {
+            assert_eq!(spec, "/opt/app(/.*)?");
+            assert!(disposition.is_included());
+            let agg = aggregate.as_ref().unwrap();
+            assert_eq!(agg.count, 2);
+            assert_eq!(agg.hosts, vec!["h1".to_string(), "h2".to_string()]);
+            // No disagreement -- aggregate_count/aggregate_hosts stay
+            // unset, per their own doc comment.
+            assert_eq!(agg.aggregate_count, None);
+            assert_eq!(agg.aggregate_hosts, None);
+        }
+        other => panic!("expected Label, got {other:?}"),
+    }
+    assert_eq!(result.fcontext_source, FcontextSource::PolicyStore);
 
     // JSON deduped
     assert_eq!(result.boolean_overrides.len(), 1);
 
-    // CarryForwardFile deduped by path
-    assert_eq!(result.audit_rules.len(), 1);
-
     // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.mode, "enforcing");
+}
+
+#[test]
+fn test_merge_selinux_fcontext_order_and_disposition() {
+    // h1: an h1-only rule, then a rule sharing a key with h2 but
+    // disagreeing on content (context "y1_t" vs h2's "y2_t" below).
+    let h1_shared = FcontextRule::Label {
+        spec: "/opt/shared".into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "y1_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::included(),
+        aggregate: None,
+    };
+    let s1 = SelinuxSection {
+        fcontext_rules: vec![fcontext_label("/opt/a"), h1_shared],
+        ..Default::default()
+    };
+
+    // h2: the same key, different content, then an h2-only rule.
+    let h2_shared = FcontextRule::Label {
+        spec: "/opt/shared".into(),
+        file_type: FcontextFileType::All,
+        context: SelinuxContext {
+            user: "system_u".into(),
+            role: "object_r".into(),
+            type_: "y2_t".into(),
+            level: Some("s0".into()),
+        },
+        disposition: FindingKind::excluded(),
+        aggregate: None,
+    };
+    let s2 = SelinuxSection {
+        fcontext_rules: vec![h2_shared, fcontext_label("/opt/c")],
+        ..Default::default()
+    };
+
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Order: hostname order, then each host's collected order -- not
+    // sorted by spec and not grouped by host. Round 3's ruling: one row
+    // survives per key (spec § 3.1), so "shared" is one row, not two --
+    // 3 rows total, not 4.
+    let specs_and_types: Vec<(&str, &str)> = result
+        .fcontext_rules
+        .iter()
+        .map(|r| match r {
+            FcontextRule::Label { spec, context, .. } => (spec.as_str(), context.type_.as_str()),
+            other => panic!("expected Label, got {:?}", other),
+        })
+        .collect();
+    assert_eq!(
+        specs_and_types,
+        vec![
+            ("/opt/a", "httpd_sys_content_t"),
+            ("/opt/shared", "y1_t"),
+            ("/opt/c", "httpd_sys_content_t"),
+        ],
+        "one row per key, the first content seen in hostname order"
+    );
+
+    let included = |rule: &FcontextRule| match rule {
+        FcontextRule::Label { disposition, .. } => disposition.is_included(),
+        other => panic!("expected Label, got {:?}", other),
+    };
+
+    // "/opt/a" and "/opt/c" each sit on only 1 of 2 hosts -- narrowing
+    // (count == total across the whole run) excludes these, where round
+    // 1's per-host-disposition rule included them (the only host carrying
+    // each had included it). This is the behaviour round 2 changed;
+    // assert it directly rather than letting it ride on an existing
+    // assertion.
+    assert!(
+        !included(&result.fcontext_rules[0]),
+        "/opt/a is on 1 of 2 hosts, must be excluded"
+    );
+    assert!(
+        !included(&result.fcontext_rules[2]),
+        "/opt/c is on 1 of 2 hosts, must be excluded"
+    );
+
+    // "/opt/shared" the key is universal, but the hosts disagree on its
+    // content -- narrowing is computed on content, matching the engine, so
+    // the surviving row is excluded even though every host carries the key.
+    // An included row would render as an active `semanage fcontext -a`,
+    // silently imposing h1's content on h2.
+    assert!(
+        !included(&result.fcontext_rules[1]),
+        "shared key's content disagrees across hosts, must be excluded"
+    );
+
+    // The surviving row is h1's (first in hostname order); its count/hosts
+    // describe only h1, who shares that exact content. The disagreement
+    // itself is not lost: aggregate_count/aggregate_hosts (set only
+    // because this key has more than one variant) name every host
+    // carrying the key under any content, which is what a future audit
+    // report needs to name both sides by host.
+    match &result.fcontext_rules[1] {
+        FcontextRule::Label {
+            context, aggregate, ..
+        } => {
+            assert_eq!(context.type_, "y1_t", "h1's content survives, not h2's");
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.total, 2);
+            assert_eq!(agg.hosts, vec!["h1".to_string()]);
+            assert_eq!(agg.aggregate_count, Some(2));
+            assert_eq!(
+                agg.aggregate_hosts,
+                Some(vec!["h1".to_string(), "h2".to_string()])
+            );
+        }
+        other => panic!("expected Label, got {:?}", other),
+    }
+
+    // "/opt/a" and "/opt/c" have no disagreement -- aggregate_count/
+    // aggregate_hosts stay None, per their own doc comment ("only set for
+    // items with content variants").
+    for idx in [0, 2] {
+        match &result.fcontext_rules[idx] {
+            FcontextRule::Label { aggregate, .. } => {
+                let agg = aggregate.as_ref().expect("aggregate must be populated");
+                assert_eq!(agg.aggregate_count, None);
+                assert_eq!(agg.aggregate_hosts, None);
+            }
+            other => panic!("expected Label, got {:?}", other),
+        }
+    }
+}
+
+#[test]
+fn test_merge_selinux_fcontext_label_and_unlabel_share_a_key() {
+    // h1 labels a spec; h2 unlabels the *same* spec/file_type. These are
+    // the same local-database entry (round 1 review, item 3) -- a replay
+    // that ran both in sequence would have the second silently overwrite
+    // the first, so the merge must treat them as one key, not two rows
+    // that happen to share a spec.
+    let s1 = SelinuxSection {
+        fcontext_rules: vec![fcontext_label("/opt/x")],
+        ..Default::default()
+    };
+    let s2 = SelinuxSection {
+        fcontext_rules: vec![FcontextRule::Unlabel {
+            spec: "/opt/x".into(),
+            file_type: FcontextFileType::All,
+            disposition: FindingKind::included(),
+            aggregate: None,
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // One key, one surviving row (round 3 ruling, spec § 3.1: "hosts that
+    // disagree on the context for one key keep the first in hostname
+    // order"). Round 2 had this produce 2 rows; that would let both
+    // render and, under § 3.1 rule 1's replay, the second silently
+    // overwrites the first in the built image -- the exact failure the
+    // shared-key merge exists to prevent, recreated through row count
+    // instead of key count.
+    assert_eq!(result.fcontext_rules.len(), 1);
+
+    match &result.fcontext_rules[0] {
+        FcontextRule::Label {
+            spec,
+            disposition,
+            aggregate,
+            ..
+        } => {
+            assert_eq!(
+                spec, "/opt/x",
+                "h1's Label survives, first in hostname order"
+            );
+            // The key itself is universal, but the hosts disagree on
+            // content (Label vs Unlabel) -- narrowing is computed on
+            // content, matching the engine, so the surviving row is
+            // excluded even though every host carries the key.
+            assert!(!disposition.is_included());
+            let agg = aggregate.as_ref().expect("aggregate must be populated");
+            // count/hosts describe only the hosts sharing the surviving
+            // row's exact content: h1 alone.
+            assert_eq!(agg.count, 1);
+            assert_eq!(agg.hosts, vec!["h1".to_string()]);
+            // aggregate_count/aggregate_hosts carry the disagreement: both
+            // hosts carry the key, across its two variants (Label,
+            // Unlabel) -- this is the record a future audit report needs
+            // to name both sides by host without adding a row.
+            assert_eq!(agg.aggregate_count, Some(2));
+            assert_eq!(
+                agg.aggregate_hosts,
+                Some(vec!["h1".to_string(), "h2".to_string()])
+            );
+        }
+        other => panic!("expected h1's Label to survive, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1613,10 +1845,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
             name: "vfio_pci".into(),
             ..Default::default()
         }],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/vfio.conf".into(),
-            content: "vfio_pci".into(),
-        }],
         alternatives: vec![AlternativeEntry {
             name: "python3".into(),
             path: "/usr/bin/python3.11".into(),
@@ -1641,10 +1869,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
                 ..Default::default()
             },
         ],
-        modules_load_d: vec![ConfigSnippet {
-            path: "/etc/modules-load.d/vfio.conf".into(),
-            content: "vfio_pci".into(),
-        }],
         alternatives: vec![AlternativeEntry {
             name: "python3".into(),
             path: "/usr/bin/python3.11".into(),
@@ -1664,9 +1888,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);
-
-    // ConfigSnippets deduped by path
-    assert_eq!(result.modules_load_d.len(), 1);
 
     // alternatives deduped by name
     assert_eq!(result.alternatives.len(), 1);

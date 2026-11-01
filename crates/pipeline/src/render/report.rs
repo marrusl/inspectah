@@ -14,6 +14,7 @@ use minijinja::{Environment, Value, context};
 
 use super::advisory::{advisory_type_str, config_advisories};
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
+use super::selinux;
 
 /// Advisory discriminant for synthesized orphan full-shadow entries. Not an
 /// `AdvisoryType` variant — the finding lives on the drop-in's `shadow_type`,
@@ -231,10 +232,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 InspectorId::Config => snap.config.as_ref().map(|c| c.files.len()),
                 InspectorId::Services => snap.services.as_ref().map(|s| s.state_changes.len()),
                 InspectorId::Storage => snap.storage.as_ref().map(|s| s.fstab_entries.len()),
-                InspectorId::KernelBoot => snap
-                    .kernel_boot
-                    .as_ref()
-                    .map(|k| k.sysctl_overrides.len() + k.non_default_modules.len()),
+                InspectorId::KernelBoot => {
+                    snap.kernel_boot.as_ref().map(|k| k.sysctl_overrides.len())
+                }
                 InspectorId::ScheduledTasks => snap.scheduled_tasks.as_ref().map(|s| {
                     s.cron_jobs.len()
                         + s.systemd_timers.len()
@@ -843,35 +843,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let modules_load_d: Vec<Value> = snap
-        .kernel_boot
-        .as_ref()
-        .map(|k| {
-            k.modules_load_d
-                .iter()
-                .map(|m| {
-                    Value::from_serialize(serde_json::json!({
-                        "path": m.path,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let modprobe_d: Vec<Value> = snap
-        .kernel_boot
-        .as_ref()
-        .map(|k| {
-            k.modprobe_d
-                .iter()
-                .map(|m| {
-                    Value::from_serialize(serde_json::json!({
-                        "path": m.path,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let kernelboot_count = sysctl_overrides.len() + modules_load_d.len() + modprobe_d.len();
+    let kernelboot_count = sysctl_overrides.len();
     let kernelboot_state = section_state(InspectorId::KernelBoot, &snap.completeness);
     let kernelboot_state_str = match kernelboot_state {
         SectionState::Normal => "normal",
@@ -907,16 +879,21 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 .collect()
         })
         .unwrap_or_default();
-    let selinux_fcontexts: Vec<Value> = snap
-        .selinux
-        .as_ref()
-        .map(|s| {
-            s.fcontext_rules
-                .iter()
-                .map(|f| Value::from(f.as_str()))
-                .collect()
+    // § 4: each rule as the command the Containerfile emits or the reason it
+    // emits none, read from the one helper all three consumers read. The
+    // emitted state is on every row because this is a decision surface: a
+    // row shown with no command and no reason reads as "this will be added",
+    // which is the inverse of the truth for a row the build refuses.
+    let selinux_fcontexts: Vec<Value> = selinux::fcontext_summaries(snap)
+        .iter()
+        .map(|row| {
+            Value::from_serialize(serde_json::json!({
+                "rule": selinux::summary_label(&row.rule),
+                "disposition": selinux::summary_disposition(row),
+                "command": selinux::summary_command(row).unwrap_or_default(),
+            }))
         })
-        .unwrap_or_default();
+        .collect();
     let security_count = selinux_modules.len() + selinux_booleans.len() + selinux_fcontexts.len();
     let security_state = section_state(InspectorId::Selinux, &snap.completeness);
     let security_state_str = match security_state {
@@ -1214,8 +1191,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let storage_items_val = Value::from(storage_items);
     let unbacked_var_dirs_val = Value::from(unbacked_var_dirs);
     let sysctl_overrides_val = Value::from(sysctl_overrides);
-    let modules_load_d_val = Value::from(modules_load_d);
-    let modprobe_d_val = Value::from(modprobe_d);
     let selinux_modules_val = Value::from(selinux_modules);
     let selinux_booleans_val = Value::from(selinux_booleans);
     let selinux_fcontexts_val = Value::from(selinux_fcontexts);
@@ -1301,8 +1276,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         has_kernelboot,
         kernel_cmdline,
         sysctl_overrides => sysctl_overrides_val,
-        modules_load_d => modules_load_d_val,
-        modprobe_d => modprobe_d_val,
         kernelboot_count,
         kernelboot_state => kernelboot_state_str,
         // Security & Access Control (conditional)
@@ -2379,7 +2352,18 @@ mod tests {
             boolean_overrides: vec![
                 serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
             ],
-            fcontext_rules: vec!["/opt/app(/.*)?".into()],
+            fcontext_rules: vec![inspectah_core::types::selinux::FcontextRule::Label {
+                spec: "/opt/app(/.*)?".into(),
+                file_type: inspectah_core::types::selinux::FcontextFileType::All,
+                context: inspectah_core::types::selinux::SelinuxContext {
+                    user: "system_u".into(),
+                    role: "object_r".into(),
+                    type_: "httpd_sys_content_t".into(),
+                    level: Some("s0".into()),
+                },
+                disposition: inspectah_core::types::FindingKind::included(),
+                aggregate: None,
+            }],
             fips_mode: false,
             ..Default::default()
         });

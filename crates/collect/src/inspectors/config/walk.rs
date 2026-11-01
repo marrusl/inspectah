@@ -139,7 +139,13 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/pki/consumer/*",
     "/etc/pki/entitlement/*",
     "/etc/depmod.d/*-dist.conf",
-    "/etc/modprobe.d/*-blacklist.conf",
+    // NOTE: `/etc/modprobe.d/*-blacklist.conf` was here, "for the distro
+    // files". This list is consulted only in the unowned branch of the
+    // walk, after is_rpm_owned() and is_rpm_owned_via_symlink(), and not
+    // at all in the rpm -Va branch — so a distro-shipped blacklist never
+    // reached it and the only files it could drop were ones the admin
+    // wrote. Dropping a module blacklist silently changes which driver
+    // binds in the migrated image, so the pattern is gone.
     "/etc/dconf/db/distro.d/*",
     "/etc/dconf/db/distro.d/locks/*",
     "/etc/dnf/protected.d/*",
@@ -152,7 +158,6 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     // NOTE: Drop-in overrides (*.service.d/*.conf, *.timer.d/*.conf,
     // *.socket.d/*.conf) are intentionally NOT excluded — they are
     // user-created config that is migration-relevant.
-    "/etc/tuned/*/tuned.conf",
     "/etc/systemd/sleep.conf.d/*",
     "/etc/lvm/archive/*",
     "/etc/lvm/backup/*",
@@ -177,14 +182,9 @@ const UNOWNED_EXCLUDE_PREFIX: &[&str] = &[
     "/etc/xdg/systemd/",
 ];
 
-/// Cross-inspector ownership exclusions.
-/// These prefixes are skipped during the /etc walk to avoid double-ownership
-/// with the SELinux inspector, which is the sole collector for these paths.
-const CROSS_INSPECTOR_EXCLUDE_PREFIXES: &[&str] = &["/etc/audit/rules.d/", "/etc/pam.d/"];
-
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
-/// Checks: exact match, glob match, and cross-inspector exclusion prefixes.
+/// Checks: exact match, glob match, and subtree prefix exclusion.
 pub fn is_excluded_unowned(path: &str) -> bool {
     // Exact match
     if UNOWNED_EXCLUDE_EXACT.contains(&path) {
@@ -200,13 +200,6 @@ pub fn is_excluded_unowned(path: &str) -> bool {
 
     // Subtree prefix exclusion (system-generated noise)
     for prefix in UNOWNED_EXCLUDE_PREFIX {
-        if path.starts_with(prefix) {
-            return true;
-        }
-    }
-
-    // Cross-inspector ownership exclusion
-    for prefix in CROSS_INSPECTOR_EXCLUDE_PREFIXES {
         if path.starts_with(prefix) {
             return true;
         }
@@ -336,22 +329,41 @@ fn glob_match_chars(pat: &[char], txt: &[char]) -> bool {
 ///
 /// Returns relative paths (relative to `root`) of all regular files found.
 /// Prunes dev-artifact directories and VCS trees. Returns an error if the
-/// top-level directory read fails with PermissionDenied.
-pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>, std::io::Error> {
+/// walk found nothing at all, which is what a PermissionDenied on `root`
+/// itself looks like.
+///
+/// A PermissionDenied on a directory *below* `root` is appended to
+/// `degraded_reasons` and the walk continues. Those files are absent from
+/// the result and therefore from the export, so the caller must report the
+/// section degraded rather than complete: the walk earlier discarded these
+/// reasons unless it found no files at all, which reported a partial scan
+/// of `/etc` as a whole one.
+pub fn walk_etc_with_reasons(
+    exec: &dyn Executor,
+    root: &str,
+    degraded_reasons: &mut Vec<String>,
+) -> Result<Vec<String>, std::io::Error> {
     let mut files = Vec::new();
-    let mut degraded_reasons = Vec::new();
-    walk_recursive_inner(exec, root, "", &mut files, &mut degraded_reasons);
+    let before = degraded_reasons.len();
+    walk_recursive_inner(exec, root, "", &mut files, degraded_reasons);
 
-    if files.is_empty() && !degraded_reasons.is_empty() {
-        // If we got no files and had permission errors, the first error
-        // was likely on the root itself
+    if files.is_empty() && degraded_reasons.len() > before {
+        // No files and a permission error: the error was on `root` itself,
+        // so it is the whole result rather than a partial-scan note.
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
-            degraded_reasons.join("; "),
+            degraded_reasons.split_off(before).join("; "),
         ));
     }
 
     Ok(files)
+}
+
+/// [`walk_etc_with_reasons`] for the secondary scans (orphan detection,
+/// `/usr/etc`, the ostree branch), which do not feed the section's
+/// completeness and so have nowhere to put a partial-scan note.
+pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>, std::io::Error> {
+    walk_etc_with_reasons(exec, root, &mut Vec::new())
 }
 
 fn walk_recursive_inner(
@@ -546,20 +558,31 @@ mod tests {
 
     // ---- Cross-inspector boundary tests ----
 
-    // ---- Test 26: test_config_skips_audit_rules_dir ----
-
+    /// The walker owns `/etc/audit/rules.d/`, `/etc/pam.d/` and the custom
+    /// tuned profiles (§ 3.6).
+    ///
+    /// Tests 26 and 27 asserted the opposite — that `is_excluded_unowned`
+    /// returns true for `/etc/audit/rules.d/custom.rules`,
+    /// `/etc/pam.d/sshd` and `/etc/pam.d/system-auth` — and a third rule
+    /// excluded `/etc/tuned/*/tuned.conf`. That exclusion was item 1.8's
+    /// defect, not a requirement: it handed the three trees to collectors
+    /// that emitted files nobody could decide about.
+    ///
+    /// The three tuned runtime-state files are a different case and stay
+    /// excluded, because `tuned_disposition` renders them.
     #[test]
-    fn test_config_skips_audit_rules_dir() {
-        assert!(is_excluded_unowned("/etc/audit/rules.d/custom.rules"));
-        assert!(is_excluded_unowned("/etc/audit/rules.d/audit.rules"));
-    }
+    fn test_config_walker_owns_pam_audit_and_tuned_profiles() {
+        assert!(!is_excluded_unowned("/etc/audit/rules.d/custom.rules"));
+        assert!(!is_excluded_unowned("/etc/pam.d/sshd"));
+        assert!(!is_excluded_unowned("/etc/pam.d/system-auth"));
+        assert!(!is_excluded_unowned("/etc/tuned/myapp/tuned.conf"));
 
-    // ---- Test 27: test_config_skips_pam_dir ----
-
-    #[test]
-    fn test_config_skips_pam_dir() {
-        assert!(is_excluded_unowned("/etc/pam.d/sshd"));
-        assert!(is_excluded_unowned("/etc/pam.d/system-auth"));
+        assert!(is_excluded_unowned("/etc/tuned/active_profile"));
+        assert!(is_excluded_unowned("/etc/tuned/profile_mode"));
+        assert!(is_excluded_unowned("/etc/tuned/bootcmdline"));
+        // The eight base PAM configs keep their exact-match exclusion.
+        assert!(is_excluded_unowned("/etc/pam.d/su-l"));
+        assert!(is_excluded_unowned("/etc/pam.d/runuser-l"));
     }
 
     // ---- DHCP filtering ----

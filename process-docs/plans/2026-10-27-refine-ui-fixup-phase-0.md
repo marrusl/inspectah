@@ -123,7 +123,7 @@ Tasks 1 and 2 are **merge gates, not implementation tasks**. Both must pass befo
 **Status, 2026-10-27.** Both have now been run once, and the `Result:` lines below are the record of that run; **they are history, not a pass.**
 
 - **B2 PASSED** against the stock base. § 3.4 is verified on its point and Tasks 18 and 19 are unblocked. Task 2 needs nothing further.
-- **B1 FAILED at step 1**: `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`. That re-opened § 3.1, and the spec's revision of 2026-10-27 answers it with the install precondition now in § 3.1 and § 5.1. Sub-cases (i) to (vi) were run on the same base with `policycoreutils-python-utils` added by hand and every one matched its expectation, which is evidence behind the decision but **not closed gate evidence**, because the image was augmented manually rather than by the line the renderer emits. **B1 re-runs in full once Task 11 implements the precondition**, against the stock base plus the emitted install line, and only then does it read PASS.
+- **B1 FAILED at step 1**: `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`. That re-opened § 3.1, and the spec's revision of 2026-10-27 answers it with the install precondition now in § 3.1 and § 5.1. Sub-cases (i) to (vi) were run on the same base with `policycoreutils-python-utils` added by hand and every one matched its expectation, which is evidence behind the decision but **not closed gate evidence**, because the image was augmented manually rather than by the line the renderer emits. **B1 re-runs in full once Task 11 implements the precondition**, against the stock base plus the emitted install line, and only then does it read PASS. **Re-run 2026-10-28: B1 PASSES.** All six sub-cases and step 1 match their expectations against an image (b) built from the Containerfile the renderer emits; no re-open condition fires. The verdict table and the five additive checks are under Task 1 step 8.
 
 **Do not start Task 3 until B2 reads PASS and B1's re-run is scheduled.** B1's re-run is the one gate that cannot complete before its implementation task: it tests a line Task 11 writes. Task 11 is therefore the point at which B1 becomes runnable, and Task 26 step 4 is where it must read PASS.
 
@@ -179,7 +179,7 @@ Expected: (a) `semanage ABSENT`, the other three PRESENT. (b) all four PRESENT. 
 
 **Every sub-case below runs against image (b), not the stock base**, because that is the state the rendered block creates. Replace `registry.redhat.io/rhel9/rhel-bootc:9.8` with `localhost/b1-precondition` in each `podman run` of steps 2 to 7 on the re-run.
 
-Result: **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **FAIL, 2026-10-27. `semanage` is absent from `registry.redhat.io/rhel9/rhel-bootc:9.8`.** The re-open condition fires and **§ 3.1 is re-opened before merge.**
 
 Per-binary `command -v` inside the base: `semanage` status 1 and no path; `matchpathcon` `/usr/sbin/matchpathcon`; `awk` `/usr/bin/awk`; `grep` `/usr/bin/grep`; `printf` a builtin. Neither `/usr/sbin/semanage` nor `/usr/bin/semanage` exists. Everything the emitted commands need except `semanage` is present.
 
@@ -189,7 +189,19 @@ It is installable in a build layer. A `FROM registry.redhat.io/rhel9/rhel-bootc:
 
 Note on the step as first written: `command -v semanage matchpathcon awk grep printf; echo "exit=$?"` prints `exit=0` on this base even with `semanage` missing, because `command -v` over several names exits 0 when it resolves any of them. The verdict above rests on the per-binary runs, not on that status. The step above has since been rewritten to check each binary separately, and § 8.14 (0) with it, so a later gate cannot repeat the error.
 
-**Re-run: pending.** § 3.1 now carries the install precondition this failure produced. Re-run (a) and (b) above after Task 11, and replace this line with the outcome.
+**Re-run, 2026-10-28: PASS.** § 3.1's install precondition is confirmed on both legs.
+
+(a) the stock base, per binary: `semanage ABSENT`; `matchpathcon /usr/sbin/matchpathcon`; `awk /usr/bin/awk`; `grep /usr/bin/grep`. The designed-for state, unchanged from 2026-10-27.
+
+(b) built from the Containerfile **the renderer emits**, not a hand-written one. The build completes and, per binary, `semanage /usr/sbin/semanage`, `matchpathcon /usr/sbin/matchpathcon`, `awk /usr/bin/awk`, `grep /usr/bin/grep` — all four PRESENT. No re-open condition fires.
+
+**How image (b) was obtained, because this is the clause the re-run exists for.** The repo carries no JSON snapshot fixture with `fcontext_rules`; the renderer's fixtures are Rust (`crates/pipeline/tests/selinux_support/mod.rs`). Image (b) was therefore rendered by calling `render_containerfile` on the committed § 5.1 host fixture (`sel::snapshot` with one `/srv/www(/.*)?` label and one `ssh_port_t` port label, `PolicyStore` order) through a throwaway test, since deleted. Two substitutions were needed and both are recorded rather than silently made: that fixture populates only the SELinux section, so the renderer emits `# FROM line omitted — target image could not be determined` and the gate's base was prepended by hand; and image (b) per step 1(b) is the base plus the precondition block alone, so the precondition's eight lines were extracted verbatim from the rendered file. Everything executed below is renderer output byte for byte. The fully rendered image is kept separately as `localhost/b1-rendered` and is what the additive checks measure.
+
+Its local store is pristine as step 1(b) intends: `semanage fcontext -l -C` prints nothing and exits 0.
+
+**Note on the sub-case scripts below.** Task 11 changed two of the emitted forms after this plan was written: rule 2 gained the listing capture that rule 1 already had, and three FIXME diagnostics gained their missing operands. The scripts in steps 2 to 7 quote the pre-change text. Each sub-case was run with **the form the renderer emits today**, because § 8.14's purpose is to exercise what ships; where the executed path differs from the quoted script the Result line says so. No sub-case's expectation or re-open condition was altered.
+
+**Incidental, not a gate criterion.** The rendered Containerfile ends in `RUN bootc container lint`, which exits 0 with two warnings on image (b) against one on the stock base. The new residue is `/run/rhsm`, an empty `/var/lib/dnf`, `/var/lib/rhsm/*` and `/var/cache/ldconfig/aux-cache` — all from the `dnf` transaction, none from the SELinux rules, and the `rhsm` entries are an artifact of this build host supplying RHEL entitlements through podman rather than of the emitted line. Warnings only; the lint check passes.
 
 - [ ] **Step 2: Sub-case (i) — stock expression, delete-then-add-or-modify**
 
@@ -212,11 +224,15 @@ Expected: exit 0. `-d` fails on a key defined in policy and is swallowed by `2>/
 
 **Re-open condition:** the spec allows exactly one surprise here — if a RHEL downstream `semanage` accepts the duplicate `-a`, the `|| -m` fallback stays (harmless) and § 3.1 rule 1 gains a note on the downstream behaviour. Any other failure re-opens § 3.1. "The duplicate-add allowance is not permission to ignore any other failure" (§ 8.14).
 
-Result: **Not run as specified, 2026-10-27: step 1 failed and the stock base has no `semanage`.** Run against the same base with `policycoreutils-python-utils` added, as evidence toward the § 3.1 decision. `policycoreutils` and `libsemanage` are 3.6, the versions § 3.1 cites, so the behaviour transfers.
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27: step 1 failed and the stock base has no `semanage`.** Run against the same base with `policycoreutils-python-utils` added, as evidence toward the § 3.1 decision. `policycoreutils` and `libsemanage` are 3.6, the versions § 3.1 cites, so the behaviour transfers.
 
 Observed: exit 0, and the final listing shows `/var/www(/.*)?  all files  system_u:object_r:public_content_t:s0`, the outcome the step expects. **The one allowed surprise is present:** `-a` on an already-defined key does not fail. `semanage fcontext -a -t public_content_t '/var/www(/.*)?'` prints `File context for /var/www(/.*)? already defined, modifying instead` and **exits 0**, auto-modifying, on a stock key and again on a local one; only `-d` fails, with `ValueError: File context for /var/www(/.*)? is defined in policy, cannot be deleted` (exit 1, swallowed as designed). So the `|| -m` fallback never fires for a duplicate on this base. Per § 8.14 the fallback stays (harmless) and § 3.1 rule 1 gains the downstream note. The end state is the one rule 1 intends, so the recency model is unaffected: sub-cases (iii) and (iv) measure it directly and both hold.
 
 Incidental, on every mutating `semanage` call in a container: stderr carries `libsemanage.semanage_rename: WARNING: rename(/etc/selinux/targeted/active, /etc/selinux/targeted/previous) failed: Invalid cross-device link, fall back to non-atomic semanage_copy_dir_flags()`. It is benign (libsemanage falls back to a copy) and comes from the overlay mount, not the rule, but it will appear in real build output and should not be read as a rule failure.
+
+**Re-run, 2026-10-28, against image (b): PASS.** Exit 0, and `semanage fcontext -l -C` afterwards shows the single line `/var/www(/.*)?  all files  system_u:object_r:public_content_t:s0`. The one allowed surprise is present again and nothing else: `-a` printed `File context for /var/www(/.*)? already defined, modifying instead` and exited 0, so the `|| -m` never fired. Per § 8.14 the fallback stays and § 3.1 rule 1 keeps the downstream note. No other failure, so the duplicate-add allowance is not being stretched to cover anything.
+
+**Ruling out a pass for the wrong reason.** Exit 0 alone proves little here: the `-d` is swallowed by `2>/dev/null || true` and a `semanage` that did nothing at all would also exit 0. The listing is the proof, on two counts. `semanage fcontext -l -C` reports **local customizations only**, so the entry exists because this run wrote it. And the type is the discriminator: the stock policy defines `/var/www(/.*)?` as `httpd_sys_content_t` (`grep '^/var/www' /etc/selinux/targeted/contexts/files/file_contexts`), while the listing reads `public_content_t`, which only the replay could have put there.
 
 - [ ] **Step 3: Sub-case (ii) — equivalence added, then identical**
 
@@ -237,7 +253,11 @@ Expected: `pass1 exit=0`, `pass2 exit=0`, and exactly one `/var/srv = /srv` line
 
 **Re-open condition:** a second entry, a nonzero exit, or a mutation on pass 2 re-opens § 3.1 rule 2.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation exactly.** Output was `pass1 exit=0`, `pass2 exit=0`, and the final listing held exactly one line, `/var/srv = /srv`, with the whole equivalence section containing nothing else. Pass 2 found the mapping identical and ran no `semanage` mutation. § 3.1 rule 2's absent-add and identical-no-op branches hold on this base.
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation exactly.** Output was `pass1 exit=0`, `pass2 exit=0`, and the final listing held exactly one line, `/var/srv = /srv`, with the whole equivalence section containing nothing else. Pass 2 found the mapping identical and ran no `semanage` mutation. § 3.1 rule 2's absent-add and identical-no-op branches hold on this base.
+
+**Re-run, 2026-10-28, against image (b), with the form the renderer emits today: PASS.** The executed body is rule 2 as changed by Task 11, with the listing captured and its failure fatal, which the script above predates. `pass1 exit=0`, `pass2 exit=0`, and the final listing holds exactly one `/var/srv = /srv` line (`wc -l` on the filtered listing gives 1). No second entry, no nonzero exit, no mutation on pass 2.
+
+**Ruling out a pass for the wrong reason.** "No mutation on pass 2" cannot be read off an exit status, since both branches can exit 0. It is read off stdout: `semanage fcontext -a -e` on an existing subject prints `Equivalence class for /var/srv already exists, modifying instead` (measured on this base), and pass 2 printed nothing at all. Silence is therefore positive evidence that the `[ -z "$eq" ]` branch was not entered, not merely an absence of errors.
 
 - [ ] **Step 4: Sub-case (iii) — two overlapping rules in reversed specificity**
 
@@ -266,7 +286,7 @@ Expected: both replays exit 0, and both `matchpathcon` paths report the **later*
 
 **Re-open condition:** if the two paths disagree, or the winner is `httpd_sys_content_t`, § 3.1 rule 1's recency claim is wrong and § 3.1 is re-opened.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base in both forms, because the spec and this plan set up the store differently, and the difference is load-bearing.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base in both forms, because the spec and this plan set up the store differently, and the difference is load-bearing.**
 
 This plan's form, equivalence added first: both replays exit 0, `matchpathcon /var/srv/www/index.html` and `matchpathcon /srv/www/index.html` both give `system_u:object_r:public_content_t:s0`, they agree, and the winner is the later rule, B. `file_contexts.local` lists A (`/srv/www(/.*)?`) before B (`/srv/.*`). **§ 3.1 rule 1's recency claim holds.**
 
@@ -275,6 +295,10 @@ The spec's § 8.14 (iii) form, "on a clean store" with no equivalence first: bot
 The disagreement is the absence of the equivalence, not a defect in rule 1. On this base `/srv` is a symlink to `var/srv`, `file_contexts.subs_dist` has no entry mapping `/var/srv`, and § 3.1 has the renderer emit the synthesized `/var/srv = /srv` before the first rule whose spec starts at a var-symlinked top level. The rendered block therefore always carries the equivalence ahead of these two rules, which is the state this plan's form sets up and the spec's wording omits. Read the clean-store run as confirmation that the synthesis is load-bearing: without it, every `/srv` rule misses the real path.
 
 **This was a spec wording defect in § 8.14 (iii), not a § 3.1 design failure.** As first written, § 8.14 (iii) asked for a clean store and for both paths to agree, and on this base those two cannot both hold. **Settled 2026-10-27: § 8.14 (iii) now starts from a store that already carries the synthesized `/var/srv = /srv`, as the renderer does**, which is the form this step has used all along. The two descriptions agree from here on; the step below needs no change on the re-run beyond the image swap.
+
+**Re-run, 2026-10-28, against image (b): PASS.** Both replays exit 0. `matchpathcon /var/srv/www/index.html` and `matchpathcon /srv/www/index.html` both give `system_u:object_r:public_content_t:s0`; the two paths agree and the winner is the later rule, B. `file_contexts.local` lists A (`/srv/www(/.*)?  httpd_sys_content_t`) before B (`/srv/.*  public_content_t`). § 3.1 rule 1's recency claim holds.
+
+**Ruling out a pass for the wrong reason.** `public_content_t` would be the right answer for the wrong reason if the stock policy already gave it to `/srv/www`. It does not: stock is `/srv/([^/]*/)?www(/.*)? -> httpd_sys_content_t`, and A explicitly adds a local `/srv/www(/.*)? -> httpd_sys_content_t` on top of it. So the more specific rule names `httpd_sys_content_t` from two directions, and the oracle still returns `public_content_t`. Only recency produces that, which is precisely the claim under test. The agreement of the two paths is likewise load-bearing rather than incidental: without the equivalence `/var/srv/www/index.html` resolves to `var_t` (measured 2026-10-27, clean-store form).
 
 - [ ] **Step 5: Sub-case (iv) — preseeded overlapping local key, `matchpathcon` oracle**
 
@@ -304,9 +328,13 @@ Expected: both replays exit 0; the listing shows `/srv/.*` with the source's `pu
 
 **Re-open condition:** if `matchpathcon` names `httpd_sys_content_t`, or `file_contexts.local` lists B before A, § 3.1 is wrong and is re-opened before merge.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying the source's `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A (`/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0`) before B (`/srv/.*  system_u:object_r:public_content_t:s0`). The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — **the source winner, not `httpd_sys_content_t`.**
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying the source's `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A (`/srv/www(/.*)?  system_u:object_r:httpd_sys_content_t:s0`) before B (`/srv/.*  system_u:object_r:public_content_t:s0`). The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — **the source winner, not `httpd_sys_content_t`.**
 
 This is the sub-case that measures what § 3.1 rule 1 says it gives up: a target-local key the source does not define, overlapping a collected key, loses to it. The preseeded `var_t` on `/srv/.*` was replaced by the source's type and the source's relative order survived. `semanage` printed `File context for /srv/.* already defined, modifying instead` twice, once for the preseed (stock policy defines `/srv/.*`) and once for B; the `-d` before B removed the preseeded local key, so B still landed last in the local list. The auto-modify of sub-case (i) does not disturb the ordering model.
+
+**Re-run, 2026-10-28, against image (b): PASS on every clause.** Both replays exit 0. The listing shows `/srv/.*` carrying `system_u:object_r:public_content_t:s0`, not the preseeded `var_t`. `file_contexts.local` lists A before B. The oracle, `matchpathcon /srv/www/index.html`, gives `system_u:object_r:public_content_t:s0` — the source winner, not `httpd_sys_content_t`. Neither re-open condition fires.
+
+**Ruling out a pass for the wrong reason.** The preseed is shown in place before the replays run (`/srv/.*  all files  system_u:object_r:var_t:s0`), so the `var_t` this sub-case claims to displace was really there. The oracle's discriminator is the same as (iii)'s and is sharper here: a local `/srv/www(/.*)?  httpd_sys_content_t` exists and is more specific than the winner, so `public_content_t` can only come from B being later. And the secondary check is genuinely secondary — the `-l -C` listing is sorted by expression and cannot show replay order, which is why `file_contexts.local` was read directly rather than inferred from it.
 
 - [ ] **Step 6: Sub-case (v) — conflicting target equivalence stops the build**
 
@@ -332,7 +360,7 @@ and the final listing still shows `/var/srv = /opt/srv` with no `/srv` mapping.
 
 **Re-open condition:** if the mapping was replaced, § 3.1 rule 2 is wrong and is re-opened.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation.** The emitted form exits 1, stdout is empty, and stderr carries exactly the one expected line and nothing else:
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation.** The emitted form exits 1, stdout is empty, and stderr carries exactly the one expected line and nothing else:
 
 ```
 FIXME: /var/srv is already equivalent to /opt/srv on the target, not /srv; delete that equivalence with semanage fcontext -d -e, or exclude this rule, then rebuild
@@ -341,6 +369,16 @@ FIXME: /var/srv is already equivalent to /opt/srv on the target, not /srv; delet
 The mapping survives unreplaced: the equivalence listing after the run still reads `/var/srv = /opt/srv`, and no mapping to `/srv` was added. § 3.1 rule 2's conflict branch holds, with no mutation.
 
 Note on the step as written: the `elif` branch ends in `exit 1`, so the `echo "exit=$?"` and the listing after the `fi` are unreachable when the conflict fires and print nothing. The exit status and the surviving mapping above were confirmed by running the emitted form in a subshell and inspecting the store afterward; the conclusion does not rest on the exit status alone.
+
+**Re-run, 2026-10-28, against image (b), with the form the renderer emits today: PASS.** The diagnostic changed with Task 11: it now spells both operands of the delete command, because `semanage fcontext -d -e` without them answers with a `KeyError`. Run in a subshell with stderr captured, exit is 1, stdout is empty, and stderr is **exactly one line**:
+
+```
+FIXME: /var/srv is already equivalent to /opt/srv on the target, not /srv; delete that equivalence with semanage fcontext -d -e /opt/srv /var/srv, or exclude this rule, then rebuild
+```
+
+The equivalence listing afterwards still reads `/var/srv = /opt/srv`, with no mapping to `/srv` added. § 3.1 rule 2's conflict branch holds with no mutation.
+
+**Ruling out a pass for the wrong reason.** A nonzero exit on its own would also be produced by the listing failing, which is a different branch with a different message; the stderr text identifies which branch ran, and `wc -l` on the captured stderr confirms nothing else was printed. The surviving mapping was read from a fresh `semanage fcontext -l -C` after the subshell exited, not inferred from the absence of an error.
 
 - [ ] **Step 7: Sub-case (vi) — a target equivalence subject under a label spec is refused without mutation**
 
@@ -371,7 +409,7 @@ Expected: the three `/var/srv` replays each exit 0 with the rule 1 skip FIXME on
 
 **Re-open condition:** if the equivalence is gone or a `/var/srv` label row appears, § 3.1 is wrong and is re-opened before merge.
 
-Result: **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** The three `/var/srv` replays print `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv`:
+Result (superseded by the 2026-10-28 re-run below against image (b), which reads **PASS** — see the B1 VERDICT table): **Not run as specified, 2026-10-27 (no `semanage` in the stock base). Run on the augmented base: matches the expectation on every clause.** The three `/var/srv` replays print `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv`:
 
 ```
 FIXME: skipped the file context rule for /var/srv; the target maps that path as an equivalence, which semanage fcontext -d would delete instead of a label; delete it with semanage fcontext -d -e, or exclude this rule, then rebuild
@@ -387,9 +425,51 @@ ValueError: File spec /var/srv/www(/.*)? conflicts with equivalency rule '/var/s
 
 printed once for `-a` and once for `-m`, after which the listing still reads `/var/srv = /srv`. Stopping the build on that message is the outcome § 3.1 rule 1 calls correct, and `semanage`'s own text names the fix.
 
+**Re-run, 2026-10-28, against image (b): PASS on every clause.** `label exit=0`, `unlabel exit=0`, `ftype exit=0`, each with the rule 1 skip FIXME on stderr naming `/var/srv` (now carrying the delete command's operands, per Task 11). The listing after the three holds `/var/srv = /srv` under the equivalence header and an **empty fcontext table** — no `/var/srv` label row of any file type. The descendant `/var/srv/www(/.*)?` does not fire the guard, `semanage` refuses both `-a` and `-m` with its equivalency-conflict message, that replay exits 1, and the equivalence survives. Neither re-open condition fires.
+
+**Ruling out a pass for the wrong reason.** "No `/var/srv` label row" would be equally true of a listing that failed and printed nothing. It did not fail: the same listing printed the equivalence section, so the table is genuinely empty rather than unread.
+
+**One divergence worth recording, which is not a failure.** The descendant clause now tests a form the renderer no longer emits. Task 11's collision check refuses at render time any spec sitting under an equivalence the block itself adds, so a collected `/var/srv/www(/.*)?` rule becomes a two-line FIXME in the Containerfile and never reaches `semanage`. The behaviour this clause measures is still the correct oracle for what `semanage` does, and keeping it guards against the renderer's check being removed; but the build-stopping outcome it describes is now unreachable from shipped output. Additive check 4 measures the path that replaced it.
+
 - [ ] **Step 8: Record the verdict**
 
 Write PASS or the failing sub-case and its observed output into each Result line above, and commit this document alone.
+
+## B1 VERDICT: **PASS** (re-run 2026-10-28, `fa627ffe` plus Task 11c)
+
+Run against `registry.redhat.io/rhel9/rhel-bootc:9.8` (aarch64, `policycoreutils-3.6-5.el9`, `libsemanage-3.6-5.el9_6`, `selinux-policy-targeted-38.1.75-2.el9_8.1`, `ostree-2025.7-1.el9`), with image (b) built from the Containerfile the renderer emits. podman 6.1.4.
+
+| Sub-case | Verdict |
+|---|---|
+| Step 1 — tooling, per binary, both images | PASS |
+| (i) stock expression, delete-then-add-or-modify | PASS (the one allowed surprise, nothing else) |
+| (ii) equivalence added, then identical | PASS |
+| (iii) two overlapping rules, reversed specificity | PASS |
+| (iv) preseeded overlapping local key, `matchpathcon` oracle | PASS |
+| (v) conflicting target equivalence stops the build | PASS |
+| (vi) equivalence subject under a label spec | PASS |
+
+**No re-open condition fires.** § 3.1 stands as written and Task 26 step 4 is satisfied.
+
+The single deviation from expectation is sub-case (i)'s duplicate `-a`, which § 8.14 allows by name and which was already recorded on 2026-10-27. Per that allowance the `|| -m` fallback stays and § 3.1 rule 1 keeps its downstream note. Nothing else differed, so the allowance is not doing any work it was not granted.
+
+### Additive checks (b1-runbook.md), all PASS
+
+These are additions to how the gate is run, not to what it requires. Measured against `localhost/b1-rendered`, the fully rendered image.
+
+1. **Image-size delta.** Budget `base + 70 MB + 25 MB x (emitted semanage RUNs)` = 1.84 GB + 70 + 75 = **1.985 GB** for the three `semanage` RUNs this Containerfile emits. Measured **1.94 GB**. Layers: 58.7 MB precondition, 447 kB equivalence, 21 MB rule, 21 MB port label, 1 kB lint. Under budget.
+2. **`/var/cache/dnf` absent.** ABSENT; `/var` totals 376 KB. Pre-fix it held 533 MB.
+3. **Rule-2 listing failure with a differing equivalence preseeded.** Exit 1, the listing-failure FIXME, and `/var/srv = /opt/srv` survives untouched. *Wrong-reason check:* the `PATH` stub fails only `semanage ... -l` and execs the real binary otherwise — proven by pushing a mutating `semanage fcontext -a -e /tmp /var/tmpx` through the same stub and watching it succeed. So the guard stopped the destructive call, not the stub.
+4. **A snapshot carrying both `/srv/...` and `/var/srv/...` rules.** All three assertions: the build succeeds; zero `RUN` lines mention `/var/srv/data` and the rule renders as the two-line FIXME instead; and following the FIXME's advised rewrite works — `matchpathcon /var/srv/data/x` moves from `var_t` to `httpd_sys_content_t` after `semanage fcontext -a -t httpd_sys_content_t '/srv/data(/.*)?'`.
+5. **`matchpathcon` on the real path.** `/var/srv/www/index.html -> system_u:object_r:httpd_sys_content_t:s0`, agreeing with `/srv/www/index.html`. Not a read-back of the listing.
+
+Two permanent checks raised by the correctness seat were already closed before this run and were re-confirmed incidentally: image (b)'s pristine local store makes `semanage fcontext -l -C` print nothing and exit 0 with the guard returning OK on zero equivalence lines, and `-d -e <target> <subject>` is the working operand order (sub-case (v)'s diagnostic prints exactly that form).
+
+### What a passing B1 still does not cover
+
+**The upgrade leg.** Everything above is build-time. What happens to these rules across `bootc upgrade` or `bootc switch`, and whether an admin running `semanage` on a deployed machine pins the policy store and silently loses later image rules, is **not measured** — it is inference from ostree merge semantics plus `bootc-filesystem(7)`. Where the rules land is measured and is high confidence (`store-root=/etc/selinux` on this base, nothing in `/var`); what an upgrade does to them is medium. It needs `bootc install to-disk`, a first boot and a switch, and is not reachable from the machine this gate was run on. The README's caution about running `semanage` on a deployed machine must stay a caution, hedged in both directions, until something measures it. Tracked as Gap 1 in `b1-runbook.md`.
+
+**composefs-native.** Gap 2 in the runbook; not a B1 concern while RHEL 9 is ostree-backed.
 
 ```bash
 git add process-docs/plans/2026-10-27-refine-ui-fixup-phase-0.md
@@ -2579,6 +2659,8 @@ Keep a Changelog 1.1.0 categories, the repo's `- **Label** — description` form
 - **Snapshot schema 23** — removed fields and changed types make schema 22 snapshots unloadable. Re-scan; aggregates re-aggregate from re-scanned hosts.
 ```
 
+**Note, 2026-10-31: the draft above did not ship as written.** Two dedicated review seats verified these entries against the shipped code at `8aed2b7a`/HEAD after this draft was written and found four clauses of the fcontext entry, the repo-enabling entry's "every", two history clauses of the repo/group entry, the "66" figure, and most of the Security entry's history wrong or incomplete. `CHANGELOG.md`'s `## [Unreleased]` section is the authoritative text; it does not match the draft above. See `/Users/mrussell/FKA/marks-inbox/reviews/inspectah-changelog-claim-verification-2026-10-30.md` and `/Users/mrussell/FKA/marks-inbox/reviews/inspectah-security-changelog-verification-2026-10-30.md` for what changed and why, and Task 26's own report for the full per-claim accounting.
+
 - [ ] **Step 2: Walk the § 4 consumer checklist**
 
 Open § 4's consumer table and the task map at the top of this plan, and confirm each row's "Phase 0" column is what the code does. Record any row the implementation diverged from, with the reason, under a new "Divergences" heading in this document.
@@ -2687,3 +2769,89 @@ Run against the spec with fresh eyes after the plan was written.
 **4. Review Focus.** Five input classes the spec implies and § 8 does not pin, each with a test in the owning task: `RepoId` case folding (Task 4), `parse_repo_sections` on dnf's `enabled=` vocabulary (Task 4), the no-op arms with no `rpm` section (Task 7), `effective_var_backing` with absent sections (Task 19), and the `validate_staged_name` length boundaries (Task 12).
 
 **5. Proportion.** The plan is shorter than the spec it implements. Most of its bulk is the two merge gates' runnable shell and the two emitted `RUN` forms, both of which are exact bytes the implementer cannot derive.
+
+---
+
+## Divergences
+
+Written by Task 26, step 2 (the § 4 checklist walk) and the companion's
+required record of spec and plan defects found while closing out the plan.
+Each entry names what diverges, from what, and why.
+
+### § 4 consumer checklist walk
+
+Every row of spec § 4's "Phase 0 consumer and merge checklist" was checked
+against the code at HEAD (`d5e93d3e`). Ten of eleven rows match the table's
+"Phase 0" column exactly. One does not:
+
+- **Aggregate merge, storage (`merge.rs:1512`, now `merge_storage_sections`
+  in `crates/core/src/aggregate/merge.rs`).** The § 4 table's Phase 0 column
+  reads "unchanged in structure; `backing` payloads compare by value, and
+  hosts that disagree keep the first in hostname order." Task 18's own
+  file-change note in this plan (its Files list) repeats the same text. The
+  shipped code does something narrower: first-host-in-hostname-order is the
+  default, but a host whose verdict is `Unbacked` loses to another host's
+  backed verdict **only when that verdict names a creator the export can
+  carry** (`VarDirBacking::names_a_carryable_creator`). This was added in
+  commit `965ecdba` ("feat(pipeline): reconcile /var backing against what
+  the export carries", Task 19), whose message explains why: "the fleet
+  case needed its own rule... keeping `Unbacked` because its host sorted
+  first makes the export provision a path the merged config section already
+  creates." The behaviour is correct and the commit message states the
+  reasoning; the § 4 table and Task 18's file note simply predate the
+  exception Task 19 had to add. No action needed beyond this record — the
+  spec's table is stale on one clause, not wrong in intent.
+
+### Spec and plan defects found closing out tasks 20-26
+
+1. **§ 3.5 prescribes building `customizations_from_config` by path prefix**,
+   which would re-derive a classification the config walker already owns.
+   Task 21 implemented a categorical filter instead, by ruling (see Task
+   21's own notes); the spec's path-prefix wording was never followed.
+2. **§ 3.4's "counted in the summary row's `<U> unbacked`" and § 6.6's state
+   text need correcting together.** § 6.6 still prescribes `<U> unbacked` as
+   the only non-empty state text, but Task 23 split the count into
+   `<U> unbacked` and `<N> unconfirmed`. The `/var` review seat made
+   correcting this pairing an explicit condition of its approval; the spec
+   text itself was never updated to match.
+3. **§ 3.8 / Task 23 step 5's delta enumeration is incomplete.** It omits
+   the config-backed pointer row's `decision`, which Task 23's own "Where
+   `decision` is filled" paragraph requires. A reviewer ruled the
+   enumeration defective, not the implementation — the shipped code is
+   correct, the spec's list of what changes is short by one row.
+4. **§ 3.9 credits `invalidate_caches` with clearing the view caches on
+   every mutation.** It has three callers — `rescan_upload_dir`,
+   `set_uploaded`, `unmark_uploaded_rpm` — none on an op path. `apply`,
+   `apply_batch`, `undo`, `redo`, and `reset` each inline the cache-clear
+   work themselves. The behaviour (caches are cleared on every mutation) is
+   correct; the attribution to one shared function is wrong.
+5. **Task 25's own brief had four defects**, found while Task 25 was
+   reviewed: two citations (the brief cited `crates/refine/src/rpm_filename.rs`,
+   which was never created; the module shipped at `crates/core/src/rpm_filename.rs`
+   instead, so it could be read from both `refine` and `pipeline`, which sit
+   on opposite sides of a dependency edge — this plan's own File Structure
+   note at the top carries the same stale `crates/refine/...` path and is
+   wrong for the same reason; and a `normalize.rs` line citation pointed at
+   the callee while its prose described the caller) and two merged claims (the brief's
+   `Inventory`-bucket sentence is true only of sysctl-shadowed config
+   entries, not of `loaded_modules`, which reaches no bucket at all per
+   `web-disposition-contract.md` § 4's Inventory caveat; and "the substring
+   rule is replaced" is true of `classify_recorded_repo` only, not of
+   `repo_matches_enabled`). Task 25's commits (`025c2747`, `d5e93d3e`)
+   already corrected the skill-file text itself; this entry records that
+   the brief that drove Task 25, not just the skills, was wrong.
+6. **Task 26's own step 3 cannot pass as written.**
+   `cargo clippy --workspace --all-targets -- -D clippy::all` exits 101,
+   because the 9-warning baseline is entirely `clippy::all`-style lint and
+   `-D` promotes every one of the nine to a hard error. The step's own
+   expectation ("reports nothing beyond the 9-warning pre-existing
+   baseline") is incompatible with the flag it prescribes. The working
+   check, used for this task's step 3 instead, is
+   `cargo clippy --workspace --all-targets 2>&1 | grep -cE "^warning: [a-z]"`,
+   which must read 9. Two counting traps sit next to this number: a bare
+   `grep -c '^warning: '` reads 13 (the 9 lints plus 4 per-crate "generated
+   N warnings" summary lines), and the `-->` span count reads 11 (the two
+   `field_reassign_with_default` warnings each carry two spans). Neither 13
+   nor 11 is the warning count; **9 is correct and is not changed by this
+   entry**, despite an earlier seat in this plan recommending it be changed
+   to 11.

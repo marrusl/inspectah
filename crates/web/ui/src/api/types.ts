@@ -373,7 +373,12 @@ export interface ReferenceSection {
 }
 
 /** Rust: #[serde(rename_all = "snake_case")] */
-export type RepoProvenance = "verified" | "incomplete" | "unknown";
+export type RepoProvenance =
+  | "verified"
+  | "incomplete"
+  | "disabled"
+  | "stale"
+  | "unknown";
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type RepoTier = "distro" | "official_optional" | "third_party";
@@ -399,6 +404,13 @@ export interface RepoGroupInfo {
   is_distro: boolean;
   tier: RepoTier;
   package_count: number;
+  /** In `packages_added`, actionable, and not locked. The repo control's
+   *  effective member set. */
+  effective_member_count: number;
+  /** Of the effective members, those currently included. */
+  effective_included: number;
+  /** Of the effective members, those absent from the visible package list. */
+  effective_unlisted: number;
   enabled: boolean;
 }
 
@@ -519,10 +531,14 @@ export interface GroupMemberInfo {
 export interface GroupInfo {
   name: string;
   member_count: number;
+  /** In `packages_added`, actionable, and not locked (§ 3.7). */
+  effective_member_count: number;
+  /** Of the effective members, those currently included. */
+  effective_included: number;
   added_count: number;
   locked_count: number;
   optional_spillover_count: number;
-  render_state: "renderable" | "excluded" | "ungrouped" | "degraded";
+  render_state: "renderable" | "excluded" | "ungrouped" | "degraded" | "inert";
   degradation_reason: string | null;
   members: GroupMemberInfo[];
 }

@@ -4,8 +4,81 @@ expression: json
 ---
 {
   "baseline_summary": null,
-  "config_files": [],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Kernel and Boot Configuration ===\n# 1 sysctl override(s) — merged into single drop-in\nCOPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n# 1 custom audit rule file(s) materialized under config/etc/audit/rules.d/\n# 1 custom PAM config file(s) materialized under config/etc/pam.d/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "config_files": [
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "audit",
+        "content": "-w /etc/shadow -p wa -k shadow_changes",
+        "diff_against_rpm": null,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/audit/rules.d/10-custom.rules",
+        "rpm_va_flags": null,
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "pam",
+        "content": "auth required pam_google_authenticator.so",
+        "diff_against_rpm": null,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/pam.d/sshd-custom",
+        "rpm_va_flags": null,
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    },
+    {
+      "entry": {
+        "aggregate": null,
+        "category": "kernel_module",
+        "content": "br_netfilter",
+        "diff_against_rpm": null,
+        "disposition": {
+          "include": true,
+          "kind": "actionable"
+        },
+        "kind": "unowned",
+        "package": null,
+        "path": "/etc/modules-load.d/br_netfilter.conf",
+        "rpm_va_flags": null,
+        "variant_selection": "Only"
+      },
+      "triage": {
+        "primary_reason": "config_unowned",
+        "triage": {
+          "mode": "single_host",
+          "site": null
+        }
+      }
+    }
+  ],
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'httpd.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 3 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# === Container Workloads (1) ===\nCOPY quadlet/ /etc/containers/systemd/\n\n# === Kernel and Boot Configuration ===\n# 1 sysctl override(s) — merged into single drop-in\nCOPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/\n\n# === Security & Access Control ===\n# FIXME: 1 custom policy module(s) detected — export .pp files to config/selinux/ and uncomment the COPY + semodule lines below\n# COPY config/selinux/ /tmp/selinux/\n# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/\n\n# === /etc/hosts Additions ===\n# FIXME: These /etc/hosts entries need to be added to the image:\n#   10.0.0.50 app-server\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "flatpaks": [],
   "generation": 0,
   "has_unmanaged_scan": false,
@@ -41,6 +114,9 @@ expression: json
         "epoch": "",
         "name": "httpd",
         "release": "11.el9",
+        "repo_attribution": {
+          "kind": "unrecorded"
+        },
         "source_repo": "",
         "state": "added",
         "version": "2.4.57"
@@ -73,6 +149,9 @@ expression: json
   ],
   "repo_groups": [
     {
+      "effective_included": 0,
+      "effective_member_count": 0,
+      "effective_unlisted": 0,
       "enabled": true,
       "is_distro": false,
       "package_count": 1,
@@ -116,9 +195,9 @@ expression: json
       {
         "advisory": 0,
         "excluded": 0,
-        "included": 0,
+        "included": 3,
         "kind": "config",
-        "total": 0
+        "total": 3
       }
     ]
   },

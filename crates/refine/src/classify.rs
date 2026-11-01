@@ -5,7 +5,7 @@ use crate::types::{
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::config::{ConfigCategory, ConfigFileKind};
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::redaction::RedactionState;
@@ -779,11 +779,22 @@ pub fn classify_tuned(snap: &InspectionSnapshot) -> Vec<RefinedTunedSelection> {
         return Vec::new();
     }
 
-    let custom_paths: Vec<String> = kernel_boot
-        .tuned_custom_profiles
-        .iter()
-        .map(|c| c.path.clone())
-        .collect();
+    // The custom profiles are `config.files` entries with category `Tuned`
+    // (§ 3.6): the walker owns `/etc/tuned/` and the export decides each
+    // file there. Re-deriving the list from a second collector would be a
+    // second answer to the same question.
+    let custom_paths: Vec<String> = snap
+        .config
+        .as_ref()
+        .map(|config| {
+            config
+                .files
+                .iter()
+                .filter(|f| f.category == ConfigCategory::Tuned)
+                .map(|f| f.path.clone())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Check whether the tuned RPM is installed.
     let tuned_pkg_installed = snap
@@ -2716,7 +2727,8 @@ mod sysctl_classification {
 #[cfg(test)]
 mod tuned_classification {
     use super::*;
-    use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::kernelboot::KernelBootSection;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
@@ -2812,16 +2824,30 @@ mod tuned_classification {
         assert!(result.is_empty());
     }
 
+    /// The custom profiles come from `config.files` (§ 3.6), not from a
+    /// second list on `KernelBootSection`. The earlier form of this test
+    /// fed `tuned_custom_profiles`, which was the second derivation.
     #[test]
     fn tuned_custom_profiles_are_captured() {
         let snap = InspectionSnapshot {
             kernel_boot: Some(KernelBootSection {
                 tuned_active: "my-custom-profile".to_string(),
-                tuned_custom_profiles: vec![ConfigSnippet {
-                    path: "/etc/tuned/my-custom-profile/tuned.conf".to_string(),
-                    content: "[main]\nsummary=Custom profile".to_string(),
-                }],
                 ..Default::default()
+            }),
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/tuned/my-custom-profile/tuned.conf".to_string(),
+                        category: ConfigCategory::Tuned,
+                        content: "[main]\nsummary=Custom profile".to_string(),
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/myapp/app.conf".to_string(),
+                        category: ConfigCategory::Other,
+                        ..Default::default()
+                    },
+                ],
             }),
             rpm: Some(RpmSection {
                 packages_added: vec![tuned_pkg()],

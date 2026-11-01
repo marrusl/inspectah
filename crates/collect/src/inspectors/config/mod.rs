@@ -17,7 +17,10 @@ use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use std::collections::HashSet;
 use std::path::Path;
-use walk::{dhcp_connection_paths, is_dev_artifact, is_excluded_unowned, walk_etc_recursive};
+use walk::{
+    dhcp_connection_paths, is_dev_artifact, is_excluded_unowned, walk_etc_recursive,
+    walk_etc_with_reasons,
+};
 
 use super::modernization;
 
@@ -131,6 +134,12 @@ impl Inspector for ConfigInspector {
             if dhcp_paths.contains(*path) {
                 continue;
             }
+            if is_selinux_fcontext_store_file(path) {
+                continue;
+            }
+            if is_authselect_pam_link(exec, path, flags) {
+                continue;
+            }
 
             let content = read_config_content(exec, path, &mut degraded_reasons);
 
@@ -165,7 +174,7 @@ impl Inspector for ConfigInspector {
             inspector: inspector_id,
             step: StepId::WalkingFilesystem,
         });
-        match walk_etc_recursive(exec, "/etc") {
+        match walk_etc_with_reasons(exec, "/etc", &mut degraded_reasons) {
             Ok(files) => {
                 for rel_path in files {
                     let abs_path = format!("/etc/{rel_path}");
@@ -338,6 +347,20 @@ impl Inspector for ConfigInspector {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// `file_contexts.local`/`file_contexts.subs` under the SELinux policy
+/// store are derived policy-store state collected as typed `FcontextRule`s
+/// (see `inspectors::selinux::collect_fcontext_rules`), not config. The
+/// unowned-file walk already excludes them via `UNOWNED_EXCLUDE_GLOBS`
+/// (`contexts/files/*`), but `rpm -Va` can also report them as a modified
+/// owned file (they are `rpm_owned_modified` on a host where policycoreutils
+/// owns them), which takes the separate code path above and needs its own
+/// skip.
+fn is_selinux_fcontext_store_file(path: &str) -> bool {
+    path.starts_with("/etc/selinux/")
+        && (path.ends_with("/contexts/files/file_contexts.local")
+            || path.ends_with("/contexts/files/file_contexts.subs"))
+}
+
 /// Classify an RPM-verified config file as Modified or Default based on
 /// verification flags.
 ///
@@ -382,6 +405,45 @@ fn is_rpm_owned_via_symlink(exec: &dyn Executor, rpm_state: &RpmState, path: &st
         rpm_state.is_rpm_owned(&resolved)
     } else {
         false
+    }
+}
+
+/// Directory holding the authselect profile files the `/etc/pam.d/` links
+/// point at.
+const AUTHSELECT_PREFIX: &str = "/etc/authselect/";
+
+/// Directory the authselect-managed PAM links live in.
+const PAM_D_PREFIX: &str = "/etc/pam.d/";
+
+/// § 3.6's authselect rule: an `rpm -Va` entry under `/etc/pam.d/` whose
+/// only flag is `L` is an RPM-owned symlink whose target changed. When that
+/// target resolves under `/etc/authselect/` it is not a local PAM
+/// customization: the customization is the authselect profile, which the
+/// unowned walk collects from `/etc/authselect/` on its own. Classifying
+/// the link as a modified config would carry the same content twice, under
+/// a path the target system regenerates.
+///
+/// On a host running authselect this is the state of `system-auth`,
+/// `password-auth`, `fingerprint-auth`, `smartcard-auth` and `postlogin`.
+///
+/// Reachability, measured rather than assumed: `classify_rpm_va_kind` reads
+/// only the size and digest columns, so a flags string whose only flag is
+/// `L` is already `RpmOwnedDefault` and already dropped a few lines below
+/// this call. This rule is therefore a guard on the classification rather
+/// than the filter that does the work today, and deleting it changes no
+/// output. It is kept because the premise it defends -- that the link is
+/// never the subject -- does not depend on which columns
+/// `classify_rpm_va_kind` happens to read.
+fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool {
+    if !path.starts_with(PAM_D_PREFIX) {
+        return false;
+    }
+    if !flags.contains('L') || !flags.chars().all(|c| c == '.' || c == 'L') {
+        return false;
+    }
+    match exec.resolve_final_target(Path::new(path)) {
+        Ok(resolved) => resolved.to_string_lossy().starts_with(AUTHSELECT_PREFIX),
+        Err(_) => false,
     }
 }
 
@@ -1347,6 +1409,23 @@ mod tests {
         // .........  — all dots (no changes detected but listed)
         assert_eq!(
             classify_rpm_va_kind("........."),
+            ConfigFileKind::RpmOwnedDefault
+        );
+    }
+
+    /// Tripwire for `is_authselect_pam_link`, which is unreachable while
+    /// this holds.
+    ///
+    /// The authselect skip exists for an `rpm -Va` entry whose only flag
+    /// is `L`. This classifier reads the size and digest columns only, so
+    /// such an entry is already `RpmOwnedDefault` and already dropped
+    /// before the skip can matter. Widening the classifier to read the
+    /// readLink column is the one change that makes the skip live, and it
+    /// fails this assertion at exactly that moment.
+    #[test]
+    fn va_link_only_is_default_which_is_why_the_authselect_skip_is_unreachable() {
+        assert_eq!(
+            classify_rpm_va_kind("....L...."),
             ConfigFileKind::RpmOwnedDefault
         );
     }

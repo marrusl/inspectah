@@ -67,6 +67,9 @@ Each module defines the data model for a snapshot section:
 
 **Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`
 
+**Core helper modules:** `crates/core/src/`
+- `rpm_filename.rs` — RPM filename parsing (`RpmFilename::parse_untrusted`) and the staged-upload filename allowlist (`validate_staged_name`)
+
 ## Inspectors
 
 **Location:** `crates/collect/src/inspectors/`
@@ -106,6 +109,8 @@ Artifact generators invoked after triage decisions finalized:
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
 - `readme.rs` — Auto-generated README for output directory
+- `selinux.rs` — SELinux file context rule rendering and the build-time equivalence table (`selinux_equivalences`)
+- `var_dirs.rs` — Effective `/var` directory backing at export time (`VarDirOutcome`, `EffectiveBacking`)
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 
@@ -158,7 +163,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 | Location | Type |
 |----------|------|
 | `crates/*/tests/` | Per-crate integration tests |
-| `crates/web/ui/e2e/` | Playwright browser tests (React UI) |
+| `crates/web/ui/e2e/` | Playwright browser tests (React UI). Fixtures under `e2e/fixtures/` are hand-maintained, not generated — see `e2e-fixtures-are-hand-maintained.md`. |
 | `crates/web/ui/src/**/__tests__/` | Jest unit tests (React components) |
 | `tests/` | Top-level end-to-end tests |
 | `testdata/` | Fixtures for integration tests |
@@ -200,3 +205,5 @@ Bundled into RPM packages.
 - **Build script version:** `crates/cli/build.rs` stamps version metadata at compile time. Don't manually update version strings in code.
 - **Schema versioning:** Snapshot JSON has a `schema_version` field that MUST be bumped when types change. See `snapshot-schema-versioning.md`.
 - **Package identity is `name.arch`** — Never use bare package names. See `package-identity-is-name-dot-arch.md`.
+- **Clippy clean has two different strictness levels** — the pre-commit hook and CI only run `cargo clippy --workspace -- -W clippy::all` (no `--all-targets`, warn not deny), which does not lint test code and cannot block a commit on clippy alone. A stricter `--all-targets -- -D clippy::all` acceptance exists in some plans but cannot pass as a `-D` command once any baseline warning exists. See `full-workspace-verification-gates.md`.
+- **Every gate is fast** — measured on an M3 Pro: a from-scratch `cargo clean` plus build plus the full 3010-test suite is under two minutes, and the pre-commit hook on a realistic change is under one. There is no per-binary startup idle. A run that has not returned in a couple of minutes is a hang, not a slow build; check `ps` elapsed time instead of waiting. `target/` grows (3.8 GB clean, 36 GB when neglected), and a periodic `cargo clean` is cheap maintenance. See `full-workspace-verification-gates.md`.

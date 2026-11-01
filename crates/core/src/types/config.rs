@@ -20,6 +20,15 @@ pub enum ConfigCategory {
     Tmpfiles,
     Environment,
     Audit,
+    /// `/etc/pam.d/`.
+    Pam,
+    /// `/etc/tuned/`.
+    Tuned,
+    /// `/etc/modules-load.d/` and `/etc/modprobe.d/` — which kernel
+    /// modules load and with what options.
+    KernelModule,
+    /// `/etc/dracut.conf.d/` — how the initramfs is built.
+    Initramfs,
     LibraryPath,
     Journal,
     Logrotate,
@@ -30,6 +39,24 @@ pub enum ConfigCategory {
     Limits,
     #[default]
     Other,
+}
+
+/// The single `/etc/sysctl.d/` drop-in the export synthesizes from the
+/// included sysctl overrides. The files whose keys it absorbs are
+/// `ConfigShadow::Sysctl` entries, and every surface that explains where
+/// their content went names this file.
+pub const SYNTHESIZED_SYSCTL_FILE: &str = "99-inspectah-migrated.conf";
+
+/// The decision a config file's content travels under when it is not the
+/// file's own. A shadowed entry is inventory: its content reaches the
+/// image through the shadowing decision and never through a copy of the
+/// file itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigShadow {
+    /// The file's keys appear in `kernel_boot.sysctl_overrides`, which
+    /// synthesizes a single drop-in from the included ones.
+    Sysctl,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -52,6 +79,10 @@ pub struct ConfigFileEntry {
     pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+    /// Set when another section's decision carries this file's content.
+    /// `disposition` is `Inventory` whenever this is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowed_by: Option<ConfigShadow>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

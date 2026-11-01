@@ -9,6 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 
 use inspectah_pipeline::render::advisory::{advisory_type_str, config_advisories};
+use inspectah_refine::projection::config_ref_summary;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, TriageBucket};
 
@@ -311,6 +312,19 @@ fn build_repo_bar_line(session: &RefineSession) -> Option<String> {
         })
         .collect();
     Some(format!("Repos: {}", parts.join("  ")))
+}
+
+/// The detail line for a `/var` directory row: its mode and ownership,
+/// or nothing when the stat that would have supplied them failed.
+///
+/// The row used to lead with a size estimate and a recommendation that
+/// the collector never filled, so it read `" — "` with nothing on either
+/// side of the dash.
+fn var_dir_detail(d: &inspectah_refine::projection::RefVarDirectory) -> String {
+    match (&d.mode, &d.owner_name, &d.group_name) {
+        (Some(mode), Some(owner), Some(group)) => format!("{mode} {owner}:{group}"),
+        _ => String::new(),
+    }
 }
 
 /// Build `ListItem`s for the active section from session data.
@@ -794,64 +808,17 @@ pub fn build_list_items(
                     None,
                 ));
             }
-            for m in &kb.non_default_modules {
-                items.push(RawItem::new(
-                    m.name.clone(),
-                    format!("size: {}, used by: {}", m.size, m.used_by),
-                    TriageGroup::Site,
-                    None,
-                    Some(ItemId::KernelModule {
-                        name: m.name.clone(),
-                    }),
-                    false,
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.modules_load_d {
+            // The kernel and boot config files are `config.files`
+            // entries. These rows point at the Configuration Files row
+            // that decides each one rather than restating its content.
+            for c in &kb.customizations_from_config {
                 items.push(RawItem::new(
                     c.path.clone(),
-                    "modules-load.d",
+                    config_ref_summary(c),
                     TriageGroup::Site,
                     None,
                     None,
-                    !c.content.is_empty(),
                     false,
-                    None,
-                ));
-            }
-            for c in &kb.modprobe_d {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "modprobe.d",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.dracut_conf {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "dracut.conf",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
-                    false,
-                    None,
-                ));
-            }
-            for c in &kb.custom_tuned_profiles {
-                items.push(RawItem::new(
-                    c.path.clone(),
-                    "tuned profile",
-                    TriageGroup::Site,
-                    None,
-                    None,
-                    !c.content.is_empty(),
                     false,
                     None,
                 ));
@@ -1022,19 +989,9 @@ pub fn build_list_items(
                 ));
             }
             for d in &st.var_directories {
-                let detail = if let (Some(mode), Some(owner), Some(group)) =
-                    (&d.mode, &d.owner_name, &d.group_name)
-                {
-                    format!(
-                        "{} \u{2014} {} ({} {}:{})",
-                        d.size_estimate, d.recommendation, mode, owner, group
-                    )
-                } else {
-                    format!("{} \u{2014} {}", d.size_estimate, d.recommendation)
-                };
                 items.push(RawItem::new(
                     d.path.clone(),
-                    detail,
+                    var_dir_detail(d),
                     TriageGroup::Site,
                     None,
                     None,
@@ -1460,6 +1417,40 @@ pub fn build_user_entries(session: &RefineSession) -> Vec<UserEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod var_dir_detail_line {
+        use super::*;
+        use inspectah_pipeline::render::var_dirs::EffectiveBacking;
+        use inspectah_refine::projection::RefVarDirectory;
+
+        #[test]
+        fn ownership_and_mode_are_the_whole_line() {
+            let d = RefVarDirectory {
+                path: "/var/lib/appone/cache".into(),
+                mode: Some("0750".into()),
+                owner_name: Some("appone".into()),
+                group_name: Some("appone".into()),
+                source: None,
+                outcome: EffectiveBacking::Carried,
+            };
+            assert_eq!(var_dir_detail(&d), "0750 appone:appone");
+        }
+
+        /// `discover_var_directories` leaves all four fields `None` when
+        /// `stat` fails, and the row then has nothing to say.
+        #[test]
+        fn a_directory_without_ownership_has_no_detail() {
+            let d = RefVarDirectory {
+                path: "/var/lib/missing".into(),
+                mode: None,
+                owner_name: None,
+                group_name: None,
+                source: None,
+                outcome: EffectiveBacking::Carried,
+            };
+            assert_eq!(var_dir_detail(&d), "");
+        }
+    }
 
     /// Render the whole screen with the given section active and return
     /// only the status bar row.

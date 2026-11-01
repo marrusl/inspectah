@@ -149,7 +149,9 @@ describe("useRpmUpload", () => {
     );
     mockFetch.mockResolvedValueOnce({
       ok: false,
+      status: 404,
       statusText: "Not Found",
+      json: async () => ({ error: "no uploaded RPM for nginx.x86_64" }),
     });
     await expect(
       act(async () => {
@@ -369,5 +371,108 @@ describe("useRpmUpload", () => {
     expect(matchResult!.matched).toHaveLength(2);
     expect(matchResult!.unmatched).toHaveLength(0);
     expect(matchResult!.conflicts).toHaveLength(0);
+  });
+
+  // Every refusal the upload routes can return carries its reason in a
+  // JSON `error` field, and the reason is the whole value of the status
+  // distinction: "Conflict" alone does not tell an operator whether the
+  // file is already staged or came from their own dnf cache.
+  const refusals = [
+    {
+      what: "a filename the allowlist rejects",
+      status: 400,
+      error: 'filename rejected: "../etc/passwd" is not a bare filename',
+    },
+    {
+      what: "a package that is already staged",
+      status: 409,
+      error: "nginx-1.24-1.el9.x86_64.rpm is already staged for nginx.x86_64",
+    },
+    {
+      what: "a snapshot pointing outside the upload directory",
+      status: 409,
+      error:
+        "nginx.x86_64 records a staged file outside the upload directory; nothing was staged",
+    },
+    {
+      what: "a body over the route limit",
+      status: 413,
+      error: "failed to read stream",
+    },
+  ];
+
+  it.each(refusals)(
+    "uploadRpm surfaces the server's reason and status for $what",
+    async ({ status, error }) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status,
+        statusText: "",
+        json: async () => ({ error }),
+      });
+      const { result } = renderHook(() => useRpmUpload());
+      const mockFile = new File(["rpm"], "nginx-1.24-1.el9.x86_64.rpm");
+      await expect(
+        result.current.uploadRpm("nginx.x86_64", mockFile),
+      ).rejects.toThrow(`Upload failed (${status}): ${error}`);
+    },
+  );
+
+  it("uploadRpm leaves the row untouched when the upload is refused", async () => {
+    const { result } = renderHook(() => useRpmUpload());
+    act(() => {
+      result.current.initFromBackend([
+        {
+          name: "nginx",
+          arch: "x86_64",
+          repoless_annotation: "manual",
+          repoless_cached: false,
+        },
+      ]);
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      json: async () => ({ error: "already staged" }),
+    });
+    const mockFile = new File(["rpm"], "nginx-1.24-1.el9.x86_64.rpm");
+    await expect(
+      result.current.uploadRpm("nginx.x86_64", mockFile),
+    ).rejects.toThrow("already staged");
+    expect(result.current.getRowState("nginx.x86_64")).toBe("needs_upload");
+  });
+
+  it("removeUpload surfaces the server's reason for a cached-only package", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      json: async () => ({
+        error:
+          "only uploads can be removed; nginx.x86_64 is cached from the host's dnf cache",
+      }),
+    });
+    const { result } = renderHook(() => useRpmUpload());
+    await expect(result.current.removeUpload("nginx.x86_64")).rejects.toThrow(
+      "Remove upload failed (409): only uploads can be removed; " +
+        "nginx.x86_64 is cached from the host's dnf cache",
+    );
+  });
+
+  it("falls back to the status line when the body is not JSON", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON at position 0");
+      },
+    });
+    const { result } = renderHook(() => useRpmUpload());
+    const mockFile = new File(["rpm"], "nginx-1.24-1.el9.x86_64.rpm");
+    await expect(
+      result.current.uploadRpm("nginx.x86_64", mockFile),
+    ).rejects.toThrow("Upload failed (502): Bad Gateway");
   });
 });

@@ -1300,6 +1300,7 @@ dependencies = [
  "flate2",
  "inspectah-core",
  "inspectah-pipeline",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2",
@@ -1331,6 +1332,7 @@ version = "0.9.0-beta.3"
 dependencies = [
  "axum",
  "flate2",
+ "futures-core",
  "http-body-util",
  "inspectah-core",
  "inspectah-pipeline",
