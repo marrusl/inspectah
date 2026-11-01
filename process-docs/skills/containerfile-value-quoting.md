@@ -147,3 +147,23 @@ fn active_lines(output: &str) -> Vec<&str> {
 For quoting, the precise negative is the unquoted form with its leading
 separator — `" /tmp/{name}"` rather than `"/tmp/{name}"`, since the quoted
 rendering contains the latter as a substring.
+
+**One poisoned fixture per field, and prove it by mutation.** The first
+version of `var_dir_hostile_fields_add_no_directive` gave `owner_name`
+and `group_name` the same bad value, which reads as covering both and
+covers one: the refused owner falls through to the numeric branch, that
+branch emits a numeric group as well, and the group's own check is never
+reached. Deleting group validation left the test green. A fixture that
+poisons two fields at once only reaches the first one the code rejects.
+
+So the check on a test written to close an injection finding is not that
+it passes. It is: **remove the guard it is supposed to be testing and
+confirm this test, specifically, goes red.** Two mutations are worth
+running, because they fail in different places and only the second
+proves the assertion earns its keep:
+
+- Remove the validation at one call site. A typed guard will often turn
+  this into a panic in the constructor rather than a bad line, which
+  still fails the test but tells you nothing about the assertion.
+- Neuter the allowlist predicate itself. Now the bad value reaches the
+  output and the active-line comparison is what has to catch it.
