@@ -356,6 +356,30 @@ in the diagram's source, not a find-and-replace on rendered output, which is
 why it's listed alongside the architecture diagram rather than with the
 plain-markdown deletions.
 
+## 5a. Answered 2026-11-01. All eight settled; nothing here is open.
+
+Mark took every recommendation. The list below is kept as written so the
+reasoning behind each is still readable, with his answer against it.
+
+| # | Decision | Answer |
+|---|---|---|
+| 1 | README: nothing replaces the subsection | **Confirmed.** Raised separately as a real call rather than a formality, since the README is the front door and a visible section leaves it. A pointer to `refine` was considered and rejected: the surrounding material already covers it, so a signpost would point at a road that was never a fork. |
+| 2 | Crate count seven to six | Follows. No choice to make. |
+| 3 | Delete the dedicated section | Follows. No choice to make. |
+| 4 | Cross-reference sentence | **Option B**, drop the claim. It is speculative once there is exactly one frontend. |
+| 5 | "Choose your interface" | **Option A**, fold into one `## Launch the refine UI`. The one genuine information-architecture call in the set. |
+| 6 | Locked-items comparison | Follows from 5. No choice to make. |
+| 7 | Export fidelity note | **Option A**, keep the web-only caveat reworded. The quirk is true independent of the TUI, and dropping it would lose real information while tidying an edit. |
+| 8 | Diagrams | Not a decision. Recorded because data-array edits are a different risk profile from regenerating artwork. |
+
+**One consequence worth carrying into the work.** Decision 7's caveat
+exists because the web download alone drops `dnf group install`: the
+handler passes `None` for the render context while the CLI and TUI pass
+a real one. So removing the TUI removes one of the two interfaces that
+got that right. It does not cause the bug and it does not block this
+work, but it makes the open item slightly more pressing than it was.
+Tracked in FKA as `inspectah-downloaded-export-drops-every-dnf-group-install`.
+
 ## 5. Decisions for Mark — summary
 
 1. **README.md:** nothing replaces the deleted subsection. *(Recommendation:
