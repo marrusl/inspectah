@@ -63,13 +63,6 @@ reasoned, not yet measured, and measuring it is the first step.
 Guardrails against accidental credential exposure in inspectah output.
 Gates the full-capture work. Needs its own spec.
 
-### Version Pinning Model for Language Packages
-
-`LanguagePackage.pinned` is scoped to npm globals only, meaningful for
-one ecosystem and ignored for two others. Decide whether pinning
-generalizes to system pip and gems or whether the field is re-modeled,
-before the asymmetry hardens into the 1.0 contract.
-
 ### Release Binary Size Optimization
 
 Add `[profile.release]` settings (`lto = "thin"`, `strip = true`,
@@ -113,13 +106,6 @@ Plain-English documentation of inspectah's internal decision logic
 across five subsystems, plus internationalization and the `.git-backup/`
 history scrub. Post-1.0, and the documentation half may fold into the
 Docs Overhaul.
-
-### Needs-Spec Batch
-
-Four roadmap items with no spec and no scheduled slot: structured
-`sshd_config` parsing, the config content viewer, fleet divergence
-review UX, and clean export mode. Each has a recorded reason for
-waiting.
 
 ### Post-1.0 Detection Coverage
 
