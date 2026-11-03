@@ -216,6 +216,21 @@ Full documentation is available at [marrusl.github.io/inspectah](https://marrusl
 - [Reference](https://marrusl.github.io/inspectah/reference/) — CLI commands, inspector catalog, output format
 - [Explanation](https://marrusl.github.io/inspectah/explanation/) — concepts, architecture, design decisions
 
+## Contributing
+
+After cloning, enable the repo's git hooks:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Git does not run hooks from a tracked directory by default: it only ever runs hooks from `.git/hooks`, which is not version controlled. The committed `.githooks/` directory does nothing until `core.hooksPath` points at it, and nothing sets that for you automatically. Skip this step and nothing visible happens: no warning, no error, your commits just go unchecked until a reviewer notices.
+
+What the hooks do:
+
+- `pre-commit` runs `cargo fmt --check`, `cargo clippy`, and `cargo test` before letting a commit through.
+- `commit-msg` refuses a `Co-Authored-By` trailer. This project records AI assistance with a single `Assisted-by: Claude Code (<model>)` trailer instead, because `Co-Authored-By` makes a model show up in GitHub's contributor statistics as if it were a person. Several AI coding tools add `Co-Authored-By` automatically, so if you use one, you may hit this and should know why.
+
 ## License
 
 [MIT](LICENSE)
