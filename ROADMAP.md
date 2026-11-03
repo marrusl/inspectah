@@ -48,8 +48,8 @@ against a tree that has moved past it.
 
 ### Docs Overhaul
 
-User-facing documentation refresh ahead of 1.0. Scope is in
-`process-docs/backlog/documentation-backlog.md`.
+User-facing documentation refresh ahead of 1.0. Scope needs to be
+re-drafted.
 
 ### Sysctl Source File Preservation
 
