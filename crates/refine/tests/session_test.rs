@@ -755,67 +755,12 @@ fn test_aggregate_snapshot_skips_leaf_only_filter() {
     assert!(view.packages.iter().any(|pkg| pkg.entry.name == "apr"));
 }
 
-#[test]
-#[ignore] // TODO(green-suite): pre-existing failure — aggregate preview missing dnf install block
-fn test_aggregate_snapshot_preview_skips_leaf_only_filter() {
-    let mut snap = InspectionSnapshot::new();
-    snap.baseline = Some(empty_baseline());
-    snap.aggregate_meta = Some(AggregateSnapshotMeta {
-        label: "test-aggregate".into(),
-        host_count: 5,
-        hostnames: vec![
-            "host-a".into(),
-            "host-b".into(),
-            "host-c".into(),
-            "host-d".into(),
-            "host-e".into(),
-        ],
-        merged_at: "2026-01-01T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: Default::default(),
-    });
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                disposition: FindingKind::included(),
-                aggregate: Some(aggregate(3, 5, &["host-a", "host-b", "host-c"])),
-                ..Default::default()
-            },
-            PackageEntry {
-                name: "apr".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                disposition: FindingKind::included(),
-                aggregate: Some(aggregate(2, 5, &["host-d", "host-e"])),
-                ..Default::default()
-            },
-        ],
-        leaf_packages: Some(vec!["httpd.x86_64".into()]),
-        auto_packages: Some(vec!["apr.x86_64".into()]),
-        ..Default::default()
-    });
-
-    let session = RefineSession::new(snap);
-    let preview = &session.view().containerfile_preview;
-
-    assert!(
-        preview.contains("dnf install"),
-        "aggregate preview must include a dnf install block"
-    );
-    assert!(
-        preview.contains("httpd"),
-        "aggregate preview must include httpd"
-    );
-    assert!(
-        preview.contains("apr"),
-        "aggregate preview must not apply leaf-only filtering"
-    );
-}
+// The aggregate Containerfile-preview test that lived here was deleted on
+// 2026-11-04. It had been #[ignore]d as a pre-existing failure with no expiry,
+// so it pinned nothing while keeping the suite green. The defect it covered is
+// real and is tracked in the backlog as
+// inspectah-aggregate-preview-has-no-dnf-install-block, which records what the
+// test asserted; write the test again with the fix.
 
 // -- Normalization at construction tests --
 

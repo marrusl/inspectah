@@ -568,7 +568,6 @@ fn audit_nonrpm_section() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "summary cards deferred to T6; un-ignore when summary card template lands"]
 fn report_scheduled_section() {
     let snap = snapshot_with_scheduled_tasks();
     let html = report::render_report(&snap, &RenderContext { target: None });
