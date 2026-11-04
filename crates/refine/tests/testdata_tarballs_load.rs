@@ -1,16 +1,23 @@
-//! Guards the tracked e2e fixture against schema drift.
+//! Guards every snapshot tarball under `testdata/` against schema drift.
 //!
 //! This exists because `testdata/e2e-fixture.tar.gz` sat at schema 14 while
 //! `MIN_SCHEMA` moved to 25, and nothing noticed for months. CI's "Start
 //! refine server" step polls `/api/health` and proceeds regardless of the
 //! outcome, and the only spec that talks to a real server skipped itself when
 //! nothing answered, so the whole chain reported green against a server that
-//! had never started.
+//! had never started. Two further tarballs reached schema 17 the same way and
+//! were deleted unused.
 //!
-//! A unit test is the cheap place to catch that: it needs no CI, no host and
-//! no browser, and it fails in the pre-commit hook the moment the schema moves.
+//! A unit test is the cheap place to catch that: no CI, no host, no browser,
+//! and it fails in the pre-commit hook the moment the schema moves.
+//!
+//! **The directory is discovered, not listed.** A tarball added here at the
+//! wrong schema fails on arrival rather than waiting for someone to remember
+//! this file. The cost is that `testdata/` is for tracked fixtures only — a
+//! scratch tarball left there will fail the suite, which is the intended
+//! trade.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Repo root, from this crate's manifest directory.
 fn repo_root() -> PathBuf {
@@ -20,36 +27,62 @@ fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
-/// The fixture CI serves to the Playwright real-server spec. It must load
-/// through exactly the path the server uses, not a hand-rolled parse.
+/// Every `*.tar.gz` directly under `testdata/`, sorted for stable output.
+fn testdata_tarballs() -> Vec<PathBuf> {
+    let dir = repo_root().join("testdata");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.to_string_lossy().ends_with(".tar.gz"))
+        .collect();
+    found.sort();
+    found
+}
+
+/// Every tarball must load through the same path the refine server uses.
 #[test]
-fn e2e_fixture_loads_at_current_schema() {
-    let path = repo_root().join("testdata/e2e-fixture.tar.gz");
-    assert!(path.is_file(), "missing fixture: {}", path.display());
+fn every_testdata_tarball_loads_at_current_schema() {
+    let tarballs = testdata_tarballs();
 
-    let session = inspectah_refine::tarball::from_tarball(&path).unwrap_or_else(|e| {
-        panic!(
-            "testdata/e2e-fixture.tar.gz no longer loads: {e}\n\
-             CI serves this tarball to the Playwright real-server spec, so a \
-             snapshot the current binary cannot read means that spec tests \
-             nothing. Regenerate it at the current SCHEMA_VERSION."
-        )
-    });
-
-    // The real-server smoke spec needs packages to toggle and a preview
-    // string; a fixture that loads but is empty would pass the load check and
-    // still leave the spec with nothing to exercise.
-    let view = session.view();
+    // A discovery-based test that finds nothing would pass silently, which is
+    // the exact failure class this guard was written to end.
     assert!(
-        !view.packages.is_empty(),
+        !tarballs.is_empty(),
+        "no tarballs found under testdata/ — this guard would be vacuous"
+    );
+
+    for path in &tarballs {
+        if let Err(e) = inspectah_refine::tarball::from_tarball(path) {
+            panic!(
+                "{} no longer loads: {e}\n\
+                 Tracked snapshot tarballs must be readable by the current \
+                 binary. CI serves testdata/e2e-fixture.tar.gz to the \
+                 Playwright real-server spec, so an unreadable snapshot means \
+                 that spec tests nothing. Regenerate at the current \
+                 SCHEMA_VERSION, or delete the tarball if nothing consumes it.",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Loading is necessary but not sufficient: the real-server smoke spec needs
+/// packages to toggle, so an empty-but-valid fixture must not pass.
+#[test]
+fn e2e_fixture_carries_packages_for_the_smoke_spec() {
+    let path = repo_root().join("testdata/e2e-fixture.tar.gz");
+    assert!(
+        Path::new(&path).is_file(),
+        "missing fixture: {}",
+        path.display()
+    );
+
+    let session = inspectah_refine::tarball::from_tarball(&path)
+        .expect("e2e fixture loads; see sibling test");
+
+    assert!(
+        !session.view().packages.is_empty(),
         "fixture must carry at least one package for the smoke spec to toggle"
     );
 }
-
-// NOT covered here, deliberately, and not because it would be inconvenient:
-// `testdata/single-host-e2e.tar.gz` and `testdata/fleet-e2e.tar.gz` are both
-// schema 17 and would fail this guard today. Bringing them current means
-// regenerating host-derived data for the 663 KB one, which is an exposure
-// question rather than a test fix, so it is tracked separately rather than
-// silently folded in here. Widen this test to cover all three once they are
-// regenerated. Backlog: inspectah-two-stale-e2e-tarballs-predate-the-schema.
