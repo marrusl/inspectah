@@ -12,7 +12,7 @@ Read `process-docs/skills/index.md` for non-obvious patterns and correctness req
 
 - **Clippy clean:** `cargo clippy -- -D clippy::all` with zero warnings. Non-negotiable.
 - **Format:** `cargo fmt --check` must pass.
-- **Commit format:** `type(scope): description` in imperative mood. Attribution: `Assisted-by: Claude Code (<model>)`.
+- **Commit format:** `type(scope): description` in imperative mood.
 - **Attribution:** LLM-assisted commits include `Assisted-by: <tool> (<model>)` (e.g., `Assisted-by: Claude Code (Opus 4.6)`). No other identifiers.
 - **Schema versioning:** Snapshot JSON has a `schema_version` field. Bump it when types change. See `process-docs/skills/snapshot-schema-versioning.md`.
 - **Package identity:** Always `name.arch`, never bare names. See `process-docs/skills/package-identity-is-name-dot-arch.md`.
