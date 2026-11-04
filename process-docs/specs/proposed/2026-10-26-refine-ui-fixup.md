@@ -1,5 +1,7 @@
 # Refine Single-Host UI Fix-up Spec
 
+> **`crates/tui` was removed on 2026-11-04.** This spec was written while it existed. Every TUI consumer row and `crates/tui/` citation below is a no-op; the surfaces that remain are the web UI, the CLI, and the rendered report.
+
 ## Metadata
 
 | Field      | Value |

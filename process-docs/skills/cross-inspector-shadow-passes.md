@@ -32,8 +32,8 @@ section's entry for that path is marked `FindingKind::inventory()` with
 
 Doing it there and not in the renderer is what makes it stick: the
 refine session refuses `SetInclude` on an inventory item with
-`InventoryNotToggleable`, so the bad state is unreachable from the web,
-CLI and TUI surfaces alike rather than merely warned about downstream.
+`InventoryNotToggleable`, so the bad state is unreachable from the web
+and CLI surfaces alike rather than merely warned about downstream.
 `orchestrate.rs` is the wrong home — the production `scan` command calls
 `collect()` directly and never `run_pipeline()`.
 

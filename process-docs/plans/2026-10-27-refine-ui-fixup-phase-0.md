@@ -1,5 +1,7 @@
 # Refine UI Fix-up, Phase 0 Implementation Plan
 
+> **`crates/tui` was removed on 2026-11-04.** This plan was written while it existed. Every task step, consumer row, and `git add` line below that names a `crates/tui/` path is a no-op: skip it, and do not recreate the crate to satisfy it. Nothing else in the plan changes, since no other crate depended on it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship phase 0 of the refine single-host UI fix-up: the Rust correctness change set, `SCHEMA_VERSION` 23, and the three small frontend edits that keep the existing web UI compatible with the new server contract.

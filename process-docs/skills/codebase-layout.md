@@ -22,13 +22,12 @@ Directory structure and module organization for inspectah. Helps new agents navi
 |-------|---------|-------------|
 | `crates/cli/` | Binary entry point, argument parsing, command dispatch | Yes |
 | `crates/web/` | Embedded web server (axum), React UI host | No |
-| `crates/tui/` | Terminal UI (ratatui) for refine | No |
 | `crates/pipeline/` | Orchestrates inspectors, rendering, redaction | No |
 | `crates/refine/` | Interactive triage engine, session persistence | No |
 | `crates/collect/` | System inspectors (RPM, config, services, etc.) | No |
 | `crates/core/` | Types, traits, aggregate data structures (no logic) | No |
 
-**Dependency direction:** CLI/web/tui → pipeline → refine → collect → core.
+**Dependency direction:** CLI/web → pipeline → refine → collect → core.
 Core has zero dependencies on other crates.
 
 ## CLI commands
@@ -39,7 +38,7 @@ Core has zero dependencies on other crates.
 |------|-----------|
 | `scan.rs` | `inspectah scan` — single-host scan |
 | `aggregate.rs` | `inspectah aggregate` — cross-host aggregation |
-| `refine.rs` | `inspectah refine` — launch web or TUI |
+| `refine.rs` | `inspectah refine` — launch the web refine UI |
 | `build.rs` | `inspectah build` — extract tarball, mount certs, run podman build |
 | `version.rs` | `inspectah --version` or `inspectah version` |
 | `pull_progress.rs` | Progress reporting during snapshot tarball pulls |

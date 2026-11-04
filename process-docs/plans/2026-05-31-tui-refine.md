@@ -1,5 +1,7 @@
 # TUI Refine Implementation Plan
 
+> **Historical.** The TUI was removed on 2026-11-04 and this plan describes a crate that no longer exists. Kept as the project's record of the decision. Why it was removed, and what a reimplementation should read first, is in `topics/inspectah-tui.md` in Mark's FKA repo.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `inspectah-tui`, a terminal interface for the refine workflow — keyboard-driven, works over SSH at 80×24, full single-host triage parity with the web UI.

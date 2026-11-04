@@ -52,6 +52,5 @@ crates/collect/   — Host inspection (inspectors)
 crates/core/      — Shared types, snapshot schema, aggregate logic
 crates/pipeline/  — Rendering (Containerfile, README, audit, report, secrets)
 crates/refine/    — Refine editor server
-crates/tui/       — TUI interface
 crates/web/       — Web server
 ```

@@ -1,5 +1,7 @@
 # inspectah-tui: Terminal Refine Interface
 
+> **Historical.** The TUI was removed on 2026-11-04 and this spec describes a crate that no longer exists. Kept as the project's record of the decision. Why it was removed, and what a reimplementation should read first, is in `topics/inspectah-tui.md` in Mark's FKA repo.
+
 ## Purpose
 
 inspectah-tui is a terminal interface for the refine workflow — triage
