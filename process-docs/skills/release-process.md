@@ -167,6 +167,7 @@ happened on every recent release:
 |---|---|---|---|
 | v0.9.0-beta.1 | `ed39bbd6` | `d4857478` | 2 docs commits above tag |
 | v0.9.0-beta.2 | `dfc32f4f` | `c52b02bd` | 4 docs commits above tag |
+| v0.9.0-beta.4 | `802fdd11` | `9f918710` | 2 docs commits above tag |
 
 Acceptable only while those intervening commits are docs-only. **Confirm
 that before building** -- if this returns anything, the binaries would
@@ -309,7 +310,7 @@ Run them with the sandbox disabled.
 The formula's `test` block asserts `version.to_s` appears in
 `inspectah version` output. That holds as long as the version string in
 the formula exactly matches `CARGO_PKG_VERSION` -- note the formula uses
-the hyphenated form (`0.9.0-beta.2`), not the RPM tilde form.
+the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
 
 ## Gotchas
 
