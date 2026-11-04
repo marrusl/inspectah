@@ -253,7 +253,7 @@ _inspectah() {
             return 0
             ;;
         inspectah__subcmd__refine)
-            opts="-h --port --open --fresh --tui --help <TARBALL>"
+            opts="-h --port --open --fresh --help <TARBALL>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

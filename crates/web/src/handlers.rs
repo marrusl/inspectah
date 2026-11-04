@@ -21,8 +21,8 @@ pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
 /// **This is a UI affordance, not the record.** Every demotion is already
 /// in the artifact, as a per-package `# FIXME` line in the exported
 /// Containerfile, which every consumer of the tarball gets whatever route
-/// produced it. That is why the CLI and TUI exports not surfacing this
-/// header costs them nothing, and why truncating the list below loses a
+/// produced it. That is why the CLI export not surfacing this
+/// header costs it nothing, and why truncating the list below loses a
 /// convenience rather than a fact.
 ///
 /// The body of this route is the tarball itself, so the list travels as a

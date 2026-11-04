@@ -2,7 +2,7 @@
 //!
 //! Each group collects related sections under a collapsible disclosure heading.
 //! This enum lives in the pipeline crate because grouping is a presentation
-//! decision; other renderers (TUI, web) may define their own groupings.
+//! decision; other renderers may define their own groupings.
 
 /// A single section within a group, with its canonical ID, display label,
 /// and whether it carries triage decisions (include/exclude toggles).

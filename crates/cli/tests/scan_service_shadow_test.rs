@@ -318,8 +318,8 @@ fn the_view_response_names_the_owner_of_a_shadowed_config_row() {
 }
 
 /// All four combinations of the two dispositions that used to exist over
-/// one overlapping path, driven through the session the web, CLI and TUI
-/// surfaces all share, and read back off the staged tree **and** the
+/// one overlapping path, driven through the session the web and CLI
+/// surfaces share, and read back off the staged tree **and** the
 /// Containerfile.
 ///
 /// The assertion is the product contract rather than a fixed table:

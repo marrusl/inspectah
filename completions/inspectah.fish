@@ -52,7 +52,6 @@ complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l port -d '
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l open -d 'Open browser automatically (use --no-open to suppress)' -r -f -a "true\t''
 false\t''"
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l fresh -d 'Start a fresh session, discarding any saved progress'
-complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -l tui -d 'Use terminal UI instead of web browser'
 complete -c inspectah -n "__fish_inspectah_using_subcommand refine" -s h -l help -d 'Print help'
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l target-image -d 'Override the target image reference for baseline comparison' -r
 complete -c inspectah -n "__fish_inspectah_using_subcommand aggregate" -l output-dir -d 'Output directory for the aggregate tarball' -r -F

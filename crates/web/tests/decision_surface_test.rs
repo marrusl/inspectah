@@ -30,7 +30,7 @@
 //!    so the *downloaded* Containerfile carries no `dnf group install`
 //!    and installs a renderable group's members individually. The
 //!    session's own `export_tarball` passes
-//!    `self.cached_render_context`, so the CLI and TUI are unaffected
+//!    `self.cached_render_context`, so the CLI is unaffected
 //!    and only the web download diverges from the preview.
 //!
 //! The group cases below therefore compare `render_state` against which

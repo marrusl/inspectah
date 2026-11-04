@@ -559,8 +559,8 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
     // rather than looked up by path. `zip` truncates to the shorter
     // side in silence, so the lengths are checked first and in release
     // too: the first filter anyone adds to `effective_var_backing`
-    // would otherwise drop the tail of this projection, in the web view
-    // and the TUI both, with nothing saying so.
+    // would otherwise drop the tail of this projection, in the web view,
+    // with nothing saying so.
     let outcomes = effective_var_backing(snap);
     assert_eq!(
         st.var_directories.len(),

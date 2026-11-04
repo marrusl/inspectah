@@ -54,7 +54,6 @@ _arguments "${_arguments_options[@]}" : \
 '--port=[Port to bind (default\: 8642, use 0 for ephemeral)]:PORT:_default' \
 '--open=[Open browser automatically (use --no-open to suppress)]:OPEN:(true false)' \
 '--fresh[Start a fresh session, discarding any saved progress]' \
-'--tui[Use terminal UI instead of web browser]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':tarball -- Path to scan output tarball (.tar.gz):_files' \

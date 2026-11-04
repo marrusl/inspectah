@@ -10,8 +10,7 @@ inspectah-collect = { path = "../collect" }
 inspectah-pipeline = { path = "../pipeline" }
 inspectah-web = { path = "../web" }
 inspectah-refine = { path = "../refine" }
-inspectah-tui = { path = "../tui" }
-clap = { version = "4", features = ["derive"] }
+clap ={ version = "4", features = ["derive"] }
 clap_complete = "4"
 anyhow = "1"
 libc = "0.2"
