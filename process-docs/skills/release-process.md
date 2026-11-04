@@ -335,3 +335,48 @@ the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
 - **Binary names are in .gitignore.** The staged binaries in the repo
   root are not tracked by git. They exist only for the `gh release
   create` upload step.
+
+- **The release workflow can be run without shipping.**
+  `package-release.yml` takes a `workflow_dispatch` with a required `tag`
+  input, so an existing tag can be rebuilt on demand:
+  `gh workflow run package-release.yml --ref main -f tag=v<version>`. The
+  workflow definition comes from `--ref`; the source tree comes from the
+  tag. A manual run builds and verifies but touches nothing outside the
+  runner: both release-asset upload steps and the whole `update-homebrew`
+  job are guarded to `github.event_name == 'release'`, so a test run
+  cannot overwrite a published release's assets or open a tap pull
+  request. The built packages come back as workflow artifacts (`srpm`,
+  `rpm-fedora`, `rpm-el9`, `rpm-el10`), so a green run leaves something to
+  inspect.
+
+  **A green manual run is not a green release run.** The two
+  release-upload paths are guarded off on a manual run, and the RPM
+  upload-to-release step has still never executed successfully in this
+  pipeline's history. A manual green proves the build and packaging
+  steps, not the release path.
+
+  **Use it.** Before this trigger existed, the only way to fire the
+  pipeline was to publish a release, and a failed release run's re-run
+  replays that same run's workflow definition, so re-running a broken
+  release replays the break. That is the structural reason the RPM legs
+  stayed red across five releases: nobody could test the release pipeline
+  without shipping a release.
+
+  Run `41922788939` (2026-11-04) is the first CI-built RPM in the
+  project's current history, across all three targets (Fedora, EL9,
+  EL10). Two earlier successful runs exist in the workflow's history,
+  from 2026-04-28, but they predate the web UI: don't read those as "it
+  used to work" without that qualifier, since the pipeline now has to
+  build something considerably heavier than it did then.
+
+- **A CI failure in `Build SRPM` that reads as a gzip error is an
+  ownership problem.** `actions/checkout` writes the workspace as a
+  different UID than the build step runs as, so git refuses the
+  repository as dubiously owned. `git archive HEAD` then emits an empty
+  stream, and the first thing that complains is `gzip: stdin: unexpected
+  end of file`, well downstream of the actual cause. The real line is
+  `fatal: detected dubious ownership`, further up in the log. The
+  workflow runs `git config --global --add safe.directory
+  "$GITHUB_WORKSPACE"` before `make` to prevent it. Keep that fix in the
+  workflow, not in `.copr/Makefile`: COPR owns the tree it builds and has
+  no such UID mismatch.
