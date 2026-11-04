@@ -26,6 +26,29 @@ test.describe("Smoke integration (real server)", () => {
     } catch {
       viteAvailable = false;
     }
+
+    // In CI neither service is optional, so an unreachable one must fail
+    // loudly here. This is the only spec that exercises the real refine
+    // backend, and the per-test skips below mean it goes *quiet* exactly when
+    // the backend is dead — the one circumstance it exists to detect. CI has
+    // no excuse for either being down: the workflow starts the refine server,
+    // and Playwright starts Vite itself via `webServer` with
+    // reuseExistingServer false. Locally a skip remains a convenience.
+    if (process.env.CI) {
+      const unreachable: string[] = [];
+      if (!serverAvailable) {
+        unreachable.push("refine backend at http://127.0.0.1:8642/api/health");
+      }
+      if (!viteAvailable) {
+        unreachable.push("Vite dev server at http://localhost:5174/");
+      }
+      if (unreachable.length > 0) {
+        throw new Error(
+          `Smoke integration cannot run: ${unreachable.join(" and ")} unreachable. ` +
+            `In CI this is a failure, not a skip: it means the service did not come up.`
+        );
+      }
+    }
   });
 
   test.describe("API endpoints", () => {
