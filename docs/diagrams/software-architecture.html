@@ -43,7 +43,7 @@ const crates = [
     sublabel: 'CLI entry point',
     tier: 'entry',
     color: 'green',
-    deps: ['core', 'collect', 'pipeline', 'web', 'refine', 'tui'],
+    deps: ['core', 'collect', 'pipeline', 'web', 'refine'],
     tooltip: 'Binary crate. Parses CLI arguments, orchestrates scan/aggregate/refine commands, manages progress display, and launches the web server.',
     modules: [
       {
@@ -124,60 +124,6 @@ const crates = [
       },
     ],
     contract: 'build_router() — constructs axum Router with all API and static routes',
-  },
-  {
-    id: 'tui',
-    label: 'inspectah-tui',
-    sublabel: 'Terminal UI',
-    tier: 'entry',
-    color: 'green',
-    deps: ['refine', 'core'],
-    tooltip: 'Terminal UI for interactive refinement (ratatui-based). Keyboard-driven alternative to the web UI.',
-    modules: [
-      {
-        name: 'app.rs',
-        desc: 'Application state',
-        children: [
-          { text: 'app.rs', detail: 'Main application struct, event loop, and state management' },
-        ],
-      },
-      {
-        name: 'screen/',
-        desc: 'Screen views',
-        children: [
-          { text: 'single_host.rs', detail: 'Single-host triage screen with section navigation' },
-        ],
-      },
-      {
-        name: 'widget/',
-        desc: 'UI widgets',
-        children: [
-          { text: 'section_nav', detail: 'Section navigation sidebar' },
-          { text: 'triage_list', detail: 'Scrollable item list with triage controls' },
-          { text: 'detail_view', detail: 'Item detail pane with metadata' },
-          { text: 'search', detail: 'Fuzzy search and filter bar' },
-          { text: 'containerfile', detail: 'Live Containerfile preview' },
-          { text: 'status_bar', detail: 'Status bar with counts and progress' },
-          { text: 'info_bar', detail: 'Contextual information display' },
-          { text: 'help_screen', detail: 'Keybinding help overlay' },
-          { text: 'user_strategy', detail: 'User/group migration strategy selector' },
-          { text: 'command_line', detail: 'Command input line for advanced operations' },
-        ],
-      },
-      {
-        name: 'support',
-        desc: 'Core support modules',
-        children: [
-          { text: 'sections.rs', detail: 'Section definitions and ordering' },
-          { text: 'keys.rs', detail: 'Keybinding configuration' },
-          { text: 'event.rs', detail: 'Terminal event handling (crossterm)' },
-          { text: 'action.rs', detail: 'Action dispatch and processing' },
-          { text: 'theme.rs', detail: 'Color theme and styling' },
-          { text: 'types.rs', detail: 'TUI-specific type definitions' },
-        ],
-      },
-    ],
-    contract: 'run_tui() — launches ratatui terminal, processes events, delegates to refine',
   },
 
   // ── Orchestration (teal) ──
@@ -469,7 +415,7 @@ const nodeGap = 60;
 
 // Tier definitions and positioning
 const tiers = [
-  { id: 'entry',         label: 'ENTRY POINTS',   crateIds: ['cli', 'web', 'tui'] },
+  { id: 'entry',         label: 'ENTRY POINTS',   crateIds: ['cli', 'web'] },
   { id: 'orchestration', label: 'ORCHESTRATION',   crateIds: ['pipeline', 'refine'] },
   { id: 'collection',    label: 'COLLECTION',      crateIds: ['collect'] },
   { id: 'foundation',    label: 'FOUNDATION',      crateIds: ['core'] },

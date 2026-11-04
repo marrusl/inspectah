@@ -157,7 +157,6 @@ inspectah refine [OPTIONS] <TARBALL>
 | `--port <PORT>` | integer | `8642` | Port to bind (use `0` for ephemeral) |
 | `--open <OPEN>` | bool | `true` | Open browser automatically (use `--no-open` to suppress) |
 | `--fresh` | bool | `false` | Start a fresh session, discarding any saved progress |
-| `--tui` | bool | `false` | Use terminal UI instead of web browser |
 
 ### Examples
 
@@ -165,12 +164,6 @@ Open the refinement UI for a scan snapshot:
 
 ```bash
 inspectah refine /tmp/migration-snapshot.tar.gz
-```
-
-Use the terminal UI instead of a web browser:
-
-```bash
-inspectah refine --tui /tmp/migration-snapshot.tar.gz
 ```
 
 Bind to a custom port:

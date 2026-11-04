@@ -14,13 +14,7 @@ image build.
 
 - A scan output tarball (`.tar.gz`) from a previous `inspectah scan` run
 
-## Choose your interface
-
-inspectah refine offers two interfaces: a **web UI** (default) and a
-**terminal UI**. Both provide the same refinement capabilities -- section
-navigation, item toggling, search, export, and session persistence.
-
-### Web UI (default)
+## Launch the refine UI
 
 ```bash
 inspectah refine ./scan-output.tar.gz
@@ -38,20 +32,6 @@ To suppress the browser launch:
 ```bash
 inspectah refine --open false ./scan-output.tar.gz
 ```
-
-### Terminal UI
-
-For environments without a browser (SSH sessions, headless servers, or
-personal preference), use the terminal UI:
-
-```bash
-inspectah refine --tui ./scan-output.tar.gz
-```
-
-The TUI renders directly in your terminal using a keyboard-driven
-interface. Press `?` to see available keybindings. The TUI shares the
-same session persistence as the web UI -- switching between them
-preserves your progress.
 
 ## Navigate the dashboard
 
@@ -119,14 +99,11 @@ are affected as a batch.
 ### Locked items
 
 Some items display as locked -- their include/exclude state is visible but
-the toggle is disabled. Locked items carry a reason explaining why they
-cannot be changed (e.g., "Baseline package" or "Required dependency").
-These represent non-negotiable decisions where toggling would produce an
-invalid Containerfile.
-
-In the web UI, locked items appear with a lock icon and a reason badge.
-In the TUI, locked items are marked with a lock indicator and cannot be
-selected for toggling.
+the toggle is disabled, marked with a lock icon and a reason badge.
+Locked items carry a reason explaining why they cannot be changed (e.g.,
+"Baseline package" or "Required dependency"). These represent
+non-negotiable decisions where toggling would produce an invalid
+Containerfile.
 
 ## Handle version changes
 
@@ -174,13 +151,11 @@ export produces a tarball containing:
 - The refined Containerfile reflecting all your include/exclude decisions
 - Updated scan data with your triage overrides applied
 
-When you export from the TUI, the generated Containerfile is byte-identical
-to what the preview pane showed before you exported.
-
-When you export from the web UI's Export dialog, one difference exists
-today: package groups render as their individual members instead of a
-single `dnf group install` line. The image that results installs the same
-packages either way; only the Containerfile's wording differs.
+One difference exists today between the preview pane and the Export
+dialog: package groups render as their individual members in the exported
+Containerfile instead of a single `dnf group install` line. The image that
+results installs the same packages either way; only the Containerfile's
+wording differs.
 
 ## Work with aggregate data
 

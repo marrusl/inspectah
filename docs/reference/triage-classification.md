@@ -242,9 +242,9 @@ The net effect after classification:
 ### Locked items
 
 Some items carry a `locked: true` flag that prevents toggling in the refine
-UI (both web and TUI). Locked items display their include/exclude state but
-the toggle is disabled. A reason string explains why the item is locked
-(e.g., "Baseline package" or "Required dependency").
+UI. Locked items display their include/exclude state but the toggle is
+disabled. A reason string explains why the item is locked (e.g., "Baseline
+package" or "Required dependency").
 
 Locked items are set during classification and aggregate merge. They
 represent non-negotiable decisions -- items where toggling would produce an
