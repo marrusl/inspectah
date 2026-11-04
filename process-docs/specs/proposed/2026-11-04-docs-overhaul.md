@@ -5,10 +5,10 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-04 |
-| Status | Proposed |
+| Status | Proposed. Scope questions decided 2026-11-04 and folded into the body. |
 | Scope | Track 1: the existing pages under `docs/` brought to the current code. Track 2: a rewritten `docs/contributing/developer-guide.md` and a new `docs/contributing/testing.md`. |
 | Out of scope | New information architecture, a doc site generator change, a README restructure, a glossary, any page for a feature that exists only in a spec. |
-| Verified | Drift audit run against `cafa0a5b` (HEAD, 2026-11-04). CLI output taken from `./inspectah-darwin-arm64`, `inspectah 0.9.0-beta.4 (commit 9f918710, built 2026-11-04)`; the six commits between `9f918710` and HEAD touch CI and skill files only. |
+| Verified | Drift audit run against `cafa0a5b` (HEAD, 2026-11-04). CLI output taken from `./inspectah-darwin-arm64`, `inspectah 0.9.0-beta.4 (commit 9f918710, built 2026-11-04)`; the six commits between `9f918710` and HEAD touch CI and skill files only. CI workflow and `smoke-integration.spec.ts` re-read at `6952f25d` when the decisions were folded in. |
 | Audit window | `8ac0a19d^..HEAD`, 300 commits. `8ac0a19d` (2026-06-29, "docs: update user-facing docs for 0.8.7-beta.1 release") is the last substantive docs commit before July. The only later commits under `docs/` are a Jekyll en dash fix (2026-07-07), one sentence in the refine how-to (2026-10-31), and the terminal UI removal sweep (2026-11-04). |
 
 **No page under `docs/` has been edited to produce this file.** The pages are written in a separate pass after this spec is approved.
@@ -27,6 +27,8 @@ This spec fixes that in two tracks, in order:
 - **Refresh, not restructure.** The Diataxis layout under `docs/` stays. No page is added to the user-facing sections, none is removed, none is renamed. The only new page is `docs/contributing/testing.md`.
 - **Priority order for Track 1:** getting started, the CLI reference, and the refine how-to first. The rest by severity (§ 2.3).
 - **Track 2 follows Track 1.** The developer guide points at user pages (the CLI reference, the refine how-to) and should point at their corrected versions.
+- **The tutorial builds the refine export.** Step 6 names where the downloaded export lands and Step 7 builds that file, so the tutorial shows the triage decisions reaching the image. Its output blocks come from the § 4 real-host run.
+- **The 0.9.0-beta.4 credential-rotation advisory stays out of the user docs.** The docs describe current behavior. The advisory lives in `CHANGELOG.md` and the beta.4 release notes, where an operator upgrading sees it; `how-to/review-and-refine.md` describes what redaction covers now.
 - **Agent and harness content on public pages is one sentence.** The project is developed with AI assistance, and the core team keeps its harness setup in a private team repository. Nothing more about agents, harnesses, or VMs appears under `docs/`.
 - **Every code block on an updated page is re-run at implementation time.** See § 4.
 
@@ -73,7 +75,7 @@ Severity: **wrong today** means a reader following the page would fail or be mis
 | 23 | 0.9.0-beta.4 Security: manifest, compose, quadlet, and timer scrubbing; unresolved scrubber findings downgrade to `PartiallyRedacted` | Redaction covers fields it did not, and a line the scrubber cannot parse now lowers the redaction state instead of passing as clean. | `reference/inspector-coverage.md` (§ Redaction engine), `how-to/review-and-refine.md` (§ Review sensitive data) | missing |
 | 24 | `ade11cba` RPM-owned paths read one per line | The RPM inspector's ownership query is `--qf '[%{FILENAMES}\n]'`, not the sentinel `rpm -qa` format the table lists. | `reference/inspector-coverage.md` (RpmInspector data sources) | cosmetic |
 | 25 | Long-standing: `.packages` is not a snapshot field | `jq '.packages | length'` on `--inspect-only` output returns `null`; packages live under `.rpm.packages_added`, and there is no `baseline_match` field on a package. Predates the window, found by the audit. | `how-to/ci-integration.md` (§ Extract specific data) | wrong today |
-| 26 | Long-standing: the tutorial builds the original scan tarball | Step 7 runs `inspectah build webserver01-...tar.gz`, the scan output, so none of the Step 5 triage decisions reach the image. The refine export is a separate download. Predates the window, found by the audit. | `tutorials/first-migration.md` (Step 6 and Step 7) | wrong today |
+| 26 | Long-standing: the tutorial builds the original scan tarball | Step 7 runs `inspectah build webserver01-...tar.gz`, the scan output, so none of the Step 5 triage decisions reach the image. The refine export is a separate download. Predates the window, found by the audit. The fix: Step 7 builds the export Step 6 downloads (§ 1). | `tutorials/first-migration.md` (Step 6 and Step 7) | wrong today |
 | 27 | `fd422ff6` fix(hooks): clippy gate able to fail | The hook runs `cargo clippy --workspace --all-targets -- -D clippy::all`; the guide states `cargo clippy --workspace -- -D warnings`. Resolved in § 3.3. | `contributing/developer-guide.md` | wrong today |
 | 28 | Pre-commit hook and `core.hooksPath` (2026-06-28), commit-msg hook | Neither hook is mentioned; a contributor learns about them when a commit is refused. | `contributing/developer-guide.md` | missing |
 | 29 | Fleet-to-aggregate rename (June) left doubled words | "aggregate aggregation", "Aggregate aggregate merges", "a aggregate scan", "a aggregate-wide" in 10 files. | `index.md`, `getting-started.md`, `how-to/review-and-refine.md`, `reference/output-artifacts.md` (3), `reference/triage-classification.md` (2), `explanation/triage-philosophy.md` (2), `explanation/architecture.md`, `contributing/adding-an-inspector.md`, `diagrams/aggregate-topology.html` (2), `diagrams/software-architecture.html` | cosmetic |
@@ -137,14 +139,14 @@ Mark's priority pages first, then by severity, wrong today before missing before
 | `diagrams/software-architecture.html`, `diagrams/user-flow.html` | Redrawn on 2026-11-04 for the terminal UI removal; the crate graph matches each `crates/*/Cargo.toml`. (`software-architecture.html` still carries one row 29 doubled word.) |
 | `diagrams/conceptual-pipeline.html`, `diagrams/data-flow.html` | Searched for schema numbers, `include:` literals, inspector counts, and the removed terminal UI. Nothing found. Not read node by node. |
 
-### 2.5 Code disagreements found, flagged, not fixed
+### 2.5 Code disagreements found by the audit
 
-These look like defects in code or CI rather than in the docs. They are recorded here so the docs pass does not write around them silently; each needs its own fix outside this spec.
+These are defects in code or CI rather than in the docs. They are recorded here so the docs pass does not write around them silently. Each is fixed outside this spec, apart from item 4, which Track 2 carries.
 
-1. **`refine --open` help text names a flag that does not exist.** The clap help reads "Open browser automatically (use --no-open to suppress)", and `--no-open` is rejected as an unexpected argument. The docs pass writes `--open false` regardless; the help text should change to match, or a real `--no-open` should be added. Open question 3.
-2. **CI's real-server e2e step cannot load its fixture, and passes anyway.** `testdata/e2e-fixture.tar.gz` holds a schema 14 snapshot. Run against the current binary: `error: snapshot load error: json error: unknown variant `disabled`, expected `enable` or `disable``. The "Start refine server" step in `.github/workflows/rust-ci.yml` polls `/api/health` for 30 seconds and falls through without failing, and `e2e/smoke-integration.spec.ts` skips every case when nothing answers, so the job is green with no real-server coverage. `testdata/single-host-e2e.tar.gz` and `testdata/fleet-e2e.tar.gz` are schema 17 and cannot load either. Open question 2.
-3. **CI clippy is weaker than the hook.** `rust-ci.yml` runs `cargo clippy --workspace -- -W clippy::all`: no `--all-targets`, and `-W` cannot fail. The hook was corrected in `fd422ff6`; CI was not. Open question 1.
-4. **Two skill files contradict the current tree.** `process-docs/skills/full-workspace-verification-gates.md` §§ 1 and 2 still say the hook runs `-W clippy::all` and describe a nine-warning baseline that `fd422ff6` retired. `process-docs/skills/codebase-layout.md` gives the dependency direction as "pipeline → refine" (the manifests say refine depends on pipeline) and the inspector method as `collect()` (the trait method is `inspect`). The developer guide tells contributors to read both files first, so Track 2 refreshes them. Open question 7.
+1. **`refine --open` help text names a flag that does not exist.** The clap help reads "Open browser automatically (use --no-open to suppress)", and `--no-open` is rejected as an unexpected argument. The fix is to the help text: it says `--open false`, which is what works and what the docs show. No `--no-open` flag is added. A one-line change to the doc comment on `open` in `crates/cli/src/commands/refine.rs`, tracked separately.
+2. **CI's real-server e2e step cannot load its fixture.** `testdata/e2e-fixture.tar.gz` holds a schema 14 snapshot. Run against the current binary: `error: snapshot load error: json error: unknown variant `disabled`, expected `enable` or `disable``. The "Start refine server" step in `.github/workflows/rust-ci.yml` polls `/api/health` for 30 seconds and falls through without failing. Until `bafd5c70`, `e2e/smoke-integration.spec.ts` then skipped every case and the job was green with no real-server coverage; it now throws in CI when the backend is unreachable, so the failure surfaces in the smoke spec rather than at the step that caused it. The fix, tracked separately: regenerate `testdata/e2e-fixture.tar.gz` at schema 25 from a real scan, and make the start step fail when `/api/health` never answers. `testdata/single-host-e2e.tar.gz` and `testdata/fleet-e2e.tar.gz` are schema 17 and cannot load either.
+3. **CI clippy was weaker than the hook. Fixed in `79e46050`.** `rust-ci.yml` ran `cargo clippy --workspace -- -W clippy::all`: no `--all-targets`, and `-W` cannot fail. It now runs `cargo clippy --workspace --all-targets -- -D clippy::all`, the hook's command since `fd422ff6`.
+4. **Two skill files contradict the current tree.** `process-docs/skills/full-workspace-verification-gates.md` §§ 1 and 2 still say the hook runs `-W clippy::all` and describe a nine-warning baseline that `fd422ff6` retired. `process-docs/skills/codebase-layout.md` gives the dependency direction as "pipeline → refine" (the manifests say refine depends on pipeline) and the inspector method as `collect()` (the trait method is `inspect`). The developer guide tells contributors to read both files first, so Track 2 refreshes them (§ 3.5).
 
 ## 3. Track 2: developer guide and testing contract
 
@@ -190,7 +192,7 @@ Sections, in order. The existing workspace table and cross-compilation section c
 
 ### 3.3 The clippy command
 
-Four sources disagreed when this spec was briefed. Measured at HEAD:
+Four sources disagreed when this spec was briefed. Measured at HEAD (`6952f25d`):
 
 | Source | Command it states |
 |---|---|
@@ -198,12 +200,12 @@ Four sources disagreed when this spec was briefed. Measured at HEAD:
 | `CLAUDE.md` § Key Conventions (same commit) | `cargo clippy --workspace --all-targets -- -D clippy::all` |
 | `process-docs/skills/release-process.md` (same commit) | `cargo clippy --workspace --all-targets -- -D clippy::all` |
 | `docs/contributing/developer-guide.md` | `cargo clippy --workspace -- -D warnings` |
-| `.github/workflows/rust-ci.yml` | `cargo clippy --workspace -- -W clippy::all` |
+| `.github/workflows/rust-ci.yml` (since `79e46050`, 2026-11-04) | `cargo clippy --workspace --all-targets -- -D clippy::all` |
 | `process-docs/skills/full-workspace-verification-gates.md` | describes the pre-`fd422ff6` hook |
 
 **Resolution: the guide states `cargo clippy --workspace --all-targets -- -D clippy::all`.** It is the command that actually rejects a commit, and `CLAUDE.md` and the release checklist already state it. It passes on HEAD (`cafa0a5b`, run for this spec: clean finish, no warnings). The skill file's warning that this form "exits 101 on a clean tree" described the nine-warning baseline, which `fd422ff6` fixed.
 
-The guide's current `-D warnings` form also denies the default clippy lints, and rustc warnings besides, so the flag is not the gap that matters. The gap is `--all-targets`: without it clippy checks lib and bin targets only, and every warning this tree has carried lived in a test target. The CI line is weaker than both, since `-W` cannot fail; aligning it is a CI change, not a docs change (open question 1).
+The guide's current `-D warnings` form also denies the default clippy lints, and rustc warnings besides, so the flag is not the gap that matters. The gap is `--all-targets`: without it clippy checks lib and bin targets only, and every warning this tree has carried lived in a test target. CI runs the hook's command since `79e46050`, so a PR that passes CI's clippy step passes the hook's.
 
 ### 3.4 `docs/contributing/testing.md`, new
 
@@ -213,9 +215,9 @@ The testing contract. What must pass, when a real host is required, when a brows
    - fmt, clippy, `cargo test --workspace`: every PR that touches Rust.
    - `npm run test`, `npm run build`, `npm run test:e2e`: every PR that touches `crates/web/ui/`, and every PR that changes a web DTO or handler under `crates/web/src/`, because the hook does not run them.
 2. **What a green result does not prove.**
-   - `npm run test:e2e` reports skipped tests as part of a green run. `e2e/smoke-integration.spec.ts` skips every case when no refine server answers on `127.0.0.1:8642`. Report the skipped count separately from the passed count, every time.
+   - `npm run test:e2e` reports skipped tests as part of a green run. Locally, `e2e/smoke-integration.spec.ts` skips every case when no refine server answers on `127.0.0.1:8642`; under CI it fails instead (`bafd5c70`). Report the skipped count separately from the passed count, every time.
    - The e2e fixtures under `crates/web/ui/e2e/fixtures/` are hand-written JSON, not generated from the server's DTOs. A DTO change updates them by hand; a passing e2e run does not show the DTO matches what ships.
-   - CI's real-server step currently loads nothing (§ 2.5, item 2). Until that is fixed, the page says so plainly rather than describing the step as coverage.
+   - CI's real-server step loads nothing until its fixture is regenerated (§ 2.5, item 2). The page says so plainly rather than describing the step as coverage.
 3. **How long the gates take.** From the skill file's measurement, with its machine named: a clean rebuild plus the full suite is one to two minutes, the hook on a realistic change is under a minute. A run that has not returned in a few minutes is hung, not slow; check `ps -eo pid,etime,command` for a `rustc` child before waiting longer. Periodic `cargo clean` is cheap maintenance.
 4. **When a real-host run is required.** Required for a change to: an inspector or anything under `crates/collect/`; the lines the Containerfile renderer emits; either export path (the CLI scan tarball or the refine web download); redaction; `/var` backing; SELinux replay; and any claim that a generated build succeeds. Not required for: presentation-only web UI changes with no DTO change, docs, test-only changes, refactors with no output change. The run is scan, refine, export, `podman build` against a host carrying synthetic drift from the companion fixture tool, never a clean install. The method and its traps are in `process-docs/skills/real-host-validation-runs.md`; this page links it and does not repeat it.
 5. **When a browser pass is required.** Any change under `crates/web/ui/src/` that alters what renders or how a control behaves, any change to a web DTO or handler the UI consumes, and any keyboard or accessibility change. The pass runs a real refine server (`inspectah refine --open false --port 0 <tarball>`, which prints its origin), waits for the page to settle, exercises the changed control by mouse and by keyboard, and confirms the server's response, including a refusal. Unit tests and the e2e suite run against mocked APIs and do not substitute for it.
@@ -225,7 +227,7 @@ The testing contract. What must pass, when a real host is required, when a brows
 
 Because the guide's first instruction is to read them:
 
-- `full-workspace-verification-gates.md`: §§ 1 and 2 rewritten to the current hook command and a zero baseline; the timing table kept, with its measurement date. The CI line stays named as weaker until open question 1 is settled.
+- `full-workspace-verification-gates.md`: §§ 1 and 2 rewritten to the current hook command and a zero baseline; the timing table kept, with its measurement date. The CI line is named as matching the hook (`79e46050`).
 - `codebase-layout.md`: dependency direction corrected to the manifests (core, collect, pipeline, refine, web, cli, each depending only on those before it as the architecture page states), and the inspector method corrected to `inspect`.
 - `e2e-fixtures-are-hand-maintained.md`: its two "Full write-up" pointers cite backlog items that live outside this repository. Replace each with a one-line summary; a public skill file should not send a reader somewhere they cannot follow.
 
@@ -259,16 +261,6 @@ The two tracks are sequential. The real-host capture for Track 1's output blocks
 **A second counter-case: swap the tracks.** New developers are arriving now, and a corrected developer guide is two pages against eighteen. Doing Track 2 first would unblock contributors in one session. Against that: the guide links the CLI reference and the refine how-to, and a contributor's first task is often a user-visible change that cites those pages.
 
 **Evidence that would change the recommendation.** If the aggregate UI convergence is scheduled to merge within two weeks, the aggregate sections of both pages should wait for it and Track 1 shrinks by about one session. If new contributors are blocked on build or hook questions before Track 1 can finish, Track 2 should go first; the fix is to swap, not to run them in parallel, because both touch `getting-started.md`'s source-build section.
-
-## 7. Open questions for Mark
-
-1. **Align CI's clippy line with the hook?** Recommended: yes, change `rust-ci.yml` to `cargo clippy --workspace --all-targets -- -D clippy::all` in its own `ci` commit, outside the docs work. Otherwise a contributor's PR can pass CI with a warning the hook would have refused.
-2. **Fix the CI real-server e2e step?** Recommended: yes, as a separate item. Regenerate `testdata/e2e-fixture.tar.gz` at schema 25 from a real scan, and make the "Start refine server" step fail when `/api/health` never answers. Until then `testing.md` states that the step loads nothing.
-3. **`--open` help text: fix the text or add `--no-open`?** Recommended: fix the text to say `--open false`, since that is what works and what the docs will show. Adding `--no-open` is a CLI change with completions to hand-edit.
-4. **Tutorial Step 7: build the refine export?** Recommended: yes. Step 6 names where the downloaded export lands and Step 7 builds that file, so the tutorial demonstrates the decisions reaching the image. This makes the tutorial depend on a real export, so its output blocks are captured in the § 4 real-host run.
-5. **Move `adding-an-inspector.md` to Track 2?** Recommended: yes, as § 2.3 does. It is a contributor page and shares its sources with the developer guide.
-6. **Do the user docs carry the 0.9.0-beta.4 credential-rotation advisory?** Recommended: no. The docs describe current behavior; the advisory stays in `CHANGELOG.md` and the beta.4 release notes, where an operator upgrading will see it. `how-to/review-and-refine.md` describes what redaction covers now.
-7. **Refresh the three skill files in Track 2?** Recommended: yes (§ 3.5). The developer guide tells contributors to read `codebase-layout.md` first, and two of its claims are wrong.
 
 ## Related
 
