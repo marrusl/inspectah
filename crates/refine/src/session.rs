@@ -4122,9 +4122,10 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// the Containerfile matches the preview byte for byte **only when the
 /// caller passes the `RenderContext` the preview was rendered with**.
 /// `RefineSession::export_tarball` passes `cached_render_context` and
-/// does match; `POST /api/tarball` passes `None`, and the Containerfile
-/// in that download drops every `dnf group install` and installs the
-/// members individually instead. Backlog:
+/// does match, but has no production caller left, so no shipped route
+/// takes that path; `POST /api/tarball` passes `None`, and the
+/// Containerfile in that download drops every `dnf group install` and
+/// installs the members individually instead. Backlog:
 /// `inspectah-nothing-tests-the-tarball-route-or-the-byte-identity-claim`.
 ///
 /// `upload_dir_canon` must be the *canonical* upload directory the session
