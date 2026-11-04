@@ -7,7 +7,7 @@ non-obvious gotchas discovered during actual releases.
 
 Two files need version bumps:
 
-1. **Root `Cargo.toml`** -- `[workspace.package]` section (line ~14).
+1. **Root `Cargo.toml`** -- `[workspace.package]` section (line ~13).
    All crates inherit via `version.workspace = true`, so only the root
    needs changing. Run `cargo check` afterward to regenerate `Cargo.lock`.
 
@@ -92,6 +92,13 @@ frontend source. A release binary must embed the built frontend, so
 A binary built with the variable set ships without a UI and the failure
 is invisible until someone runs `refine`.
 
+Checking that the variable wasn't set is a weak verification, since it
+only tells you what you intended, not what shipped. Verify the embedded
+UI directly instead: check each built binary for `index.html` and a
+content-hashed asset from the fresh `dist` output. That confirms the
+frontend is actually inside the artifact rather than just that nothing
+told it to skip itself.
+
 **`npm ci` needs network and will hang under the default command
 sandbox.** Run the cargo builds with the sandbox disabled. A build that
 appears to hang with no output is this, not a slow compile -- do not
@@ -102,6 +109,18 @@ cost three times.
 Timings: a cold build (after `cargo clean`) measured 73s / 67s / 69s
 per target, 209s total, on an M-series Mac. The earlier "30-60 seconds
 each" figure was a warm-build number; budget roughly double for cold.
+
+**Open question: does `npm ci` really run fresh per target?** The
+v0.9.0-beta.4 builds, warm tree, measured 150s total: native 32.8s,
+x86_64 musl 83s, aarch64 musl 33.9s. That's not a clean comparison
+against the 209s cold figure above, since the tree was warm, so it
+doesn't refute it. But two of the three targets finishing in about 33
+seconds leaves little room for an `npm ci` that deletes and reinstalls
+`node_modules` on each one. Either `build.rs` caches more across targets
+than this skill assumes, or `npm ci` is cheaper now than when that claim
+was written. Unresolved -- don't treat the "three times" framing above as
+settled, and don't budget a release purely off the 209s figure without
+rechecking.
 
 ## Binary naming and staging
 
@@ -188,7 +207,13 @@ Build and test are part of the gate even though a release commit changes
 no source: the version bump rewrites `Cargo.lock` and every crate
 version, so confirm the workspace still builds and the suite still
 passes at the bumped version. v0.9.0-beta.2 was 2784 passed, 0 failed,
-6 ignored; v0.9.0-beta.3 was 2785 passed, 0 failed, 6 ignored.
+6 ignored; v0.9.0-beta.3 was 2785 passed, 0 failed, 6 ignored; v0.9.0-beta.4
+was 2969 passed, 0 failed, 6 ignored, across 83 suites. The jump from
+beta.3 is expected (beta.4 carries the whole accumulated `[Unreleased]`
+body plus the TUI removal) -- the pass count legitimately grows release to
+release, so don't treat a gap against this baseline as a problem on its
+own. **0 failed and 6 ignored are the numbers that signal trouble**, not
+the pass count.
 
 Two sandbox traps make a clean tree look broken. Neither is a real
 failure, and both cost time on more than one release:
@@ -250,11 +275,18 @@ gh release create v0.8.6-beta.5 \
   inspectah-linux-amd64 \
   inspectah-linux-arm64-bin \
   --title "v0.8.6-beta.5" \
-  --prerelease \
   --notes-file process-docs/release-notes-0.8.6-beta.5.md
 ```
 
-Use `--prerelease` for any beta/alpha/rc tag. Omit for stable releases.
+**Do not pass `--prerelease`, even on a beta/alpha/rc tag, until 1.0 ships.**
+A pre-release does not show up on the repo home page, and there is no
+stable release yet to hold that spot, so every beta is currently marked as
+a full release on purpose (Mark, 2026-11-04). Confirmed against
+`gh release list`: `v0.9.0-beta.4`, `beta.3`, `beta.2`, `beta.1`, and
+`v0.8.7-beta.1` are all `isPrerelease: false` -- five releases of
+consistent practice. **Expiry condition: once 1.0 ships, betas go back to
+`--prerelease`**, because a stable release then exists to hold the home
+page and a beta no longer needs to.
 
 ## Homebrew formula
 
@@ -287,11 +319,14 @@ the hyphenated form (`0.9.0-beta.2`), not the RPM tilde form.
 - **RPM spec uses tilde, not hyphen.** `0.8.6~beta.5` sorts correctly
   in RPM; `0.8.6-beta.5` would sort *after* `0.8.6` (wrong).
 
-- **Skipped releases happen.** beta.4 was tagged but never released on
-  GitHub. When this happens, roll the unreleased changes into the next
-  version. The CHANGELOG keeps the skipped version's section as-is;
-  the release notes for the new version mention "also included from
-  beta.N" for visibility.
+- **Skipped releases happen.** `v0.8.6-beta.4` was tagged but never
+  released on GitHub. (Note this is specifically `v0.8.6-beta.4` -- a later,
+  unrelated `v0.9.0-beta.4` exists and was released normally; don't read
+  "beta.4" here as a pattern that recurs at every `.4`.) When a version is
+  skipped like this, roll the unreleased changes into the next version.
+  The CHANGELOG keeps the skipped version's section as-is; the release
+  notes for the new version mention "also included from beta.N" for
+  visibility.
 
 - **Cargo.lock regeneration.** After bumping `Cargo.toml`, run
   `cargo check` to update `Cargo.lock`. Don't forget to stage it.
