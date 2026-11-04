@@ -21,9 +21,18 @@ if grep -qiE '^[[:space:]]*Co-Authored-By:' <(grep -v '^#' "$MSG_FILE"); then
   cat >&2 <<'EOF'
 commit-msg: commit refused — Co-Authored-By is not used in this repo.
 
-Attribution is a single trailer:
+Attribution is a single trailer naming the tool and the model:
 
-    Assisted-by: Claude Code (<model>)
+    Assisted-by: <tool> (<model>)
+
+for example:
+
+    Assisted-by: Claude Code (Opus 5)
+    Assisted-by: Cursor (GPT-5.4)
+
+Both fields are required. The same model driven by a different tool is a
+different provenance, so the model alone does not say who produced the
+commit.
 
 A second Assisted-by line is allowed only when the commit carries
 substantial verbatim content from a different model's output. Reviewer

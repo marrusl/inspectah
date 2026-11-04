@@ -229,7 +229,7 @@ Git does not run hooks from a tracked directory by default: it only ever runs ho
 What the hooks do:
 
 - `pre-commit` runs `cargo fmt --check`, `cargo clippy`, and `cargo test` before letting a commit through.
-- `commit-msg` refuses a `Co-Authored-By` trailer. This project records AI assistance with a single `Assisted-by: Claude Code (<model>)` trailer instead, because `Co-Authored-By` makes a model show up in GitHub's contributor statistics as if it were a person. Several AI coding tools add `Co-Authored-By` automatically, so if you use one, you may hit this and should know why.
+- `commit-msg` refuses a `Co-Authored-By` trailer. This project records AI assistance with a single `Assisted-by: <tool> (<model>)` trailer instead, for example `Assisted-by: Claude Code (Opus 5)` or `Assisted-by: Cursor (GPT-5.4)`. Name both fields: the same model driven by a different tool is a different provenance, so the model alone would not say who produced the commit. `Co-Authored-By` is refused because it makes a model show up in GitHub's contributor statistics as if it were a person. Several AI coding tools add it automatically, so if you use one, you may hit this and should know why.
 
 ## License
 
