@@ -124,7 +124,7 @@ Refine export tarballs are **flat** (no prefix subdirectory).
 
 | File | Description |
 |------|-------------|
-| `Containerfile` | Byte-identical to the refine UI preview. Uses the same materialized roots as the preview to guarantee fidelity. |
+| `Containerfile` | Reflects the session's include/exclude decisions. Package groups render as individual members, not a single `dnf group install` line, unlike the preview pane. |
 | `audit-report.md` | Findings and recommendations. |
 | `inspection-snapshot.json` | Projected snapshot reflecting all refinement operations applied. |
 | `schema/snapshot.schema.json` | JSON Schema placeholder. |
