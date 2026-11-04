@@ -212,15 +212,63 @@ jobs:
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
-      - name: Compute source tarball metadata
-        id: source_tarball
+      # The formula is a BINARY formula: its `install` is
+      # `bin.install "inspectah-darwin-arm64" => "inspectah"`, so `url` must
+      # point at the release asset of that name. This step previously
+      # computed the *source tarball* URL and digest, which produced a
+      # formula whose install looked for a file a source checkout does not
+      # contain. Every automated tap PR since March has been unmergeable for
+      # that reason, and the job reported success each time because opening
+      # a PR is all it ever checked.
+      - name: Resolve the darwin binary asset
+        id: asset
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           REPO: ${{ github.repository }}
+          ASSET_NAME: inspectah-darwin-arm64
+          # The asset is uploaded during release creation, by a different
+          # process than this workflow, so it can still be in flight when
+          # `release: published` fires. Measured on v0.9.0-beta.4: the asset
+          # finished uploading at 18:56:02Z and the release published_at was
+          # 18:56:02Z, the same second. That is a tie, not a margin, so wait
+          # for the asset rather than assuming it.
+          ASSET_WAIT_ATTEMPTS: "30"
+          ASSET_WAIT_SECONDS: "10"
+          # sha256 of zero bytes. If curl ever writes an empty file and we
+          # fail to notice, this is the digest we would publish.
+          EMPTY_SHA256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         run: |
-          URL="https://github.com/${REPO}/archive/refs/tags/${RELEASE_TAG}.tar.gz"
-          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          set -euo pipefail
+
           VERSION="${RELEASE_TAG#v}"
+          URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${ASSET_NAME}"
+
+          ok=""
+          for i in $(seq 1 "$ASSET_WAIT_ATTEMPTS"); do
+            # -f so an HTTP error is a non-zero exit rather than an error
+            # page written to the output file and hashed as if it were the
+            # binary.
+            if curl -fsSL -o asset.bin "$URL"; then ok=yes; break; fi
+            echo "attempt $i: ${ASSET_NAME} not downloadable yet, waiting"
+            sleep "$ASSET_WAIT_SECONDS"
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::${URL} never became downloadable. The tap was not updated." >&2
+            exit 1
+          fi
+
+          SHA=$(sha256sum asset.bin | cut -d' ' -f1)
+
+          if [ "${#SHA}" -ne 64 ]; then
+            echo "::error::computed sha256 is not 64 characters: '${SHA}'" >&2
+            exit 1
+          fi
+          if [ "$SHA" = "$EMPTY_SHA256" ]; then
+            echo "::error::asset hashed as empty; refusing to publish that digest" >&2
+            exit 1
+          fi
+
+          echo "resolved ${ASSET_NAME} for ${RELEASE_TAG}: ${SHA}"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -234,15 +282,36 @@ jobs:
 
       - name: Update formula
         env:
-          VERSION: ${{ steps.source_tarball.outputs.version }}
-          SHA256: ${{ steps.source_tarball.outputs.sha256 }}
+          VERSION: ${{ steps.asset.outputs.version }}
+          SHA256: ${{ steps.asset.outputs.sha256 }}
+          ASSET_URL: ${{ steps.asset.outputs.url }}
         working-directory: homebrew-tap
         run: |
+          set -euo pipefail
+
+          # `version` was never substituted before, so a merged PR would have
+          # left the old version beside the new url and failed the formula's
+          # own test block, which asserts version.to_s appears in
+          # `inspectah version` output. `install` is deliberately untouched.
           sed -i \
-            -e "s|url \".*\"|url \"https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.tar.gz\"|" \
-            -e "s|sha256 \".*\"|sha256 \"${SHA256}\"|" \
+            -e "s|^  version \".*\"|  version \"${VERSION}\"|" \
+            -e "s|^  url \".*\"|  url \"${ASSET_URL}\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" \
             Formula/inspectah.rb
-          echo "Updated formula to v${VERSION} (sha256: ${SHA256})"
+
+          # Confirm each substitution actually landed. If the formula is ever
+          # restructured so a pattern stops matching, sed exits 0 having
+          # changed nothing and the job would otherwise report success while
+          # delivering a stale formula.
+          for expected in "version \"${VERSION}\"" "url \"${ASSET_URL}\"" "sha256 \"${SHA256}\""; do
+            if ! grep -qF "$expected" Formula/inspectah.rb; then
+              echo "::error::substitution did not land: ${expected}" >&2
+              echo "The formula may have been restructured. Not updating the tap." >&2
+              exit 1
+            fi
+          done
+
+          echo "Updated formula to ${VERSION} (sha256: ${SHA256})"
 
       - name: Open PR against tap repo
         env:
@@ -257,7 +326,11 @@ jobs:
           git checkout -B "$BRANCH"
           git add Formula/inspectah.rb
           if git diff --cached --quiet; then
-            echo "No formula changes to commit"
+            # Previously `exit 0`. The substitutions are verified above, so
+            # reaching here means the formula already matched this release:
+            # a re-run, or a tap someone updated by hand. That is not an
+            # error, but it must not look like a delivered update either.
+            echo "::notice::Formula already at ${TAG}; nothing to push."
             exit 0
           fi
           git commit -m "Update inspectah to ${TAG}"
