@@ -2,7 +2,7 @@ name: Rust CI
 
 on:
   push:
-    branches: [rust]
+    branches: [main]
     paths:
       - 'crates/*/src/**'
       - 'crates/*/tests/**'
@@ -21,7 +21,7 @@ on:
       - 'testdata/**'
       - '.github/workflows/rust-ci.yml'
   pull_request:
-    branches: [rust]
+    branches: [main]
 
 jobs:
   tier1:
@@ -40,8 +40,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all -- --check
+      # Must match .githooks/pre-commit and the CLAUDE.md policy exactly.
+      # -W exits 0 however many warnings it prints, and without --all-targets
+      # clippy never compiles test targets, which is where every warning this
+      # tree has carried lived. This step was the fourth copy of the old
+      # non-enforcing form and went unnoticed because the workflow never ran.
       - name: Clippy
-        run: cargo clippy --workspace -- -W clippy::all
+        run: cargo clippy --workspace --all-targets -- -D clippy::all
       - name: Install UI dependencies
         working-directory: crates/web/ui
         run: npm ci
