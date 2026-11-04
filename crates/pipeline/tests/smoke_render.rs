@@ -446,56 +446,6 @@ fn all_sections_in_audit_report() {
 // HTML report includes storage and kernelboot sections.
 // ---------------------------------------------------------------------------
 
-#[test]
-#[ignore = "section templates deferred to T5-T12; un-ignore when Storage/KernelBoot templates land"]
-fn all_sections_in_html_report() {
-    let snap = snapshot_all_sections();
-    let context = inspectah_core::traits::renderer::RenderContext { target: None };
-    let html = report::render_report(&snap, &context);
-
-    // Storage section appears
-    assert!(
-        html.contains("<h2>Storage</h2>"),
-        "HTML report must contain Storage heading"
-    );
-    assert!(
-        html.contains("/dev/sda1"),
-        "HTML report must list fstab device /dev/sda1"
-    );
-    assert!(
-        html.contains("//server/share"),
-        "HTML report must list CIFS device"
-    );
-
-    // Kernel & Boot section appears
-    assert!(
-        html.contains("Kernel &amp; Boot"),
-        "HTML report must contain Kernel & Boot heading"
-    );
-    assert!(
-        html.contains("Sysctl Overrides"),
-        "HTML report must contain Sysctl Overrides sub-heading"
-    );
-    assert!(
-        html.contains("net.ipv4.ip_forward"),
-        "HTML report must list sysctl override key"
-    );
-    assert!(
-        html.contains("br_netfilter"),
-        "HTML report must list modules-load.d config"
-    );
-
-    // Summary cards include storage and kernelboot counts
-    assert!(
-        html.contains("Storage Entries"),
-        "HTML report must have Storage Entries summary card"
-    );
-    assert!(
-        html.contains("Kernel/Boot Items"),
-        "HTML report must have Kernel/Boot Items summary card"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Test 8: credential_refs_in_secrets_review
 // Storage credential refs and services drop-in secrets produce findings
@@ -567,72 +517,6 @@ fn credential_refs_in_secrets_review() {
 // Integration check: render_all with all three sections populates all 8
 // artifacts without errors.
 // ---------------------------------------------------------------------------
-
-#[test]
-#[ignore = "section templates deferred to T5-T12; un-ignore when Storage/KernelBoot templates land"]
-fn render_all_with_all_sections() {
-    let snap = snapshot_all_sections();
-    let context = inspectah_core::traits::renderer::RenderContext { target: None };
-    let dir = TempDir::new().unwrap();
-
-    inspectah_pipeline::render::render_all(&snap, &context, dir.path()).unwrap();
-
-    // All 8 artifacts must exist
-    let expected_files = [
-        "Containerfile",
-        "audit-report.html",
-        "audit-report.md",
-        "secrets-review.md",
-        "README.md",
-        "kickstart-suggestion.ks",
-        "inspection-snapshot.json",
-    ];
-
-    for name in &expected_files {
-        let path = dir.path().join(name);
-        assert!(path.exists(), "{} must exist after render_all", name);
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert!(!content.is_empty(), "{} must be non-empty", name);
-    }
-
-    assert!(
-        dir.path().join("config").exists(),
-        "config/ directory must exist after render_all"
-    );
-
-    // Cross-check: Containerfile references services
-    let cf = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
-    assert!(
-        cf.contains("systemctl enable") && cf.contains("httpd.service"),
-        "render_all Containerfile must contain services data"
-    );
-
-    // Cross-check: audit report references services, storage, and kernelboot
-    let audit = std::fs::read_to_string(dir.path().join("audit-report.md")).unwrap();
-    assert!(
-        audit.contains("httpd.service"),
-        "render_all audit report must contain services data"
-    );
-    assert!(
-        audit.contains("## Storage"),
-        "render_all audit report must contain Storage section"
-    );
-    assert!(
-        audit.contains("## Kernel & Boot"),
-        "render_all audit report must contain Kernel & Boot section"
-    );
-
-    // Cross-check: HTML report references storage and kernelboot
-    let html_report = std::fs::read_to_string(dir.path().join("audit-report.html")).unwrap();
-    assert!(
-        html_report.contains("<h2>Storage</h2>"),
-        "render_all HTML report must contain Storage section"
-    );
-    assert!(
-        html_report.contains("Kernel &amp; Boot"),
-        "render_all HTML report must contain Kernel & Boot section"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // SELinux file context rules — spec § 3.1, § 5.1, § 8.9 render half

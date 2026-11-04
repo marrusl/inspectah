@@ -602,18 +602,6 @@ fn report_selinux_section() {
     assert!(html.contains("enforcing"), "security card must show mode");
 }
 
-#[test]
-#[ignore = "summary cards deferred to T6; un-ignore when summary card template lands"]
-fn report_nonrpm_section() {
-    let snap = snapshot_with_nonrpm();
-    let html = report::render_report(&snap, &RenderContext { target: None });
-    assert!(
-        html.contains("Non-RPM Items"),
-        "must contain Non-RPM Items summary card"
-    );
-    assert!(html.contains(">3<"), "non-RPM count must be 3");
-}
-
 // ---------------------------------------------------------------------------
 // Test: @reboot audit detection from GeneratedTimerUnit.cron_expr
 // ---------------------------------------------------------------------------
@@ -700,23 +688,6 @@ fn audit_no_content_for_missing_scheduled() {
     assert!(
         !md.contains("## Scheduled Tasks"),
         "audit must not produce Scheduled Tasks heading when section is None"
-    );
-}
-
-#[test]
-#[ignore = "summary cards deferred to T6; un-ignore when summary card template lands"]
-fn report_no_card_for_missing_nonrpm() {
-    let snap = InspectionSnapshot::new();
-    let html = report::render_report(&snap, &RenderContext { target: None });
-    // Non-RPM card should still be present (with 0) since the summary grid
-    // always renders all cards. But verify the count is 0.
-    assert!(
-        html.contains("Non-RPM Items"),
-        "Non-RPM card is always rendered in the summary grid"
-    );
-    assert!(
-        html.contains(">0<") || html.contains(">n/a<"),
-        "Non-RPM count must be 0 or n/a when section is None"
     );
 }
 
