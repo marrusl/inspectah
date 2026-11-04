@@ -3,9 +3,27 @@ name: Package release
 on:
   release:
     types: [published]
+  # Manual runs exist so this pipeline can be exercised without shipping.
+  # A `release` re-run replays the original run's definition, so before this
+  # trigger the only way to fire the pipeline was to publish a release, which
+  # is why it stayed broken across four months of releases.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v0.9.0-beta.4"
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+# The release payload is empty on a manual run and the dispatch input is empty
+# on a release, so exactly one of these is ever set. The release is named first
+# because it is the production path; the input is the fallback.
+# GITHUB_REF_NAME is NOT a substitute: on a manual run it holds the branch, not
+# the tag.
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   build-srpm:
@@ -21,7 +39,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Verify version consistency
         run: |
@@ -30,7 +48,7 @@ jobs:
           # uses tilde (0.8.1~alpha.3). Normalize for comparison.
           CARGO_VERSION=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' Cargo.toml | head -1)
           RPM_CARGO_VERSION=$(echo "$CARGO_VERSION" | sed 's/-/~/')
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${RELEASE_TAG#v}"
           RPM_TAG_VERSION=$(echo "$TAG_VERSION" | sed 's/-/~/')
           if [ "$SPEC_VERSION" != "$RPM_CARGO_VERSION" ]; then
             echo "Version mismatch: packaging/inspectah.spec=$SPEC_VERSION Cargo.toml=$CARGO_VERSION (normalized: $RPM_CARGO_VERSION)" >&2
@@ -51,7 +69,13 @@ jobs:
       - name: Build SRPM
         run: make -f .copr/Makefile srpm outdir="$PWD"
 
+      # Release runs only. A manual run has no release payload, so
+      # context.payload.release.id is undefined and this step would throw; and
+      # pointing a test run at an already-published tag would replace assets
+      # users may already have downloaded. A manual run builds and verifies
+      # without touching anything outside the runner.
       - name: Upload SRPM to release
+        if: github.event_name == 'release'
         uses: actions/github-script@v7
         with:
           script: |
@@ -124,7 +148,23 @@ jobs:
           rpmbuild --rebuild *.src.rpm
           find ~/rpmbuild/RPMS -name '*.rpm' ! -name '*.src.rpm' -exec cp {} . \;
 
+      # Runs on both triggers, mirroring the SRPM artifact upload. Without it a
+      # manual run would build the RPMs and discard them, leaving green as the
+      # only evidence; with it the packages can be downloaded and inspected.
+      # The name is per-leg because upload-artifact rejects duplicate names.
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.target.name }}
+          # The SRPM was downloaded into this directory, so exclude it: this
+          # artifact is the built binary packages only.
+          path: |
+            *.rpm
+            !*.src.rpm
+
+      # Release runs only, for the same reasons as the SRPM upload above.
       - name: Upload RPM to release
+        if: github.event_name == 'release'
         uses: actions/github-script@v7
         with:
           script: |
@@ -157,7 +197,11 @@ jobs:
               });
             }
 
+  # Release runs only. This job pushes a branch and opens a pull request on the
+  # tap repo, and a manual test run must not do either. Its tag references are
+  # left on the release payload deliberately: the job never runs without one.
   update-homebrew:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Compute source tarball metadata
