@@ -12,14 +12,18 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
+      # Must run before actions/checkout. Without git on PATH the action
+      # falls back to downloading a REST API tarball, which leaves no .git
+      # directory, and .copr/Makefile builds its source tree with
+      # `git archive HEAD`. The fedora:latest image ships no git.
+      - name: Install git for checkout
+        run: dnf install -y git make
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - name: Install build dependencies
-        run: dnf install -y rpm-build rust cargo git
-
-      - name: Build SRPM
+      - name: Verify version consistency
         run: |
           SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' packaging/inspectah.spec)
           # Cargo.toml uses semver prerelease (e.g. 0.8.1-alpha.3), RPM spec
@@ -36,12 +40,16 @@ jobs:
             echo "Version mismatch: packaging/inspectah.spec=$SPEC_VERSION tag=$TAG_VERSION (normalized: $RPM_TAG_VERSION)" >&2
             exit 1
           fi
-          VERSION=$SPEC_VERSION
-          mkdir -p ~/rpmbuild/SOURCES
-          tar czf ~/rpmbuild/SOURCES/inspectah-${VERSION}.tar.gz \
-            --transform "s,^\.,inspectah-${VERSION}," --exclude-vcs .
-          rpmbuild -bs packaging/inspectah.spec
-          cp ~/rpmbuild/SRPMS/*.src.rpm .
+
+      # Use the same recipe COPR uses rather than a second one. The previous
+      # plain `tar czf --exclude-vcs .` of the checkout could never work: the
+      # spec's %build runs cargo, which drives crates/web/build.rs, and that
+      # needs either npm on PATH or a pre-built crates/web/ui/dist. dist is
+      # gitignored, so a fresh checkout never contains it and the RPM build
+      # panicked on every release. The Makefile pre-builds the UI and vendors
+      # the crates, so the SRPM rebuilds offline with only cargo and rust.
+      - name: Build SRPM
+        run: make -f .copr/Makefile srpm outdir="$PWD"
 
       - name: Upload SRPM to release
         uses: actions/github-script@v7
@@ -86,6 +94,9 @@ jobs:
     needs: build-srpm
     runs-on: ubuntu-latest
     strategy:
+      # One leg's failure must not cancel the others: until now a single
+      # failing target masked whether the rest build at all.
+      fail-fast: false
       matrix:
         target:
           - { name: "fedora", container: "fedora:latest" }
