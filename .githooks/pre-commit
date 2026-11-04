@@ -42,10 +42,15 @@ EOF
     exit 1
 fi
 
-# --- gate 2: clippy (catches warnings-as-errors) ---
+# --- gate 2: clippy (warnings are errors) ---
+#
+# -D, not -W: -W exits 0 however many warnings it prints, so this gate
+# tested an exit code that could not be non-zero and never blocked a commit.
+# --all-targets is equally load-bearing: without it clippy checks lib and bin
+# only, and every warning this tree has ever carried lived in a test target.
 
 echo "pre-commit: running cargo clippy..."
-if ! cargo clippy --workspace -- -W clippy::all 2>&1; then
+if ! cargo clippy --workspace --all-targets -- -D clippy::all 2>&1; then
     cat <<'EOF'
 
     !! COMMIT BLOCKED — clippy warnings found !!

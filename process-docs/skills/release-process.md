@@ -185,24 +185,29 @@ not just the native one.
 ## Pre-commit checks
 
 Run these yourself and read the output before committing the release.
-Do not trust exit codes here: `-W` warns without failing, and the
-pre-commit hook inherits that, so its clippy step cannot fail.
 
 ```bash
 cargo build --workspace
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -W clippy::all
+cargo clippy --workspace --all-targets -- -D clippy::all
 cargo test --workspace
 ```
 
-**`--all-targets` is required.** Every clippy warning in this tree lives
-in a test target, so plain `cargo clippy` (lib and bin only) reports
-zero and sees nothing. At v0.9.0-beta.2 the baseline is **nine**
-pre-existing warnings -- 4 in `inspectah-web` (test `contract_snapshots`),
-1 in `inspectah-web` (lib test), 2 in `inspectah-cli` (bin test), 2 in
-`inspectah-pipeline` (lib test). Compare against that count; a release
-commit should introduce none. Note this baseline is in tension with the
-`-D clippy::all` standard in `CLAUDE.md`, which those nine would fail.
+**The expected clippy result is zero warnings, and the command now fails
+if there are any.** This line matches `CLAUDE.md` and the pre-commit
+hook exactly; if you change one, change all three.
+
+Two flags carry that guarantee. `-D` makes warnings errors: the earlier
+`-W` form exited 0 however many it printed, which is why the hook's
+clippy gate could never block and why the baseline below was allowed to
+stand. `--all-targets` checks test targets too; without it clippy sees
+lib and bin only, and every warning this tree has ever carried lived in
+a test target.
+
+Until v0.9.0-beta.4 this section documented a standing baseline of nine
+pre-existing warnings to compare against. **That baseline is retired --
+the nine were fixed and the gate now enforces zero.** If you are reading
+an older release's notes and expecting nine, that is why.
 
 Build and test are part of the gate even though a release commit changes
 no source: the version bump rewrites `Cargo.lock` and every crate
