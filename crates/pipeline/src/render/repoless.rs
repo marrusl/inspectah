@@ -194,12 +194,13 @@ mod tests {
     use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
     fn test_snapshot_with_repoless(packages: Vec<PackageEntry>) -> InspectionSnapshot {
-        let mut snap = InspectionSnapshot::default();
-        snap.rpm = Some(RpmSection {
-            packages_added: packages,
+        InspectionSnapshot {
+            rpm: Some(RpmSection {
+                packages_added: packages,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
-        snap
+        }
     }
 
     #[test]

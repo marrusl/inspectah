@@ -1513,7 +1513,7 @@ VARIANT_ID="workstation"
         fn file_exists(&self, path: &std::path::Path) -> bool {
             self.existing_dirs
                 .iter()
-                .any(|d| d == &path.to_string_lossy().as_ref())
+                .any(|d| d == path.to_string_lossy().as_ref())
         }
 
         fn read_dir(&self, _path: &std::path::Path) -> Result<Vec<String>, std::io::Error> {

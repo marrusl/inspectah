@@ -2191,10 +2191,7 @@ mod tests {
             pkg.name, pkg.pinned
         );
         assert_eq!(pkg.name, "django");
-        assert_eq!(
-            pkg.pinned, true,
-            "django should be pinned in projected snapshot"
-        );
+        assert!(pkg.pinned, "django should be pinned in projected snapshot");
 
         eprintln!("JSON check: {:?}", lang[0]["packages"][0]);
         assert_eq!(

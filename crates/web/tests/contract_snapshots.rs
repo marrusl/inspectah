@@ -386,29 +386,25 @@ async fn grouped_view_contract() {
 
     // First two should be new (httpd, mod_ssl), sorted alphabetically
     assert_eq!(members[0]["name"].as_str().unwrap(), "httpd");
-    assert_eq!(
-        members[0]["in_base_image"].as_bool().unwrap(),
-        false,
+    assert!(
+        !members[0]["in_base_image"].as_bool().unwrap(),
         "httpd should NOT be in_base_image"
     );
     assert_eq!(members[1]["name"].as_str().unwrap(), "mod_ssl");
-    assert_eq!(
-        members[1]["in_base_image"].as_bool().unwrap(),
-        false,
+    assert!(
+        !members[1]["in_base_image"].as_bool().unwrap(),
         "mod_ssl should NOT be in_base_image"
     );
 
     // Last two should be from base (apr, apr-util), sorted alphabetically
     assert_eq!(members[2]["name"].as_str().unwrap(), "apr");
-    assert_eq!(
+    assert!(
         members[2]["in_base_image"].as_bool().unwrap(),
-        true,
         "apr should be in_base_image"
     );
     assert_eq!(members[3]["name"].as_str().unwrap(), "apr-util");
-    assert_eq!(
+    assert!(
         members[3]["in_base_image"].as_bool().unwrap(),
-        true,
         "apr-util should be in_base_image"
     );
 

@@ -96,14 +96,15 @@ mod tests {
     fn test_snapshot_with_unmanaged(items: Vec<UnmanagedFile>) -> InspectionSnapshot {
         let total_size = items.iter().map(|f| f.size).sum();
         let total_count = items.len();
-        let mut snap = InspectionSnapshot::default();
-        snap.unmanaged_files = Some(UnmanagedFileSection {
-            items,
-            usr_entries: Vec::new(),
-            total_size,
-            total_count,
-        });
-        snap
+        InspectionSnapshot {
+            unmanaged_files: Some(UnmanagedFileSection {
+                items,
+                usr_entries: Vec::new(),
+                total_size,
+                total_count,
+            }),
+            ..Default::default()
+        }
     }
 
     #[test]

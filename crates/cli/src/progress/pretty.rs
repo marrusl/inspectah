@@ -1147,11 +1147,10 @@ mod tests {
             "expected child lines between Services and Network"
         );
         // Child lines should be indented with 6 spaces.
-        for i in (services_idx + 1)..network_idx {
+        for line in &lines[(services_idx + 1)..network_idx] {
             assert!(
-                lines[i].starts_with("      "),
-                "child line not indented: {}",
-                lines[i]
+                line.starts_with("      "),
+                "child line not indented: {line}"
             );
         }
         insta::assert_snapshot!(text);
