@@ -541,8 +541,8 @@ impl SectionStats {
     ///
     /// The match is exhaustive on purpose. Counting both buckets off
     /// `is_included()` filed every advisory under `excluded`, so the stats
-    /// bar claimed a decision the user never made and the TUI group
-    /// advisory badge, computed as the remainder, was structurally zero.
+    /// bar claimed a decision the user never made and any advisory count
+    /// derived as the remainder was structurally zero.
     /// A new `FindingKind` variant has to fail to compile here rather than
     /// fall into a bucket by default.
     pub fn from_dispositions<'a>(

@@ -8391,8 +8391,8 @@ mod tests {
     }
 
     /// Advisories are display-only facts, not decisions. Counting them as
-    /// excluded made the stats bar contradict the rows beside it and
-    /// zeroed the TUI group advisory badge, which is computed as
+    /// excluded made the stats bar contradict the rows beside it, and
+    /// zeroed any advisory count derived as the remainder
     /// `total - (included + excluded)`.
     #[test]
     fn config_advisories_are_not_counted_as_excluded_decisions() {
