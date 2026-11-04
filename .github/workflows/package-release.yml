@@ -67,7 +67,15 @@ jobs:
       # panicked on every release. The Makefile pre-builds the UI and vendors
       # the crates, so the SRPM rebuilds offline with only cargo and rust.
       - name: Build SRPM
-        run: make -f .copr/Makefile srpm outdir="$PWD"
+        run: |
+          # Works around a container-UID mismatch, not a recipe problem.
+          # actions/checkout writes the tree as a different UID than the one
+          # running this step, so git rejects it with "detected dubious
+          # ownership" and `git archive HEAD` in .copr/Makefile emits an empty
+          # stream that fails downstream as a gzip error. Seen in run
+          # 41919295805. Scoped to this checkout rather than '*'.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          make -f .copr/Makefile srpm outdir="$PWD"
 
       # Release runs only. A manual run has no release payload, so
       # context.payload.release.id is undefined and this step would throw; and
