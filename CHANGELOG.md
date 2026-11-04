@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.4] - 2026-11-04
+
 ### Changed
 - **File context rules are replayed as real commands** — custom `semanage fcontext` rules were collected as raw table rows, and every one of them failed the renderer's shell safety check, so the generated build carried a FIXME in place of each of the first ten rules, nothing at all for any beyond that, and a commented-out `restorecon -Rv /` suggestion at the end. They are now collected as typed records and emitted as `semanage fcontext` commands that are valid against the target's policy. Order follows the source host's policy store when `file_contexts.local` and `file_contexts.subs` can be read, and the sorted output of `semanage fcontext -l -C` otherwise, with a note in the build saying which. Each label and unlabel rule removes its own key from the target's local store, then adds it, or modifies it when the target policy already defines the key; a rule whose path the target already maps as an equivalence is skipped at build time with a FIXME, because deleting its key would delete that equivalence. An equivalence rule instead reads the target's own mapping for its subject: added when absent, left alone when identical, and the build stops with an instruction when the target maps it elsewhere. There is no build-time `restorecon`, because a bootc target labels the deployed tree from the image's own policy. `/srv` is a symlink to `/var/srv` on the RHEL bootc base and the policy carries no alias for it, so a `/var/srv` equivalence is added once, ahead of the first `/srv` rule that needs it, to make the rules reach the real path.
 - **A repo-enabling package installs from the repo that served it** — a `-release` package installed outside any repo rendered twice, once as an active install and once as a manual block, and the build could resolve neither reliably. Such a package is now recognised only when the host's enabled repos actually served it, the serving repo ids travel in the snapshot, and the export keeps the active install only while one of those repo definitions is still carried, enabled, and keyed, and every repo file and GPG key the package itself provides is still included. When no proof survives, the package is demoted to the upload path with an instruction naming the repo. A CodeReady Builder section enabled on the source host is carried as `--enablerepo` on the four `dnf` transactions that resolve against it: the repo-enabling bootstrap, the package list, the group install, and the module-stream enable.
@@ -442,7 +444,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...HEAD
+[0.9.0-beta.4]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...v0.9.0-beta.4
 [0.9.0-beta.3]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...v0.9.0-beta.3
 [0.9.0-beta.2]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.1...v0.9.0-beta.2
 [0.9.0-beta.1]: https://github.com/marrusl/inspectah/compare/v0.8.7-beta.1...v0.9.0-beta.1
