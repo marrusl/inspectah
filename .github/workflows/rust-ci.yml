@@ -82,6 +82,18 @@ jobs:
         if: env.SKIP_E2E != 'true'
         working-directory: crates/web/ui
         run: npm run test:e2e
+      # Without this the HTML reporter writes a report nobody can read. The
+      # github reporter annotates failures but shows no flake counts, so a
+      # test that passed only on its retry is indistinguishable from one that
+      # passed outright. Failure-only, to avoid an artifact on every green run.
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: crates/web/ui/playwright-report/
+          retention-days: 14
+
       - name: Stop refine server
         if: always() && env.SERVER_PID != ''
         run: kill $SERVER_PID || true
