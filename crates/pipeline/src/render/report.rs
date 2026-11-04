@@ -2,7 +2,10 @@
 //! using minijinja templates.
 //!
 //! The base template (`templates/report/base.html`) provides the structural
-//! shell. Section templates are added incrementally in T5-T12.
+//! shell and includes the section templates alongside it in
+//! `templates/report/`. Those sections have all landed; this line previously
+//! said they were "added incrementally in T5-T12", which outlived the work
+//! and was later read as meaning they were still outstanding.
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;

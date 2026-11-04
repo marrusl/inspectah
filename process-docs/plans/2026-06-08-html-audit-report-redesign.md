@@ -1,5 +1,27 @@
 # HTML Audit Report Redesign — Implementation Plan
 
+> **Executed. The empty checkboxes below do not mean unstarted work.** This
+> plan was carried out; its tracking boxes were simply never ticked, which
+> dates from a period when the process was less enforced. Noted 2026-11-04
+> after the unticked boxes were read as evidence the work had never happened,
+> and that reading reached a decision before it was caught.
+>
+> Three things a reader can check in under a minute:
+> - The templates exist: `crates/pipeline/templates/report/` holds 23 of them,
+>   `storage.html` and `summary-cards.html` among them, and `base.html`
+>   includes both.
+> - `crates/pipeline/src/render/report.rs` carries 79 passing tests over this
+>   behaviour, including `test_report_contains_storage_section`,
+>   `test_report_summary_cards_rendered` and
+>   `test_report_nonrpm_renders_with_data`.
+> - Commit `c0e808ac` (2026-08-14), *"docs(specs): create implemented/ and
+>   file shipped specs"*, filed this plan's spec under
+>   `process-docs/specs/implemented/`. Someone had already judged it shipped.
+>
+> **`plans/` carries no reliable completion signal**: 22 of its 25 plans have
+> unticked boxes and none ticked, several for work that demonstrably shipped.
+> Do not infer a plan's status from its checkboxes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the minimal `report.html` with a self-contained, offline-capable HTML audit report at full parity with `audit-report.md`, using minijinja templates and PatternFly 6.
