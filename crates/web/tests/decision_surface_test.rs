@@ -28,10 +28,11 @@
 //!    `inspectah-downloaded-export-drops-every-dnf-group-install`. The
 //!    `POST /api/tarball` handler passes `None` for the `RenderContext`,
 //!    so the *downloaded* Containerfile carries no `dnf group install`
-//!    and installs a renderable group's members individually. The
-//!    session's own `export_tarball` passes
-//!    `self.cached_render_context`, so the CLI is unaffected
-//!    and only the web download diverges from the preview.
+//!    and installs a renderable group's members individually.
+//!    `RefineSession::export_tarball` passes `self.cached_render_context`
+//!    instead and does render the groups, but it has no production
+//!    caller — only these tests and the library API — so there is no
+//!    shipped route that agrees with the preview.
 //!
 //! The group cases below therefore compare `render_state` against which
 //! packages reach the install list, and say so at the probe. They are
