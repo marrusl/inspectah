@@ -7,6 +7,65 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// The scan root that the bootc target family links into `/var`.
+///
+/// On fedora-bootc, centos-bootc and rhel-bootc `/srv` is a symlink to
+/// `var/srv`, so a `COPY` into it writes into `/var/srv`, which is unpacked
+/// once on first boot and never touched by a later image update.
+const VAR_BACKED_SCAN_ROOT: &str = "srv";
+
+/// Where an included unmanaged finding lands on a bootc target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnmanagedDestination {
+    /// A plain image directory (`/opt`, `/usr/local`): the Containerfile
+    /// carries it with `COPY`.
+    Image,
+    /// Under `/srv`, which resolves into `/var/srv`: machine-local data
+    /// for the `/var` strategy, never a `COPY`.
+    VarSrv,
+}
+
+impl UnmanagedDestination {
+    /// Classify a finding by its path, matching whole path components so
+    /// that `/srvdata` is not mistaken for `/srv`.
+    pub fn of(path: &str) -> Self {
+        if std::path::Path::new(path.trim_start_matches('/')).starts_with(VAR_BACKED_SCAN_ROOT) {
+            Self::VarSrv
+        } else {
+            Self::Image
+        }
+    }
+}
+
+/// Paths of included unmanaged findings that live under `/srv`, in
+/// snapshot order. The Containerfile and the audit report both name them.
+pub fn included_var_srv_paths(snap: &InspectionSnapshot) -> Vec<&str> {
+    snap.unmanaged_files
+        .iter()
+        .flat_map(|s| &s.items)
+        .filter(|f| {
+            f.disposition.is_included()
+                && UnmanagedDestination::of(&f.path) == UnmanagedDestination::VarSrv
+        })
+        .map(|f| f.path.as_str())
+        .collect()
+}
+
+/// Comment block that replaces `COPY` for `/srv` findings.
+fn var_srv_comment_lines(paths: &[&str]) -> Vec<String> {
+    let mut lines = vec![
+        "#".into(),
+        "# Not copied: /srv is a symlink to var/srv on bootc images, so content".into(),
+        "# there is machine-local data that belongs to the /var lifecycle, not".into(),
+        "# image content. A COPY would land in /var/srv once, on first boot, and".into(),
+        "# no later image update would change it. Carry it with your /var".into(),
+        "# strategy: restore it into /var/srv after deployment, or give it its".into(),
+        "# own mount. The files are in this export under unmanaged/srv/.".into(),
+    ];
+    lines.extend(paths.iter().map(|p| format!("#   {p}")));
+    lines
+}
+
 /// Render Containerfile lines for unmanaged files.
 ///
 /// Groups files by parent directory for readability.
@@ -36,7 +95,10 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     // Group by parent directory
     let mut groups: BTreeMap<String, Vec<&UnmanagedFile>> = BTreeMap::new();
-    for file in &included {
+    for file in included
+        .iter()
+        .filter(|f| UnmanagedDestination::of(&f.path) == UnmanagedDestination::Image)
+    {
         let parent = std::path::Path::new(&file.path)
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -82,6 +144,11 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 ));
             }
         }
+    }
+
+    let var_srv = included_var_srv_paths(snap);
+    if !var_srv.is_empty() {
+        lines.extend(var_srv_comment_lines(&var_srv));
     }
 
     lines
@@ -194,6 +261,87 @@ mod tests {
         let lines = unmanaged_file_lines(&snap);
         let ln_lines: Vec<_> = lines.iter().filter(|l| l.contains("RUN ln -sf")).collect();
         assert_eq!(ln_lines.len(), 2, "each symlink must produce a RUN ln -sf");
+    }
+
+    /// `/srv` resolves into `/var/srv` on the bootc target family, so a
+    /// finding there gets the `/var` strategy note instead of `COPY` or
+    /// `ln -sf`, while `/opt` beside it still copies.
+    #[test]
+    fn srv_findings_route_to_var_strategy_not_copy() {
+        let snap = test_snapshot_with_unmanaged(vec![
+            UnmanagedFile {
+                path: "/srv/www/index.html".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/srv/www/app.css".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/srv/www/current".into(),
+                file_type: FileType::Symlink,
+                link_target: "/srv/www/index.html".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/opt/app/server".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ]);
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            !lines
+                .iter()
+                .any(|l| !l.starts_with('#') && l.contains("srv")),
+            "no directive may name /srv, got: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("symlink to var/srv")),
+            "the /var strategy note must be present, got: {lines:?}"
+        );
+        for path in [
+            "/srv/www/index.html",
+            "/srv/www/app.css",
+            "/srv/www/current",
+        ] {
+            assert!(
+                lines.iter().any(|l| l == &format!("#   {path}")),
+                "{path} must be listed, got: {lines:?}"
+            );
+        }
+        assert!(
+            lines.contains(&"COPY unmanaged/opt/app/server /opt/app/server".to_string()),
+            "/opt finding must still COPY, got: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn destination_matches_whole_components() {
+        let cases = [
+            ("/srv", UnmanagedDestination::VarSrv),
+            ("/srv/data/file", UnmanagedDestination::VarSrv),
+            ("srv/data/file", UnmanagedDestination::VarSrv),
+            ("/srvdata/file", UnmanagedDestination::Image),
+            ("/opt/srv/file", UnmanagedDestination::Image),
+            ("/usr/local/bin/tool", UnmanagedDestination::Image),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(UnmanagedDestination::of(path), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn excluded_srv_finding_renders_nothing() {
+        let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
+            path: "/srv/www/index.html".into(),
+            disposition: FindingKind::excluded(),
+            ..Default::default()
+        }]);
+        assert!(unmanaged_file_lines(&snap).is_empty());
     }
 
     #[test]

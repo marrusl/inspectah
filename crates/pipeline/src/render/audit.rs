@@ -1077,6 +1077,25 @@ fn render_software_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
             }
         }
     }
+
+    let var_srv = super::unmanaged::included_var_srv_paths(snap);
+    if !var_srv.is_empty() {
+        lines.push("### Unmanaged Files under /srv".into());
+        lines.push(String::new());
+        lines.push(format!(
+            "{} included file(s) under `/srv` have no `COPY` line in the Containerfile. \
+             On bootc images `/srv` is a symlink to `var/srv`, so this content is \
+             machine-local data that belongs to the `/var` lifecycle, not image content: \
+             a `COPY` would land in `/var/srv` once, on first boot, and no later image \
+             update would change it. Carry it with your `/var` strategy, restoring it into \
+             `/var/srv` after deployment or giving it its own mount. The files are in the \
+             export under `unmanaged/srv/`.",
+            var_srv.len()
+        ));
+        lines.push(String::new());
+        lines.extend(var_srv.iter().map(|p| format!("- `{p}`")));
+        lines.push(String::new());
+    }
 }
 
 /// Render Secrets section (secrets, subscription).
@@ -1450,6 +1469,57 @@ mod tests {
         let snap = InspectionSnapshot::default();
         let report = render_audit(&snap);
         assert!(!report.contains("Aggregate Summary"));
+    }
+
+    /// The Containerfile drops `COPY` for `/srv` findings, so the audit
+    /// report has to say where they went; an `/opt` finding gets no note.
+    #[test]
+    fn test_audit_notes_srv_findings_route_to_var() {
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        let snap = InspectionSnapshot {
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![
+                    UnmanagedFile {
+                        path: "/srv/www/index.html".into(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    },
+                    UnmanagedFile {
+                        path: "/srv/www/excluded.html".into(),
+                        disposition: FindingKind::excluded(),
+                        ..Default::default()
+                    },
+                    UnmanagedFile {
+                        path: "/opt/app/server".into(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let md = render_audit(&snap);
+        assert!(md.contains("### Unmanaged Files under /srv"), "{md}");
+        assert!(md.contains("1 included file(s) under `/srv`"), "{md}");
+        assert!(md.contains("symlink to `var/srv`"), "{md}");
+        assert!(md.contains("- `/srv/www/index.html`"), "{md}");
+        assert!(!md.contains("excluded.html"), "{md}");
+        assert!(!md.contains("/opt/app/server"), "{md}");
+
+        let opt_only = InspectionSnapshot {
+            unmanaged_files: Some(UnmanagedFileSection {
+                items: vec![UnmanagedFile {
+                    path: "/opt/app/server".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!render_audit(&opt_only).contains("under /srv"));
     }
 
     #[test]
