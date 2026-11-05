@@ -4237,6 +4237,64 @@ mod tests {
         assert_eq!(paths, vec!["/usr/share/stray".to_string()]);
     }
 
+    /// Owned set as `build_rpm_owned_set` produces it from rpmdb output,
+    /// so the walk tests exercise the real normalization.
+    fn owned_set_from_rpmdb(recorded: &[&str]) -> HashSet<String> {
+        let mut stdout = String::new();
+        for path in FIXTURE_OWNED_DIRS.iter().chain(recorded) {
+            stdout.push_str(path);
+            stdout.push('\n');
+        }
+        let exec = MockExecutor::new().with_command(
+            &format!(
+                "rpm --query --all --qf {}",
+                crate::rpm_ownership::OWNED_PATHS_QUERY_FORMAT
+            ),
+            ExecResult {
+                stdout,
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+        crate::rpm_ownership::build_rpm_owned_set(&exec)
+    }
+
+    #[test]
+    fn test_usr_walk_matches_legacy_recorded_paths_after_usrmerge() {
+        // The rpmdb records the pre-usrmerge path; the walk sees /usr.
+        let root = usr_fixture(&[
+            "/usr/lib/modules/x/y.ko",
+            "/usr/lib64/libgcc_s.so.1",
+            "/usr/bin/legacy-tool",
+            "/usr/sbin/legacy-daemon",
+            "/usr/lib/stray/unowned.so",
+        ]);
+        let owned = owned_set_from_rpmdb(&[
+            "/lib/modules",
+            "/lib/modules/x",
+            "/lib/modules/x/y.ko",
+            "/lib64/libgcc_s.so.1",
+            "/bin/legacy-tool",
+            "/sbin/legacy-daemon",
+        ]);
+        let paths = walk_fixture(&root, &owned, &[], &[]);
+        // Only the genuinely unowned file is left; the normalization
+        // must not blanket-suppress /usr/lib.
+        assert_eq!(paths, vec!["/usr/lib/stray".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_still_matches_paths_recorded_under_usr() {
+        let root = usr_fixture(&["/usr/lib/modules/x/y.ko"]);
+        let owned = owned_set_from_rpmdb(&[
+            "/usr/lib/modules",
+            "/usr/lib/modules/x",
+            "/usr/lib/modules/x/y.ko",
+        ]);
+        let paths = walk_fixture(&root, &owned, &[], &[]);
+        assert!(paths.is_empty(), "{paths:?}");
+    }
+
     // ---- UnmanagedUsrEntry serde roundtrip ----
 
     #[test]

@@ -15,13 +15,26 @@ use std::collections::HashSet;
 ///
 /// The argv is passed to `Command` unshelled, so the `\n` here is the
 /// two-character escape `rpm` expands, not a literal newline.
-const OWNED_PATHS_QUERY_FORMAT: &str = "[%{FILENAMES}\\n]";
+pub(crate) const OWNED_PATHS_QUERY_FORMAT: &str = "[%{FILENAMES}\\n]";
+
+/// Legacy top-level prefixes that usrmerge turned into symlinks into
+/// `/usr` (`/lib -> usr/lib` and so on).
+///
+/// Packages built before or without usrmerge still record these paths in
+/// the rpmdb (`kernel-core` records `/lib/modules/...`, libgcc records
+/// `/lib64/...`), while a walk over `/usr` sees the merged path. Without
+/// the `/usr` form in the owned set the walk reports the kernel module
+/// tree and libgcc as unmanaged content.
+const USRMERGE_LEGACY_PREFIXES: &[&str] = &["/lib/", "/lib64/", "/bin/", "/sbin/"];
 
 /// Build the set of all file paths owned by any installed RPM package.
 ///
 /// Queries every installed package for its file list, one path per
 /// line. The returned set contains normalized absolute paths (no
-/// trailing slashes, no double slashes).
+/// trailing slashes, no double slashes). A path recorded under a
+/// `USRMERGE_LEGACY_PREFIXES` prefix is inserted both as recorded and
+/// with `/usr` prepended, so ownership matches on a usrmerged host and
+/// is unchanged on one that is not.
 ///
 /// This is intentionally separate from `RpmState.owned_paths` (which
 /// is filtered to `/etc` for config deduplication). The /usr walk
@@ -41,9 +54,16 @@ pub fn build_rpm_owned_set(exec: &dyn Executor) -> HashSet<String> {
         // The whole line is the path. Do not split on whitespace and do
         // not trim: both would corrupt paths that legally contain spaces.
         let normalized = normalize_path(line);
-        if !normalized.is_empty() {
-            owned.insert(normalized);
+        if normalized.is_empty() {
+            continue;
         }
+        if USRMERGE_LEGACY_PREFIXES
+            .iter()
+            .any(|prefix| normalized.starts_with(prefix))
+        {
+            owned.insert(format!("/usr{normalized}"));
+        }
+        owned.insert(normalized);
     }
     owned
 }
@@ -121,6 +141,48 @@ mod tests {
             owned
         );
         assert_eq!(owned.len(), 2);
+    }
+
+    /// Regression: on a usrmerged host the rpmdb records `/lib/...` for
+    /// packages such as kernel-core while the /usr walk sees
+    /// `/usr/lib/...`. Both forms must be owned, for every legacy prefix.
+    #[test]
+    fn test_build_rpm_owned_set_adds_usr_form_of_legacy_paths() {
+        let cases = [
+            ("/lib/modules/x/y.ko", "/usr/lib/modules/x/y.ko"),
+            ("/lib64/libgcc_s.so.1", "/usr/lib64/libgcc_s.so.1"),
+            ("/bin/legacy-tool", "/usr/bin/legacy-tool"),
+            ("/sbin/legacy-daemon", "/usr/sbin/legacy-daemon"),
+        ];
+        assert_eq!(cases.len(), USRMERGE_LEGACY_PREFIXES.len());
+        for (recorded, merged) in cases {
+            let exec = mock_owned_set(&format!("{recorded}\n"));
+            let owned = build_rpm_owned_set(&exec);
+            assert!(owned.contains(recorded), "lost {recorded}: {owned:?}");
+            assert!(owned.contains(merged), "missing {merged}: {owned:?}");
+            assert_eq!(owned.len(), 2, "{owned:?}");
+        }
+    }
+
+    /// Only the legacy directories themselves are mapped. A path that
+    /// merely shares a prefix string, or is already under /usr, or lives
+    /// elsewhere, is inserted once and not rewritten.
+    #[test]
+    fn test_build_rpm_owned_set_leaves_other_paths_alone() {
+        let output = "/usr/lib/modules/x/y.ko\n/library/file\n/binaries/tool\n/etc/passwd\n";
+        let exec = mock_owned_set(output);
+        let owned = build_rpm_owned_set(&exec);
+        let mut got: Vec<&str> = owned.iter().map(String::as_str).collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![
+                "/binaries/tool",
+                "/etc/passwd",
+                "/library/file",
+                "/usr/lib/modules/x/y.ko",
+            ]
+        );
     }
 
     #[test]
