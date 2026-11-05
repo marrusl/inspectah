@@ -58,7 +58,10 @@ cargo build --release -p inspectah-cli
 sudo install target/release/inspectah /usr/local/bin/
 ```
 
-Requires Rust 1.80+ and a C linker.
+Requires Rust 1.85 or newer (the workspace uses edition 2024), a C linker,
+and Node.js 26 with npm. The `inspectah-web` crate's `build.rs` runs
+`npm ci` and `npm run build` to build the refine UI, and the build fails
+on a fresh clone if Node.js is missing.
 
 Verify the install:
 
@@ -77,7 +80,7 @@ inspectah does when you scan a host:
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-conceptual-pipeline"
           src="diagrams/conceptual-pipeline.html"
-          title="Conceptual Pipeline — interactive preview"
+          title="Conceptual Pipeline, interactive preview"
           width="100%" height="450" frameborder="0"
           loading="lazy" tabindex="0"></iframe>
   <div style="margin-top: 0.5em;">
@@ -120,7 +123,7 @@ inspectah runs a four-stage pipeline:
 
 1. **Detect** the OS and resolve a matching base image
 2. **Pull** the base image (you will see download progress)
-3. **Inspect** the system — RPMs, configs, services, users, repos,
+3. **Inspect** the system: RPMs, configs, services, users, repos,
    containers, storage, and more (11 inspectors by default)
 4. **Render** migration artifacts and package them into a tarball
 
@@ -128,28 +131,39 @@ A typical scan takes 30--90 seconds depending on the number of installed
 packages and network speed for the base image pull. On subsequent runs,
 the base image is cached locally.
 
-When the scan finishes, you will see output like:
+When the scan finishes, you will see output like this, captured from a
+RHEL 9.8 test host:
 
 ```
-  ✓ RPM packages               847 packages, 6 repos
-  ✓ Services                    27 units
-  ✓ Storage                     done
-  ✓ Kernel & boot               done
-  ✓ Network                     done
-  ✓ Containers                  2 found
-  ✓ Users & groups              done
-  ✓ Scheduled tasks             done
-  ✓ Config files                12 modified
-  ✓ SELinux                     done
-  ✓ Non-RPM packages            2 ecosystems
-      pip packages 23 · npm packages 69 · 1 repo-less RPM (cached)
+Detecting source system...
+  Red Hat Enterprise Linux 9.8 (Plow)
+Resolving target image...
+  registry.redhat.io/rhel9/rhel-bootc:9.8 (OsRelease)
+Pulling registry.redhat.io/rhel9/rhel-bootc:9.8...
+Pulled registry.redhat.io/rhel9/rhel-bootc:9.8 (sha256:173c055cc9c7)
+  Baseline extracted: 457 packages
+  Resolved via: os-release (auto-detected)
+Inspecting host rhel9...
+  ✓ RPM packages                 584 packages, 4 repos
+  ✓ Services                     5 units
+  ✓ Storage                      done
+  ✓ Kernel & boot                done
+  ✓ Network                      done
+  ✓ Containers                   none found
+  ✓ Users & groups               done
+  ✓ Scheduled tasks              16 timers
+  ✓ Config files                 62 modified
+  ✓ SELinux                      done
+  ✓ Non-RPM packages             4 ecosystems
+      ELF binaries 13 · Python virtualenvs 2 · npm packages 2 · git repos 1
 
   ┄┄┄
-  12 modified configs · 23 pip packages · 69 npm packages · 1 repo-less
+  14 version changes (14 target-newer, 0 host-newer)
+  62 modified configs · 2 npm packages · 1 git repo
 
-  Inspected in 42.3s
-  Report: myhost-20260527-143000.tar.gz
-  To review: inspectah refine myhost-20260527-143000.tar.gz
+  Inspected in 27s
+  Report: rhel9-20261104-222606.tar.gz
+  To review: inspectah refine rhel9-20261104-222606.tar.gz
 ```
 
 The tarball is written to your current directory. The filename includes
@@ -160,20 +174,20 @@ the hostname and a timestamp.
 Extract the tarball to see what inspectah produced:
 
 ```bash
-tar tzf myhost-*.tar.gz
+tar tzf rhel9-*.tar.gz
 ```
 
 Key files inside:
 
 | File | Purpose |
 |------|---------|
-| `Containerfile` | Image build definition — the starting point for `podman build` |
+| `Containerfile` | Image build definition: the starting point for `podman build` |
 | `audit-report.md` | Findings summary: what was detected, storage plan, version drift |
 | `audit-report.html` | HTML audit report of all findings |
 | `secrets-review.md` | Details of redacted sensitive content for your review |
 | `README.md` | Build commands and a FIXME checklist |
 | `kickstart-suggestion.ks` | Deploy-time settings (network, storage, boot) |
-| `inspection-snapshot.json` | Structured data — the full snapshot, re-renderable |
+| `inspection-snapshot.json` | Structured data: the full snapshot, re-renderable |
 | `config/` | Modified config files to COPY into the image |
 
 Conditional files may also appear depending on your system: `quadlet/`
@@ -200,6 +214,9 @@ managed by any package manager, add `--include-unmanaged`:
 sudo inspectah scan --include-unmanaged
 ```
 
+inspectah prints the number and total size of the unmanaged files it found
+and asks `Include in tarball? [Y/n]`. Add `-y` to skip the prompt.
+
 Packages installed from local `.rpm` files or disabled repositories are
 flagged automatically. See
 [Handle Repo-less RPMs](how-to/repoless-rpms.md) for the upload and
@@ -211,14 +228,15 @@ The refine command starts a local web server so you can review and
 curate the scan findings in your browser:
 
 ```bash
-inspectah refine myhost-*.tar.gz
+inspectah refine rhel9-*.tar.gz
 ```
 
-You will see:
+You will see these four lines, which inspectah prints to stderr:
 
 ```
 Loading snapshot...
 Starting refine server on http://127.0.0.1:8642
+If accessing remotely: ssh -L 8642:localhost:8642 <host>
 Press Ctrl-C to stop.
 ```
 
@@ -227,11 +245,14 @@ Your browser opens automatically. If it does not, navigate to
 
 The refine UI shows every finding organized by section (packages,
 configs, services, language packages, unmanaged files, etc.). Each item
-has a triage classification and an include/exclude toggle. Your changes
+has a triage classification (see below). Actionable items have an
+include/exclude toggle; Advisory and Inventory items do not. Your changes
 are autosaved -- close the browser and stop the server with Ctrl-C when
 you are done.
 
-If you are accessing a remote host over SSH, forward the port:
+If you are accessing a remote host over SSH, forward the port. This
+command is illustrative: replace `user@remote-host` with your own login and
+host.
 
 ```bash
 ssh -L 8642:localhost:8642 user@remote-host
@@ -243,7 +264,7 @@ Then open `http://127.0.0.1:8642` in your local browser.
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-user-flow"
           src="diagrams/user-flow.html"
-          title="User Flow — interactive preview"
+          title="User Flow, interactive preview"
           width="100%" height="450" frameborder="0"
           loading="lazy" tabindex="0"></iframe>
   <div style="margin-top: 0.5em;">
@@ -270,19 +291,33 @@ Then open `http://127.0.0.1:8642` in your local browser.
       Open interactive diagram
     </button>
   </div>
-  <p><em>The end-to-end user workflow: scan, refine, aggregate aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
+  <p><em>The end-to-end user workflow: scan, refine, aggregate, and build. Click "Open interactive diagram" for zoom, pan, and click-to-expand detail.</em></p>
 </div>
 {% endraw %}
 
 ## Understand triage classifications
 
-inspectah classifies every finding into one of three buckets:
+inspectah assigns packages, configuration files, services, and several
+other kinds of finding to one of three triage buckets:
 
 | Classification | Meaning | Action |
 |---------------|---------|--------|
-| **Baseline** | Already provided by the base image — no action needed | Excluded from the Containerfile (subtracted from scope) |
-| **Site** | Specific to this host — likely needs to be carried forward | Included in the Containerfile by default |
-| **Investigate** | Ambiguous — inspectah could not confidently classify it | Review manually and decide include or exclude |
+| **Baseline** | Already provided by the base image: no action needed | Excluded from the Containerfile (subtracted from scope) |
+| **Site** | Specific to this host: likely needs to be carried forward | Included in the Containerfile by default |
+| **Investigate** | Ambiguous: inspectah could not confidently classify it | Review manually and decide include or exclude |
+
+Separately from its bucket, every finding carries a disposition that says
+whether you can decide it at all:
+
+| Disposition | Meaning | Toggle in the refine UI |
+|-------------|---------|-------------------------|
+| **Actionable** | You decide whether it reaches the image | Yes |
+| **Advisory** | Shown with a rationale, never rendered into the Containerfile | No |
+| **Inventory** | Shown for reference only | No |
+
+The refine server refuses a request to toggle an Advisory or Inventory
+finding. See [Finding dispositions](reference/triage-classification.md#finding-dispositions)
+for the details.
 
 Baseline subtraction is the core value of running inspectah against a
 known base image. Instead of migrating everything, you only carry
@@ -297,21 +332,21 @@ For details on how classification works and the aggregate-level extensions
 You have scanned a host, reviewed the output, and seen the triage
 model in action. From here:
 
-- **Review and refine findings** — use the refine UI to curate
+- **Review and refine findings**: use the refine UI to curate
   include/exclude decisions. See
   [How to Review and Refine](how-to/review-and-refine.md).
-- **Build a bootc image** — use `inspectah build` to build the image
+- **Build a bootc image**: use `inspectah build` to build the image
   directly from the scan tarball, or use `podman build` manually with
   the generated Containerfile. See
   [How to Build a bootc Image](how-to/build-bootc-image.md).
-- **Roll up multiple hosts** — migrating more than one system? Scan them
+- **Roll up multiple hosts**: migrating more than one system? Scan them
   all and aggregate the results to find common patterns. See
   [How to Aggregate Multiple Hosts](how-to/aggregation.md).
-- **Handle non-RPM software** — pip, npm, and gem packages are
+- **Handle non-RPM software**: pip, npm, and gem packages are
   detected automatically. See
   [Handle Non-RPM Software](how-to/non-rpm-software.md).
-- **Resolve repo-less packages** — packages without a repository source
+- **Resolve repo-less packages**: packages without a repository source
   need manual handling. See
   [Handle Repo-less RPMs](how-to/repoless-rpms.md).
-- **Explore the full CLI** — see all available commands and flags in
+- **Explore the full CLI**: see all available commands and flags in
   the [CLI Reference](reference/cli.md).
