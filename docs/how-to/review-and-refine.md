@@ -53,7 +53,7 @@ expandable, and its sections are listed beneath it.
 | Network | Network | Reference only |
 | Storage | Storage | Reference only, including the `/var` directory summary |
 | Software & Files | Non-RPM Software, Language Packages, Unmanaged Files | Software outside the package manager, pip, npm, and gem environments, and files from `/opt`, `/srv`, and `/usr/local` |
-| Secrets & Subscription | Secrets, Subscription | Reference only |
+| Secrets & Subscription | Secrets, Subscription | Placeholders today: each says "Not yet implemented." |
 
 Every section is always in the sidebar. A section with nothing to show says
 so in the content area, for example "No service state changes detected."
@@ -66,8 +66,9 @@ findings but not change them. Reference sections are included in the export
 as they are.
 
 The stats bar at the top shows a Packages counter and a Configs counter,
-each as `N included / M excluded`. When a counter has advisory findings it
-adds `/ K advisory`; the advisory count is left out at zero. The stats bar
+each as `N included / M excluded`. When a counter has rows with no
+decision it adds `/ K advisory`; the count is left out at zero. `K` counts
+the rows you cannot toggle, Advisory and Inventory alike. The stats bar
 also holds Undo, Redo, Reset to defaults, and Export.
 
 ### Find items and move around
@@ -84,24 +85,22 @@ also holds Undo, Redo, Reset to defaults, and Export.
 
 `Cmd` works in place of `Ctrl`. The single-key shortcuts (`1` to `8`, `/`,
 `?`) do nothing while focus is in a text field, and no shortcut acts while a
-dialog is open. A number key leaves focus on the sidebar entry it jumped to,
-so you can keep pressing keys; clicking a section moves focus into its
-content instead.
+dialog is open.
 
 ## Understand triage indicators
 
 Each item gets a triage classification that tells you what it means for
 your migration:
 
-**Baseline** -- The item matches the base image. It ships with the OS and
+**Baseline**: The item matches the base image. It ships with the OS and
 does not need to appear in your Containerfile. Baseline items are excluded
 from the Containerfile by default.
 
-**Site** -- The item was added or configured by your organization. It belongs
+**Site**: The item was added or configured by your organization. It belongs
 in the Containerfile to reproduce your environment. Site items are included
 by default.
 
-**Investigate** -- The item's provenance is unclear or it has an unusual
+**Investigate**: The item's provenance is unclear or it has an unusual
 characteristic that needs human judgment. Examples include locally installed
 packages (no repository), packages with unknown source repositories,
 version downgrades, and items at security-sensitive paths.
@@ -122,7 +121,7 @@ model.
 | Row shows | Meaning |
 |-----------|---------|
 | A checkbox | Actionable. You decide whether it goes into the image. |
-| "Advisory: Modernization", "Advisory: Cross-tree symlink", or "Advisory: Unbacked /var directory", with a rationale beneath the row | Advisory. inspectah is reporting something, not asking for a decision. There is no checkbox. The finding is listed in the audit report, and its files are not copied into the image. |
+| "Advisory: Modernization" or "Advisory: Cross-tree symlink", with a rationale beneath the row | Advisory. inspectah is reporting something, not asking for a decision. There is no checkbox. The finding is listed in the audit report, and its file is not copied into the image. |
 | "Inventory", or a badge naming the row that owns the decision | Inventory. The row is shown for reference. There is no checkbox. |
 
 A configuration file that a service drop-in or a sysctl override already
@@ -143,7 +142,7 @@ it appears in the generated Containerfile. The UI reflects these changes
 immediately in the Containerfile preview pane.
 
 Including an item adds it to the Containerfile. Excluding it removes it.
-You can override the automatic triage classification in either direction --
+You can override the automatic triage classification in either direction:
 include a Baseline item you want to pin, or exclude a Site item you have
 decided not to carry forward.
 
@@ -201,7 +200,7 @@ locked or from base", and a group action on it is refused.
 
 ### Locked items
 
-Some items display as locked -- their include/exclude state is visible but
+Some items display as locked: their include/exclude state is visible but
 the checkbox is disabled, and a grey badge gives the reason, or reads
 "LOCKED" when there is none. Locked items are set before refine opens the
 snapshot. They represent decisions where toggling would produce an invalid
@@ -210,16 +209,11 @@ cannot move into an image.
 
 ### Change a whole section at once
 
-Sections where you decide have a menu beside the section name with "Include
-all" and "Exclude all". The menu acts on every actionable, unlocked item in
+Sections where you decide have an Actions menu beside the section name
+(Include all, Exclude all). The menu acts on every actionable, unlocked item in
 that section, and one undo reverses the whole change. Excluding every package
 asks you to confirm first. There is no menu on Users & Identity, and none on
 the reference sections.
-
-With focus on a section link, `Ctrl+Shift+A` includes all and
-`Ctrl+Shift+X` excludes all in that section. The shortcuts act from a
-section link, whether it sits in an expanded group or stands alone. They do
-nothing from a group heading.
 
 To discard every include and exclude change, use Reset to defaults in the
 stats bar. It is available once you have made a change, and asks you to
@@ -253,32 +247,35 @@ moves focus to the first match.
 
 The Storage view lists the `/var` directories the scan found as one
 collapsed summary row, titled with the directory count. The row's state text
-counts the directories this export does not back with a creator: "N unbacked,
-M unconfirmed", or "all backed by tmpfiles.d, unit directives, or package
-ownership" when there are none. Expand the row to see one line per
+counts the directories this export does not back with a creator: "N
+unbacked", "M unconfirmed", or both ("N unbacked, M unconfirmed"), or "all
+backed by tmpfiles.d, unit directives, or package ownership" when there are
+none. Expand the row to see one line per
 directory. Each line gives, in order:
 
 - The path
 - The mode and owner, or "ownership not recorded"
-- What created it on the host: "tmpfiles.d (conf)", "StateDirectory= (unit)",
-  "CacheDirectory= (unit)", "LogsDirectory= (unit)", "package-owned
-  (package)", or "nothing declares it"
+- What created it on the host: "tmpfiles.d" with the fragment path in
+  parentheses, "StateDirectory=", "CacheDirectory=" or "LogsDirectory="
+  with the declaring unit in parentheses, "package-owned" with the package
+  in parentheses, or "nothing declares it"
 - What the export does about it: "backed: creator carried by this export",
   "unbacked: provisioned by this export", or "backing unconfirmed"
 
 Directories that need attention are listed first. Each unbacked or
-unconfirmed directory also gets its own "Advisory: Unbacked /var directory"
-row, and a carried directory whose mode or owner differs from the default
-gets an Inventory row.
+unconfirmed directory also gets its own row under the summary, showing its
+path and, where it applies, a state such as `backing unconfirmed`. A carried
+directory whose mode or owner differs from the default gets an Inventory
+row.
 
 ## Manage users and groups
 
 User accounts discovered on the host have additional options beyond
 include/exclude:
 
-- **Containerfile strategy** -- Choose how each user is handled: Skip, or
+- **Containerfile strategy**: Choose how each user is handled: Skip, or
   create the user with `useradd`.
-- **Password** -- Choose "No password", "Keep existing password" (offered
+- **Password**: Choose "No password", "Keep existing password" (offered
   only when the scan preserved the user's hash), or "Set new password",
   which you type and confirm in the browser.
 
@@ -298,12 +295,12 @@ reference.
 
 The redaction state records how complete the scrubbing was:
 
-- **Fully redacted** -- Every finding was resolved by redaction, or there
+- **Fully redacted**: Every finding was resolved by redaction, or there
   were none.
-- **Partially redacted** -- At least one finding is unresolved. A line that
+- **Partially redacted**: At least one finding is unresolved. A line that
   a scrubber matched by key but could not parse is reported this way, with
   its line number, instead of being passed as clean.
-- **Sensitive retained** -- You kept sensitive data on purpose with
+- **Sensitive retained**: You kept sensitive data on purpose with
   `--preserve` or `--no-redaction`.
 
 Review unresolved lines by hand before you share the export.
@@ -321,10 +318,12 @@ acknowledge it before it lets you export.
 
 When you are satisfied with your selections, choose Export, or press
 `Ctrl+Shift+E`. The dialog reports how many packages and configuration files
-are excluded. It reports advisory findings apart from exclusions: they are
-listed in the audit report, and their files are not copied into the image.
-The browser downloads `inspectah-<hostname>-refined.tar.gz`, a tarball
-containing:
+are excluded. It reports advisory findings apart from exclusions: "Advisory
+findings (N)" counts Advisory and Inventory rows together, and the note
+that their files are not copied into the image holds for Advisory rows
+only, since an Inventory row's file travels with the row that owns the
+decision. The browser saves `inspectah-refine-output.tar.gz`. The archive
+inside unpacks to `inspectah-<hostname>-refined/`, which contains:
 
 - The refined Containerfile reflecting all your include/exclude decisions
 - Updated scan data with your triage overrides applied
@@ -343,26 +342,26 @@ dashboard switches to aggregate mode. An aggregate tarball loads under the
 same exact-match rule as a single-host one. Instead of single-host triage
 buckets, items are grouped by prevalence zones:
 
-**Consensus** -- The item appears on all or nearly all hosts. Treat it
+**Consensus**: The item appears on all or nearly all hosts. Treat it
 like a Baseline item in single-host mode.
 
-**Near consensus** -- The item appears on most hosts but not all. Similar
-to Site classification -- it likely belongs in the Containerfile but
+**Near consensus**: The item appears on most hosts but not all. Similar
+to Site classification: it likely belongs in the Containerfile but
 verify whether the partial coverage is intentional.
 
-**Divergent** -- The item differs significantly across hosts. These need
+**Divergent**: The item differs significantly across hosts. These need
 investigation to decide which variant to include.
 
 The aggregate summary shows the total host count and highlights items with
-variant conflicts -- cases where the same item exists in different versions
+variant conflicts: cases where the same item exists in different versions
 or configurations across hosts. Each variant shows its host count so you
 can see how widespread each version is.
 
 For items with multiple variants, you can:
 
-- **Select a variant** -- Choose which host's version to use
-- **Edit a variant** -- Modify the content directly
-- **Discard a variant** -- Remove a variant from consideration
+- **Select a variant**: Choose which host's version to use
+- **Edit a variant**: Modify the content directly
+- **Discard a variant**: Remove a variant from consideration
 
 Repository source conflicts are also surfaced when a package is sourced
 from different repositories on different hosts.
