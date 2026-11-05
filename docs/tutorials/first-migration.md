@@ -307,13 +307,11 @@ dialog. The browser downloads a tarball that reflects your decisions.
 Nothing in the scan tarball from Step 1 changes: your decisions live only
 in this export.
 
-The file lands in your browser's download folder (often `~/Downloads`) on
-the machine that runs the browser. Through the port forward above, that is
-your workstation, not the host. The browser picks the file name: the
-Export button in this build saves `inspectah-refine-output.tar.gz`, while
-the refine server labels the same file `inspectah-<hostname>-refined.tar.gz`.
-Copy it to the host where you will build, for example with `scp`, and name
-it `export.tar.gz`; Step 7 uses that name.
+The browser saves the export as `inspectah-refine-output.tar.gz` in its
+download directory (often `~/Downloads`) on the machine that runs the
+browser. Through the port forward above, that is your workstation, not
+the host. Copy the file to the host where you will build, for example
+with `scp`.
 
 The export is a different tree from the scan tarball. It has no
 `README.md`, `audit-report.html`, `secrets-review.md`, or
@@ -327,10 +325,10 @@ When you are done, stop the refine server with Ctrl-C in the terminal.
 
 Build the export, not the scan tarball. The scan tarball from Step 1
 still describes the host as it was found, so building it would ignore
-every decision from Step 5. From the directory that holds `export.tar.gz`:
+every decision from Step 5. From the directory that holds `inspectah-refine-output.tar.gz`:
 
 ```bash
-inspectah build export.tar.gz --tag rhel9-refined:v1
+inspectah build inspectah-refine-output.tar.gz --tag rhel9-refined:v1
 ```
 
 This extracts the export and runs `podman build` for you. The build ran
@@ -388,7 +386,7 @@ To see what the build used, extract the export and read its
 Containerfile:
 
 ```bash
-tar xzf export.tar.gz
+tar xzf inspectah-refine-output.tar.gz
 cat inspectah-rhel9-refined/Containerfile
 ```
 
