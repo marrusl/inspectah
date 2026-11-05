@@ -1,25 +1,10 @@
 # ansible-role-inspectah Implementation Plan
 
-> ## Executed (2026-11-04)
+> ## Paused — not classified (2026-11-04)
 >
-> **Checkbox state below is not evidence** — the boxes were never ticked.
-> This plan targets a different repo,
-> `github.com/marrusl/ansible-role-inspectah`. Classified against that tree:
-> - All 16 tasks below map to commits, all dated 2026-06-28, the day after
->   this plan was written: scaffolding `d7e272f`, metadata `249ea7f`,
->   variables `7e912f5`, preflight `f674e8c`, install `96a953c`, scan
->   `2879807`, fetch `591f7ad`, cleanup `0d589a3`, entry point `5700bb9`,
->   examples `1472a1e`, the three molecule scenarios `e216e6a` / `35ed276`
->   / `a455581`, CI `f07d1a9`, README `b84ed42`, validation `ad3dcd3`.
-> - Every one of the 32 files this plan names exists in that repo,
->   `tasks/main.yml`, `meta/argument_specs.yml`, `handlers/main.yml`,
->   `tests/smoke.yml` and `tests/test.yml` among them.
-> - It went through three review rounds after the build: `6cbc077` (R1),
->   `fad4f21` (R2), `088e844` (R3), then `ae8309d`, which is the role's
->   current `main`.
->
-> The role has had no commits since 2026-06-28. That is where the work
-> finished, not evidence it never ran.
+> The ansible-role-inspectah project is on pause on Mark's instruction, so
+> this plan is deliberately left unclassified. The silence here is a
+> decision, not an open question: do not reopen it without asking him.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
