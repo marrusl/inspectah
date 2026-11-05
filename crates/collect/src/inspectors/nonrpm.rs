@@ -2123,9 +2123,15 @@ pub fn scan_unmanaged_files(
     }
 
     // /usr walk: build full RPM-owned set via rpm --dump, then walk /usr
-    // with walkdir and collapse to shallowest unowned ancestors.
+    // with walkdir and collapse to shallowest unowned ancestors. It honors
+    // the same user and Tier 1 exclusions as the walk above.
     let rpm_owned = crate::rpm_ownership::build_rpm_owned_set(exec);
-    let usr_entries = walk_usr_for_unmanaged(&rpm_owned);
+    let usr_entries = walk_usr_for_unmanaged(
+        Path::new(HOST_FS_ROOT),
+        &rpm_owned,
+        exclude_paths,
+        language_env_paths,
+    );
 
     let total_count = items.len();
     UnmanagedFileSection {
@@ -2327,6 +2333,14 @@ const USR_PRUNE_DIRS: &[&str] = &[
     "/usr/lib/.build-id/",
 ];
 
+/// Filesystem root the /usr walk runs under on a real host. Tests pass a
+/// temporary directory instead, so the walk can run against a fixture tree.
+const HOST_FS_ROOT: &str = "/";
+
+/// The /usr directory, as a prefix, for deciding which Tier 2 scan roots
+/// the /usr walk would otherwise reach.
+const USR_PREFIX: &str = "/usr/";
+
 /// File patterns to prune from /usr walk results (caches, compiled bytecode).
 const USR_PRUNE_FILE_PATTERNS: &[&str] = &[
     ".pyc",
@@ -2353,19 +2367,52 @@ fn is_pruned_file(path: &str) -> bool {
 ///   pointing to RPM-owned `/usr/bin/bash` is still unmanaged if the
 ///   symlink path itself is not RPM-owned.
 /// - Prune directories are filtered at the walker level for efficiency.
+/// - Every `UNMANAGED_SCAN_ROOTS` entry under /usr (today `/usr/local`) is
+///   pruned: the Tier 2 walk owns it, and reporting it here too would give
+///   the same file two COPY lines and two independent toggles.
+/// - `exclude_paths` and `language_env_paths` are honored with the same
+///   prefix match the Tier 2 walk uses.
 /// - File metadata (size) is read from `walkdir::DirEntry::metadata()`.
-fn walk_usr_for_unmanaged(rpm_owned: &HashSet<String>) -> Vec<UnmanagedUsrEntry> {
+///
+/// `fs_root` is where the host filesystem is mounted (`HOST_FS_ROOT` on a
+/// real scan). Every comparison uses the host-absolute path, with
+/// `fs_root` stripped.
+fn walk_usr_for_unmanaged(
+    fs_root: &Path,
+    rpm_owned: &HashSet<String>,
+    exclude_paths: &[String],
+    language_env_paths: &[String],
+) -> Vec<UnmanagedUsrEntry> {
     use walkdir::WalkDir;
+
+    let tier2_roots_under_usr: Vec<&str> = UNMANAGED_SCAN_ROOTS
+        .iter()
+        .copied()
+        .filter(|root| root.starts_with(USR_PREFIX))
+        .collect();
+    let host_path = |path: &Path| -> String {
+        let rel = path.strip_prefix(fs_root).unwrap_or(path);
+        let joined = format!("/{}", rel.to_string_lossy());
+        joined.trim_end_matches('/').replace("//", "/")
+    };
 
     let mut unmanaged: Vec<(String, u64)> = Vec::new();
 
-    for entry in WalkDir::new("/usr")
+    for entry in WalkDir::new(fs_root.join("usr"))
         .follow_links(false) // check symlink's own path, not target
         .into_iter()
         .filter_entry(|e| {
-            let path = e.path().to_string_lossy();
+            let path = host_path(e.path());
             // Prune directories from the walk itself
-            !USR_PRUNE_DIRS.iter().any(|p| path.starts_with(p))
+            let noise = USR_PRUNE_DIRS.iter().any(|p| path.starts_with(p));
+            let tier2 = tier2_roots_under_usr
+                .iter()
+                .any(|root| path == *root || path.starts_with(&format!("{root}/")));
+            let excluded = exclude_paths.iter().any(|ep| path.starts_with(ep.as_str()));
+            let language_env = language_env_paths
+                .iter()
+                .any(|lp| path.starts_with(lp.as_str()));
+            !(noise || tier2 || excluded || language_env)
         })
     {
         let entry = match entry {
@@ -2376,8 +2423,7 @@ fn walk_usr_for_unmanaged(rpm_owned: &HashSet<String>) -> Vec<UnmanagedUsrEntry>
             continue;
         }
 
-        let path = entry.path().to_string_lossy();
-        let normalized = path.trim_end_matches('/').replace("//", "/");
+        let normalized = host_path(entry.path());
 
         if is_pruned_file(&normalized) {
             continue;
@@ -4080,6 +4126,115 @@ mod tests {
     #[test]
     fn test_no_prune_share_file() {
         assert!(!is_pruned_file("/usr/share/myapp/config.yaml"));
+    }
+
+    // ---- /usr walk: fixture tree tests ----
+
+    /// Directories a stock host's `filesystem` RPM owns, so the walk
+    /// reports file-level paths instead of collapsing everything to /usr.
+    const FIXTURE_OWNED_DIRS: &[&str] = &[
+        "/usr",
+        "/usr/bin",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/sbin",
+        "/usr/share",
+    ];
+
+    /// Plant `files` (host-absolute paths) under a fresh fs root.
+    fn usr_fixture(files: &[&str]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("create fixture root");
+        for file in files {
+            let path = root.path().join(file.trim_start_matches('/'));
+            std::fs::create_dir_all(path.parent().expect("fixture path has a parent"))
+                .expect("create fixture dirs");
+            std::fs::write(&path, b"x").expect("write fixture file");
+        }
+        root
+    }
+
+    fn walk_fixture(
+        root: &tempfile::TempDir,
+        rpm_owned: &HashSet<String>,
+        exclude_paths: &[String],
+        language_env_paths: &[String],
+    ) -> Vec<String> {
+        walk_usr_for_unmanaged(root.path(), rpm_owned, exclude_paths, language_env_paths)
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
+    }
+
+    #[test]
+    fn test_usr_walk_reports_unowned_file_in_fixture() {
+        // Control for the exclusion tests: without any filter the stray
+        // file is reported, by its host path rather than the fixture path.
+        let root = usr_fixture(&["/usr/bin/stray"]);
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &[], &[]);
+        assert_eq!(paths, vec!["/usr/bin/stray".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_skips_every_tier2_root_under_usr() {
+        let tier2_under_usr: Vec<&str> = UNMANAGED_SCAN_ROOTS
+            .iter()
+            .copied()
+            .filter(|r| r.starts_with(USR_PREFIX))
+            .collect();
+        assert!(
+            tier2_under_usr.contains(&"/usr/local"),
+            "fixture assumes /usr/local is a Tier 2 root"
+        );
+
+        let mut files: Vec<String> = tier2_under_usr
+            .iter()
+            .map(|r| format!("{r}/bin/tool"))
+            .collect();
+        // A sibling that merely shares the prefix is not a Tier 2 root.
+        files.push("/usr/localextra/tool".to_string());
+        let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        let root = usr_fixture(&file_refs);
+
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &[], &[]);
+        for tier2_root in &tier2_under_usr {
+            assert!(
+                !paths
+                    .iter()
+                    .any(|p| p == tier2_root || p.starts_with(&format!("{tier2_root}/"))),
+                "{tier2_root} belongs to the Tier 2 walk; got {paths:?}"
+            );
+        }
+        assert_eq!(paths, vec!["/usr/localextra".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_does_not_report_symlink_under_usr_local() {
+        // Regression: a symlink reported by both walks made the second
+        // bundler fail with EEXIST (`/usr/local/bin/ng`, an npm global).
+        let root = usr_fixture(&["/usr/local/lib/node_modules/ng/cli.js"]);
+        let link = root.path().join("usr/local/bin/ng");
+        std::fs::create_dir_all(link.parent().expect("link has a parent"))
+            .expect("create link dir");
+        std::os::unix::fs::symlink("../lib/node_modules/ng/cli.js", &link).expect("create symlink");
+
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &[], &[]);
+        assert!(paths.is_empty(), "nothing under /usr/local; got {paths:?}");
+    }
+
+    #[test]
+    fn test_usr_walk_honors_exclude_paths() {
+        let root = usr_fixture(&["/usr/lib/myapp/libfoo.so", "/usr/lib/other/libbar.so"]);
+        let exclude = vec!["/usr/lib/myapp".to_string()];
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &exclude, &[]);
+        assert_eq!(paths, vec!["/usr/lib/other".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_honors_language_env_paths() {
+        let root = usr_fixture(&["/usr/share/myenv/lib/site.py", "/usr/share/stray/data.bin"]);
+        let language_envs = vec!["/usr/share/myenv".to_string()];
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &[], &language_envs);
+        assert_eq!(paths, vec!["/usr/share/stray".to_string()]);
     }
 
     // ---- UnmanagedUsrEntry serde roundtrip ----

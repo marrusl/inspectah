@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The unmanaged `/usr` walk honors the same exclusions as the unmanaged files walk** — it filtered only by RPM ownership, so `/usr/local`, which the unmanaged files walk already covers, was reported a second time. The same file got two `COPY` lines and two include toggles that did not know about each other, and a symlink there (an npm global such as `/usr/local/bin/ng`) was positioned to fail the second bundler with `File exists`. Paths given with `--exclude-path` and the language environments already counted elsewhere were also reported again under `/usr`. The `/usr` walk now skips every unmanaged files scan root under `/usr`, taken from the same list that walk uses, and applies both exclusions with the same prefix match.
+
 ## [0.9.0-beta.4] - 2026-11-04
 
 ### Changed
