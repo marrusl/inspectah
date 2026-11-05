@@ -135,4 +135,4 @@ In practice:
   ```
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.
-- The file is parsed before its version is compared. A snapshot from an older schema whose fields no longer parse reports a `json error` that names the field, in place of the version message. It does not load either way.
+- The file is parsed before its version is compared. A snapshot from an older schema whose fields no longer parse reports a `json error` describing what failed to parse, in place of the version message. It does not load either way.
