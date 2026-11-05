@@ -159,6 +159,47 @@ const aggregateBranches = [
   },
 ];
 
+// ─── Data: Finding dispositions ─────────────────────────────────────────
+// Orthogonal to the buckets above: the bucket says how much attention an item
+// needs, the disposition says whether the user can decide it at all.
+const dispositionRoot = {
+  id: 'finding-item',
+  label: 'Finding',
+  sublabel: 'Every finding in the snapshot',
+  color: 'teal',
+  tooltip: 'Every finding carries a disposition, a FindingKind, that says whether the user can decide it.',
+};
+
+const dispositionBranches = [
+  {
+    id: 'dp-actionable',
+    label: 'Actionable',
+    sublabel: 'Carries include decision',
+    color: 'purple',
+    tooltip: 'The only disposition with an include decision. The row has an include control and the user decides.',
+    definition: 'The finding carries an include flag. Included findings reach the Containerfile and the config tree; excluded ones do not.',
+    example: 'A package installed by the admin, a modified config file, an enabled service.',
+  },
+  {
+    id: 'dp-advisory',
+    label: 'Advisory',
+    sublabel: 'No toggle',
+    color: 'rose',
+    tooltip: 'A finding the user cannot act on through include and exclude. It carries a rationale and no control.',
+    definition: 'Shown with an Advisory badge and its rationale. A toggle request is refused with HTTP 422. Never rendered into the Containerfile; listed under Advisories in the audit report.',
+    example: 'A /var directory that no tmpfiles.d entry or package declares (unbacked_var_dir).',
+  },
+  {
+    id: 'dp-inventory',
+    label: 'Inventory',
+    sublabel: 'No toggle',
+    color: 'blue',
+    tooltip: 'Displayed for reference and never decided. The row has no control.',
+    definition: 'Shown with an Inventory badge. A toggle request is refused with HTTP 422. Never produces a Containerfile line.',
+    example: 'Network findings such as connections and firewall zones.',
+  },
+];
+
 // ─── Shell setup ────────────────────────────────────────────────────
 const { svg, g, width, height, zoom } = createDiagramShell({
   title: 'inspectah',
@@ -169,7 +210,9 @@ const { svg, g, width, height, zoom } = createDiagramShell({
     { color: colors.amber.stroke,  label: 'Site / Partial' },
     { color: colors.orange.stroke, label: 'Divergent' },
     { color: colors.red.stroke,    label: 'Investigate' },
-    { color: colors.blue.stroke,   label: 'Partial (aggregate)' },
+    { color: colors.blue.stroke,   label: 'Partial (aggregate) / Inventory' },
+    { color: colors.purple.stroke, label: 'Actionable' },
+    { color: colors.rose.stroke,   label: 'Advisory' },
     { color: colors.teal.stroke,   label: 'Input / Root' },
   ],
 });
@@ -183,7 +226,8 @@ svg.append('title').text('Triage Decision Tree');
 svg.append('desc').text(
   'Two-layer diagram showing how inspectah classifies found items. ' +
   'Top layer: single-host triage into Baseline, Site, or Investigate. ' +
-  'Bottom layer: aggregate consensus into Universal, Partial, Divergent, or Investigate.'
+  'Middle layer: aggregate consensus into Universal, Partial, Divergent, or Investigate. ' +
+  'Bottom layer: finding disposition into Actionable, Advisory, or Inventory; only Actionable findings carry an include decision.'
 );
 
 // ─── Layout constants ───────────────────────────────────────────────
@@ -231,16 +275,36 @@ aggregateBranches.forEach((b, i) => {
   b.y = flBranchY;
 });
 
+// Disposition layer
+const dispositionLabelY = flBranchY + aggregateNodeH + layerGap;
+const dispositionRootY = dispositionLabelY + 30;
+const dpBranchY = dispositionRootY + rootNodeH + gapY;
+const dispositionTotalW = dispositionBranches.length * (nodeW + gapX) - gapX;
+const dpStartX = width / 2 - dispositionTotalW / 2;
+
+Object.assign(dispositionRoot, {
+  x: width / 2 - rootNodeW / 2,
+  y: dispositionRootY,
+});
+
+dispositionBranches.forEach((b, i) => {
+  b.x = dpStartX + i * (nodeW + gapX);
+  b.y = dpBranchY;
+});
+
 // ─── Layer divider ──────────────────────────────────────────────────
 const dividerY = shBranchY + nodeH + layerGap / 2 - 10;
+const dispositionDividerY = flBranchY + aggregateNodeH + layerGap / 2 - 10;
 
-g.append('line')
-  .attr('class', 'layer-divider')
-  .attr('x1', width * 0.1)
-  .attr('y1', dividerY)
-  .attr('x2', width * 0.9)
-  .attr('y2', dividerY)
-  .attr('stroke', border);
+[dividerY, dispositionDividerY].forEach(y => {
+  g.append('line')
+    .attr('class', 'layer-divider')
+    .attr('x1', width * 0.1)
+    .attr('y1', y)
+    .attr('x2', width * 0.9)
+    .attr('y2', y)
+    .attr('stroke', border);
+});
 
 // Layer labels
 g.append('text')
@@ -258,6 +322,14 @@ g.append('text')
   .attr('text-anchor', 'middle')
   .attr('fill', textDim)
   .text('Aggregate Consensus');
+
+g.append('text')
+  .attr('class', 'layer-label')
+  .attr('x', width / 2)
+  .attr('y', dispositionRootY - 30)
+  .attr('text-anchor', 'middle')
+  .attr('fill', textDim)
+  .text('Finding Disposition');
 
 // ─── Draw branch connector lines ───────────────────────────────────
 const connectors = g.append('g').attr('class', 'connectors');
@@ -293,6 +365,27 @@ aggregateBranches.forEach(b => {
   path.moveTo(aggregateRootCenterX, flRootBottom);
   path.bezierCurveTo(
     aggregateRootCenterX, flRootBottom + gapY * 0.4,
+    targetCenterX, b.y - gapY * 0.4,
+    targetCenterX, b.y
+  );
+  connectors.append('path')
+    .attr('class', 'branch-line')
+    .attr('d', path.toString())
+    .attr('stroke', colors[b.color].stroke)
+    .attr('opacity', 0.5)
+    .attr('marker-end', 'url(#arrow-default)');
+});
+
+// Disposition root to branches
+const dispositionRootCenterX = dispositionRoot.x + rootNodeW / 2;
+const dpRootBottom = dispositionRoot.y + rootNodeH;
+
+dispositionBranches.forEach(b => {
+  const targetCenterX = b.x + nodeW / 2;
+  const path = d3.path();
+  path.moveTo(dispositionRootCenterX, dpRootBottom);
+  path.bezierCurveTo(
+    dispositionRootCenterX, dpRootBottom + gapY * 0.4,
     targetCenterX, b.y - gapY * 0.4,
     targetCenterX, b.y
   );
@@ -355,6 +448,10 @@ const shRoot = drawNode(nodeGroup, {
 }, rootNodeW, rootNodeH);
 
 const flRoot = drawNode(nodeGroup, aggregateRoot, rootNodeW, rootNodeH);
+const dpRoot = drawNode(nodeGroup, dispositionRoot, rootNodeW, rootNodeH);
+
+// ─── Draw disposition branch nodes ──────────────────────────────────
+const dpNodes = dispositionBranches.map(b => drawNode(nodeGroup, b, nodeW, nodeH));
 
 // ─── Draw single-host branch nodes ─────────────────────────────────
 const shNodes = singleHostBranches.map(b => drawNode(nodeGroup, b, nodeW, nodeH));
@@ -533,7 +630,7 @@ flLockG.append('text')
   .text('Aggregate narrowing applies locked: true to items below consensus threshold');
 
 // ─── Expand indicator hints ─────────────────────────────────────────
-const allBranchNodes = [...shNodes, ...flNodes];
+const allBranchNodes = [...shNodes, ...flNodes, ...dpNodes];
 allBranchNodes.forEach(node => {
   const d = node.datum();
   const isAggregate = aggregateBranches.some(b => b.id === d.id);
@@ -568,6 +665,8 @@ const allData = [
   ...singleHostBranches,
   aggregateRoot,
   ...aggregateBranches,
+  dispositionRoot,
+  ...dispositionBranches,
 ];
 allData.forEach(d => {
   const descEl = document.createElement('span');
@@ -583,7 +682,8 @@ nodeGroup.selectAll('.node')
 function renderExpand(nodeId, isExpanded) {
   // Find data for this node
   const data = singleHostBranches.find(b => b.id === nodeId)
-    || aggregateBranches.find(b => b.id === nodeId);
+    || aggregateBranches.find(b => b.id === nodeId)
+    || dispositionBranches.find(b => b.id === nodeId);
   if (!data) return;
 
   const isSingleHost = singleHostBranches.some(b => b.id === nodeId);
@@ -730,6 +830,7 @@ nodeGroup.selectAll('.node')
     const expandState = expanded.get(d.id) ? ' (expanded)' : '';
     const clickHint = singleHostBranches.some(b => b.id === d.id)
       || aggregateBranches.some(b => b.id === d.id)
+      || dispositionBranches.some(b => b.id === d.id)
       ? ' (click to expand)' : '';
     tooltip.show(`<strong>${d.label}</strong><br>${d.tooltip}${expandState || clickHint}`, event);
   })
@@ -750,7 +851,8 @@ setupKeyboardNav(allNodeElements, {
     if (data && data.id) {
       // Only branch nodes expand
       const isBranch = singleHostBranches.some(b => b.id === data.id)
-        || aggregateBranches.some(b => b.id === data.id);
+        || aggregateBranches.some(b => b.id === data.id)
+        || dispositionBranches.some(b => b.id === data.id);
       if (isBranch) {
         toggleExpand(data.id, expanded, renderExpand);
       }
@@ -775,11 +877,12 @@ setupKeyboardNav(allNodeElements, {
 // ─── Initial centering ─────────────────────────────────────────────
 requestAnimationFrame(() => {
   const contentTop = shRootY - 60;
-  const contentBottom = flBranchY + aggregateNodeH + 220;
-  const contentLeft = Math.min(shStartX, flStartX) - 40;
+  const contentBottom = dpBranchY + nodeH + 220;
+  const contentLeft = Math.min(shStartX, flStartX, dpStartX) - 40;
   const contentRight = Math.max(
     shStartX + shTotalW,
-    flStartX + aggregateTotalW
+    flStartX + aggregateTotalW,
+    dpStartX + dispositionTotalW
   ) + 40;
 
   centerView(svg, zoom, {
