@@ -1,5 +1,20 @@
 # Refine UI Fix-up, Phase 0 Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - Merged at `4af6582f Merge branch 'phase-0-refine-ui-fixup'`, which is an
+>   ancestor of the `v0.9.0-beta.4` tag.
+> - The typed models this plan introduces are in the tree: `RepoId`
+>   (`crates/core/src/types/repo.rs:104`), `RepoAttribution` (`:173`),
+>   `VarDirBacking` (`crates/core/src/types/storage.rs:73`), `FcontextRule`,
+>   and `crates/core/src/rpm_filename.rs` — which landed in `core`, not the
+>   `crates/refine/src/rpm_filename.rs` named below.
+> - **Stale:** this plan targets `SCHEMA_VERSION = 23`;
+>   `crates/core/src/snapshot.rs:21` is at 25. Only phase 0 is executed;
+>   phases 1-3 are separate releases with their own plans.
+
 > **`crates/tui` was removed on 2026-11-04.** This plan was written while it existed. Every task step, consumer row, and `git add` line below that names a `crates/tui/` path is a no-op: skip it, and do not recreate the crate to satisfy it. Nothing else in the plan changes, since no other crate depended on it.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

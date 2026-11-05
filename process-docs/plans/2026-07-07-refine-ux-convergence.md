@@ -1,5 +1,18 @@
 # Refine & TUI UX Convergence — Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `54b4523e feat(core): add shadow fields to ServiceStateChange and
+>   ownership/mode to VarDirectory` opens the run, and 26 of the 30 files
+>   this plan names exist, `crates/web/ui/src/components/ServiceSection.tsx`
+>   among them.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+> - Of the four absent paths, `core/src/fleet/merge.rs` was renamed by
+>   `da83875b` and the two `crates/tui/` files were removed by `1f5db703`.
+>   Only `ServiceSection.css` has no successor.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Converge the refine web UI and TUI with the 8-group section model, add orphan full-shadow service rendering, tmpfiles.d-based /var provisioning, and fix TUI inventory toggle paths.

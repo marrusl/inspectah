@@ -1,5 +1,14 @@
 # Crates Reorganization Plan
 
+> ## Executed (2026-11-04)
+>
+> Classified from the tree:
+> - `crates/cli/`, `crates/collect/`, `crates/core/`, `crates/pipeline/`,
+>   `crates/refine/` and `crates/web/` all exist with the `inspectah-`
+>   prefix dropped, and `cmd/`, `.venv/` and `.pytest_cache/` are gone.
+> - `crates/tui/` was created by this move and removed later, on 2026-11-04,
+>   at `1f5db703`.
+
 Move all workspace crate directories under `crates/` and drop the
 `inspectah-` prefix from directory names. Package names in Cargo.toml
 stay unchanged (`inspectah-core`, `inspectah-cli`, etc.). Clean up dead

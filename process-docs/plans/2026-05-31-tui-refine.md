@@ -1,6 +1,19 @@
 # TUI Refine Implementation Plan
 
-> **Historical.** The TUI was removed on 2026-11-04 and this plan describes a crate that no longer exists. Kept as the project's record of the decision. Why it was removed, and what a reimplementation should read first, is in `topics/inspectah-tui.md` in Mark's FKA repo.
+> ## Executed, then the feature was removed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The crate was built: `63e45058 feat(tui): add app shell with terminal
+>   lifecycle` is the first of its commits, and `c0e808ac` filed this plan's
+>   spec under `process-docs/specs/implemented/`.
+> - The crate and the `--tui` flag were then removed on 2026-11-04 at
+>   `1f5db703`, so every `crates/tui/` path below names something that no
+>   longer exists. Do not recreate the crate to satisfy this plan.
+>
+> Kept as the project's record of the decision. Why it was removed, and what
+> a reimplementation should read first, is in `topics/inspectah-tui.md` in
+> Mark's FKA repo.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

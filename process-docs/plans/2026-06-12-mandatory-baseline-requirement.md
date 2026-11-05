@@ -1,5 +1,16 @@
 # Mandatory Baseline Requirement Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `crates/core/src/baseline.rs`, `crates/collect/src/baseline.rs` and the
+>   gate's test, `crates/cli/tests/baseline_requirement_test.rs`, all exist.
+> - Merged as `0f9df290 Feature/mandatory baseline (#5)`, and `c0e808ac`
+>   filed this plan's spec under `process-docs/specs/implemented/`.
+> - The `crates/core/src/fleet/` and `crates/core/tests/fleet_*` paths named
+>   below are stale, not absent: `da83875b` renamed fleet to aggregate.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove the `--no-baseline` code path from inspectah, making baseline extraction a hard requirement with classified error messages on failure.

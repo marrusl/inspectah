@@ -1,5 +1,15 @@
 # Fleet → Aggregate Rename Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The rename is the current layout: `crates/cli/src/commands/aggregate.rs`,
+>   `crates/core/src/aggregate/`, and
+>   `crates/core/tests/aggregate_{e2e,merge,orchestrator,validate,zone}_test.rs`
+>   all exist, and no `fleet.rs` remains under `crates/`.
+> - Merged as `da83875b Feature/fleet to aggregate rename (#6)`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rename the `fleet` subcommand to `aggregate` across the entire inspectah codebase — source, tests, fixtures, templates, completions, and documentation. The current CLI top-level commands are `scan / refine / fleet / build / version` (plus hidden `completions`). After this rename: `scan / refine / aggregate / build / version`.

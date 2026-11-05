@@ -1,5 +1,18 @@
 # Non-RPM Replication Plan 2: Tier 2 (Unmanaged Files) + Tier 3 (Repo-less RPMs)
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The upload backend shipped: `crates/web/src/lib.rs:122` routes
+>   `POST /api/upload-rpm` to `crates/web/src/upload.rs`. The
+>   `crates/refine-web/` paths named below were never the crate's name.
+> - Tier 2 and Tier 3 are covered by
+>   `crates/collect/tests/unmanaged_scan_test.rs` and
+>   `crates/collect/tests/repoless_rpm_test.rs`.
+> - `c0e808ac` filed the series' spec,
+>   `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add opt-in unmanaged file cataloging/bundling (Tier 2) and automatic repo-less RPM bundling (Tier 3) to the scan and refine pipeline. Both tiers produce executable Containerfile output backed by collected artifacts in the export tarball.

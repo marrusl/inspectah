@@ -1,5 +1,15 @@
 # Unified Include-Default Model Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `crates/refine/tests/normalize_test.rs` asserts
+>   `omitted_include_defaults_to_true` and
+>   `omitted_config_include_defaults_to_true`; `crates/web/src/aggregate_handlers.rs`
+>   carries the matching `aggregate_include_default` rule.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unify inspectah's 25 toggleable item types into a clean three-source model: collectors set `include: true`, classifiers (RPM, config, tuned) override analytically, fleet aggregate narrows by strict universality, and semantic exclusions lock image-incompatible items.

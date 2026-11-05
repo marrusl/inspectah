@@ -1,5 +1,13 @@
 # Package Group Dependency Visibility — Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - All 12 files this plan names exist, including the `GroupRow` and
+>   `PackageList` components under `crates/web/ui/src/components/`.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Show all group members (including base-image ones de-emphasized), clarify summary labels, fix member list truncation.

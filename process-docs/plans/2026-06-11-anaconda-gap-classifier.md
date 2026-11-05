@@ -1,5 +1,17 @@
 # Anaconda Gap Classifier Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The classifier post-pass is in `crates/refine/src/classify.rs`; eight of
+>   the nine files this plan names exist, the ninth being
+>   `crates/web/src/fleet_handlers.rs`, which `da83875b` renamed to
+>   `aggregate_handlers.rs`.
+> - Merged as `b3c04c6e feat: anaconda gap classifier + group-aware
+>   rendering`, and `c0e808ac` filed this plan's spec under
+>   `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Classify anaconda-sourced packages that survive baseline subtraction into four tiers: platform plumbing (locked exclude), promoted (user-intent detected), installer noise (soft exclude), and ambiguous (investigate). Collect installed dnf groups for the future rendering spec.

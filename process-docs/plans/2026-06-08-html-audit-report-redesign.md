@@ -1,12 +1,13 @@
 # HTML Audit Report Redesign — Implementation Plan
 
-> **Executed. The empty checkboxes below do not mean unstarted work.** This
-> plan was carried out; its tracking boxes were simply never ticked, which
-> dates from a period when the process was less enforced. Noted 2026-11-04
-> after the unticked boxes were read as evidence the work had never happened,
-> and that reading reached a decision before it was caught.
+> ## Executed (2026-11-04)
 >
-> Three things a reader can check in under a minute:
+> **Checkbox state below is not evidence** — the boxes were never ticked,
+> which dates from a period when the process was less enforced. Noted after
+> the unticked boxes were read as evidence the work had never happened, and
+> that reading reached a decision before it was caught.
+>
+> Classified from the tree:
 > - The templates exist: `crates/pipeline/templates/report/` holds 23 of them,
 >   `storage.html` and `summary-cards.html` among them, and `base.html`
 >   includes both.

@@ -1,5 +1,14 @@
 # Refine Projection Consolidation Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `crates/refine/src/projection/` exists (`decisions.rs`, `reference.rs`,
+>   `types.rs`, `mod.rs`), and `crates/refine/src/session.rs:42` caches a
+>   `projection::DecisionProjection`.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Move single-host view projection logic from `inspectah-web/src/handlers.rs` to `inspectah-refine`, creating shared `DecisionProjection` + `ReferenceProjection` types that any consumer (web, TUI, CLI) can use.

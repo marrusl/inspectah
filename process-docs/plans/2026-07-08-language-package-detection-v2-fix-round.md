@@ -1,5 +1,16 @@
 # Language Package Detection v2 — Fix Round
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree; each task has its commit, all on 2026-07-08/09:
+> - T1 `2ff3a08d` (bind `npm list -g` to the `npm root` prefix), T2
+>   `d9a7f78f` (live pin screen), T3 `59f31957` (scan-root dedupe), T4
+>   `66706646` and `67e961ac` (walker containment), T6 `f3bb1671` (renderer
+>   hardening). All 8 files this plan names exist.
+> - T5 targets driftify fixtures and was not checked in this repo.
+> - This is a review fix round, so it has no spec of its own.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
 
 **Goal:** Fix all must-fix and should-fix findings from the team panel review (Thorn, Slate, Fern, Tang — all request-changes).

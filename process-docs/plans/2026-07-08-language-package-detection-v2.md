@@ -1,5 +1,17 @@
 # Language Package Detection v2 — Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - All 15 files this plan names exist, and the run is visible in the log
+>   from `fe62e611 feat(core): add METHOD_NPM_GLOBAL, LanguagePackage.pinned,
+>   bump schema to v22` through `8a35bf04`, `3f4aabb5`, `caf929b7`,
+>   `7bf8ae01`, `feadd277` and `d4db2877`, all on 2026-07-08.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+> - The review fix round that followed is
+>   `2026-07-08-language-package-detection-v2-fix-round.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Improve language package detection fidelity: add npm global package detection with per-package version pinning, C-extension detection, expanded scan roots (`--scan-home`, `--scan-path`, `/var/www`), and fix `system_site_packages` rendering and bundler deprecation.

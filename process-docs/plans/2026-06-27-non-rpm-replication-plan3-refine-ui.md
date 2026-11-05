@@ -1,5 +1,16 @@
 # Non-RPM Replication Plan 3: Refine UI Changes
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The sections and the upload modal exist and are tested:
+>   `crates/web/ui/src/components/__tests__/` holds
+>   `LanguagePackageList.test.tsx`, `UnmanagedFileList.test.tsx`,
+>   `RpmUploadModal.test.tsx` and `RpmBatchUploadModal.test.tsx`.
+> - `c0e808ac` filed the series' spec,
+>   `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Language Packages and Unmanaged Files decision sections to the single-host refine UI, implement the RPM upload modal for repo-less packages wired to Plan 2's backend upload endpoint, update sidebar/keyboard navigation, and extend global search and focus plumbing to cover the new sections.

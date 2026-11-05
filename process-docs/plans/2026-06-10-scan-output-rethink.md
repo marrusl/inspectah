@@ -1,5 +1,15 @@
 # Scan Output Rethink — Implementation Plan (rev 3)
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `crates/cli/src/progress/` and `crates/core/src/types/progress.rs` exist,
+>   along with `crates/cli/src/commands/pull_progress.rs` and
+>   `pull_failure.rs`.
+> - Merged as `b0379fd6 Feature/scan output rethink (#4)`, and `c0e808ac`
+>   filed this plan's spec under `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the block-redraw scan progress output with an append-only streaming receipt, collapse three progress modes to two (pretty/flat), and add a findings summary block.

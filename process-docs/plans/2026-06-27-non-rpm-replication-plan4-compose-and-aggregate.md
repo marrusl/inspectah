@@ -1,5 +1,17 @@
 # Non-RPM Replication Plan 4: Compose Raw Content + Aggregate Support
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - Aggregate mode carries the new sections:
+>   `crates/web/ui/src/components/aggregate/` holds `AggregateSection.tsx`,
+>   `AggregateSidebar.tsx`, `VariantView.tsx` and `DiffDrawer.tsx`, backed by
+>   `crates/refine/src/aggregate/variant_ops.rs`. The `AggregateApp.tsx`
+>   named below is the one file that does not exist under that name.
+> - `c0e808ac` filed the series' spec,
+>   `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md`.
+
 <!-- agentic: tang | model: opus | sdd: true | thorn-checkpoint: after T3, T5a, T8, T9a -->
 <!-- depends-on: plan1 (data model, shared contracts), plan2 (UnmanagedFile types, ItemId::UnmanagedFile), plan3 (LanguagePackageEnv UI types) -->
 

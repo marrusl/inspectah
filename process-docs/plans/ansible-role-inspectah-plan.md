@@ -1,5 +1,21 @@
 # ansible-role-inspectah Implementation Plan
 
+> ## Cannot determine (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked,
+> and nothing in this repo settles the question either way:
+> - This plan targets a different repo,
+>   `/Users/mrussell/Work/bootc-migration/ansible-role-inspectah/`, which is
+>   not present on this machine — `bootc-migration/` holds only `driftify`,
+>   `inspectah` and `inspectah-team`. No inspectah source file is affected
+>   by it.
+> - The only in-repo signal is
+>   `process-docs/specs/implemented/ansible-role-spec.md`, filed by the bulk
+>   commit `c0e808ac`. That is a judgement someone made about 18 specs at
+>   once, not a check of the role.
+> - **To settle it:** clone the role repo and look for `tasks/main.yml`,
+>   `meta/main.yml`, `handlers/main.yml` and `tests/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create a Galaxy-publishable Ansible role that automates the inspectah scan-fetch pipeline across RHEL/CentOS/Fedora fleets, with optional install, campaign-scoped fetch, two-layer container cleanup, and leave-no-trace host cleanup.

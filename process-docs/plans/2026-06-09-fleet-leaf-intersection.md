@@ -1,5 +1,15 @@
 # Fleet Leaf-Only Package Aggregation Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The merge logic lives at `crates/core/src/aggregate/merge.rs` with
+>   `crates/core/tests/aggregate_merge_test.rs` covering it.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+> - The `crates/core/src/fleet/` and `crates/web/src/fleet_handlers.rs` paths
+>   named below are stale, not absent: `da83875b` renamed fleet to aggregate.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Filter fleet `packages_added` to leaf-only packages at aggregation time, replacing the fragile "first host wins" heuristic with a principled intersection of all hosts' leaf classifications.

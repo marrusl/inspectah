@@ -1,5 +1,15 @@
 # Group-Aware Rendering & Refine UI — Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - All 22 files this plan names exist, `crates/core/src/types/group_render.rs`
+>   and `crates/refine/src/group_state.rs` among them.
+> - Merged as `b3c04c6e feat: anaconda gap classifier + group-aware
+>   rendering`, and `c0e808ac` filed this plan's spec under
+>   `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Render Anaconda-installed DNF groups as `dnf group install` lines in the Containerfile and as collapsible, atomic group rows in the refine UI.

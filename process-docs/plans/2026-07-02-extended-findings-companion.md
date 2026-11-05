@@ -1,5 +1,23 @@
 # inspectah Extended Findings Companion Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree; all seven of this plan's goals are in it:
+> - `crates/core/src/types/finding.rs` defines `FindingKind`, `AdvisoryType`
+>   and `ShadowType`; `crates/pipeline/src/section_group.rs` defines
+>   `SectionGroup`; the `/usr` walk is at
+>   `crates/collect/src/inspectors/nonrpm.rs:2385`;
+>   `AdvisoryType::CrossTreeSymlink` renders at
+>   `crates/pipeline/src/render/advisory.rs:90`; `UnbackedVarDir` and
+>   `Modernization` are at `finding.rs:121` and `:131`, with the detector in
+>   `crates/collect/src/inspectors/modernization.rs`.
+> - Its spec lives in the driftify repo
+>   (`docs/specs/driftify-extended-findings-design.md`), which is why it has
+>   no entry in this repo's `specs/implemented/`.
+> - **Stale:** the schema bump below reads "20 → 21";
+>   `crates/core/src/snapshot.rs:21` is at 25.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add advisory finding type, section grouping, /usr walk detection, cross-tree symlink advisory, tmpfiles.d backing advisory, modernization advisory system, and systemd shadow detection to inspectah.

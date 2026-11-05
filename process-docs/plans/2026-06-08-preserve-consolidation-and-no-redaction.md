@@ -1,5 +1,14 @@
 # Preserve Flag Consolidation & --no-redaction Implementation Plan
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - `crates/cli/src/commands/scan.rs:136` declares `pub no_redaction: bool`,
+>   and lines 221-226 implement the `--ack-sensitive` gate this plan
+>   specifies for `--preserve` and `--no-redaction`.
+> - `c0e808ac` filed this plan's spec under `process-docs/specs/implemented/`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace three individual `--preserve-*` flags with a consolidated `--preserve <values>` flag, add `--no-redaction` to skip the redaction pipeline phase, and wire both through the snapshot/fleet/refine provenance model.

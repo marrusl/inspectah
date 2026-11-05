@@ -1,5 +1,15 @@
 # Non-RPM Replication Plan 1: Collector Hardening & Tier 1 Rendering
 
+> ## Executed (2026-11-04)
+>
+> **Checkbox state below is not evidence** — the boxes were never ticked.
+> Classified from the tree:
+> - The Tier 1 collector is `crates/collect/src/inspectors/nonrpm.rs` with
+>   `crates/collect/tests/nonrpm_test.rs`; `env_hash` landed in
+>   `crates/core/src/util.rs`, not the `util/env_hash.rs` named below.
+> - `c0e808ac` filed the series' spec,
+>   `process-docs/specs/implemented/2026-06-27-non-rpm-replication.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Harden the non-RPM collector to produce trustworthy, project-level language environment data, then render executable pip/npm/gem sections in the Containerfile backed by collected manifest artifacts, with manifest redaction and confidence-gated rendering.
