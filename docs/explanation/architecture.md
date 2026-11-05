@@ -69,10 +69,10 @@ Core contains several important modules:
   `nonrpm`, `aggregate`, `subscription`, `repo`, `os`, `system`, and supporting
   types like `warnings`, `redaction`, `completeness`, `preflight`, and
   `progress`. Each defines the serializable structs that flow through the
-  entire pipeline. All 25 toggleable item types use a unified include-default
-  model: `include` fields default to `true` via a `default_true` serde
-  helper, and a `locked` boolean field prevents toggling for non-negotiable
-  decisions (e.g., baseline-subtracted items).
+  entire pipeline. Item types that can be toggled carry a `locked` boolean that
+  prevents toggling for non-negotiable decisions (e.g., baseline-subtracted
+  items). Their include state lives in the `disposition` field described
+  below.
 - **traits/** -- The `Inspector`, `Renderer`, `Detector`, `Executor`, and
   `Progress` traits that define the contracts between crates. Collectors
   implement `Inspector`. Output generators implement `Renderer`. The executor
@@ -82,9 +82,17 @@ Core contains several important modules:
 - **baseline.rs** -- Baseline resolution logic: given a target image, determine
   which packages, services, and configs are defaults versus operator-added.
 - **aggregate/** -- Aggregate merge, manifest, and validation logic for combining
-  multiple host snapshots into aggregate aggregate data.
+  multiple host snapshots into aggregate data.
 - **pipeline.rs** -- Pipeline configuration types shared between the
   orchestrator and its consumers.
+
+Dispositions are defined in core. `FindingKind` in
+`crates/core/src/types/finding.rs` has three variants: `Actionable` (the
+only one that carries an `include` flag), `Advisory` (an advisory type and a
+rationale, not toggleable), and `Inventory` (displayed, never rendered into
+the Containerfile). Every item type carries `disposition: FindingKind`; there
+is no standalone `include: bool` on items. Renderers and refine ask the
+disposition whether an item is included instead of reading a flag.
 
 ## inspectah-collect: talking to the host
 
@@ -187,6 +195,19 @@ Pipeline's modules:
   - `safety.rs` -- Safety net warnings for items that need manual review.
   - Supporting modules: `baseline_fmt.rs`, `configtree.rs`,
     `service_intent.rs`, `readme.rs`.
+
+Pipeline produces an export in two ways: the CLI scan tarball, staged by
+`render_all` in `crates/pipeline/src/render/mod.rs`, and the refine web
+download (`POST /api/tarball`), staged by `render_refine_export` in
+`crates/refine/src/session.rs`. Both write the config tree, environment
+files, the tmpfiles fragment, and the language package manifests with the
+same functions from `crates/pipeline/src/render/`, and both render the
+Containerfile with the same `containerfile.rs`. The two staged trees are not
+identical: the refine export also handles uploads, re-extracts payloads from
+the source tarball, includes aggregate variants, and removes any top-level
+entry not on its allowlist. A directory the Containerfile can `COPY` must
+therefore be written by a shared function and, for refine, added to that
+allowlist.
 
 ## inspectah-refine: interactive editing
 
