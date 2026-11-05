@@ -1,34 +1,19 @@
 # Unmanaged /usr Presentation Implementation Plan
 
-> ## DO NOT EXECUTE AS WRITTEN — reanalysis required first (Mark, 2026-11-01)
+> ## Superseded (2026-11-04)
 >
-> This plan was written 2026-08-15 against a tree that has moved
-> substantially since. **Mark: it needs a full reanalysis before anyone
-> attempts it.** Treat the task list as a record of intent, not as
-> instructions.
+> This plan is retired, not to be reanalysed. The /usr walk detector stays,
+> and its two collector fixes landed on 2026-11-04 (`8cb3264d` and
+> `96bc606b`). The presentation question moved to the unified
+> unpackaged-content design, which the project's backlog tracks, carrying
+> forward the surviving decisions of the design note as constraints. The
+> design note at `process-docs/specs/proposed/2026-08-15-usr-walk-presentation-design.md`
+> remains the record of those decisions. The task list below is kept as
+> history only.
 >
-> **The schema numbers are deliberately left at 23**, which is wrong, so
-> that this header is the only thing that makes the plan look current.
-> Correcting them in isolation would make a stale document appear fresh
-> and invite exactly the execution this header exists to prevent.
->
-> The concrete known drift, as of 2026-11-01:
->
-> - § Schema Version Decision says "**This is settled: `SCHEMA_VERSION =
->   23`, `MIN_SCHEMA = 23`**". The tree is at **25** — phase 0 took it to
->   23, `0625ff6f` to 24, `26d1a8de` to 25. Executing Task 1 as written
->   would write a **downgrade**.
-> - Task 1's fixture sweep and Task 13's rewrite of
->   `process-docs/skills/snapshot-schema-versioning.md` were both
->   overtaken by phase 0, which did the same work. See
->   [[inspectah-two-plans-claim-schema-23]] in the backlog.
-> - The `/usr` walk itself is unchanged and still collected-but-unread,
->   so the plan's **goal** stands. It is the task-level detail that has
->   rotted.
->
-> Reanalysis should start from the design note named below, which is
-> authoritative over this plan, and re-derive the tasks against the
-> current tree rather than patching this file.
+> **The schema numbers below are deliberately left at 23**, which is wrong:
+> the tree is at 25. Correcting them in isolation would make a stale
+> document appear fresh and invite execution, so do not execute this plan.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
