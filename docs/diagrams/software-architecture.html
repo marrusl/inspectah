@@ -50,10 +50,10 @@ const crates = [
         name: 'commands/',
         desc: 'CLI subcommands',
         children: [
-          { text: 'scan', detail: 'Single-host scan command — runs inspectors, renders output' },
+          { text: 'scan', detail: 'Single-host scan command: runs inspectors, renders output' },
           { text: 'aggregate', detail: 'Aggregation command, combines multiple host snapshots' },
-          { text: 'refine', detail: 'Interactive triage command — launches web UI for review' },
-          { text: 'build', detail: 'Build command — extracts tarball, plans subscription mounts, runs podman build' },
+          { text: 'refine', detail: 'Interactive triage command: launches web UI for review' },
+          { text: 'build', detail: 'Build command: extracts tarball, plans subscription mounts, runs podman build' },
           { text: 'version', detail: 'Version and build info display' },
           { text: 'pull_progress', detail: 'Progress reporting during snapshot pull' },
         ],
@@ -69,7 +69,7 @@ const crates = [
         ],
       },
     ],
-    contract: 'main() — binary entry point, clap argument parsing, command dispatch',
+    contract: 'main(): binary entry point, clap argument parsing, command dispatch',
   },
   {
     id: 'web',
@@ -98,7 +98,7 @@ const crates = [
         name: 'assets',
         desc: 'Static file serving',
         children: [
-          { text: 'assets.rs', detail: 'rust-embed integration — serves compiled React UI from the binary' },
+          { text: 'assets.rs', detail: 'rust-embed integration: serves compiled React UI from the binary' },
         ],
       },
       {
@@ -123,7 +123,7 @@ const crates = [
         ],
       },
     ],
-    contract: 'build_router() — constructs axum Router with all API and static routes',
+    contract: 'build_router(): constructs axum Router with all API and static routes',
   },
 
   // ── Orchestration (teal) ──
@@ -161,7 +161,7 @@ const crates = [
         name: 'redaction/',
         desc: 'Secret scrubbing',
         children: [
-          { text: 'engine', detail: 'Core redaction engine — applies patterns to all string fields' },
+          { text: 'engine', detail: 'Core redaction engine: applies patterns to all string fields' },
           { text: 'patterns', detail: 'Built-in regex patterns for passwords, keys, tokens, connection strings' },
           { text: 'PasswordHash', detail: 'Shadow password hash detection and redaction' },
           { text: 'PEM blocks', detail: 'Private key and certificate PEM block detection' },
@@ -194,13 +194,13 @@ const crates = [
         name: 'build/',
         desc: 'Build execution pipeline',
         children: [
-          { text: 'extract', detail: 'TarballExtractor — safe archive extraction with hardlink/symlink validation' },
+          { text: 'extract', detail: 'TarballExtractor: safe archive extraction with hardlink/symlink validation' },
           { text: 'rhel', detail: 'RHEL pass-through detection and ambient subscription bundle validation' },
-          { text: 'mod (orchestrator)', detail: 'Build planning — mount planning, cert expiry checks, podman command construction' },
+          { text: 'mod (orchestrator)', detail: 'Build planning: mount planning, cert expiry checks, podman command construction' },
         ],
       },
     ],
-    contract: 'Pipeline — orchestrate inspectors, validate, redact, render artifacts',
+    contract: 'Pipeline: orchestrate inspectors, validate, redact, render artifacts',
   },
   {
     id: 'refine',
@@ -222,7 +222,7 @@ const crates = [
         name: 'session',
         desc: 'Session persistence',
         children: [
-          { text: 'session.rs', detail: 'Manages triage session state — load, save, merge decisions across runs' },
+          { text: 'session.rs', detail: 'Manages triage session state: load, save, merge decisions across runs' },
         ],
       },
       {
@@ -230,8 +230,8 @@ const crates = [
         desc: 'Aggregate consensus engine',
         children: [
           { text: 'classify', detail: 'Aggregate-level classification: consensus vs. host-specific items' },
-          { text: 'diff', detail: 'Cross-host diff computation — identifies divergent state' },
-          { text: 'variant_ops', detail: 'Variant management — create, merge, split aggregate variants' },
+          { text: 'diff', detail: 'Cross-host diff computation: identifies divergent state' },
+          { text: 'variant_ops', detail: 'Variant management: create, merge, split aggregate variants' },
         ],
       },
       {
@@ -268,7 +268,7 @@ const crates = [
         ],
       },
     ],
-    contract: 'RefineSession — load snapshot, classify, track decisions, persist state',
+    contract: 'RefineSession: load snapshot, classify, track decisions, persist state',
   },
 
   // ── Collection (blue) ──
@@ -285,9 +285,9 @@ const crates = [
         name: 'inspectors/',
         desc: 'System data collectors',
         children: [
-          { text: 'rpm/', detail: 'RPM package inventory — parser, classifier, modules, repos, source repos' },
-          { text: 'config/', detail: 'Modified config files — rpm -Va, directory walk, classification' },
-          { text: 'services', detail: 'systemd unit enumeration — enabled, running, custom units' },
+          { text: 'rpm/', detail: 'RPM package inventory: parser, classifier, modules, repos, source repos' },
+          { text: 'config/', detail: 'Modified config files: rpm -Va, directory walk, classification' },
+          { text: 'services', detail: 'systemd unit enumeration: enabled, running, custom units' },
           { text: 'containers', detail: 'Podman/Docker container inventory' },
           { text: 'network', detail: 'Network interfaces, firewall rules, DNS config' },
           { text: 'storage', detail: 'Block devices, mounts, LVM layout' },
@@ -303,8 +303,8 @@ const crates = [
         name: 'executor/',
         desc: 'Command execution abstraction',
         children: [
-          { text: 'real', detail: 'Real executor — runs shell commands on the live system' },
-          { text: 'mock', detail: 'Mock executor — deterministic test doubles with fixture data' },
+          { text: 'real', detail: 'Real executor: runs shell commands on the live system' },
+          { text: 'mock', detail: 'Mock executor: deterministic test doubles with fixture data' },
         ],
       },
       {
@@ -315,7 +315,7 @@ const crates = [
         ],
       },
     ],
-    contract: 'Inspector trait — each inspector implements collect() to produce a snapshot section',
+    contract: 'Inspector trait: each inspector implements collect() to produce a snapshot section',
   },
 
   // ── Foundation (purple) ──
@@ -332,20 +332,20 @@ const crates = [
         name: 'types/',
         desc: 'Data model',
         children: [
-          { text: 'rpm', detail: 'RPM package types — name, version, epoch, release, arch, source' },
-          { text: 'config', detail: 'Config file types — path, owner, permissions, diff status' },
-          { text: 'services', detail: 'Systemd service types — unit name, state, enabled, custom' },
-          { text: 'network', detail: 'Network types — interfaces, firewall rules, DNS, proxy' },
-          { text: 'containers', detail: 'Container types — image, name, state, engine' },
-          { text: 'kernelboot', detail: 'Kernel/boot types — parameters, modules, sysctl' },
-          { text: 'storage', detail: 'Storage types — block devices, mounts, LVM' },
-          { text: 'scheduled', detail: 'Scheduled task types — cron jobs, systemd timers' },
-          { text: 'selinux', detail: 'SELinux types — mode, policy version, custom modules' },
-          { text: 'nonrpm', detail: 'Non-RPM software types — pip, npm, go, standalone' },
-          { text: 'users', detail: 'User/group types — uid, gid, shell, home, groups' },
-          { text: 'aggregate', detail: 'Aggregate types — consensus items, variant definitions' },
-          { text: 'repo', detail: 'Repository definitions — id, name, baseurl, enabled, gpgcheck' },
-          { text: 'system / os', detail: 'System info — hostname, OS version, kernel, arch' },
+          { text: 'rpm', detail: 'RPM package types: name, version, epoch, release, arch, source' },
+          { text: 'config', detail: 'Config file types: path, owner, permissions, diff status' },
+          { text: 'services', detail: 'Systemd service types: unit name, state, enabled, custom' },
+          { text: 'network', detail: 'Network types: interfaces, firewall rules, DNS, proxy' },
+          { text: 'containers', detail: 'Container types: image, name, state, engine' },
+          { text: 'kernelboot', detail: 'Kernel/boot types: parameters, modules, sysctl' },
+          { text: 'storage', detail: 'Storage types: block devices, mounts, LVM' },
+          { text: 'scheduled', detail: 'Scheduled task types: cron jobs, systemd timers' },
+          { text: 'selinux', detail: 'SELinux types: mode, policy version, custom modules' },
+          { text: 'nonrpm', detail: 'Non-RPM software types: pip, npm, go, standalone' },
+          { text: 'users', detail: 'User/group types: uid, gid, shell, home, groups' },
+          { text: 'aggregate', detail: 'Aggregate types: consensus items, variant definitions' },
+          { text: 'repo', detail: 'Repository definitions: id, name, baseurl, enabled, gpgcheck' },
+          { text: 'system / os', detail: 'System info: hostname, OS version, kernel, arch' },
           { text: 'subscription', detail: 'SubscriptionFile, SubscriptionSection, EntitlementPair types' },
           { text: 'redaction', detail: 'Redaction markers and scrubbed-field tracking' },
           { text: 'completeness / preflight', detail: 'Completeness tracking and preflight check results' },
@@ -357,32 +357,32 @@ const crates = [
         name: 'traits/',
         desc: 'Core abstractions',
         children: [
-          { text: 'inspector', detail: 'Inspector trait — collect() returns a snapshot section' },
-          { text: 'executor', detail: 'Executor trait — run_command() abstraction for testability' },
-          { text: 'renderer', detail: 'Renderer trait — render() produces output artifact from snapshot' },
-          { text: 'detector', detail: 'Detector trait — probes system for feature presence' },
-          { text: 'progress', detail: 'Progress trait — report scan/render progress to caller' },
+          { text: 'inspector', detail: 'Inspector trait: collect() returns a snapshot section' },
+          { text: 'executor', detail: 'Executor trait: run_command() abstraction for testability' },
+          { text: 'renderer', detail: 'Renderer trait: render() produces output artifact from snapshot' },
+          { text: 'detector', detail: 'Detector trait: probes system for feature presence' },
+          { text: 'progress', detail: 'Progress trait: report scan/render progress to caller' },
         ],
       },
       {
         name: 'aggregate/',
         desc: 'Aggregate data structures',
         children: [
-          { text: 'merge', detail: 'Aggregate merge logic — combine per-host snapshots into consensus' },
-          { text: 'validate', detail: 'Aggregate validation — check consistency across hosts' },
+          { text: 'merge', detail: 'Aggregate merge logic: combine per-host snapshots into consensus' },
+          { text: 'validate', detail: 'Aggregate validation: check consistency across hosts' },
         ],
       },
       {
         name: 'snapshot + pipeline + baseline',
         desc: 'Core data containers',
         children: [
-          { text: 'snapshot.rs', detail: 'Snapshot struct — the complete system state captured by inspectors' },
-          { text: 'pipeline.rs', detail: 'Pipeline configuration types — options, failure policy' },
-          { text: 'baseline.rs', detail: 'Baseline types — known-good state for comparison' },
+          { text: 'snapshot.rs', detail: 'Snapshot struct: the complete system state captured by inspectors' },
+          { text: 'pipeline.rs', detail: 'Pipeline configuration types: options, failure policy' },
+          { text: 'baseline.rs', detail: 'Baseline types: known-good state for comparison' },
         ],
       },
     ],
-    contract: 'Inspector / Executor / Renderer traits — contracts between all crates',
+    contract: 'Inspector / Executor / Renderer traits: contracts between all crates',
   },
 ];
 
@@ -709,7 +709,7 @@ function renderCrateExpand(crateId, isExpanded) {
       .attr('transform', `translate(14, ${itemY})`)
       .attr('tabindex', '0')
       .attr('role', 'button')
-      .attr('aria-label', `${mod.name} — ${mod.desc}. ${mod.children.length} items. Click to expand.`)
+      .attr('aria-label', `${mod.name}: ${mod.desc}. ${mod.children.length} items. Click to expand.`)
       .attr('aria-expanded', 'false')
       .style('cursor', 'pointer');
 
@@ -791,7 +791,7 @@ function renderCrateExpand(crateId, isExpanded) {
     // Hover tooltip for module
     itemG
       .on('mouseenter', (event) => {
-        tooltip.show(`<strong>${mod.name}</strong><br>${mod.desc}<br><em>${mod.children.length} items — click to expand</em>`, event);
+        tooltip.show(`<strong>${mod.name}</strong><br>${mod.desc}<br><em>${mod.children.length} items, click to expand</em>`, event);
       })
       .on('mousemove', (event) => tooltip.move(event))
       .on('mouseleave', () => tooltip.hide());
