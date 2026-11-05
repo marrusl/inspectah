@@ -15,7 +15,7 @@ document explains both the structure and the reasoning behind it.
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-software-architecture"
           src="../diagrams/software-architecture.html"
-          title="Software Architecture — interactive preview"
+          title="Software Architecture: interactive preview"
           width="100%" height="450" frameborder="0"
           loading="lazy" tabindex="0"></iframe>
   <div style="margin-top: 0.5em;">
@@ -302,7 +302,7 @@ this flow is key to understanding where to make changes when contributing.
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-data-flow"
           src="../diagrams/data-flow.html"
-          title="Data Flow — interactive preview"
+          title="Data Flow: interactive preview"
           width="100%" height="450" frameborder="0"
           loading="lazy" tabindex="0"></iframe>
   <div style="margin-top: 0.5em;">
