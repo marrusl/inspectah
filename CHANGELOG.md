@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0-beta.5] - 2026-11-05
+
 ### Changed
 - **The refine export is assembled in one place** — `RefineSession::export_tarball` is removed and replaced by `RefineSession::export_plan`, which returns an `ExportPlan` the caller renders with `ExportPlan::render`. `POST /api/tarball` built its own copy of the same argument list, so the route and the session could disagree about what an export is without any test being able to see it: a change that made the route discard the operator's original include map passed the entire test suite. There is now one assembly and one list to get wrong. The download is byte-for-byte what it was; this removes a way for the two paths to drift, it does not change what either produces today. Library callers using `export_tarball` should call `session.export_plan(generation)?.render(&path)`.
 
@@ -452,7 +454,8 @@ Final release of the Go implementation before the Rust rewrite.
 
 ---
 
-[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...HEAD
+[Unreleased]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.5...HEAD
+[0.9.0-beta.5]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.4...v0.9.0-beta.5
 [0.9.0-beta.4]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.3...v0.9.0-beta.4
 [0.9.0-beta.3]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.2...v0.9.0-beta.3
 [0.9.0-beta.2]: https://github.com/marrusl/inspectah/compare/v0.9.0-beta.1...v0.9.0-beta.2
