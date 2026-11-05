@@ -38,7 +38,7 @@ for the full command reference.
 | Flag | Description |
 |:-----|:------------|
 | `--inspect-only` | Write JSON snapshot only, skip tarball generation. |
-| `-o, --output <PATH>` | Output file path (tarball) or directory (with `--inspect-only`). |
+| `-o, --output <PATH>` | Output file path (tarball). With `--inspect-only`, the path of the JSON file; a directory path is not accepted today. |
 | `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). Suppresses the size prompt that `--include-unmanaged` shows before bundling. |
 | `--base-image <IMAGE>` | Target base image for cross-distro conversion (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`). |
 | `--preserve <ITEM>` | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable. |
