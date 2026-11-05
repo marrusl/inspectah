@@ -39,12 +39,15 @@ set, and flag a missing non-base module as high severity. The
 difference between "your PAM config changed" and "your authentication
 will break".
 
-### /usr Walk Presentation
+### Unpackaged Content, Unified
 
-`usr_entries` are collected and read by nothing, so unmanaged `/usr`
-content has no user-facing surface at all. The design note is settled
-and landed; the implementation plan is parked pending reanalysis
-against a tree that has moved past it.
+Unpackaged content is reported through two detectors, the per-file walk of
+`/opt`, `/srv` and `/usr/local` and the RPM-dump diff of the rest of
+`/usr`, and today only the first has an output surface. The `/usr` walk's
+two collector bugs are fixed. The plan is one "Unpackaged content" section
+with location and provenance as attributes rather than a separate `/usr`
+section, designed as the first design task for the engineers joining the
+project. The August presentation plan is superseded.
 
 ### Docs Overhaul
 
