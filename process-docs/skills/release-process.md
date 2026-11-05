@@ -214,12 +214,21 @@ no source: the version bump rewrites `Cargo.lock` and every crate
 version, so confirm the workspace still builds and the suite still
 passes at the bumped version. v0.9.0-beta.2 was 2784 passed, 0 failed,
 6 ignored; v0.9.0-beta.3 was 2785 passed, 0 failed, 6 ignored; v0.9.0-beta.4
-was 2969 passed, 0 failed, 6 ignored, across 83 suites. The jump from
-beta.3 is expected (beta.4 carries the whole accumulated `[Unreleased]`
+was 2969 passed, 0 failed, 6 ignored, across 83 suites; v0.9.0-beta.5 was
+2990 passed, 0 failed, **0 ignored**, across 84 binaries. The jump at
+beta.4 is expected (it carries the whole accumulated `[Unreleased]`
 body plus the TUI removal) -- the pass count legitimately grows release to
 release, so don't treat a gap against this baseline as a problem on its
-own. **0 failed and 6 ignored are the numbers that signal trouble**, not
+own. **0 failed and 0 ignored are the numbers that signal trouble**, not
 the pass count.
+
+**The ignored count flipped at beta.5 and the older figures above are
+not the target.** The quarantine was emptied on 2026-11-04: the one
+quarantined test that passed was un-ignored and the parked one deleted
+(`763d0d58`), and four obsolete HTML report tests went with them
+(`93549d39`). Six ignored was the healthy number up to beta.4; zero is
+the healthy number now, and a nonzero ignored count means something was
+quarantined since.
 
 Two sandbox traps make a clean tree look broken. Neither is a real
 failure, and both cost time on more than one release:
