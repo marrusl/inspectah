@@ -327,7 +327,9 @@ fn aggregate_export_via_session_export_tarball() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let files = tarball_file_set(&tarball_path);
@@ -624,7 +626,9 @@ fn export_reimport_preserves_variant_state() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Round-trip through the real tarball loader to prove the reopen seam

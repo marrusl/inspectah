@@ -154,7 +154,9 @@ fn containerfile_copy_paths_match_export_layout() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("parity-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Extract the tarball file list

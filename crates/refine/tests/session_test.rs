@@ -396,7 +396,9 @@ fn stale_generation_export_rejected() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
 
-    let result = session.export_tarball(&tarball_path, 999);
+    // The generation check lives in `export_plan`, so a stale caller is
+    // refused before anything is rendered rather than after.
+    let result = session.export_plan(999).map(|_| ());
     assert!(matches!(
         result,
         Err(RefineError::StaleGeneration {
@@ -404,6 +406,10 @@ fn stale_generation_export_rejected() {
             actual: 0
         })
     ));
+    assert!(
+        !tarball_path.exists(),
+        "a refused export must not have written a tarball"
+    );
 }
 
 // -- Viewed ID validation tests ---

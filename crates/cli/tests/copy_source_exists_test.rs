@@ -337,7 +337,9 @@ fn the_refine_web_export_satisfies_every_copy_it_emits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let tarball = dir.path().join("export.tar.gz");
     session
-        .export_tarball(&tarball, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
         .expect("the export writes");
 
     let unpacked = dir.path().join("unpacked");

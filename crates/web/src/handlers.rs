@@ -389,40 +389,17 @@ pub async fn export_tarball(
     })?;
 
     // Snapshot state under the lock, then release before expensive work.
-    let (
-        projected,
-        _generation,
-        sensitive,
-        original_includes,
-        export_filename,
-        source_tarball,
-        upload_dir,
-    ) = {
+    let (plan, sensitive, export_filename) = {
         let session = state.session.lock().unwrap();
-        if req.generation != session.generation() {
-            return Err(AppError(
-                inspectah_refine::types::RefineError::StaleGeneration {
-                    expected: req.generation,
-                    actual: session.generation(),
-                },
-            ));
-        }
-        let orig_inc: std::collections::HashMap<String, bool> = session
-            .snapshot()
-            .rpm
-            .as_ref()
-            .map(|r| {
-                r.packages_added
-                    .iter()
-                    .map(|p| {
-                        (
-                            format!("{}.{}", p.name, p.arch),
-                            p.disposition.is_included(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // One assembly, shared with every other caller. This used to be a
+        // second hand-built argument list beside the session's own, and
+        // the two could drift without any test noticing. `export_plan`
+        // also performs the stale-generation check this block used to
+        // repeat inline.
+        let plan = session
+            .export_plan(req.generation)
+            .map_err(AppError)?
+            .without_render_context();
         // Derive download filename from hostname in the snapshot.
         let hostname = session
             .snapshot()
@@ -432,18 +409,7 @@ pub async fn export_tarball(
             .unwrap_or("inspectah");
         let sanitized = inspectah_pipeline::render::tarball::sanitize_hostname(hostname);
         let filename = format!("inspectah-{sanitized}-refined.tar.gz");
-        (
-            session.snapshot_projected(),
-            session.generation(),
-            session.is_sensitive(),
-            orig_inc,
-            filename,
-            session.source_tarball_path().map(|p| p.to_path_buf()),
-            // The canonical path, so what the export copies from is the
-            // directory `ensure_upload_dir` proved, not a path that can
-            // still resolve somewhere else.
-            session.upload_dir_canon().map(|p| p.to_path_buf()),
-        )
+        (plan, session.is_sensitive(), filename)
     };
     // Lock is released here.
 
@@ -455,7 +421,7 @@ pub async fn export_tarball(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if ack != "true" {
-            let summary = build_sensitivity_summary(&projected);
+            let summary = build_sensitivity_summary(plan.projected());
             return Ok((
                 StatusCode::PRECONDITION_REQUIRED,
                 [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -471,14 +437,7 @@ pub async fn export_tarball(
         move || -> Result<(Vec<u8>, Vec<String>), inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join(&dl_name);
-            let warnings = inspectah_refine::session::render_refine_export(
-                &projected,
-                &tarball_path,
-                Some(&original_includes),
-                None,
-                source_tarball.as_deref(),
-                upload_dir.as_deref(),
-            )?;
+            let warnings = plan.render(&tarball_path)?;
             Ok((std::fs::read(&tarball_path)?, warnings))
         },
     )

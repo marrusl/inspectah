@@ -131,7 +131,9 @@ fn full_pipeline_users_groups_materialization() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // 5. Verify tarball contains expected user artifacts.
@@ -241,7 +243,9 @@ fn preview_export_parity_for_user_artifacts() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // 5. Read the same files from the tarball.

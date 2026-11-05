@@ -224,7 +224,9 @@ fn every_copy_source_is_in_the_archive() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let files = tarball_file_set(&tarball_path);
@@ -277,7 +279,9 @@ fn export_exact_file_set() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let actual = tarball_file_set(&tarball_path);
@@ -324,7 +328,9 @@ fn export_snapshot_reflects_refinements() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Extract and verify
@@ -388,7 +394,9 @@ fn preview_export_containerfile_fidelity() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let extract_dir = tempdir.path().join("extract");
@@ -497,7 +505,9 @@ fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let extract_dir = tempdir.path().join("extract");
@@ -547,7 +557,9 @@ fn reimport_is_clean_and_coherent() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("export1.tar.gz");
     session1
-        .export_tarball(&tarball_path, session1.generation())
+        .export_plan(session1.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Second session: re-import the exported tarball.
@@ -612,7 +624,9 @@ fn export_carries_the_quadlet_root_its_containerfile_copies() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let files = tarball_file_set(&tarball_path);
@@ -662,7 +676,9 @@ fn export_includes_user_artifacts() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let actual = tarball_file_set(&tarball_path);
@@ -769,7 +785,9 @@ fn preview_and_export_produce_same_containerfile_with_groups() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let extract_dir = tempdir.path().join("extract");
@@ -822,7 +840,9 @@ fn export_includes_language_packages_root() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("lang-pkg-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let actual = tarball_file_set(&tarball_path);
@@ -863,7 +883,9 @@ fn export_excludes_language_packages_when_none_included() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("no-lang-pkg-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let actual = tarball_file_set(&tarball_path);
@@ -905,7 +927,9 @@ fn export_redacts_manifest_files_when_snapshot_redacted() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-manifest-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let hash = env_hash("/opt/venv");
@@ -955,7 +979,9 @@ fn export_redacts_manifest_files_in_snapshot_json() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-snapshot-json-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let snap_json = tarball_read_file(&tarball_path, "inspection-snapshot.json")
@@ -1009,7 +1035,9 @@ fn export_preserves_manifest_files_when_unredacted() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("no-redact-manifest-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let hash = env_hash("/opt/venv");
@@ -1054,7 +1082,9 @@ fn export_redacts_package_json_registry_auth() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-npm-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let hash = env_hash("/opt/myapp");
@@ -1096,7 +1126,9 @@ fn export_redacts_gemfile_source_auth() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-gem-test.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let hash = env_hash("/opt/railsapp");
@@ -1152,7 +1184,9 @@ fn export_redacts_package_lock_json_resolved_auth() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-lockfile-npm.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Check sidecar file
@@ -1211,7 +1245,9 @@ fn export_redacts_gemfile_lock_auth() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("redact-lockfile-gem.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // Check sidecar file
@@ -1583,7 +1619,9 @@ fn export_includes_compose_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     let files = tarball_file_set(&tarball_path);
@@ -1613,7 +1651,9 @@ fn export_redacts_compose_secrets() {
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .unwrap();
 
     // The test_snapshot() sets redaction_state to FullyRedacted,

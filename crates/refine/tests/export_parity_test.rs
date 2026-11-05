@@ -172,7 +172,9 @@ fn containerfile_unmanaged_copy_paths_match_export_layout() {
     // Export with the source tarball.
     let export_tarball = tempdir.path().join("export.tar.gz");
     session
-        .export_tarball(&export_tarball, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&export_tarball)
         .unwrap();
 
     // Extract Containerfile and verify COPY lines.
@@ -281,7 +283,9 @@ fn containerfile_repoless_copy_paths_match_export_layout() {
     // Export with the source tarball.
     let export_tarball = tempdir.path().join("export.tar.gz");
     session
-        .export_tarball(&export_tarball, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&export_tarball)
         .unwrap();
 
     // Extract Containerfile and verify COPY lines.
@@ -379,7 +383,9 @@ fn excluded_items_absent_from_both_containerfile_and_export() {
     // Export with the source tarball.
     let export_tarball = tempdir.path().join("export.tar.gz");
     session
-        .export_tarball(&export_tarball, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&export_tarball)
         .unwrap();
 
     // Extract Containerfile.

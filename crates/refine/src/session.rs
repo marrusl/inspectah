@@ -1935,7 +1935,17 @@ impl RefineSession {
         false
     }
 
-    pub fn export_tarball(&self, path: &Path, expected_generation: u64) -> Result<(), RefineError> {
+    /// Everything `render_refine_export` needs, assembled from this
+    /// session in one place.
+    ///
+    /// **This exists because there used to be two assemblies.** The
+    /// session had an `export_tarball` method and `POST /api/tarball`
+    /// built the same argument list again by hand. They agreed because
+    /// someone typed them the same way, not because anything checked
+    /// them, and a mutation that made the route drop `original_includes`
+    /// passed the whole workspace suite on 2026-11-04. The route and the
+    /// tests now call this, so there is one list to get wrong.
+    pub fn export_plan(&self, expected_generation: u64) -> Result<ExportPlan, RefineError> {
         if expected_generation != self.generation {
             return Err(RefineError::StaleGeneration {
                 expected: expected_generation,
@@ -1943,36 +1953,31 @@ impl RefineSession {
             });
         }
 
-        let projected = self.project_snapshot();
-        let orig_inc: std::collections::HashMap<String, bool> = self
-            .original
-            .rpm
-            .as_ref()
-            .map(|r| {
-                r.packages_added
-                    .iter()
-                    .map(|p| {
-                        (
-                            canonical_package_id(&p.name, &p.arch),
-                            p.disposition.is_included(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        render_refine_export(
-            &projected,
-            path,
-            Some(&orig_inc),
-            self.cached_render_context.as_ref(),
-            self.tarball_path.as_deref(),
-            // The canonical path, for the same reason the HTTP export
-            // passes it: what the export proves against must be the
-            // directory `ensure_upload_dir` prepared, not one that can
+        Ok(ExportPlan {
+            projected: self.project_snapshot(),
+            original_includes: self
+                .original
+                .rpm
+                .as_ref()
+                .map(|r| {
+                    r.packages_added
+                        .iter()
+                        .map(|p| {
+                            (
+                                canonical_package_id(&p.name, &p.arch),
+                                p.disposition.is_included(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            render_ctx: self.cached_render_context.clone(),
+            source_tarball: self.tarball_path.clone(),
+            // The canonical path: what the export proves against must be
+            // the directory `ensure_upload_dir` prepared, not one that can
             // still resolve somewhere else.
-            self.upload_dir_canon.as_deref(),
-        )
-        .map(|_warnings| ())
+            upload_dir_canon: self.upload_dir_canon.clone(),
+        })
     }
 
     // --- Private helpers ---
@@ -4136,6 +4141,56 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// could not prove. Those packages are demoted, not fatal: the export
 /// succeeds, the Containerfile carries a FIXME instead of a `COPY`, and
 /// nothing is written for them under `repoless-packages/`.
+/// The arguments `render_refine_export` needs, captured from a session by
+/// [`RefineSession::export_plan`] so that every caller renders from the
+/// same assembly. Owned throughout, so the HTTP route can build it under
+/// the session lock and render after releasing it.
+#[derive(Debug, Clone)]
+pub struct ExportPlan {
+    projected: InspectionSnapshot,
+    original_includes: std::collections::HashMap<String, bool>,
+    render_ctx: Option<RenderContext>,
+    source_tarball: Option<std::path::PathBuf>,
+    upload_dir_canon: Option<std::path::PathBuf>,
+}
+
+impl ExportPlan {
+    /// Reproduces what the shipped download does today: render with no
+    /// `RenderContext`, so a renderable group installs its members
+    /// individually rather than through `dnf group install`, and the
+    /// download diverges from the preview.
+    ///
+    /// **This is a defect, not a design.** It is tracked at
+    /// `inspectah-downloaded-export-drops-every-dnf-group-install`. The
+    /// method exists so the divergence is named at the one call site that
+    /// has it, instead of being an unexplained `None` in an argument list
+    /// where nobody could see it. Closing that item means deleting this
+    /// method and the call to it.
+    #[must_use]
+    pub fn without_render_context(mut self) -> Self {
+        self.render_ctx = None;
+        self
+    }
+
+    /// The projected snapshot this plan exports.
+    pub fn projected(&self) -> &InspectionSnapshot {
+        &self.projected
+    }
+
+    /// Render and write the export tarball. Returns one warning per
+    /// package that claimed a staged upload the export could not prove.
+    pub fn render(&self, tarball_path: &Path) -> Result<Vec<String>, RefineError> {
+        render_refine_export(
+            &self.projected,
+            tarball_path,
+            Some(&self.original_includes),
+            self.render_ctx.as_ref(),
+            self.source_tarball.as_deref(),
+            self.upload_dir_canon.as_deref(),
+        )
+    }
+}
+
 pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
@@ -6947,7 +7002,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let export_path = dir.path().join("export.tar.gz");
         session
-            .export_tarball(&export_path, session.view().generation)
+            .export_plan(session.view().generation)
+            .expect("the generation matches")
+            .render(&export_path)
             .unwrap();
 
         // Read the exported snapshot JSON from the tarball

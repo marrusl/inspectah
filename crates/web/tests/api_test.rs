@@ -63,6 +63,102 @@ fn app(state: Arc<AppState>) -> axum::Router {
     inspectah_web::router(state, "http://localhost:8642")
 }
 
+/// A host where `apr` is a non-leaf package the operator starts with
+/// excluded. Re-including it is a decision only `original_includes` can
+/// carry into the Containerfile: the leaf filter drops every package not
+/// in `leaf_packages`, and the bypass for an operator-changed disposition
+/// is the one thing that keeps `apr` in the install list.
+fn non_leaf_reinclude_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::included(),
+                locked: false,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                disposition: FindingKind::excluded(),
+                locked: false,
+                // Without a repo source the renderer emits a TODO comment
+                // instead of an install, and the assertion below could not
+                // tell the two apart.
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+        ],
+        // `apr` is deliberately absent, so only the original-includes
+        // bypass can keep it.
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The arguments `POST /api/tarball` renders with are pinned by the
+/// artifact it returns, not by a second copy of the argument list.
+///
+/// **This test exists because there was no such pin.** Until 2026-11-04
+/// the route assembled its own argument list and the only test that
+/// exercised the same render reimplemented that list rather than driving
+/// the route, so the two could never disagree in a way a test could see.
+/// A mutation that made the route pass `None` for `original_includes`
+/// passed the entire workspace suite. It fails here: dropping that
+/// argument lets the leaf filter remove `apr`, and the operator's
+/// re-inclusion never reaches the image they download.
+#[tokio::test]
+async fn the_download_carries_the_operators_decision_not_just_the_leaf_set() {
+    let app = app(non_leaf_reinclude_state());
+
+    let (status, _) = post_json(
+        &app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": "apr", "arch": "x86_64"}},
+                "include": true
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "re-including apr must succeed");
+
+    let (status, _headers, body) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK, "the download must succeed");
+
+    let containerfile =
+        String::from_utf8(tarball_member(&body, "Containerfile").expect("Containerfile")).unwrap();
+    // Only the active install block counts. A package the renderer drops
+    // still appears as a `# TODO:` follow-up comment, so a substring
+    // search over the whole file cannot tell "installed" from "mentioned".
+    let installed: Vec<&str> = containerfile
+        .lines()
+        .skip_while(|l| !l.starts_with("RUN dnf install -y"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .map(|l| l.trim().trim_end_matches(" \\"))
+        .collect();
+
+    assert!(
+        installed.contains(&"apr"),
+        "the operator re-included `apr`, so the downloaded Containerfile must \
+         install it. Its absence means the route rendered without \
+         `original_includes` and the leaf filter silently discarded the \
+         decision.\nactive install list: {installed:?}\n{containerfile}"
+    );
+}
+
 async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()

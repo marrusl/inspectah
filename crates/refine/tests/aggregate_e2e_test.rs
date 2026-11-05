@@ -411,7 +411,9 @@ fn aggregate_refine_full_lifecycle() {
     let tmpdir = tempfile::tempdir().expect("tempdir for export");
     let tarball_path = tmpdir.path().join("export.tar.gz");
     session
-        .export_tarball(&tarball_path, session.generation())
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball_path)
         .expect("export should succeed");
 
     // Read tarball entries (strip the archive prefix directory) and check
