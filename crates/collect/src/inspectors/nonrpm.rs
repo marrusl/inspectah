@@ -4237,6 +4237,25 @@ mod tests {
         assert_eq!(paths, vec!["/usr/share/stray".to_string()]);
     }
 
+    #[test]
+    fn test_usr_walk_exclude_path_with_trailing_slash_prunes_contents() {
+        // `--exclude-path /usr/lib/myapp/` is how shell completion spells
+        // the directory. The filter is a prefix match, as in the Tier 2
+        // walk, so the trailing slash still prunes everything beneath it.
+        let root = usr_fixture(&["/usr/lib/myapp/libfoo.so", "/usr/lib/other/libbar.so"]);
+        let exclude = vec!["/usr/lib/myapp/".to_string()];
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &exclude, &[]);
+        assert_eq!(paths, vec!["/usr/lib/other".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_stays_under_usr() {
+        // The fs root carries the whole host; only its /usr is walked.
+        let root = usr_fixture(&["/usr/bin/stray", "/opt/stray/tool", "/etc/stray.conf"]);
+        let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &[], &[]);
+        assert_eq!(paths, vec!["/usr/bin/stray".to_string()]);
+    }
+
     /// Owned set as `build_rpm_owned_set` produces it from rpmdb output,
     /// so the walk tests exercise the real normalization.
     fn owned_set_from_rpmdb(recorded: &[&str]) -> HashSet<String> {
