@@ -11,7 +11,7 @@ nav_order: 1
 Inspect and prepare RPM-based Linux systems for bootc image-mode migration.
 
 ```
-inspectah [OPTIONS] [COMMAND]
+Usage: inspectah [OPTIONS] [COMMAND]
 ```
 
 ### Commands
@@ -42,7 +42,7 @@ inspectah [OPTIONS] [COMMAND]
 Scan the current system and produce a migration snapshot.
 
 ```
-inspectah scan [OPTIONS]
+Usage: inspectah scan [OPTIONS]
 ```
 
 ### Options
@@ -165,7 +165,7 @@ sudo inspectah -y scan --include-unmanaged -o snapshot.tar.gz
 Launch the interactive refinement UI to review and adjust scan output.
 
 ```
-inspectah refine [OPTIONS] <TARBALL>
+Usage: inspectah refine [OPTIONS] <TARBALL>
 ```
 
 ### Arguments
@@ -215,7 +215,7 @@ inspectah refine --fresh /tmp/migration-snapshot.tar.gz
 Combine multiple host scan tarballs into a single aggregate snapshot.
 
 ```
-inspectah aggregate [OPTIONS] [INPUTS]...
+Usage: inspectah aggregate [OPTIONS] [INPUTS]...
 ```
 
 ### Arguments
@@ -293,7 +293,7 @@ the tarball, validates its contents, plans the build (including RHEL
 subscription certificate mounts when needed), and executes `podman build`.
 
 ```
-inspectah build [OPTIONS] --tag <TAG> <TARBALL> [-- <PODMAN_ARGS>...]
+Usage: inspectah build [OPTIONS] --tag <TAG> <TARBALL> [-- <PODMAN_ARGS>...]
 ```
 
 ### Arguments
@@ -313,17 +313,17 @@ inspectah build [OPTIONS] --tag <TAG> <TARBALL> [-- <PODMAN_ARGS>...]
 
 ### Behavior
 
-1. **Extract** -- extracts the tarball to a temporary directory (or a named
+1. **Extract**: extracts the tarball to a temporary directory (or a named
    cache directory when `--keep-context` is set).
-2. **Validate** -- confirms the tarball contains a `Containerfile` and checks
+2. **Validate**: confirms the tarball contains a `Containerfile` and checks
    archive safety (rejects path traversal, symlink escapes, hardlinks, and
    device nodes).
-3. **Detect RHEL pass-through** -- if building on a subscribed RHEL host,
+3. **Detect RHEL pass-through**: if building on a subscribed RHEL host,
    uses the host's ambient subscription. If not (macOS, Fedora, CI), falls
    back to subscription material from the tarball's `subscription/` directory.
-4. **Check certificate expiry** -- warns when entitlement certificates are
+4. **Check certificate expiry**: warns when entitlement certificates are
    expired or expiring within 14 days.
-5. **Build** -- constructs and runs the `podman build` command with
+5. **Build**: constructs and runs the `podman build` command with
    subscription certificate mounts (`-v`) when applicable.
 
 ### Examples
@@ -359,7 +359,7 @@ inspectah build snapshot.tar.gz --tag my-bootc-image:v1 -- --no-cache --platform
 Print version, commit SHA, and build date.
 
 ```
-inspectah version [OPTIONS]
+Usage: inspectah version [OPTIONS]
 ```
 
 No options beyond `-y, --yes` and `--help`.
