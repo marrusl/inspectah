@@ -20,12 +20,32 @@ extra flags required.
 
 | Ecosystem | Detection method | What inspectah looks for |
 |-----------|-----------------|--------------------------|
-| pip | Virtual environments | `pyvenv.cfg` files under `/opt`, `/srv`, `/usr/local` |
-| pip | System packages | `pip list --format=json`, filtered against RPM-owned packages |
-| npm | Lockfile projects | `package-lock.json` files under scan roots |
+| pip | Virtual environments | `pyvenv.cfg` files under the scan roots |
+| pip | System packages | `dist-info` directories under `/usr/lib/python3`, `/usr/lib64/python3`, and `/usr/local/lib/python3`, filtered against RPM-owned packages |
+| npm | Lockfile projects | `package-lock.json` files under the scan roots |
 | npm | Manifest-only projects | `package.json` when no lockfile is present |
-| gem | Lockfile projects | `Gemfile.lock` files under scan roots |
+| npm | Global packages | `npm list -g`, merged with a walk of each global prefix, filtered against RPM-owned packages |
+| gem | Lockfile projects | `Gemfile.lock` files under the scan roots |
 | gem | System gems | `gem list --local`, filtered against RPM-owned gems |
+
+### Scan roots
+
+The scan roots are `/opt`, `/srv`, `/usr/local`, and `/var/www`. Two
+flags add to them; neither removes a default root:
+
+- `--scan-path PATH` adds one absolute path. Repeat the flag for more
+  than one path. A relative path, or a path that does not exist, is
+  skipped with a warning.
+- `--scan-home all` adds the home directories of every user with UID
+  1000 or higher. `--scan-home alice,bob` adds the home directories of
+  the named users instead.
+
+For example, a Python virtual environment under `/apps/reporting` is
+outside the default roots. This command adds that directory to the scan:
+
+```bash
+sudo inspectah scan --scan-path /apps/reporting
+```
 
 ### Confidence levels
 
@@ -34,37 +54,82 @@ renders in the Containerfile:
 
 | Level | Meaning | Containerfile rendering |
 |-------|---------|------------------------|
-| **High** | Lockfile or `requirements.txt` present; full dependency list | Active `RUN` directives |
-| **Medium** | Packages detected via `dist-info` or runtime command; list may be incomplete | Commented-out directives (`# RUN ...`) |
+| **High** | Lockfile or `requirements.txt` present, or `npm list -g` reported the packages; full dependency list | Active `RUN` directives |
+| **Medium** | Packages detected via `dist-info`, a directory walk, or a runtime command; list may be incomplete | Commented-out directives (`# RUN ...`) |
 | **Low** | Manifest-only (e.g., `package.json` without lockfile); no pinned versions | Advisory comment only |
 
 High-confidence items run out of the box. Medium-confidence items need
 you to uncomment them after verifying the package list. Low-confidence
-items are informational only -- you write the install commands yourself.
+items are informational only: you write the install commands yourself.
 
 ### Containerfile output
 
-For a high-confidence pip venv at `/opt/myapp/venv`:
+The Language Packages section of a scan of the sample host (two pip
+virtual environments, one npm project, and the npm global packages),
+captured below. The `venv` name in each temporary path is the final
+component of the environment path, and the numbered directory under
+`language-packages/` is a hash of the environment. Paths that come from
+the host are single-quoted.
 
 ```dockerfile
-# --- pip packages: /opt/myapp/venv (from requirements.txt) ---
-COPY language-packages/pip/opt-myapp-venv/requirements.txt /tmp/myapp-venv-requirements.txt
-RUN python3 -m venv /opt/myapp/venv \
-    && /opt/myapp/venv/bin/pip install -r /tmp/myapp-venv-requirements.txt \
-    && rm /tmp/myapp-venv-requirements.txt
+# WARNING: This environment contains packages with C extensions that may need
+# native compilation toolchains (gcc, python3-devel).
+# pip packages: /opt/myapp/venv (from requirements.txt, RPM-filtered)
+COPY language-packages/pip/77fce1b75e7a/requirements.txt '/tmp/venv-requirements.txt'
+RUN python3 -m venv '/opt/myapp/venv' \
+    && '/opt/myapp/venv'/bin/pip install -r '/tmp/venv-requirements.txt' \
+    && rm '/tmp/venv-requirements.txt'
+
+# pip packages: /opt/legacy-app/venv (from requirements.txt, RPM-filtered)
+COPY language-packages/pip/3ee13faaf2c5/requirements.txt '/tmp/venv-requirements.txt'
+RUN python3 -m venv --system-site-packages '/opt/legacy-app/venv' \
+    && '/opt/legacy-app/venv'/bin/pip install -r '/tmp/venv-requirements.txt' \
+    && rm '/tmp/venv-requirements.txt'
+
+# npm packages: /opt/webapp (from package-lock.json)
+COPY language-packages/npm/23f9725da273/package.json '/opt/webapp'/package.json
+COPY language-packages/npm/23f9725da273/package-lock.json '/opt/webapp'/package-lock.json
+RUN cd '/opt/webapp' && npm ci --production
+
+# npm global packages: /usr/local/lib/node_modules (detected via npm list -g)
+RUN npm install -g @angular/cli @types/node pm2 typescript
 ```
 
-For a medium-confidence pip venv (no `requirements.txt`):
+*Captured output. Command: `sudo inspectah scan`. inspectah commit
+`f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard profile.
+Captured 2026-11-04. Lines 91 to 111 of the Containerfile.*
+
+The first pip environment is a plain virtual environment. The second was
+created with `--system-site-packages`, so its `venv` command carries that
+flag. The `# WARNING` line above the first environment appears when the
+environment contains packages with C extensions.
+
+For a medium-confidence pip virtual environment (detected from
+`dist-info`, with no `requirements.txt`), the directives are commented
+out:
 
 ```dockerfile
-# pip packages: /opt/myapp/venv (detected via dist-info — transitive deps may differ)
+# pip packages: /apps/reporting/venv (detected via dist-info — transitive deps may differ)
 # Uncomment after verifying package list is complete:
-# RUN python3 -m venv /opt/myapp/venv \
-#     && /opt/myapp/venv/bin/pip install flask==2.3.3 requests==2.31.0
+# RUN python3 -m venv '/apps/reporting/venv' \
+#     && '/apps/reporting/venv'/bin/pip install humanize==4.13.0 pip==21.3.1 setuptools==53.0.0 tabulate==0.9.0
 ```
+
+*Captured output. Command: `sudo inspectah scan --scan-path
+/apps/reporting`. inspectah commit `f486698e`. Host: RHEL 9.8 aarch64
+VM, drift tool standard profile. Captured 2026-11-04. Lines 105 to 108 of
+the Containerfile.*
+
+Check the package list before you uncomment it. In this sample the list
+includes the virtual environment's own tooling (`pip` and `setuptools`)
+pinned at the versions that environment carries, which you may not want
+in the image.
 
 npm and gem environments follow the same pattern with their respective
-install commands (`npm ci`, `bundle install`).
+install commands (`npm ci`, `bundle install`). For npm global packages,
+a high-confidence prefix renders an active `RUN npm install -g ...`
+line, as in the capture above. A prefix found only by the directory walk
+is medium confidence and renders the same line commented out.
 
 ### Runtime prerequisites
 
@@ -76,11 +141,31 @@ Containerfile before the language package section.
 ### Reviewing in refine
 
 The refine UI shows a **Language Packages** section with each detected
-environment. You can:
+environment. Each row shows the ecosystem, the path, the package count,
+the confidence level, and the manifest the packages came from. You can
+toggle individual environments between included and excluded.
 
-- Toggle individual environments between included and excluded
-- View the detected packages and their versions
-- See the confidence level and detection method
+Two badges can appear on a row:
+
+- **C extensions**: some package in the environment ships native code,
+  so the image build may need a compiler toolchain.
+- **system site-packages**: a pip virtual environment that inherits the
+  system site-packages directory.
+
+Rows for npm global packages expand to list each package and its
+detected version. Expand a row with its arrow button, or focus the row
+and press `Enter`. Inside an expanded row, `ArrowUp` and `ArrowDown`
+move between packages and `Escape` collapses the row. A search that
+matches a package name expands the environment that holds it and moves
+focus to the first match.
+
+Each package in an expanded row has a pin checkbox. A pinned package
+renders as `name@version` in the `npm install -g` line; an unpinned one
+renders as the bare name, so the build takes whatever version npm
+resolves. Each expanded row also has a bulk button, labeled **Pin all**
+or **Unpin all**, which applies to every package in that environment,
+including an environment with a single package. With a package row
+focused, `Enter` or `Space` toggles its pin.
 
 Manifest files (`requirements.txt`, `package-lock.json`, `Gemfile.lock`)
 are bundled in the tarball under `language-packages/` and subject to
@@ -97,12 +182,25 @@ sudo inspectah scan --include-unmanaged
 
 ### What gets scanned
 
-inspectah catalogs files under `/opt`, `/srv`, and `/usr/local` that are
-not owned by an RPM package and not already claimed by a Tier 1 language
-package environment.
+`--include-unmanaged` catalogs and bundles unmanaged files from `/opt`,
+`/srv`, and `/usr/local`: files that are not owned by an RPM package and
+not already claimed by a Tier 1 language package environment.
 
 Before bundling, inspectah shows the total size and prompts for
-confirmation. Suppress the prompt with `-y`/`--yes` for CI use:
+confirmation:
+
+```text
+Found 12 unmanaged files in /opt, /usr/local (12.6 MB total)
+Include in tarball? [Y/n] y
+```
+
+*Captured output. Command: `sudo inspectah scan --include-unmanaged`,
+run in a terminal with the prompt answered `y`. inspectah commit
+`f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard profile.
+Captured 2026-11-04.*
+
+The default answer is yes. Suppress the prompt with `-y`/`--yes` for CI
+use:
 
 ```bash
 sudo inspectah -y scan --include-unmanaged
@@ -135,20 +233,74 @@ whether to include it:
 
 ### Containerfile output
 
-Regular files render as COPY directives:
+Regular files under `/opt` and `/usr/local` render as `COPY`
+directives. When a directory holds more than one regular file, the
+renderer emits one `COPY` for the whole directory; when it holds exactly
+one, the `COPY` names that file. Symlinks render as `RUN ln -sf`
+directives instead of `COPY`, so the image keeps the original link
+layout:
 
 ```dockerfile
 # === Unmanaged files (no package manager provenance) ===
-# /opt/myapp/
-COPY unmanaged/opt/myapp/config.yml /opt/myapp/config.yml
-COPY unmanaged/opt/myapp/app.jar /opt/myapp/app.jar
+# These files were copied directly from the source host. They have
+# no upstream update path and must be manually maintained.
+COPY unmanaged/opt/legacy-app/requirements.txt /opt/legacy-app/requirements.txt
+COPY unmanaged/opt/myapp/ /opt/myapp/
+RUN ln -sf '/usr/lib64/myapp' '/opt/myapp/lib'
+COPY unmanaged/usr/local/bin/ /usr/local/bin/
+RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-runtime' '/usr/local/bin/pm2-runtime'
+RUN ln -sf '/usr/local/lib/node_modules/typescript/bin/tsc' '/usr/local/bin/tsc'
+RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2' '/usr/local/bin/pm2'
+RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-dev' '/usr/local/bin/pm2-dev'
+RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-docker' '/usr/local/bin/pm2-docker'
+RUN ln -sf '/usr/local/lib/node_modules/@angular/cli/bin/ng.js' '/usr/local/bin/ng'
 ```
 
-Symlinks render as `RUN ln -sf` directives instead of COPY:
+*Captured output. Command: `sudo inspectah scan --include-unmanaged`.
+inspectah commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool
+standard profile. Captured 2026-11-04. Lines 114 to 126 of the
+Containerfile.*
+
+Findings under `/srv` get no `COPY`. On bootc images `/srv` is a symlink
+to `/var/srv`, so that content is machine-local data that belongs to
+your `/var` strategy, not image content. The Containerfile carries a
+comment block in place of the `COPY`, naming each path:
 
 ```dockerfile
-RUN ln -sf '/opt/myapp/current' '/opt/myapp/latest'
+#
+# Not copied: /srv is a symlink to var/srv on bootc images, so content
+# there is machine-local data that belongs to the /var lifecycle, not
+# image content. A COPY would land in /var/srv once, on first boot, and
+# no later image update would change it. Carry it with your /var
+# strategy: restore it into /var/srv after deployment, or give it its
+# own mount. The files are in this export under unmanaged/srv/.
+#   /srv/www/index.html
 ```
+
+*Captured output. Command: `sudo inspectah -y scan --include-unmanaged`,
+with one file, `/srv/www/index.html`, added to the sample host. inspectah
+commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard
+profile. Captured 2026-11-04. Lines 127 to 134 of the Containerfile. The
+text `symlink to var/srv` is printed without a leading slash.*
+
+The audit report carries the same note under **Unmanaged Files under
+/srv**:
+
+```markdown
+### Unmanaged Files under /srv
+
+1 included file(s) under `/srv` have no `COPY` line in the Containerfile. On bootc images `/srv` is a symlink to `var/srv`, so this content is machine-local data that belongs to the `/var` lifecycle, not image content: a `COPY` would land in `/var/srv` once, on first boot, and no later image update would change it. Carry it with your `/var` strategy, restoring it into `/var/srv` after deployment or giving it its own mount. The files are in the export under `unmanaged/srv/`.
+
+- `/srv/www/index.html`
+```
+
+*Captured output. Same scan as the block above. Lines 536 to 540 of
+`audit-report.md`.*
+
+The files themselves are still bundled in the tarball under
+`unmanaged/srv/`. Restore them into `/var/srv` after deployment, or give
+that directory its own mount. `/opt` and `/usr/local` findings are not
+affected.
 
 ### Reviewing in refine
 
