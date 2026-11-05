@@ -31,13 +31,40 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Node 20 went end-of-life on 2026-04-30 and CI was still pinned to
+          # it. It also disagreed with the version this project is developed
+          # on, which is how a real cross-version difference stayed hidden:
+          # src/api/__tests__/client.test.ts asserts toBeInstanceOf(Blob) and
+          # fails on 20 because Response.blob() there returns a Blob from a
+          # different realm than the global the test checks. Same tree passes
+          # on 26. The assertion is detecting something real, so the fix is
+          # the runtime, not the test.
+          #
+          # 26 is the Active LTS line as of 2026-10-28 (supported to
+          # 2029-04-30) and is what Mark develops on. The major line rather
+          # than an exact patch, so security patches flow without anyone
+          # remembering to bump a pin.
+          node-version: '26'
           cache: 'npm'
           cache-dependency-path: crates/web/ui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Every independent gate reports, rather than the first failure hiding
+      # the rest. On the first run after this workflow was revived, one
+      # JavaScript assertion failed and took the entire Rust suite, the
+      # schema-25 fixture and the whole Playwright job down with it as
+      # "skipped" — the cheapest and most environment-sensitive gate was
+      # sequenced in front of the most valuable one. Same reasoning as
+      # fail-fast: false on the RPM matrix.
+      #
+      # `!cancelled()` rather than `always()`: a cancelled run should stop,
+      # not grind through every remaining step.
+      #
+      # Steps that genuinely depend on an earlier one gate on its `outcome`
+      # instead, so a failed npm install or a failed binary build reports
+      # once rather than cascading into three misleading failures.
       - name: Check formatting
         run: cargo fmt --all -- --check
       # Must match .githooks/pre-commit and the CLAUDE.md policy exactly.
@@ -46,21 +73,34 @@ jobs:
       # tree has carried lived. This step was the fourth copy of the old
       # non-enforcing form and went unnoticed because the workflow never ran.
       - name: Clippy
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D clippy::all
       - name: Install UI dependencies
+        id: npm_deps
+        if: ${{ !cancelled() }}
         working-directory: crates/web/ui
         run: npm ci
       - name: Vitest unit tests
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
         working-directory: crates/web/ui
         run: npm run test
+      # The most valuable gate in the workflow. It must not be reachable
+      # only when the JavaScript suite agrees.
       - name: Test
+        if: ${{ !cancelled() }}
         run: cargo test --workspace
       - name: Install Playwright browsers
+        id: pw_install
+        if: ${{ !cancelled() && steps.npm_deps.outcome == 'success' }}
         working-directory: crates/web/ui
         run: npx playwright install --with-deps chromium
       - name: Build binary for e2e
+        id: e2e_build
+        if: ${{ !cancelled() && steps.pw_install.outcome == 'success' }}
         run: cargo build -p inspectah-cli
       - name: Start refine server
+        id: e2e_server
+        if: ${{ !cancelled() && steps.e2e_build.outcome == 'success' }}
         run: |
           if [ -f testdata/e2e-fixture.tar.gz ]; then
             ./target/debug/inspectah refine --open=false testdata/e2e-fixture.tar.gz &
@@ -79,15 +119,20 @@ jobs:
             echo "SKIP_E2E=true" >> "$GITHUB_ENV"
           fi
       - name: Playwright e2e tests
-        if: env.SKIP_E2E != 'true'
+        id: playwright
+        if: ${{ !cancelled() && steps.e2e_server.outcome == 'success' && env.SKIP_E2E != 'true' }}
         working-directory: crates/web/ui
         run: npm run test:e2e
       # Without this the HTML reporter writes a report nobody can read. The
       # github reporter annotates failures but shows no flake counts, so a
       # test that passed only on its retry is indistinguishable from one that
       # passed outright. Failure-only, to avoid an artifact on every green run.
+      # Conditioned on Playwright having actually run and failed. It was
+      # previously `failure()`, which fired whenever anything earlier in the
+      # job had failed: on the first revived run it uploaded nothing, warned,
+      # and reported success — a green step that checked nothing.
       - name: Upload Playwright report
-        if: failure()
+        if: ${{ !cancelled() && steps.playwright.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
