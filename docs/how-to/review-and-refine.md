@@ -12,7 +12,11 @@ image build.
 
 ## Prerequisites
 
-- A scan output tarball (`.tar.gz`) from a previous `inspectah scan` run
+- A scan output tarball (`.tar.gz`) from a previous `inspectah scan` run,
+  made by the same inspectah release you run `refine` with. `refine` loads
+  a snapshot only when its schema version matches the binary's exactly. A
+  tarball from a different release stops with an `unsupported schema version`
+  error; re-scan with the current release.
 
 ## Launch the refine UI
 
@@ -33,33 +37,56 @@ To suppress the browser launch:
 inspectah refine --open false ./scan-output.tar.gz
 ```
 
-## Navigate the dashboard
+## Navigate the refine UI
 
-The landing page shows system metadata (hostname, OS version, system type)
-and a summary of findings across all sections. The dashboard organizes
-findings into these sections:
+The UI opens on Packages. The sidebar header shows the host name, OS name,
+and OS version, and below it the sidebar lists eight groups in a fixed
+order. A group with one section is a plain link. A group with several is
+expandable, and its sections are listed beneath it.
 
-| Section | What it contains |
-|---------|-----------------|
-| Packages | RPM packages found on the host |
-| Config Files | Modified configuration files in `/etc` |
-| Repositories | Enabled RPM repositories |
-| Users & Groups | Local user and group accounts |
-| Services | systemd service units and their state |
-| Quadlets | Podman quadlet container definitions |
-| Flatpaks | Flatpak applications |
-| Language Packages | pip, npm, and gem environments |
-| Unmanaged Files | Files from `/opt`, `/srv`, `/usr/local` not owned by a package manager |
-| Sysctl | Kernel tunable overrides |
-| Tuned | Performance tuning profiles |
+| Group | Sections | What it contains |
+|-------|----------|------------------|
+| Packages | Packages | RPM packages, the Repositories bar, package groups, and a Version Changes panel |
+| System Configuration | Configuration Files, Kernel & Boot, Security & Access Control | Modified files under `/etc`, kernel and boot settings including sysctl overrides and the tuned profile, and SELinux |
+| Services & Scheduling | Services, Scheduled Tasks, Containers | systemd units and drop-ins, cron, at, and timer jobs, Quadlet units, and Flatpaks |
+| Users & Identity | Users & Groups | Local non-system user accounts |
+| Network | Network | Reference only |
+| Storage | Storage | Reference only, including the `/var` directory summary |
+| Software & Files | Non-RPM Software, Language Packages, Unmanaged Files | Software outside the package manager, pip, npm, and gem environments, and files from `/opt`, `/srv`, and `/usr/local` |
+| Secrets & Subscription | Secrets, Subscription | Reference only |
 
-Not every section appears in every scan. Sections only show up when
-the scan found relevant data on the host. Language Packages appear
-when pip/npm/gem environments are detected. Unmanaged Files appear
-only when `--include-unmanaged` was passed during the scan.
+Every section is always in the sidebar. A section with nothing to show says
+so in the content area, for example "No service state changes detected."
+Software & Files also tells you when the scan did not collect unmanaged
+files and to re-run with `--include-unmanaged` to review them.
 
-The stats bar at the top summarizes each section's item counts
-(total, included, excluded) and shows how many items still need review.
+Each section link carries a count badge. The badge is blue on sections where
+you make decisions and grey on reference sections, where you can read the
+findings but not change them. Reference sections are included in the export
+as they are.
+
+The stats bar at the top shows a Packages counter and a Configs counter,
+each as `N included / M excluded`. When a counter has advisory findings it
+adds `/ K advisory`; the advisory count is left out at zero. The stats bar
+also holds Undo, Redo, Reset to defaults, and Export.
+
+### Find items and move around
+
+| Key | Action |
+|-----|--------|
+| `1` to `8` | Jump to the sidebar group in that position. In a group with several sections it opens the first one you decide on. |
+| `/` | Filter the items in the current section |
+| `Ctrl+K` | Search across sections |
+| `Ctrl+Z`, `Ctrl+Shift+Z` | Undo, redo |
+| `Ctrl+E` | Show or hide the Containerfile preview |
+| `Ctrl+Shift+E` | Open the Export dialog |
+| `?` | List the keyboard shortcuts |
+
+`Cmd` works in place of `Ctrl`. The single-key shortcuts (`1` to `8`, `/`,
+`?`) do nothing while focus is in a text field, and no shortcut acts while a
+dialog is open. A number key leaves focus on the sidebar entry it jumped to,
+so you can keep pressing keys; clicking a section moves focus into its
+content instead.
 
 ## Understand triage indicators
 
@@ -81,75 +108,227 @@ version downgrades, and items at security-sensitive paths.
 
 Each triage tag also carries a reason explaining why it was classified that
 way (for example, "Matches base image package" or "Locally installed RPM").
+An item that was excluded by default and is not locked shows a short label
+for the reason: "Installer default", "Unclear provenance", "No repo source",
+or "Dependency".
+
+### Findings you can and cannot decide
+
+The triage classification says how much attention an item needs. A second
+property says whether you can decide it at all. See
+[Triage Classification](../reference/triage-classification.md) for the full
+model.
+
+| Row shows | Meaning |
+|-----------|---------|
+| A checkbox | Actionable. You decide whether it goes into the image. |
+| "Advisory: Modernization", "Advisory: Cross-tree symlink", or "Advisory: Unbacked /var directory", with a rationale beneath the row | Advisory. inspectah is reporting something, not asking for a decision. There is no checkbox. The finding is listed in the audit report, and its files are not copied into the image. |
+| "Inventory", or a badge naming the row that owns the decision | Inventory. The row is shown for reference. There is no checkbox. |
+
+A configuration file that a service drop-in or a sysctl override already
+carries is Inventory, so the decision is made once. Its badge reads
+"Controlled in Service Drop-ins" or "Merged into sysctl settings", with the
+owning row's state beside it and a "Go to owner" link. A unit at its preset
+state that has a drop-in is listed under "Other drop-in overrides" in
+Services.
+
+If a request to change an Advisory or Inventory row does reach the server,
+the server refuses it with HTTP 422 and a message. The refine UI does not
+offer the control in the first place.
 
 ## Include and exclude items
 
-Toggle any item between included and excluded to control whether it appears
-in the generated Containerfile. The UI reflects these changes immediately
-in the Containerfile preview pane.
+Toggle any actionable item between included and excluded to control whether
+it appears in the generated Containerfile. The UI reflects these changes
+immediately in the Containerfile preview pane.
 
 Including an item adds it to the Containerfile. Excluding it removes it.
 You can override the automatic triage classification in either direction --
 include a Baseline item you want to pin, or exclude a Site item you have
 decided not to carry forward.
 
-When you toggle a repository, all packages sourced from that repository
-are affected as a batch.
+### Repositories
+
+The Repositories bar above the package list has one line per repository. Not
+every repository has a switch, and a switch does not always reach every
+package the repository serves. A repository gets a switch only when all of
+these hold:
+
+- It is not a distro repository.
+- Its repo definition was found on the host and is enabled. The definition
+  is either complete, or incomplete, in which case the line also reads "repo
+  definition incomplete".
+- At least one of its packages is actionable and not locked.
+
+Every other repository shows state text in place of a switch:
+
+| State text | Repository |
+|------------|------------|
+| "always included" | A distro repository |
+| "disabled on host" | The repo definition is present but disabled |
+| "repo id not found in any .repo file" | Packages name the repository, but no repo definition on the host does, usually because it was removed or renamed after install |
+| "installed outside any repo" | A pseudo repository or an empty repo id. The `@commandline` repository, for packages installed from a local file, is titled "Local / Manual installs". |
+| "nothing to decide: all members are locked" | The repository is eligible, but every one of its packages is locked or not actionable |
+
+A switch acts only on the repository's actionable, unlocked packages.
+Locked packages are never touched. The switch label counts those packages:
+"N of M packages included", or "M packages excluded" when none is included.
+When the Packages view hides some of them behind its display filters, the
+label ends with ", K not listed". The switch is on only when every one of
+those packages is included, so a repository with a partial selection shows
+as off. Turning it off excludes all of them, and turning it on includes all
+of them.
+
+The server refuses a repository or package group operation that would
+change nothing, with a message instead of a recorded change, for example
+"nothing to change: all 8 effective members of 'epel' are already excluded".
+
+After you exclude a repository, its packages are listed under "From excluded
+repos" at the end of the Packages view. Each has its own checkbox, so you can
+bring one package back without re-including the repository; the repository's
+label then shows the partial count. A package with no serving repository has
+an Upload button in place of the checkbox, here as in the main list. Use it
+to supply the RPM, as described in [Handle Repo-less RPMs](repoless-rpms.md).
+
+### Package groups
+
+A package group installed with `dnf group install` appears as one row with
+its package count. Expand it to see its members, or choose "ungroup" to
+dissolve it into individual package rows. The row has no group-level switch;
+you change a group through its members. A group whose members are each
+locked or from the base image reads "nothing to decide: all members are
+locked or from base", and a group action on it is refused.
 
 ### Locked items
 
 Some items display as locked -- their include/exclude state is visible but
-the toggle is disabled, marked with a lock icon and a reason badge.
-Locked items carry a reason explaining why they cannot be changed (e.g.,
-"Baseline package" or "Required dependency"). These represent
-non-negotiable decisions where toggling would produce an invalid
-Containerfile.
+the checkbox is disabled, and a grey badge gives the reason, or reads
+"LOCKED" when there is none. Locked items are set before refine opens the
+snapshot. They represent decisions where toggling would produce an invalid
+Containerfile, for example host state such as `/etc/fstab` entries that
+cannot move into an image.
+
+### Change a whole section at once
+
+Sections where you decide have a menu beside the section name with "Include
+all" and "Exclude all". The menu acts on every actionable, unlocked item in
+that section, and one undo reverses the whole change. Excluding every package
+asks you to confirm first. There is no menu on Users & Identity, and none on
+the reference sections.
+
+With focus on a section link, `Ctrl+Shift+A` includes all and
+`Ctrl+Shift+X` excludes all in that section. The shortcuts act from a
+section link, whether it sits in an expanded group or stands alone. They do
+nothing from a group heading.
+
+To discard every include and exclude change, use Reset to defaults in the
+stats bar. It is available once you have made a change, and asks you to
+confirm.
 
 ## Handle version changes
 
 When the scan detects that a package version differs from the base image,
-the version change is shown with its direction (upgrade or downgrade).
-Upgrades are normal maintenance. Downgrades are flagged for investigation
-since they may indicate a pinned version that needs explicit handling in
-the Containerfile.
+the change is listed in the Version Changes panel at the bottom of the
+Packages view. The panel is collapsed until you expand it. It lists the
+package with its host version and target version, in two groups:
+downgrades first, then upgrades. Upgrades are normal maintenance.
+Downgrades are flagged for investigation since they may indicate a pinned
+version that needs explicit handling in the Containerfile.
+
+## Review language packages
+
+Each pip, npm, or gem environment under Language Packages has an include
+checkbox, a confidence label, and how it was detected. Environments that
+contain C extensions or use the system site-packages directory carry a "C
+extensions" or "system site-packages" badge.
+
+npm global environments expand to list their packages. Each package has a
+pin checkbox that fixes the Containerfile line at the detected version, and
+each of these environments has a "Pin all" button, even when it holds a
+single package. With a package row focused, `Enter` or `Space` toggles its
+pin. A section search that matches a package expands its environment and
+moves focus to the first match.
+
+## Review /var directories
+
+The Storage view lists the `/var` directories the scan found as one
+collapsed summary row, titled with the directory count. The row's state text
+counts the directories this export does not back with a creator: "N unbacked,
+M unconfirmed", or "all backed by tmpfiles.d, unit directives, or package
+ownership" when there are none. Expand the row to see one line per
+directory. Each line gives, in order:
+
+- The path
+- The mode and owner, or "ownership not recorded"
+- What created it on the host: "tmpfiles.d (conf)", "StateDirectory= (unit)",
+  "CacheDirectory= (unit)", "LogsDirectory= (unit)", "package-owned
+  (package)", or "nothing declares it"
+- What the export does about it: "backed: creator carried by this export",
+  "unbacked: provisioned by this export", or "backing unconfirmed"
+
+Directories that need attention are listed first. Each unbacked or
+unconfirmed directory also gets its own "Advisory: Unbacked /var directory"
+row, and a carried directory whose mode or owner differs from the default
+gets an Inventory row.
 
 ## Manage users and groups
 
 User accounts discovered on the host have additional options beyond
 include/exclude:
 
-- **Strategy** -- Choose how to handle each user in the Containerfile
-  (create via `useradd`, skip, or manage externally)
-- **Password handling** -- Select the password approach for included
-  users (lock, set a hash, or omit)
+- **Containerfile strategy** -- Choose how each user is handled: Skip, or
+  create the user with `useradd`.
+- **Password** -- Choose "No password", "Keep existing password" (offered
+  only when the scan preserved the user's hash), or "Set new password",
+  which you type and confirm in the browser.
 
-The user preview shows how each user will appear in the generated
-Containerfile based on your selections.
+The Users & Groups view produces Kickstart and Blueprint TOML artifacts for
+the output tarball, and the artifact preview shows how each user will appear
+based on your selections.
 
 ## Review sensitive data
 
-When the scan encounters security-sensitive content (paths that may contain
-credentials, private keys, or other secrets), the session is flagged as
-sensitive. Items at sensitive paths receive an Investigate classification
-with a reason indicating the sensitivity.
+Redaction runs during the scan, before the tarball is written. It covers
+file content in configuration, repo, drop-in, and unit files, the kernel
+command line, container environment variables, Quadlet unit text, compose
+files, cron, at, and timer commands and timer unit content, language-package
+manifests, and sudoers and shadow entries. The full list is in the
+[Redaction engine](../reference/inspector-coverage.md#redaction-engine)
+reference.
 
-Redaction state tracks what level of scrubbing was applied during the scan:
+The redaction state records how complete the scrubbing was:
 
-- **Fully redacted** -- All sensitive values replaced with placeholders
-- **Partially redacted** -- Some sensitive values retained
-- **Sensitive retained** -- Sensitive values present in the data
+- **Fully redacted** -- Every finding was resolved by redaction, or there
+  were none.
+- **Partially redacted** -- At least one finding is unresolved. A line that
+  a scrubber matched by key but could not parse is reported this way, with
+  its line number, instead of being passed as clean.
+- **Sensitive retained** -- You kept sensitive data on purpose with
+  `--preserve` or `--no-redaction`.
 
-Review these items carefully before including them. The triage reason
-explains why each path was flagged so you can decide whether to include
-it, exclude it, or handle it through a separate secrets management approach.
+Review unresolved lines by hand before you share the export.
+
+Items at sensitive paths receive an Investigate classification with a reason
+indicating the sensitivity. The triage reason explains why each path was
+flagged so you can decide whether to include it, exclude it, or handle it
+through a separate secrets management approach.
+
+When the snapshot retains sensitive data, or you set a new password for a
+user, the Export dialog says "Sensitive data detected" and asks you to
+acknowledge it before it lets you export.
 
 ## Export refined results
 
-When you are satisfied with your selections, export the results. The
-export produces a tarball containing:
+When you are satisfied with your selections, choose Export, or press
+`Ctrl+Shift+E`. The dialog reports how many packages and configuration files
+are excluded. It reports advisory findings apart from exclusions: they are
+listed in the audit report, and their files are not copied into the image.
+The browser downloads `inspectah-<hostname>-refined.tar.gz`, a tarball
+containing:
 
 - The refined Containerfile reflecting all your include/exclude decisions
 - Updated scan data with your triage overrides applied
+- The audit report
 
 One difference exists today between the preview pane and the Export
 dialog: package groups render as their individual members in the exported
@@ -159,9 +338,10 @@ wording differs.
 
 ## Work with aggregate data
 
-When refining a aggregate scan (multiple hosts merged into one tarball), the
-dashboard switches to aggregate mode. Instead of single-host triage buckets,
-items are grouped by prevalence zones:
+When refining an aggregate scan (multiple hosts merged into one tarball), the
+dashboard switches to aggregate mode. An aggregate tarball loads under the
+same exact-match rule as a single-host one. Instead of single-host triage
+buckets, items are grouped by prevalence zones:
 
 **Consensus** -- The item appears on all or nearly all hosts. Treat it
 like a Baseline item in single-host mode.
@@ -191,9 +371,10 @@ from different repositories on different hosts.
 
 ### Undo and redo
 
-Every change you make is tracked. Use undo and redo to step back and
-forward through your edit history. The operation history shows a log
-of all changes made in the current session.
+Every change you make is tracked. Use the Undo and Redo buttons in the stats
+bar, or `Ctrl+Z` and `Ctrl+Shift+Z`, to step back and forward through your
+edit history. A section-wide "Include all" or "Exclude all" counts as one
+step.
 
 ### Resume a previous session
 
@@ -202,10 +383,13 @@ named `.inspectah-session-<basename>.json` (for example,
 `.inspectah-session-hostname-20260527-143000.json` for a tarball named
 `hostname-20260527-143000.tar.gz`).
 
-When you run `inspectah refine` on the same tarball again, it resumes
-where you left off with all your previous include/exclude decisions intact.
+When you run `inspectah refine` on the same tarball again and a saved
+session exists, it shows the number of saved operations and asks whether to
+resume, start fresh, or quit. Resuming restores all your previous
+include/exclude decisions.
 
-To start fresh and discard saved progress:
+To start fresh and discard saved progress, pass `--fresh`. If a saved
+session exists, `refine` asks you to confirm before it discards it:
 
 ```bash
 inspectah refine --fresh scan-output.tar.gz
