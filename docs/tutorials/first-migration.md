@@ -459,7 +459,7 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
   eight RPM-modified files described in Step 5.
 - Repositories: the scan tarball's Containerfile installs `epel-release`
   as a repo-enabling package. refine excludes it by default, so the export
-  does not, and the EPEL repo files still ship.
+  does not install it, and the EPEL repo files still ship.
 - Services: the export also enables `sshd.service`. refine adds an enable
   for a unit file that fully shadows the vendor unit; you did not decide
   it.
