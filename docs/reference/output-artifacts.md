@@ -93,11 +93,9 @@ d /var/lib/containers/storage 0700 root root -
 d /var/lib/containers/cache 0700 root root -
 ```
 
-*Captured output. The first four lines of
+*Sample output from a RHEL 9.8 test host: the first four lines of
 `config/usr/lib/tmpfiles.d/inspectah-var.conf` in the extracted refine
-export (`tar xzf export.tar.gz`). inspectah
-commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard
-profile. Captured 2026-11-04.* Later lines in the same file carry
+export (`tar xzf export.tar.gz`).* Later lines in the same file carry
 comments naming the creator on the source host and whether the export
 carries it, and a `FIXME` entry (commented out) where the export cannot
 tell whether the base image creates the directory.
@@ -154,9 +152,10 @@ part of the approved export contract.
 
 ### Tarball structure
 
-The download is named `inspectah-<hostname>-refined.tar.gz`, and the
-archive wraps a single prefix directory with the same name minus the
-extension, for example `inspectah-rhel9-refined/`.
+The Export button saves `inspectah-refine-output.tar.gz`. The archive
+wraps a single prefix directory named `inspectah-<hostname>-refined/`, for
+example `inspectah-rhel9-refined/`. A direct `POST /api/tarball` names the
+file `inspectah-<hostname>-refined.tar.gz` instead.
 
 ### Always-written artifacts
 
@@ -196,9 +195,11 @@ same snapshot. The scan tarball leaves RPM-modified configs out of
 `config/`: the snapshot records them, but they are not copied into the
 image. The refine export includes them by default, because refine treats site-specific
 configs as included until you exclude them. On the sample host the scan
-tarball's Containerfile header reads `47 config file(s) captured` and the
-export's reads `54`. The export's extra files are the eight RPM-modified
-configs, among them `ssh/sshd_config`. Review the Configuration Files
+tarball's Containerfile header reads `47 config file(s) captured`. An
+export with no decisions reads `55`: the scan's 47 plus the eight
+RPM-modified configs, among them `ssh/sshd_config`. Such an export also
+drops `epel-release`, which refine excludes by default, and enables
+`sshd.service`. Review the Configuration Files
 section in refine before you build an image from the export.
 
 ### Excluded from refine export
@@ -298,10 +299,9 @@ rhel9-20261104-223931/unmanaged/usr/local/bin/pm2-runtime
 rhel9-20261104-223931/unmanaged/usr/local/bin/tsc
 ```
 
-*Captured output. Command: `tar tzf rhel9-20261104-223931.tar.gz`, from
-`sudo inspectah -y scan --include-unmanaged`, with one file added under
-`/srv`. inspectah commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift
-tool standard profile. Captured 2026-11-04.*
+*Sample output from a RHEL 9.8 test host. Command: `tar tzf
+rhel9-20261104-223931.tar.gz`, from `sudo inspectah -y scan
+--include-unmanaged`, with one file added under `/srv`.*
 
 ### Refine export tarball
 
@@ -359,10 +359,9 @@ inspectah-rhel9-refined/sysctl/etc/sysctl.d/
 inspectah-rhel9-refined/sysctl/etc/sysctl.d/99-inspectah-migrated.conf
 ```
 
-*Captured output. Command: `tar tzf export.tar.gz`, where `export.tar.gz`
-is the refine download for the scan `rhel9-20261104-222606.tar.gz`.
-inspectah commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool
-standard profile. Captured 2026-11-04.*
+*Sample output from a RHEL 9.8 test host. Command: `tar tzf
+export.tar.gz`, where `export.tar.gz` is the refine download for the scan
+`rhel9-20261104-222606.tar.gz`.*
 
 ### Aggregate tarball
 
@@ -414,11 +413,9 @@ aggregate-scans-20261104-234031/sysctl/etc/sysctl.d/
 aggregate-scans-20261104-234031/sysctl/etc/sysctl.d/99-inspectah-migrated.conf
 ```
 
-*Captured output. Command: `tar tzf aggregate-scans-20261104-234031.tar.gz`,
-from `inspectah aggregate scans/` over two scans of the sample host.
-inspectah commit `f486698e`. Host: macOS binary on the Mac that
-aggregated two RHEL 9.8 aarch64 VM scans, drift tool standard profile.
-Captured 2026-11-04.*
+*Sample output from a RHEL 9.8 test host. Command: `tar tzf
+aggregate-scans-20261104-234031.tar.gz`, from `inspectah aggregate scans/`
+over two scans of the sample host.*
 
 Apart from the added `schema/snapshot.schema.json`, an aggregate tarball
 has the same structure as a scan tarball.
