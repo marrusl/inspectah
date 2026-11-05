@@ -239,7 +239,7 @@ attention does this need" but "can the user decide it, and if not, why not".
 | Disposition | In the snapshot | In the refine UI | In the export |
 |---|---|---|---|
 | **Actionable** | `"kind": "actionable"` with an `include` flag | The row has an include control. The user decides. | Included findings reach the Containerfile and the config tree. Excluded ones do not. |
-| **Advisory** | `"kind": "advisory"` with an `advisory_type` and a `rationale` | The row shows an "Advisory" badge and the rationale beneath it. No control. The stats bar counts it as "N advisory", omitted at zero. | Never rendered into the Containerfile and its file is not copied into the image. Listed under "Advisories" in the audit report. |
+| **Advisory** | `"kind": "advisory"` with an `advisory_type` and a `rationale` | The row shows an "Advisory" badge and the rationale beneath it. No control. The stats bar counts it, together with Inventory rows, as "N advisory", omitted at zero. | A configuration-file advisory (modernization, cross-tree symlink) is not copied into the image. The unbacked `/var` advisory is the exception: the export provisions those directories through `inspectah-var.conf`, or `RUN mkdir -p` when the mode was not recorded. Listed under "Advisories" in the audit report. |
 | **Inventory** | `"kind": "inventory"` | The row shows an "Inventory" badge, or a badge naming the row that owns the decision. No control. | Shown for reference only. Never produces a Containerfile line. |
 
 The field is named `disposition` on 27 types, and `tuned_disposition` on
@@ -346,8 +346,9 @@ loaded modules, and excluded for `tuned_disposition`.
 Some items carry a `locked: true` flag that prevents toggling in the refine
 UI. Locked items display their include/exclude state but the toggle is
 disabled. A reason string explains why the item is locked. Reasons in use
-include "host state, not image-portable" (every fstab entry), "merge-hostile"
-(`/etc/fstab` and `/etc/crypttab` as config files), and services and drop-ins
+include "host state — not image-portable" (every fstab entry),
+"merge-hostile — fights bootc /etc 3-way merge" (`/etc/fstab` and
+`/etc/crypttab` as config files), and services and drop-ins
 that are incompatible with image mode. Platform-plumbing packages installed by
 Anaconda are locked too.
 
@@ -373,7 +374,8 @@ The Containerfile action depends on the item type:
 | Sysctl override | The included keys are merged into one file: `COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/` |
 | Scheduled task (timer) | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable <name>.timer` |
 
-Advisory and Inventory findings produce no Containerfile line. That includes
+Advisory and Inventory findings produce no Containerfile line, apart from
+the unbacked `/var` directories the export provisions. That includes
 firewall zones, NetworkManager connections, and loaded kernel modules: the
 Containerfile never runs `firewall-offline-cmd`.
 
