@@ -26,13 +26,15 @@
 //!    archive carries.
 //! 2. **Open**, backlogged as
 //!    `inspectah-downloaded-export-drops-every-dnf-group-install`. The
-//!    `POST /api/tarball` handler passes `None` for the `RenderContext`,
-//!    so the *downloaded* Containerfile carries no `dnf group install`
-//!    and installs a renderable group's members individually.
-//!    `RefineSession::export_tarball` passes `self.cached_render_context`
-//!    instead and does render the groups, but it has no production
-//!    caller — only these tests and the library API — so there is no
-//!    shipped route that agrees with the preview.
+//!    `POST /api/tarball` handler builds its `ExportPlan` and then calls
+//!    `ExportPlan::without_render_context()`, so it renders with `None`
+//!    for the `RenderContext`: the *downloaded* Containerfile carries no
+//!    `dnf group install` and installs a renderable group's members
+//!    individually. The preview renders with the context the session
+//!    cached, so it does show the group install. Every other caller of
+//!    `export_plan` keeps the context, which makes the download the one
+//!    path that disagrees with the preview — and it is the only one a
+//!    user reaches.
 //!
 //! The group cases below therefore compare `render_state` against which
 //! packages reach the install list, and say so at the probe. They are

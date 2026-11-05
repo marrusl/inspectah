@@ -319,8 +319,8 @@ fn aggregate_export_selected_not_in_variants() {
 }
 
 #[test]
-fn aggregate_export_via_session_export_tarball() {
-    // Verify the session-level export_tarball method also produces aggregate/variants/
+fn aggregate_export_via_session_export_plan() {
+    // Verify the session-level export path also produces aggregate/variants/
     let snap = aggregate_snapshot_with_variants();
     let session = RefineSession::new(snap);
 
@@ -335,7 +335,7 @@ fn aggregate_export_via_session_export_tarball() {
     let files = tarball_file_set(&tarball_path);
     assert!(
         files.iter().any(|f| f.starts_with("aggregate/variants/")),
-        "session export_tarball must produce aggregate/variants/ for aggregate snapshots"
+        "the session export path must produce aggregate/variants/ for aggregate snapshots"
     );
 }
 

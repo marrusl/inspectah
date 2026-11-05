@@ -4126,12 +4126,13 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// call `render_containerfile` with the same materialized root set, so
 /// the Containerfile matches the preview byte for byte **only when the
 /// caller passes the `RenderContext` the preview was rendered with**.
-/// `RefineSession::export_tarball` passes `cached_render_context` and
-/// does match, but has no production caller left, so no shipped route
-/// takes that path; `POST /api/tarball` passes `None`, and the
-/// Containerfile in that download drops every `dnf group install` and
-/// installs the members individually instead. Backlog:
-/// `inspectah-nothing-tests-the-tarball-route-or-the-byte-identity-claim`.
+/// An `ExportPlan` from [`RefineSession::export_plan`] carries that
+/// context and does match. `POST /api/tarball` drops it by calling
+/// [`ExportPlan::without_render_context`], so the Containerfile in that
+/// download drops every `dnf group install` and installs the members
+/// individually instead — and it is the only path a user reaches.
+/// Backlog:
+/// `inspectah-downloaded-export-drops-every-dnf-group-install`.
 ///
 /// `upload_dir_canon` must be the *canonical* upload directory the session
 /// prepared, not a path that can still resolve somewhere else; `None`
@@ -5664,7 +5665,7 @@ mod tests {
     }
 
     #[test]
-    fn export_tarball_includes_promoted_roots() {
+    fn export_includes_promoted_roots() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
         use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
