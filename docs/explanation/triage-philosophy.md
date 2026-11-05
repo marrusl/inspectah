@@ -36,7 +36,7 @@ what is already handled, then focus on the remainder.
 <div class="diagram-embed" style="margin: 2em 0;">
   <iframe id="diagram-triage-decision-tree"
           src="../diagrams/triage-decision-tree.html"
-          title="Triage Decision Tree — interactive preview"
+          title="Triage Decision Tree: interactive preview"
           width="100%" height="450" frameborder="0"
           loading="lazy" tabindex="0"></iframe>
   <div style="margin-top: 0.5em;">
@@ -163,7 +163,7 @@ hosts missed a rollout.
 ## Design choices: what counts as "the same"
 
 Aggregate analysis has to decide what "the same item" means when hosts are not
-perfectly identical. Two choices in particular shape the results:
+perfectly identical. Two choices in particular decide the results:
 
 ### Version differences are universal, not divergent
 
