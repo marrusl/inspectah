@@ -27,39 +27,18 @@ frontend-only commit gets no `tsc`, no `npm test`, and no `npm run
 test:e2e` from the hook. A passing hook on a frontend change says
 nothing about any of the three.
 
-## 2. `cargo clippy --workspace --all-targets -- -D clippy::all` does not pass, and that's expected
+## 2. `cargo clippy --workspace --all-targets -- -D clippy::all` is required and passes
 
-As of this writing there is a 9-warning baseline, entirely
-`clippy::all`-style lint in test code (`bool_assert_comparison` x5,
-`field_reassign_with_default` x2, `needless_range_loop`, `op_ref`).
-`-D` promotes every one of those nine to a hard error, so the command
-above **exits 101** on a clean tree. A task description that says
-"`--all-targets -- -D clippy::all` reports nothing beyond the N-warning
-baseline" is describing an impossible combination of flag and
-expectation; the `-D` form cannot report a baseline, only fail on one.
-
-Use this instead, and compare the count, not the diff:
+This command is the clippy gate. It exits 0 with zero warnings as of
+2026-11-04, so any warning it reports is a regression to fix, not a
+baseline to compare against.
 
 ```bash
-cargo clippy --workspace --all-targets 2>&1 | grep -cE "^warning: [a-z]"
+cargo clippy --workspace --all-targets -- -D clippy::all
 ```
 
-**Two counting traps sit right next to that number:**
-
-- A bare `grep -c '^warning: '` overcounts. It also matches each
-  per-crate "generated N warnings" summary line, so a 9-warning
-  baseline reads as 13.
-- Counting `-->` lines (one per reported span) overcounts differently.
-  A single warning can carry more than one span —
-  `field_reassign_with_default` carries two — so 9 warnings produce 11
-  `-->` lines. **The span count is not the warning count.** This has
-  already produced a wrong baseline number once in this repo's own
-  planning documents (an 11 was proposed to replace a correct 9).
-
-When the baseline changes, update it in one place
-(`process-docs/plans/*` Global Constraints or wherever the current plan
-states it) and re-derive the new number with the `^warning: [a-z]`
-form, not by eyeballing `-->` counts.
+`--all-targets` is part of the gate: without it clippy checks the lib and
+bin targets only, and test code is where warnings accumulate unseen.
 
 ## 3. The gates are fast. A slow run is a symptom, not a budget
 
