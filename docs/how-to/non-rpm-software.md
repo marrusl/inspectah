@@ -95,9 +95,8 @@ RUN cd '/opt/webapp' && npm ci --production
 RUN npm install -g @angular/cli @types/node pm2 typescript
 ```
 
-*Captured output. Command: `sudo inspectah scan`. inspectah commit
-`f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard profile.
-Captured 2026-11-04. Lines 91 to 111 of the Containerfile.*
+*Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan`.
+Lines 91 to 111 of the Containerfile.*
 
 The first pip environment is a plain virtual environment. The second was
 created with `--system-site-packages`, so its `venv` command carries that
@@ -115,10 +114,8 @@ out:
 #     && '/apps/reporting/venv'/bin/pip install humanize==4.13.0 pip==21.3.1 setuptools==53.0.0 tabulate==0.9.0
 ```
 
-*Captured output. Command: `sudo inspectah scan --scan-path
-/apps/reporting`. inspectah commit `f486698e`. Host: RHEL 9.8 aarch64
-VM, drift tool standard profile. Captured 2026-11-04. Lines 105 to 108 of
-the Containerfile.*
+*Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan
+--scan-path /apps/reporting`. Lines 105 to 108 of the Containerfile.*
 
 Check the package list before you uncomment it. In this sample the list
 includes the virtual environment's own tooling (`pip` and `setuptools`)
@@ -194,10 +191,8 @@ Found 12 unmanaged files in /opt, /usr/local (12.6 MB total)
 Include in tarball? [Y/n] y
 ```
 
-*Captured output. Command: `sudo inspectah scan --include-unmanaged`,
-run in a terminal with the prompt answered `y`. inspectah commit
-`f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard profile.
-Captured 2026-11-04.*
+*Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan
+--include-unmanaged`, run in a terminal with the prompt answered `y`.*
 
 The default answer is yes. Suppress the prompt with `-y`/`--yes` for CI
 use:
@@ -228,7 +223,7 @@ whether to include it:
 | Permissions | File permission bits |
 | UID / GID | Owning user and group |
 | Writable mount | Whether the file sits on a writable filesystem |
-| Mutable | Whether the path is on a mutable filesystem layer |
+| Mutable | Whether the file changed after the system was installed |
 | Service working dir | Whether a systemd service uses this path as its working directory |
 
 ### Containerfile output
@@ -256,10 +251,8 @@ RUN ln -sf '/usr/local/lib/node_modules/pm2/bin/pm2-docker' '/usr/local/bin/pm2-
 RUN ln -sf '/usr/local/lib/node_modules/@angular/cli/bin/ng.js' '/usr/local/bin/ng'
 ```
 
-*Captured output. Command: `sudo inspectah scan --include-unmanaged`.
-inspectah commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool
-standard profile. Captured 2026-11-04. Lines 114 to 126 of the
-Containerfile.*
+*Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan
+--include-unmanaged`. Lines 114 to 126 of the Containerfile.*
 
 Findings under `/srv` get no `COPY`. On bootc images `/srv` is a symlink
 to `/var/srv`, so that content is machine-local data that belongs to
@@ -277,11 +270,10 @@ comment block in place of the `COPY`, naming each path:
 #   /srv/www/index.html
 ```
 
-*Captured output. Command: `sudo inspectah -y scan --include-unmanaged`,
-with one file, `/srv/www/index.html`, added to the sample host. inspectah
-commit `f486698e`. Host: RHEL 9.8 aarch64 VM, drift tool standard
-profile. Captured 2026-11-04. Lines 127 to 134 of the Containerfile. The
-text `symlink to var/srv` is printed without a leading slash.*
+*Sample output from a RHEL 9.8 test host. Command: `sudo inspectah -y scan
+--include-unmanaged`, with one file, `/srv/www/index.html`, added to the
+sample host. Lines 127 to 134 of the Containerfile. The text `symlink to
+var/srv` is printed without a leading slash.*
 
 The audit report carries the same note under **Unmanaged Files under
 /srv**:
@@ -294,7 +286,7 @@ The audit report carries the same note under **Unmanaged Files under
 - `/srv/www/index.html`
 ```
 
-*Captured output. Same scan as the block above. Lines 536 to 540 of
+*Sample output from a RHEL 9.8 test host. Same scan as the block above. Lines 536 to 540 of
 `audit-report.md`.*
 
 The files themselves are still bundled in the tarball under
