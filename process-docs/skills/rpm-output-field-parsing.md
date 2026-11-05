@@ -49,6 +49,18 @@ shipped code, because every unit test fixture used space-free paths.
 **Test fixtures for anything that parses paths must include a path with
 an embedded space.** That single omission is what let this ship.
 
+## The rpmdb records pre-usrmerge paths
+
+A second way a path that rpm owns can miss the owned set. Packages built
+without usrmerge record `/lib/...`, `/lib64/...`, `/bin/...` or
+`/sbin/...` (on RHEL 10, `kernel-core` records `/lib/modules/<ver>` and
+libgcc records `/lib64/libgcc_s.so.1`), while a walk of the filesystem
+sees `/usr/lib/...`. `rpm -qf` resolves the symlink and answers correctly;
+a set lookup does not. `build_rpm_owned_set` therefore inserts the `/usr`
+form of any path under `USRMERGE_LEGACY_PREFIXES` beside the recorded
+form. Any new consumer that compares walked paths against rpm file lists
+must go through that function, not its own parse of `rpm` output.
+
 ## Where this applies
 
 - `crates/collect/src/rpm_ownership.rs` — `build_rpm_owned_set`, consumed
