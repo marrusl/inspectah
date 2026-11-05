@@ -132,14 +132,18 @@ rhel9-20261104-222606/audit-report.md
 rhel9-20261104-222606/config/
 ...
 rhel9-20261104-222606/config/etc/nsswitch.conf.bak
-rhel9-20261104-222606/config/usr/lib/tmpfiles.d/inspectah-var.conf
 ...
+rhel9-20261104-222606/config/usr/lib/tmpfiles.d/inspectah-var.conf
 rhel9-20261104-222606/drop-ins/
+...
 rhel9-20261104-222606/inspection-snapshot.json
 rhel9-20261104-222606/kickstart-suggestion.ks
 rhel9-20261104-222606/language-packages/
+...
 rhel9-20261104-222606/quadlet/
+...
 rhel9-20261104-222606/secrets-review.md
+...
 ```
 
 Key files:
@@ -247,9 +251,10 @@ package (`epel-release`, which has no repository source). All 25 are
 Actionable. Of the 62 configs, 55 are Actionable and 7 are not: 2
 Advisory (`/etc/init.d/legacy-app`, a SysV init script that needs a
 `.service` unit in image mode, and `/etc/mydb/config.yaml`, a symlink that
-crosses from `/etc` into `/var`) and 5 Inventory (two sysctl drop-ins and
-three systemd unit files, which the export carries through the merged
-sysctl drop-in and the service drop-ins). Eight of the Actionable configs
+crosses from `/etc` into `/var`) and 5 Inventory (two sysctl drop-ins, two
+`httpd.service.d` drop-ins, and the `sshd.service` unit file, which the
+export carries through the merged sysctl drop-in and the service
+drop-ins). Eight of the Actionable configs
 are RPM-owned files you modified; Step 5 covers them.
 
 See [Triage Classification](../reference/triage-classification.md) for
@@ -271,8 +276,11 @@ its default.
   Toggle each to excluded.
 - **Exclude the EPEL repository, then take `htop` back.** Four packages
   come from EPEL: `bat`, `fd-find`, `htop`, and `the_silver_searcher`.
-  Excluding the repository excludes all four. Then include `htop` again,
-  because you do want it on the host.
+  The EPEL switch starts off, because only four of its eight packages are
+  included; the other four are dependencies the list hides. Click it once
+  to include all eight, then again to exclude all eight. `bat`, `fd-find`,
+  `htop`, and `the_silver_searcher` move to "From excluded repos". Then
+  include `htop` again, because you do want it on the host.
 
 `epel-release` is the one Investigate item. It is excluded by default and
 this tutorial leaves it that way. The EPEL `.repo` files still ship in
@@ -293,8 +301,8 @@ the image, which is how `htop` installs.
   work you do outside refine: write a systemd unit for the init script.
 
 After these decisions the stats bar shows 18 packages included and 7
-excluded, and 54 configs included and 1 excluded, with 7 more that
-cannot be toggled.
+excluded, and `Configs: 54 included / 1 excluded / 7 advisory`. The 7
+counts every config you cannot toggle: the 2 Advisory and the 5 Inventory.
 
 The goal is not to migrate everything. The goal is to migrate what
 defines this workload and leave behind what was incidental to the
@@ -449,7 +457,12 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
 - Configs: the scan tarball's Containerfile captures 47 config files. The
   export captures 54: the 47, less `/etc/nsswitch.conf.bak`, plus the
   eight RPM-modified files described in Step 5.
-- Services: the export also enables `sshd.service`.
+- Repositories: the scan tarball's Containerfile installs `epel-release`
+  as a repo-enabling package. refine excludes it by default, so the export
+  does not, and the EPEL repo files still ship.
+- Services: the export also enables `sshd.service`. refine adds an enable
+  for a unit file that fully shadows the vendor unit; you did not decide
+  it.
 
 The rest of the Containerfile covers the Python virtual environments, the npm application, the three
 Quadlet units, the Compose file as a reference, the sysctl drop-in, the
