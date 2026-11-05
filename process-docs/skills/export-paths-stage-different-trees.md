@@ -65,10 +65,43 @@ Two things the guard does **not** cover, deliberately:
 - `unmanaged/` and `repoless-packages/` are re-extracted from the
   **source tarball**, not rendered from the snapshot, so a fixture
   without one cannot exercise them.
-- A file the export silently drops with no `COPY` emitted for it. The
-  guard reads the Containerfile, so a loss nothing references is
-  invisible to it — `configtree.rs`'s `etc/containers/systemd/` prefix
-  suppression is the standing example.
+- ~~A file the export silently drops with no `COPY` emitted for it.~~
+  **Covered since 2026-11-04** by `assert_every_staged_file_is_copied` in
+  the same file, which asks the mirror question: does some `COPY` carry
+  *this staged file* into the image. It found a real one — deleting
+  `COPY flatpak/ /usr/share/inspectah/flatpak/` leaves the provision
+  service copied and enabled while the manifest it reads at boot never
+  ships, and the build still succeeds.
+- **Still uncovered:** a file the export never stages *and* never
+  references. Both guards read what is on disk or in the Containerfile,
+  so content that disappears before either sees it is invisible to both.
+  `configtree.rs`'s `etc/containers/systemd/` prefix suppression is the
+  standing example.
+
+## The COPY invariant has two directions and they need different granularity
+
+Learned 2026-11-04 by running mutations against both halves. Getting this
+wrong in either direction produces a guard that is useless or that people
+weaken.
+
+- **Forward** (every `COPY` source exists) is checked **per COPY line**.
+  A missing source stops `podman build` at that line, so each line is
+  independently load-bearing.
+- **Reverse** (every staged file is carried) is checked **per staged
+  file, with directory-prefix matching**, and must not be checked per
+  COPY line. The config tree is copied by root: `write_config_tree`
+  returns the roots it materialized and the renderer emits one
+  `COPY config/<root>/ /<root>/` for each, so deeper lines are
+  redundant. `COPY config/etc/systemd/system/ ...` and
+  `COPY config/usr/lib/bootc/kargs.d/...` can both be deleted with no
+  observable effect, because `COPY config/etc/ /etc/` and
+  `COPY config/usr/ /usr/` already carry those paths.
+
+**The general lesson, which cost a wrong finding in a report before it was
+caught:** a surviving mutant is only evidence of a coverage gap once you
+have shown the mutation changes observable behaviour. A mutation that
+deletes genuinely redundant code is an *equivalent mutant*, and the suite
+is right not to fail. Check equivalence before writing the finding up.
 
 ## The same check against a real export
 

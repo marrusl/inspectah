@@ -106,6 +106,170 @@ fn top_level(root: &Path) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+// ── The reverse invariant ────────────────────────────────────────────
+//
+// The guard above holds one direction: every `COPY` names something the
+// archive carries. It cannot catch the mirror defect, because deleting a
+// `COPY` leaves the archive a strict superset of what the Containerfile
+// references, which satisfies it perfectly. A mutation sample on
+// 2026-11-04 deleted `COPY flatpak/ /usr/share/inspectah/flatpak/` and the
+// whole workspace suite stayed green: the payload stays in the tarball,
+// never reaches the image, and the artifact still builds. So this half
+// holds the other direction.
+//
+// **Granularity is per file, with directory-prefix matching, and that
+// ruling is the point of this comment.** Both coarser and finer forms
+// were tried against real mutations and both are wrong:
+//
+//   - *Per top-level directory* is too coarse. Deleting
+//     `COPY flatpak/ /usr/share/inspectah/flatpak/` leaves
+//     `COPY flatpak/flatpak-provision.service ...` behind, so `flatpak/`
+//     still looks reachable while the manifest the service reads at boot
+//     no longer ships. The build passes and the image fails on first boot.
+//
+//   - *Per literal COPY line* is too fine. The config tree is copied by
+//     root: `write_config_tree` returns the roots it materialized and the
+//     renderer emits one `COPY config/<root>/ /<root>/` for each, so
+//     anything deeper is already carried. Deleting the dedicated
+//     `COPY config/etc/systemd/system/ ...` or
+//     `COPY config/usr/lib/bootc/kargs.d/...` line changes nothing a build
+//     can observe, because `COPY config/etc/ /etc/` and
+//     `COPY config/usr/ /usr/` carry those paths anyway. Measured, not
+//     assumed, on 2026-11-04. Those two lines are redundant rather than
+//     load-bearing, and a per-line check would fail on both and teach the
+//     next person to weaken the guard.
+//
+// So the question asked of each staged file is "does some COPY carry
+// *this file* into the image", where a `COPY` of a directory carries
+// everything beneath it. That is the strongest form of the invariant that
+// is actually true of this renderer.
+
+/// Top-level export members that correctly carry no `COPY`, each with the
+/// reason. An entry here is a claim that the member is not image content:
+/// it is a record for the operator, or an input to tooling that runs
+/// outside the build. **Do not add a name here to make a failure go away.**
+/// A staged directory with no reason to be exempt is the defect this guard
+/// is for.
+const NOT_IMAGE_CONTENT: &[(&str, &str)] = &[
+    (
+        "Containerfile",
+        "the build instruction itself, not an input to it",
+    ),
+    (
+        "inspection-snapshot.json",
+        "the machine-readable record of the scan: re-import and audit, never installed",
+    ),
+    (
+        "audit-report.md",
+        "the human-readable report that ships beside the artifact",
+    ),
+    (
+        "schema",
+        "the snapshot JSON schema, a record alongside inspection-snapshot.json",
+    ),
+    (
+        "inspectah-users.ks",
+        "kickstart input, consumed by Anaconda at install time rather than by the build",
+    ),
+    (
+        "inspectah-users.toml",
+        "image-builder blueprint input, consumed outside the build for the same reason",
+    ),
+    (
+        "users",
+        "SSH key material staged for the kickstart and blueprint above to reference",
+    ),
+    (
+        "compose",
+        "reference-only by design: the containers renderer documents that compose emits no COPY or RUN",
+    ),
+    (
+        "aggregate",
+        "per-variant material for multi-host review; a single image is built from one variant, not from these",
+    ),
+    // The four below are staged by the CLI scan path only.
+    (
+        "README.md",
+        "operator instructions for the tarball, including how to run the build",
+    ),
+    (
+        "audit-report.html",
+        "the browsable form of audit-report.md, same reason",
+    ),
+    (
+        "kickstart-suggestion.ks",
+        "a suggestion for the operator to adapt, consumed by Anaconda if used at all",
+    ),
+    (
+        "secrets-review.md",
+        "the redaction review the operator reads before sharing the tarball; must never be installed",
+    ),
+];
+
+/// Every file under `root`, as a path relative to it.
+fn staged_files(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else if let Ok(rel) = path.strip_prefix(base) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// Panics naming every staged file that no `COPY` carries into the image
+/// and that does not live under a declared non-content member.
+fn assert_every_staged_file_is_copied(path_label: &str, root: &Path) {
+    let containerfile = std::fs::read_to_string(root.join("Containerfile"))
+        .unwrap_or_else(|e| panic!("{path_label}: no Containerfile in the export: {e}"));
+    let sources = copy_sources(&containerfile);
+
+    let files = staged_files(root);
+    assert!(
+        !files.is_empty(),
+        "{path_label}: the export staged no files, so this proves nothing"
+    );
+
+    let exempt: BTreeSet<&str> = NOT_IMAGE_CONTENT.iter().map(|(name, _)| *name).collect();
+    // The top-level member a relative path belongs to.
+    let top_of = |rel: &str| rel.split('/').next().unwrap_or(rel).to_string();
+
+    // A `COPY <src>` carries `rel` when `src` is the file itself or a
+    // directory above it. Sources arrive with or without a trailing slash.
+    let carried = |rel: &str| {
+        sources.iter().any(|src| {
+            let s = src.trim_end_matches('/');
+            rel == s || rel.starts_with(&format!("{s}/"))
+        })
+    };
+
+    let orphaned: Vec<&String> = files
+        .iter()
+        .filter(|rel| !exempt.contains(top_of(rel).as_str()) && !carried(rel))
+        .collect();
+
+    assert!(
+        orphaned.is_empty(),
+        "{path_label}: the export stages files that no COPY carries into the \
+         image, so `podman build` succeeds while the content is silently \
+         dropped:\n  {orphaned:?}\n\
+         If one of these is genuinely not image content, add its top-level \
+         directory to NOT_IMAGE_CONTENT with the reason. If it is content, \
+         the renderer has stopped emitting the COPY that carried it.\n\
+         COPY sources: {sources:?}"
+    );
+}
+
 // ── The fixture ──────────────────────────────────────────────────────
 
 const QUADLET_DIR: &str = "/etc/containers/systemd";
@@ -184,6 +348,23 @@ fn populated_host_mock() -> MockExecutor {
         .with_dir("/etc/containers", vec!["systemd"])
         .with_dir(QUADLET_DIR, vec!["webapp.container"])
         .with_file(QUADLET_UNIT, QUADLET_CONTENT)
+        // -- flatpaks ---------------------------------------------------
+        // `flatpak/` is the only top-level export directory that is image
+        // content and has no parent `COPY` above it, so it is the one case
+        // that proves the reverse invariant is live. Without an app here
+        // the directory is never staged and that half holds vacuously:
+        // measured on 2026-11-04 by deleting
+        // `COPY flatpak/ /usr/share/inspectah/flatpak/` and watching this
+        // file stay green.
+        .with_command("which flatpak", ok("/usr/bin/flatpak"))
+        .with_command(
+            "flatpak list --app --system --columns=application,origin,branch",
+            ok("org.mozilla.firefox\tflathub\tstable\n"),
+        )
+        .with_command(
+            "flatpak remote-list --system --columns=name,url",
+            ok("flathub\thttps://dl.flathub.org/repo/\n"),
+        )
         // -- services --------------------------------------------------
         .with_command(
             "systemctl list-unit-files --type=service --no-pager",
@@ -302,6 +483,7 @@ fn the_fixture_populates_the_optional_export_directories() {
         "COPY quadlet/",
         "COPY drop-ins/",
         "COPY language-packages/npm/",
+        "COPY flatpak/",
     ] {
         assert!(
             containerfile.contains(expected),
@@ -323,6 +505,7 @@ fn the_cli_scan_export_satisfies_every_copy_it_emits() {
     render::render_all(&snapshot, &RenderContext { target: None }, dir.path()).expect("render");
 
     assert_every_copy_source_exists("CLI scan export", dir.path());
+    assert_every_staged_file_is_copied("CLI scan export", dir.path());
 }
 
 /// The refine web download. This is the path that stripped `quadlet/`
@@ -347,4 +530,5 @@ fn the_refine_web_export_satisfies_every_copy_it_emits() {
     let root = unpack(&tarball, &unpacked);
 
     assert_every_copy_source_exists("refine web export", &root);
+    assert_every_staged_file_is_copied("refine web export", &root);
 }
