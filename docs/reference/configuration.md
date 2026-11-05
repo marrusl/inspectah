@@ -39,13 +39,24 @@ for the full command reference.
 |:-----|:------------|
 | `--inspect-only` | Write JSON snapshot only, skip tarball generation. |
 | `-o, --output <PATH>` | Output file path (tarball) or directory (with `--inspect-only`). |
-| `--base-image <IMAGE>` | Target base image for baseline comparison (e.g., `quay.io/centos-bootc/centos-bootc:stream9`). |
+| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). Suppresses the size prompt that `--include-unmanaged` shows before bundling. |
+| `--base-image <IMAGE>` | Target base image for cross-distro conversion (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.6`). |
 | `--preserve <ITEM>` | Preserve sensitive data (password-hashes, ssh-keys, subscription, all). Comma-separated, repeatable. |
 | `--no-redaction` | Skip redaction pipeline, retaining raw secrets (requires `--ack-sensitive`). |
 | `--ack-sensitive` | Acknowledge sensitive data in the snapshot (required with `--preserve` or `--no-redaction`). Alias: `--acknowledge-sensitive`. |
 | `--progress <MODE>` | Override progress display: `pretty` or `flat`. |
 | `-v, --verbose` | Show sub-step detail for all inspectors. Conflicts with `--quiet`. |
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
+| `--include-unmanaged` | Catalog and bundle unmanaged files from /opt, /srv, /usr/local. Prompts with total size before bundling (suppressed by `-y`/`--yes`). |
+| `--exclude-path <PATH>` | Exclude specific paths from unmanaged file collection. Repeatable. |
+| `--scan-home <all\|USER,...>` | Scan home directories for non-RPM software. `all` covers users with UID 1000 or higher; otherwise give a comma-separated list of usernames. A system user (UID below 1000) is included when named explicitly. An unknown user is skipped with a warning. |
+| `--scan-path <PATH>` | Add an extra scan path for non-RPM software detection. Repeatable. Must be an absolute path; a relative or nonexistent path is skipped with a warning. |
+
+### Non-RPM software scan roots
+
+The non-RPM software scan walks `/opt`, `/srv`, `/usr/local`, and `/var/www`
+by default. `--scan-home` and `--scan-path` add to that list; they do not
+replace it.
 
 ## CLI flags (build)
 
@@ -53,6 +64,7 @@ for the full command reference.
 |:-----|:------------|
 | `-t, --tag <TAG>` | Image tag (required). Must include a version, e.g., `myimage:v1`. |
 | `--dry-run` | Show the build command without executing it. |
+| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). |
 | `--keep-context` | Keep the extracted build context after build completes. |
 | `[-- <PODMAN_ARGS>...]` | Additional arguments to pass to `podman build`. |
 
@@ -61,7 +73,8 @@ for the full command reference.
 | Flag | Description |
 |:-----|:------------|
 | `--port <PORT>` | Port to bind the web UI (default: 8642, use 0 for ephemeral). |
-| `--open <true\|false>` | Open browser automatically (default: true). Use `--no-open` to suppress. |
+| `--open <true\|false>` | Open browser automatically (default: `true`). To suppress, pass `--open false` or `--open=false`. |
+| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). |
 | `--fresh` | Start a fresh session, discarding any saved progress. |
 
 ## CLI flags (aggregate)
@@ -70,9 +83,10 @@ for the full command reference.
 |:-----|:------------|
 | `--target-image <IMAGE>` | Override the target image reference for baseline comparison. |
 | `--output-dir <DIR>` | Output directory for the aggregate tarball. |
+| `-y, --yes` | Assume yes to all interactive prompts (for CI and automation). |
 | `--output-file <FILE>` | Output file path for the aggregate tarball. |
-| `--json-only` | Write JSON snapshot to stdout (or file) instead of tarball. |
-| `--strict` | Treat aggregation warnings as errors. |
+| `--json-only` | Write JSON snapshot instead of tarball (to stdout, `--output-file`, or `--output-dir`). |
+| `--strict` | Treat warnings as errors. |
 | `-v, --verbose` | Show per-host detail in output. |
 | `--ack-sensitive` | Acknowledge that the merged output may contain sensitive data. Required when any contributing snapshot has `sensitive_snapshot` set. Alias: `--acknowledge-sensitive`. |
 
