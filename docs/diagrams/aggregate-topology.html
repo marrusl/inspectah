@@ -122,7 +122,7 @@ const futureNodes = [
     label: 'Factor',
     sublabel: 'Image Composition',
     color: 'purple',
-    tooltip: 'Planned capability — build-time image composition, not runtime layer boundaries.',
+    tooltip: 'Planned capability: build-time image composition, not runtime layer boundaries.',
     children: [
       { text: 'Base layer', detail: 'Shared OS foundation from aggregate consensus' },
       { text: 'App layer', detail: 'Application-specific packages and configs' },
@@ -489,7 +489,7 @@ futureGroup.append('text')
   .attr('font-size', '9px')
   .attr('font-style', 'italic')
   .attr('opacity', 0.6)
-  .text('planned — build-time image composition, not runtime layers');
+  .text('planned: build-time image composition, not runtime layers');
 
 // Set first focusable node
 hostGroup.select('.node').attr('tabindex', '0');
