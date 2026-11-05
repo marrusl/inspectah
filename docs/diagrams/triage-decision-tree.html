@@ -186,7 +186,7 @@ const dispositionBranches = [
     sublabel: 'No toggle',
     color: 'rose',
     tooltip: 'A finding the user cannot act on through include and exclude. It carries a rationale and no control.',
-    definition: 'Shown with an Advisory badge and its rationale. A toggle request is refused with HTTP 422. Never rendered into the Containerfile; listed under Advisories in the audit report.',
+    definition: 'Shown with an Advisory badge and its rationale. A toggle request is refused with HTTP 422. A configuration-file advisory is not copied into the image; an unbacked /var directory is provisioned by the export. Listed under Advisories in the audit report.',
     example: 'A /var directory that no tmpfiles.d entry or package declares (unbacked_var_dir).',
   },
   {
