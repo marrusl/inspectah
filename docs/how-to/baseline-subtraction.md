@@ -15,11 +15,25 @@ additions. This guide covers how to control that comparison.
 When you run `inspectah scan`, it automatically resolves the target base image
 using this chain (first match wins):
 
-1. **CLI override** -- The `--base-image` flag, if provided
-2. **Universal Blue metadata** -- Detected from UBlue-specific files on the host
-3. **bootc status** -- The image reference reported by `bootc status`
-4. **Fedora Atomic Desktop** -- Matched from os-release variant ID
-5. **os-release mapping** -- Derived from `/etc/os-release` with version clamping
+1. **CLI override**: The `--base-image` flag, if provided
+2. **Universal Blue metadata**: Detected from UBlue-specific files on the host
+3. **bootc status**: The image reference reported by `bootc status`
+4. **Fedora Atomic Desktop**: Matched from os-release variant ID
+5. **os-release mapping**: Derived from `/etc/os-release` with version clamping
+
+The os-release mapping reads the distribution ID and version and picks the
+matching bootc base:
+
+- **RHEL 9 and 10** resolve to the `rhel-bootc` image for the host's own
+  release, for example `registry.redhat.io/rhel9/rhel-bootc:9.8` on a RHEL 9.8
+  host. Releases older than the first one that ships a bootc image (9.6 on
+  RHEL 9) are raised to that release.
+- **CentOS Stream** resolves to `quay.io/centos-bootc/centos-bootc:stream9`
+  (or `stream10`).
+- **RHEL 8 and CentOS Stream 8** have no bootc image, so they resolve to the
+  EL9 base by default: `registry.redhat.io/rhel9/rhel-bootc:9.6` and
+  `quay.io/centos-bootc/centos-bootc:stream9`. Pass `--base-image` if you want
+  a different target.
 
 Once resolved, inspectah pulls the container image and extracts its package
 manifest. Every package on your host that matches the base image is classified
@@ -69,7 +83,11 @@ For disconnected or air-gapped environments, you have two options:
 
 1. **Pre-stage the base image:** Pull the image on a connected machine, save it
    as a tarball with `podman save`, transfer it to the target host, and load it
-   with `podman load`.
+   with `podman load`. The image you load has to be the one the scan resolves.
+   Without `--base-image`, the scan resolves the image from the host's own
+   release, so a RHEL 9.8 host pulls `rhel-bootc:9.8` and ignores a loaded
+   `9.6`. Pass `--base-image` with the loaded reference to make the scan use
+   it. The scan still runs `podman pull` on that reference.
 
    ```bash
    # On a connected machine:
@@ -78,7 +96,7 @@ For disconnected or air-gapped environments, you have two options:
 
    # Transfer the tarball to the target host, then:
    sudo podman load -i rhel9-bootc-9.6.tar
-   sudo inspectah scan
+   sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
    ```
 
 2. **Use a local or mirror registry:** Configure a mirror registry in your
@@ -95,9 +113,11 @@ During a baseline scan, inspectah:
 4. **Extracts** the package manifest from the image
 5. **Compares** each host package against the manifest
 
-Packages that match are tagged as `baseline_match` in the snapshot data.
-The refine UI uses this to pre-populate triage decisions, letting you focus
-on the packages that actually differ from the base image.
+Packages that match are left out of `rpm.packages_added` in the snapshot
+data, and the base image's package list is recorded under `baseline.packages`
+(an object keyed by `name.arch`). The refine UI uses this to pre-populate
+triage decisions, letting you focus on the packages that actually differ from
+the base image.
 
 ### Network requirements
 
@@ -111,13 +131,19 @@ environments, see the section above on pre-staging the base image via
 The scan output shows which image was resolved and how:
 
 ```
-  Baseline extracted: 847 packages
-  Resolved via: OsRelease
+Resolving target image...
+  registry.redhat.io/rhel9/rhel-bootc:9.8 (OsRelease)
+Pulling registry.redhat.io/rhel9/rhel-bootc:9.8...
+Pulled registry.redhat.io/rhel9/rhel-bootc:9.8 (sha256:173c055cc9c7)
+  Baseline extracted: 457 packages
+  Resolved via: os-release (auto-detected)
 ```
 
-The resolution strategy tells you which step in the chain was used. If
-auto-detection selected the wrong image, re-run with `--base-image` to
-override.
+The resolution strategy tells you which step in the chain was used. The
+resolve line carries the strategy's internal name in parentheses, and the
+`Resolved via` line spells it out; with `--base-image` it reads
+`Resolved via: --base-image (user-specified)`. If auto-detection selected the
+wrong image, re-run with `--base-image` to override.
 
 ## Aggregate baseline
 
