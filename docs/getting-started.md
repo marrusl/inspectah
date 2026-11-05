@@ -247,7 +247,7 @@ The refine UI shows every finding organized by section (packages,
 configs, services, language packages, unmanaged files, etc.). Each item
 has a triage classification (see below). Actionable items have an
 include/exclude toggle; Advisory and Inventory items do not. Your changes
-are autosaved -- close the browser and stop the server with Ctrl-C when
+are autosaved: close the browser and stop the server with Ctrl-C when
 you are done.
 
 If you are accessing a remote host over SSH, forward the port. This
@@ -312,7 +312,7 @@ whether you can decide it at all:
 | Disposition | Meaning | Toggle in the refine UI |
 |-------------|---------|-------------------------|
 | **Actionable** | You decide whether it reaches the image | Yes |
-| **Advisory** | Shown with a rationale, never rendered into the Containerfile | No |
+| **Advisory** | Shown with a rationale. No include control. A configuration-file advisory (modernization, cross-tree symlink) is not copied into the image. The unbacked `/var` advisory is the exception: the export provisions those directories through `inspectah-var.conf`, or `RUN mkdir -p` when the mode was not recorded | No |
 | **Inventory** | Shown for reference only | No |
 
 The refine server refuses a request to toggle an Advisory or Inventory
@@ -335,9 +335,9 @@ model in action. From here:
 - **Review and refine findings**: use the refine UI to curate
   include/exclude decisions. See
   [How to Review and Refine](how-to/review-and-refine.md).
-- **Build a bootc image**: use `inspectah build` to build the image
-  directly from the scan tarball, or use `podman build` manually with
-  the generated Containerfile. See
+- **Build a bootc image**: use `inspectah build` to build the refine
+  export (or the scan tarball, if you made no decisions in refine), or
+  use `podman build` manually with the generated Containerfile. See
   [How to Build a bootc Image](how-to/build-bootc-image.md).
 - **Roll up multiple hosts**: migrating more than one system? Scan them
   all and aggregate the results to find common patterns. See
