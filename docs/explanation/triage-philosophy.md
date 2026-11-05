@@ -106,11 +106,25 @@ available. A host scanned without a target image comparison will show many
 Investigate results. The same host scanned with a baseline typically shows very
 few, because the comparison resolves most ambiguity.
 
+## Dispositions: what you can do about a finding
+
+The buckets describe where a finding came from relative to the base image.
+A separate property, the finding's disposition, describes what you can do
+about it in refine and what the export does with it. There are three:
+**Actionable** findings carry an include toggle and feed the Containerfile
+when included; **Advisory** findings are reported with a rationale but have
+no toggle, so they tell you something rather than ask for a decision; and
+**Inventory** findings are displayed for awareness only and never reach the
+Containerfile. The two properties are independent: a bucket says where a
+finding came from, a disposition says what happens next. For the full rules,
+see the
+[Triage Classification Reference](../reference/triage-classification.md).
+
 ## Aggregate consensus: the second axis
 
 Single-host triage answers: *what matters on this host?* But many
 organizations run aggregates -- 10, 50, or 200 hosts in the same role. When you
-manage a aggregate of web servers, the question changes from "what is on this host"
+manage an aggregate of web servers, the question changes from "what is on this host"
 to "what is consistent across all my hosts, and where do they diverge?"
 
 Aggregate analysis adds a second classification dimension: how prevalent is each
@@ -172,7 +186,7 @@ not. Maybe one has a custom port. These differences matter for migration
 because they represent different operational decisions that cannot be collapsed
 into a single image configuration.
 
-When a config path has multiple variants across a aggregate (3 hosts have version
+When a config path has multiple variants across an aggregate (3 hosts have version
 A of the file, 2 hosts have version B), the path's overall classification
 reflects the most divergent variant. The system does not hide the divergence
 by averaging -- it surfaces it, because config divergence is exactly the kind
