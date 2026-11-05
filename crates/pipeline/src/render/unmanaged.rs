@@ -344,6 +344,61 @@ mod tests {
         assert!(unmanaged_file_lines(&snap).is_empty());
     }
 
+    /// With an included sibling the section renders, so the early return
+    /// no longer hides an excluded `/srv` finding: the toggle itself must
+    /// keep it out of the `/var` strategy list.
+    #[test]
+    fn excluded_srv_finding_is_not_listed_beside_included_ones() {
+        let snap = test_snapshot_with_unmanaged(vec![
+            UnmanagedFile {
+                path: "/srv/www/index.html".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/srv/www/excluded.html".into(),
+                disposition: FindingKind::excluded(),
+                ..Default::default()
+            },
+            UnmanagedFile {
+                path: "/opt/app/server".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ]);
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            lines.iter().any(|l| l == "#   /srv/www/index.html"),
+            "included /srv finding must be listed, got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("excluded.html")),
+            "excluded /srv finding must not appear, got: {lines:?}"
+        );
+    }
+
+    /// An `/opt` symlink may point into `/srv`; it is still an image path
+    /// and keeps its `ln -sf`, and no `/var` strategy note is emitted.
+    #[test]
+    fn opt_symlink_targeting_srv_is_still_recreated() {
+        let snap = test_snapshot_with_unmanaged(vec![UnmanagedFile {
+            path: "/opt/app/data".into(),
+            file_type: FileType::Symlink,
+            link_target: "/srv/app/data".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }]);
+        let lines = unmanaged_file_lines(&snap);
+        assert!(
+            lines.contains(&"RUN ln -sf '/srv/app/data' '/opt/app/data'".to_string()),
+            "got: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("symlink to var/srv")),
+            "an /opt finding must not get the /srv note, got: {lines:?}"
+        );
+    }
+
     #[test]
     fn mixed_regular_and_symlink_dir() {
         let snap = test_snapshot_with_unmanaged(vec![
