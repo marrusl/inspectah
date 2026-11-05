@@ -91,7 +91,7 @@ const singleHostBranches = [
     tooltip: 'Item exists in the base image. No migration action required.',
     criteria: 'Package or config file matches the target base image manifest.',
     example: 'bash-5.1.8 found on host, also present in rhel9 base image.',
-    action: 'Excluded from Containerfile — already in base layer.',
+    action: 'Excluded from Containerfile: already in base layer.',
   },
   {
     id: 'sh-site',
@@ -110,7 +110,7 @@ const singleHostBranches = [
     color: 'red',
     tooltip: 'Origin unclear. Requires manual review before migration decision.',
     criteria: 'Item does not match known patterns or provenance is unclear.',
-    example: 'Custom binary /usr/local/bin/myapp — no RPM origin.',
+    example: 'Custom binary /usr/local/bin/myapp: no RPM origin.',
     action: 'Flagged in audit-report.md for operator review.',
   },
 ];
@@ -134,7 +134,7 @@ const aggregateBranches = [
     color: 'blue',
     tooltip: 'Present on some hosts, completely absent on others.',
     definition: 'Item exists on a subset of hosts, missing from the rest.',
-    example: 'postgresql installed on 4 of 12 hosts — DB servers only.',
+    example: 'postgresql installed on 4 of 12 hosts: DB servers only.',
     hostPattern: 'some-present', // 2 of 3 boxes filled, 1 empty
   },
   {
@@ -153,7 +153,7 @@ const aggregateBranches = [
     sublabel: 'Unclear pattern',
     color: 'red',
     tooltip: 'Aggregate pattern unclear. Requires manual review.',
-    definition: 'Cannot be categorized — insufficient data or ambiguous pattern.',
+    definition: 'Cannot be categorized: insufficient data or ambiguous pattern.',
     example: 'Orphan RPM with no repo origin on a single host.',
     hostPattern: 'unclear',
   },
@@ -605,7 +605,7 @@ shLockG.append('text')
   .attr('text-anchor', 'start')
   .attr('fill', textDim)
   .attr('font-size', '10px')
-  .text('Classified items may be locked — prevents toggling in refine UI');
+  .text('Classified items may be locked: prevents toggling in refine UI');
 
 // Aggregate locked note (below aggregate branches, centered)
 const flLockY = flBranchY + aggregateNodeH + 24;
