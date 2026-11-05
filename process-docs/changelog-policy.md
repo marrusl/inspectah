@@ -29,4 +29,6 @@ add a fresh empty `## [Unreleased]` section above it.
 
 Follow [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
 Categories: Added, Changed, Deprecated, Removed, Fixed, Security.
-Each entry: `- **Short label** — description of what changed and why it matters.`
+Each entry: `- **Short label**: description of what changed and why it matters.`
+Entries written before 2026-11-04 use an em dash after the label; leave
+them as they are.
