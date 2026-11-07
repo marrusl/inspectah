@@ -452,6 +452,17 @@ against validating a stale binary.
 `start=$(date +%s)` / `$((end-start))` for timings on the guest. An
 agent cannot time its own run; time the command.
 
+## An unprivileged scan over-reports `/var` directories
+
+The `/var` directory population differs by privilege in both directions.
+On RHEL 9.8 aarch64 (measured 2026-10-31), unprivileged
+`find /var/{lib,log,cache} -mindepth 1 -maxdepth 2 -type d ! -empty`
+reported 43 non-empty directories where root reported 32. Root sees three
+the unprivileged user cannot confirm. The unprivileged run reports eight
+or more that root does not: `find` cannot read them, so `-empty` is false
+and they survive `! -empty`. Run the control scan as root, or the count is
+not comparable.
+
 ## Test VM hygiene
 
 - Killing a local `ssh` does **not** kill the remote process. Output
