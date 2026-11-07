@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **An unreadable directory under `/etc` marks the scan partial**: the main `/etc` walk recorded a permission failure on a subdirectory and then dropped it unless the whole walk came back empty, so on any real host the config inspector reported complete while that subtree's files were missing from the export. The failure now degrades the config inspector, and the scan reports partial. A host with any unreadable `/etc` subdirectory, for example `/etc/sssd`, now gets a partial scan where it used to get a complete one. This change shipped in 0.9.0-beta.4 without an entry.
+
 ## [0.9.0-beta.5] - 2026-11-05
 
 ### Changed
