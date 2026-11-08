@@ -11,7 +11,7 @@ use inspectah_core::traits::executor::{ExecResult, Executor};
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractionError {
     #[error(
-        "podman is not installed. inspectah requires podman to pull container images.\nInstall it with: sudo dnf install podman"
+        "podman is not installed. inspectah requires podman to use container images.\nInstall it with: sudo dnf install podman"
     )]
     PodmanNotFound,
     #[error("failed to pull image {image_ref}: {reason}")]
