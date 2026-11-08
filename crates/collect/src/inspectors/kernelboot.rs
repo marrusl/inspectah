@@ -226,7 +226,7 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
     let mut overrides = Vec::new();
     for (key, (file_val, source)) in &file_values {
         if let Some(runtime_val) = runtime_values.get(key.as_str())
-            && file_val != runtime_val
+            && !sysctl_values_equal(file_val, runtime_val)
         {
             overrides.push(SysctlOverride {
                 key: key.clone(),
@@ -244,6 +244,19 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
     overrides.sort_by(|a, b| a.key.cmp(&b.key));
 
     Ok(overrides)
+}
+
+/// Compare a sysctl.d file value with a runtime value as token sequences.
+///
+/// The kernel reports multi-value sysctls (`net.ipv4.ip_local_port_range`,
+/// `net.ipv4.tcp_rmem`, `kernel.printk`) tab-separated, while config files
+/// write them space-separated. Comparing raw strings would report every such
+/// key as drift even when the kernel runs exactly the configured value, so
+/// whitespace of any kind and amount counts as a single separator here.
+fn sysctl_values_equal(file_val: &str, runtime_val: &str) -> bool {
+    file_val
+        .split_whitespace()
+        .eq(runtime_val.split_whitespace())
 }
 
 /// Read sysctl config files from standard directories.
@@ -474,6 +487,69 @@ mod tests {
                 );
             }
             other => panic!("expected Degraded for unreadable sysctl config, got {other:?}"),
+        }
+    }
+
+    /// The kernel prints multi-value sysctls tab-separated while sysctl.d
+    /// files write them space-separated; only a token difference is drift.
+    #[test]
+    fn test_sysctl_override_ignores_whitespace_differences() {
+        // (key, file value, runtime value, expect override)
+        let cases: &[(&str, &str, &str, bool)] = &[
+            (
+                "net.ipv4.ip_local_port_range",
+                "1024 65535",
+                "1024\t65535",
+                false,
+            ),
+            (
+                "net.ipv4.tcp_rmem",
+                "4096 87380 6291456",
+                "4096\t87380\t6291456",
+                false,
+            ),
+            (
+                "net.ipv4.ip_local_port_range",
+                "1024 65535",
+                "1024\t65536",
+                true,
+            ),
+            (
+                "net.ipv4.ip_local_port_range",
+                "1024 65535",
+                "1024 65536",
+                true,
+            ),
+            ("kernel.sysrq", "1", "1 ", false),
+            ("kernel.sysrq", "1", "\t1", false),
+            ("kernel.sysrq", "1", "0", true),
+        ];
+        for &(key, file_val, runtime_val, expect_override) in cases {
+            let exec = MockExecutor::new()
+                .with_dir("/etc/sysctl.d", vec!["99-test.conf"])
+                .with_file(
+                    "/etc/sysctl.d/99-test.conf",
+                    &format!("{key} = {file_val}\n"),
+                )
+                .with_dir("/usr/lib/sysctl.d", vec![])
+                .with_command(
+                    "sysctl -a",
+                    ExecResult {
+                        stdout: format!("{key} = {runtime_val}\n"),
+                        exit_code: 0,
+                        ..Default::default()
+                    },
+                );
+            let overrides = collect_sysctl_overrides(&exec).expect("sysctl collection succeeds");
+            assert_eq!(
+                !overrides.is_empty(),
+                expect_override,
+                "{key}: file {file_val:?} vs runtime {runtime_val:?}"
+            );
+            if expect_override {
+                // Stored strings stay raw so the snapshot contract is unchanged.
+                assert_eq!(overrides[0].default, file_val);
+            }
         }
     }
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A multi-value sysctl set to its configured value no longer reports as drift**: the kernel prints values such as `net.ipv4.ip_local_port_range` tab-separated while sysctl.d files write them space-separated, and the two were compared as raw strings. Measured on a RHEL 9.8 host, `1024 65535` in the file against `1024<TAB>65535` at runtime was reported as an override, written into `99-inspectah-migrated.conf`, and the source file was then left out of the image, taking every other setting in it along. Values are now compared token by token, so only a real difference in value counts. The values stored in the snapshot are unchanged.
+
 ## [0.9.0-beta.5] - 2026-11-05
 
 ### Changed
