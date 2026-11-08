@@ -116,7 +116,13 @@ During a baseline scan, inspectah:
 3. **Pulls** the container image layers (with progress output), or uses the
    image already in local storage without pulling. A stored image is not
    refreshed: pull it again or remove it with `podman rmi` to pick up a newer
-   build
+   build.
+   The stored copy may be older than the registry's current tag. That does not
+   change the result, because baseline subtraction checks whether a package is
+   present, not its version, and that set does not change within a release. To
+   pin the baseline regardless, pass a digest reference to `--base-image`, for
+   example `registry.redhat.io/rhel9/rhel-bootc@sha256:<digest>`, or run
+   `podman pull <ref>` before the scan.
 4. **Extracts** the package manifest from the image
 5. **Compares** each host package against the manifest
 

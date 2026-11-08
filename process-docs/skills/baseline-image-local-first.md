@@ -25,6 +25,16 @@ It is one command instead of two, but the release that added `--policy` to
 form carries no version risk. Revisit only with the floor
 verified on a real EL8 host.
 
+## Pull-first was reconsidered and not adopted
+
+The maintainer reconsidered pull-first ordering on 2026-11-08 for
+reproducibility and kept local-first. Baseline subtraction only checks
+whether a package is present, not its version, and that set does not change
+in the target image within a release of RHEL, Fedora or CentOS. A user who
+wants a byte-for-byte reproducible baseline passes a digest reference to
+`--base-image`, which `normalize_image_ref` preserves; the how-to page
+documents this as the answer.
+
 ## What it costs
 
 A stored image is used as-is. A connected host that pulled the base image
