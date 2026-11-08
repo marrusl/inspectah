@@ -40,7 +40,7 @@ new tag.
 
 ## Release notes
 
-Create `process-docs/release-notes-<version>.md`. Follow the format
+Create `process-docs/release-notes/release-notes-<version>.md`. Follow the format
 from the most recent release notes file. Key sections:
 
 - Thematic groupings of changes (not just a flat list)
@@ -285,7 +285,7 @@ is three commits, not one:
 | Commit | Files |
 |---|---|
 | `chore(release): v<version>` | `Cargo.toml`, `Cargo.lock`, `packaging/inspectah.spec`, `CHANGELOG.md` |
-| `docs(release): write v<version> release notes` | `process-docs/release-notes-<version>.md` |
+| `docs(release): write v<version> release notes` | `process-docs/release-notes/release-notes-<version>.md` |
 | `docs(roadmap): bump current version to v<version>` | `ROADMAP.md` |
 
 **Stage the release commit by explicit path.** Other agents commit to
@@ -317,7 +317,7 @@ gh release create v0.8.6-beta.5 \
   inspectah-linux-amd64 \
   inspectah-linux-arm64-bin \
   --title "v0.8.6-beta.5" \
-  --notes-file process-docs/release-notes-0.8.6-beta.5.md
+  --notes-file process-docs/release-notes/release-notes-0.8.6-beta.5.md
 ```
 
 **Do not pass `--prerelease`, even on a beta/alpha/rc tag, until 1.0 ships.**

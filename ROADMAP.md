@@ -18,8 +18,8 @@ disagreement here is findable, which is more than the arrangement this
 replaced could say.
 
 Completed release inventories live in `CHANGELOG.md`. Recent shipped
-context is in `process-docs/release-notes-0.9.0-beta.1.md` and
-`process-docs/release-notes-0.9.0-beta.2.md`.
+context is in `process-docs/release-notes/release-notes-0.9.0-beta.1.md` and
+`process-docs/release-notes/release-notes-0.9.0-beta.2.md`.
 
 Grouping below reflects the backlog's own split between live work and
 work that has been deliberately parked. It is not a priority ranking.
