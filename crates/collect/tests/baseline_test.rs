@@ -110,7 +110,10 @@ fn baseline_happy_path_extracts_packages_and_digest() {
 
 #[test]
 fn baseline_command_ordering() {
-    let mock = happy_mock();
+    // Register the image as absent explicitly so this test keeps covering the
+    // pull path even if `happy_mock` later gains an `image exists` entry.
+    let mock =
+        happy_mock().with_command(&format!("{IMAGE_EXISTS_KEY} {TEST_IMAGE}"), absent_result());
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
     let result = extract_baseline(&mock, &normalized, &mut |_| {});
@@ -118,8 +121,7 @@ fn baseline_command_ordering() {
 
     let log = mock.command_log();
     // Verify ordering: which, image exists, pull, create, start, exec, rm,
-    // inspect. The mock has no `image exists` entry, so it reports the image
-    // absent and the pull runs.
+    // inspect.
     let expected = [
         "which podman",
         "podman image exists",
@@ -480,4 +482,61 @@ fn baseline_local_image_absent_pull_fails_returns_pull_failed() {
         Err(ExtractionError::PullFailed { .. }) => {}
         other => panic!("expected PullFailed, got {:?}", other),
     }
+}
+
+#[test]
+fn baseline_local_image_without_digest_returns_digest_failed() {
+    // A stored image whose inspect reports neither `.Digest` nor a
+    // `RepoDigests` entry. On a RHEL 9.8 host with podman 5.8.2, an image
+    // restored with `podman load` from a `podman save` archive did carry
+    // both, so this pins the existing contract rather than a measured case:
+    // extraction still fails with DigestFailed instead of recording an
+    // empty digest.
+    let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
+        .with_command(&format!("{IMAGE_EXISTS_KEY} {TEST_IMAGE}"), ok_result())
+        .with_command_prefix(
+            "nsenter -t 1 -m -u -i -n -- podman create",
+            ok_with_stdout("ctr-id\n"),
+        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman start", ok_result())
+        .with_command_prefix(
+            "nsenter -t 1 -m -u -i -n -- podman exec",
+            ok_with_stdout(NEVRA_OUTPUT),
+        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result())
+        .with_command(
+            &format!(
+                "nsenter -t 1 -m -u -i -n -- podman inspect --format {{{{.Digest}}}} {}",
+                TEST_IMAGE
+            ),
+            ok_with_stdout("\n"),
+        )
+        .with_command(
+            &format!(
+                "nsenter -t 1 -m -u -i -n -- podman inspect --format {{{{index .RepoDigests 0}}}} {}",
+                TEST_IMAGE
+            ),
+            ok_with_stdout("\n"),
+        );
+    let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
+
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
+    match result {
+        Err(ExtractionError::DigestFailed(_)) => {}
+        other => panic!("expected DigestFailed, got {:?}", other),
+    }
+
+    let log = mock.command_log();
+    assert!(
+        !log.iter().any(|c| c.contains("podman pull")),
+        "the local branch should not pull, got: {:?}",
+        log
+    );
+    assert_eq!(
+        log.iter().filter(|c| c.contains("podman inspect")).count(),
+        2,
+        "both digest lookups should run before giving up, got: {:?}",
+        log
+    );
 }
