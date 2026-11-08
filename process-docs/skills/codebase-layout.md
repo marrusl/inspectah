@@ -184,7 +184,7 @@ Diataxis structure for GitHub Pages:
 
 **Process docs:** `process-docs/` — specs, plans, skills (internal, not published)
   - `process-docs/skills/` — Non-obvious patterns and gotchas (this file)
-  - `process-docs/release-notes/` — Per-release notes, `release-notes-<version>.md` (older alpha notes are `RELEASE-v<version>.md`)
+  - `process-docs/release-notes/` — Per-release notes, `release-notes-<version>.md`
   - `process-docs/specs/` — Design specs
   - `process-docs/plans/` — Implementation plans
 
