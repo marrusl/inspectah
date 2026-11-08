@@ -28,9 +28,18 @@ verified on a real EL8 host.
 ## What it costs
 
 A stored image is used as-is. A connected host that pulled the base image
-weeks ago scans against that copy, not the registry's current build. The
-callback prints `Using local image <ref>; not pulling...` so the operator
-can tell, and the docs tell them to `podman rmi` or re-pull to refresh.
+weeks ago scans against that copy, not the registry's current build. So the
+operator can tell, `extract_baseline` returns an `ImageSource` (`Local` or
+`Pulled`) next to the `BaselineData`, and `scan.rs` prints
+`Using local image <ref> (<digest>)` in place of `Pulled <ref> (...)`,
+followed by a line naming `podman pull <ref>` and `podman rmi <ref>` as the
+two ways to refresh. The line is built by `baseline_summary_line` in
+`pull_progress.rs` and printed after the pull viewport is cleared, so it
+survives in the interactive terminal. Do not route it through the
+pull-progress callback: in the default terminal mode that callback draws a
+transient viewport that is erased when extraction finishes. The source is
+not a field on `BaselineData` because that type is serialized into the
+snapshot.
 
 ## Test consequence
 

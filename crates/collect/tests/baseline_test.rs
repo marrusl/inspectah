@@ -4,7 +4,7 @@
 //! including happy path, command ordering, cleanup behavior,
 //! digest capture, and mixed-arch keying.
 
-use inspectah_collect::baseline::{ExtractionError, extract_baseline};
+use inspectah_collect::baseline::{ExtractionError, ImageSource, extract_baseline};
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_core::baseline::NormalizedImageRef;
 use inspectah_core::traits::executor::ExecResult;
@@ -91,7 +91,7 @@ fn baseline_happy_path_extracts_packages_and_digest() {
     let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
-    let data = result.unwrap();
+    let data = result.unwrap().data;
     assert_eq!(data.packages.len(), 3);
     assert!(data.packages.contains_key("bash.x86_64"));
     assert!(data.packages.contains_key("coreutils.x86_64"));
@@ -345,7 +345,7 @@ fn baseline_digest_fallback_repo_digests() {
     let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
-    let data = result.unwrap();
+    let data = result.unwrap().data;
     assert_eq!(data.image_digest, "sha256:fallback999");
 }
 
@@ -382,7 +382,7 @@ glibc\t0\t2.34\t83.el9\taarch64
     let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok());
 
-    let data = result.unwrap();
+    let data = result.unwrap().data;
     // Keys should use the arch from the output, not host arch.
     assert!(
         data.packages.contains_key("bash.aarch64"),
@@ -414,7 +414,9 @@ fn baseline_local_image_present_skips_pull() {
     let mut lines: Vec<String> = Vec::new();
     let result = extract_baseline(&mock, &normalized, &mut |l| lines.push(l.to_string()));
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
-    assert_eq!(result.unwrap().packages.len(), 3);
+    let extracted = result.unwrap();
+    assert_eq!(extracted.source, ImageSource::Local);
+    assert_eq!(extracted.data.packages.len(), 3);
 
     let log = mock.command_log();
     assert!(
@@ -427,11 +429,11 @@ fn baseline_local_image_present_skips_pull() {
         "extraction should proceed from the local image, got: {:?}",
         log
     );
+    // The caller reports the local image from `source`; the pull-progress
+    // callback carries pull output only, so nothing reaches it here.
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("local image") && l.contains(TEST_IMAGE)),
-        "the progress callback should say the local image is used, got: {:?}",
+        lines.is_empty(),
+        "no pull ran, so the pull-progress callback should be silent, got: {:?}",
         lines
     );
 }
@@ -444,6 +446,7 @@ fn baseline_local_image_absent_pulls() {
 
     let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    assert_eq!(result.unwrap().source, ImageSource::Pulled);
 
     let log = mock.command_log();
     let exists_pos = log

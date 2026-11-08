@@ -57,7 +57,7 @@ failure is how an unprivileged test shows the happy path is open.
 
 Run the same suite as root and execution falls through the `euid != 0` branch
 into the real body: source detection, a baseline container **image pull**
-(`eprintln!("Pulling {}...")`, around `scan.rs:430`), every inspector, and a
+(`eprintln!("Preparing baseline image {}...")`, around `scan.rs:430`), every inspector, and a
 tarball written into the test's working directory. A slow, network-dependent,
 filesystem-mutating run triggered by nothing the test checks.
 

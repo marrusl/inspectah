@@ -138,10 +138,18 @@ The scan output shows which image was resolved and how:
 ```
 Resolving target image...
   registry.redhat.io/rhel9/rhel-bootc:9.8 (OsRelease)
-Pulling registry.redhat.io/rhel9/rhel-bootc:9.8...
+Preparing baseline image registry.redhat.io/rhel9/rhel-bootc:9.8...
 Pulled registry.redhat.io/rhel9/rhel-bootc:9.8 (sha256:173c055cc9c7)
   Baseline extracted: 457 packages
   Resolved via: os-release (auto-detected)
+```
+
+When the image is already in local podman storage, no pull runs and the
+`Pulled` line is replaced by:
+
+```
+Using local image registry.redhat.io/rhel9/rhel-bootc:9.8 (sha256:173c055cc9c7)
+  Not pulled. To refresh it, run podman pull registry.redhat.io/rhel9/rhel-bootc:9.8 or podman rmi registry.redhat.io/rhel9/rhel-bootc:9.8.
 ```
 
 The resolution strategy tells you which step in the chain was used. The

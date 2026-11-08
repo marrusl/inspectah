@@ -7,11 +7,16 @@
 
 use std::io::Write;
 
+use inspectah_collect::baseline::ImageSource;
+
 /// Minimum terminal width for TTY viewport. Below this, fall back to non-TTY.
 pub const MIN_VIEWPORT_WIDTH: usize = 40;
 
 /// Maximum viewport content width.
 const MAX_VIEWPORT_WIDTH: usize = 72;
+
+/// Displayed digest length: `sha256:` plus 12 hex digits.
+const SHORT_DIGEST_LEN: usize = 19;
 
 /// Dynamic viewport height: 30% of terminal rows, floor 8, cap 16.
 pub fn viewport_height(terminal_rows: usize) -> usize {
@@ -103,14 +108,39 @@ pub fn count_completed_blobs(stderr_lines: &[String]) -> Option<usize> {
 /// Uses "blob transfers" rather than "layers" — the pull progress is
 /// transport-level blob chatter, not stable image-model truth.
 pub fn pull_summary_line(image_ref: &str, digest: &str, blob_count: Option<usize>) -> String {
-    let short_digest = if digest.len() > 19 {
-        &digest[..19]
-    } else {
-        digest
-    };
+    let short_digest = short_digest(digest);
     match blob_count {
         Some(n) => format!("Pulled {image_ref} ({n} blob transfers, {short_digest})"),
         None => format!("Pulled {image_ref} ({short_digest})"),
+    }
+}
+
+/// Format the summary shown once the baseline image is ready.
+///
+/// A pulled image gets [`pull_summary_line`]. A local image says no pull ran
+/// and names both ways to refresh it, since a stored copy can be older than
+/// the registry's current build and that changes the package baseline.
+pub fn baseline_summary_line(
+    image_ref: &str,
+    digest: &str,
+    source: ImageSource,
+    blob_count: Option<usize>,
+) -> String {
+    match source {
+        ImageSource::Pulled => pull_summary_line(image_ref, digest, blob_count),
+        ImageSource::Local => format!(
+            "Using local image {image_ref} ({})\n  Not pulled. To refresh it, run podman pull {image_ref} or podman rmi {image_ref}.",
+            short_digest(digest)
+        ),
+    }
+}
+
+/// Shorten a digest for display: `sha256:` plus the first 12 hex digits.
+fn short_digest(digest: &str) -> &str {
+    if digest.len() > SHORT_DIGEST_LEN {
+        &digest[..SHORT_DIGEST_LEN]
+    } else {
+        digest
     }
 }
 
@@ -318,6 +348,37 @@ mod tests {
         let line = pull_summary_line("quay.io/test:latest", "sha256:abc123", None);
         assert!(!line.contains("blob transfers"));
         assert!(line.contains("sha256:abc123"));
+    }
+
+    #[test]
+    fn baseline_summary_pulled_reports_the_pull() {
+        let line = baseline_summary_line(
+            "quay.io/test:latest",
+            "sha256:abc123def456789",
+            ImageSource::Pulled,
+            Some(7),
+        );
+        assert!(line.starts_with("Pulled quay.io/test:latest"));
+        assert!(line.contains("7 blob transfers"));
+        assert!(!line.contains("local"));
+    }
+
+    #[test]
+    fn baseline_summary_local_says_no_pull_and_how_to_refresh() {
+        let line = baseline_summary_line(
+            "quay.io/test:latest",
+            "sha256:abc123def456789",
+            ImageSource::Local,
+            None,
+        );
+        assert!(line.starts_with("Using local image quay.io/test:latest (sha256:abc123def45"));
+        assert!(!line.contains("Pulled"));
+        assert!(line.contains("podman pull quay.io/test:latest"));
+        assert!(line.contains("podman rmi quay.io/test:latest"));
+        assert!(
+            !line.contains('`'),
+            "terminal output must not carry backticks"
+        );
     }
 
     #[test]

@@ -427,12 +427,12 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Step 3: Extract baseline
     let baseline_data = match &normalized_ref {
         Some(norm) => {
-            eprintln!("Pulling {}...", norm.as_str());
+            eprintln!("Preparing baseline image {}...", norm.as_str());
 
             let use_viewport = mode == crate::progress::Mode::Pretty;
             let mut collected_lines: Vec<String> = Vec::new();
 
-            let data = if use_viewport {
+            let extracted = if use_viewport {
                 // TTY: viewport rendering
                 let (term_width, term_height) = terminal_size::terminal_size()
                     .map(|(w, h)| (w.0 as usize, h.0 as usize))
@@ -461,12 +461,12 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                         )
                     };
                     match result {
-                        Ok(data) => {
+                        Ok(extracted) => {
                             // Only clear viewport if lines were actually rendered.
                             if ring_pos > 0 {
                                 pull_progress::viewport_cleanup(viewport_lines);
                             }
-                            data
+                            extracted
                         }
                         Err(_e) => {
                             if ring_pos > 0 {
@@ -496,7 +496,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                         )
                     };
                     match result {
-                        Ok(data) => data,
+                        Ok(extracted) => extracted,
                         Err(_e) => {
                             let stderr_combined = collected_lines.join("\n");
                             let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
@@ -519,7 +519,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                     inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
                 };
                 match result {
-                    Ok(data) => data,
+                    Ok(extracted) => extracted,
                     Err(_e) => {
                         let stderr_combined = collected_lines.join("\n");
                         let kind = super::pull_failure::classify_pull_failure(&stderr_combined);
@@ -534,11 +534,18 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
                 }
             };
 
-            // Pull summary line
+            // Summary line: says whether the image was pulled or used from
+            // local storage, so a stored copy is not reported as a pull.
+            let data = extracted.data;
             let blob_count = pull_progress::count_completed_blobs(&collected_lines);
             eprintln!(
                 "{}",
-                pull_progress::pull_summary_line(norm.as_str(), &data.image_digest, blob_count,)
+                pull_progress::baseline_summary_line(
+                    norm.as_str(),
+                    &data.image_digest,
+                    extracted.source,
+                    blob_count,
+                )
             );
 
             // Provenance block

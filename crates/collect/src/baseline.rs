@@ -26,6 +26,29 @@ pub enum ExtractionError {
     DigestFailed(String),
 }
 
+/// Where the baseline image came from on this scan.
+///
+/// Reported to the caller so the terminal can say whether the baseline is a
+/// fresh pull or a stored copy that may be older than the registry's build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageSource {
+    /// Already in local podman storage; no pull ran.
+    Local,
+    /// Pulled from the registry during this scan.
+    Pulled,
+}
+
+/// A successful baseline extraction: the snapshot data plus where the image
+/// came from. The source is kept out of [`BaselineData`] because that type is
+/// serialized into the snapshot, and provenance here is terminal-only.
+#[derive(Debug)]
+pub struct ExtractedBaseline {
+    /// Baseline package data recorded in the snapshot.
+    pub data: BaselineData,
+    /// Whether the image was used from local storage or pulled.
+    pub source: ImageSource,
+}
+
 /// The nsenter prefix used to enter the host mount/UTS/IPC/net namespaces.
 const NSENTER_PREFIX: &[&str] = &["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--"];
 
@@ -82,11 +105,14 @@ fn container_name() -> String {
 /// already in local storage), create, start, exec rpm, cleanup, then
 /// inspect the image for digest. The container is always
 /// removed when it was successfully created, even on error.
+///
+/// `on_pull_line` receives `podman pull` stderr only; it is not called when
+/// the local image is used. The returned [`ImageSource`] says which happened.
 pub fn extract_baseline(
     executor: &dyn Executor,
     normalized_ref: &NormalizedImageRef,
     on_pull_line: &mut dyn FnMut(&str),
-) -> Result<BaselineData, ExtractionError> {
+) -> Result<ExtractedBaseline, ExtractionError> {
     let image_ref = normalized_ref.as_str();
     let ctr_name = container_name();
 
@@ -106,10 +132,8 @@ pub fn extract_baseline(
     //    separate command rather than `podman pull --policy missing` so it
     //    does not depend on which podman release added that flag.
     let exists_result = run_nsenter(executor, &["podman", "image", "exists", image_ref]);
-    if exists_result.success() {
-        on_pull_line(&format!(
-            "Using local image {image_ref}; not pulling. Remove it with `podman rmi` to pull a fresh copy."
-        ));
+    let source = if exists_result.success() {
+        ImageSource::Local
     } else {
         let pull_result =
             run_nsenter_with_callback(executor, &["podman", "pull", image_ref], on_pull_line);
@@ -119,7 +143,8 @@ pub fn extract_baseline(
                 reason: pull_result.stderr.trim().to_string(),
             });
         }
-    }
+        ImageSource::Pulled
+    };
 
     // 2. Create
     let create_result = run_nsenter(
@@ -187,10 +212,13 @@ pub fn extract_baseline(
 
     let extracted_at = chrono_now_utc();
 
-    Ok(BaselineData {
-        image_digest: digest,
-        packages,
-        extracted_at,
+    Ok(ExtractedBaseline {
+        data: BaselineData {
+            image_digest: digest,
+            packages,
+            extracted_at,
+        },
+        source,
     })
 }
 
