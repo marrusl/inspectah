@@ -2147,7 +2147,9 @@ pub fn scan_unmanaged_files(
 /// Both unmanaged walks match `exclude_paths` and `language_env_paths`
 /// with this, so an entry such as `/opt/app` hides `/opt/app/bin/x` but
 /// not the sibling `/opt/app-data`. A trailing slash on `prefix` is
-/// ignored, since shell completion spells directories that way.
+/// ignored, since shell completion spells directories that way. Callers
+/// pass host-absolute paths: an empty or `/` prefix matches every
+/// absolute path, but no relative one.
 fn path_is_within(path: &str, prefix: &str) -> bool {
     let prefix = prefix.trim_end_matches('/');
     path == prefix
@@ -4163,6 +4165,12 @@ mod tests {
             ("/opt/app.conf", "/opt/app", false),
             ("/opt", "/opt/app", false),
             ("/opt/app", "/", true),
+            ("/opt/app", "", true),
+            ("/opt/app/bin/x", "/opt/app///", true),
+            ("/opt/app-data", "/opt/app///", false),
+            ("/opt/app/", "/opt/app", true),
+            ("/opt/äpp", "/opt/ä", false),
+            ("/opt/ä/x", "/opt/ä", true),
         ];
         for (path, prefix, expected) in cases {
             assert_eq!(
@@ -4302,27 +4310,18 @@ mod tests {
             "/usr/lib/app-data/y",
             "/usr/lib/app.conf",
         ]);
-        let not_hidden = vec![
-            "/usr/lib/app-data".to_string(),
-            "/usr/lib/app.conf".to_string(),
+        // The no-filter case proves the fixture reports `/usr/lib/app`
+        // at all, so the filtered cases are not passing vacuously.
+        let everything: &[&str] = &["/usr/lib/app", "/usr/lib/app-data", "/usr/lib/app.conf"];
+        let not_hidden: &[&str] = &["/usr/lib/app-data", "/usr/lib/app.conf"];
+        let cases: &[(&[&str], &[&str], &[&str])] = &[
+            (&[], &[], everything),
+            (&["/usr/lib/app"], &[], not_hidden),
+            (&["/usr/lib/app/"], &[], not_hidden),
+            (&[], &["/usr/lib/app"], not_hidden),
+            (&[], &["/usr/lib/app/"], not_hidden),
         ];
-        let cases: &[(&str, &str, &[&str], &[&str])] = &[
-            ("exclude", "/usr/lib/app", &["/usr/lib/app"], &[]),
-            (
-                "exclude, trailing slash",
-                "/usr/lib/app/",
-                &["/usr/lib/app/"],
-                &[],
-            ),
-            ("language env", "/usr/lib/app", &[], &["/usr/lib/app"]),
-            (
-                "language env, trailing slash",
-                "/usr/lib/app/",
-                &[],
-                &["/usr/lib/app/"],
-            ),
-        ];
-        for (label, entry, exclude, language_envs) in cases {
+        for (exclude, language_envs, expected) in cases {
             let exclude: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
             let language_envs: Vec<String> = language_envs.iter().map(|s| s.to_string()).collect();
             let mut paths = walk_fixture(
@@ -4332,7 +4331,10 @@ mod tests {
                 &language_envs,
             );
             paths.sort();
-            assert_eq!(paths, not_hidden, "{label} {entry}");
+            assert_eq!(
+                paths, *expected,
+                "exclude {exclude:?}, language envs {language_envs:?}"
+            );
         }
     }
 

@@ -268,36 +268,83 @@ fn scan_unmanaged_applies_exclude_paths() {
 fn scan_unmanaged_path_lists_match_on_path_boundary() {
     // An entry covers the path itself and everything under it, never a
     // sibling that merely shares its leading characters.
+    // `/opt/app-link` is a sibling symlink, so the symlink branch's own
+    // filter calls are held to the same boundary as the directory and
+    // regular-file branches.
     let exec = base_mock()
-        .with_dir("/opt", vec!["app", "app-data", "app.conf"])
+        .with_dir("/opt", vec!["app", "app-data", "app.conf", "app-link"])
         .with_dir("/opt/app", vec!["bin"])
         .with_dir("/opt/app/bin", vec!["x"])
-        .with_dir("/opt/app-data", vec!["y"]);
-    let exec = ["/opt/app/bin/x", "/opt/app-data/y", "/opt/app.conf"]
-        .iter()
-        .fold(exec, |exec, path| {
-            exec.with_command(&format!("rpm -qf {path}"), rpm_not_owned())
-                .with_command(
-                    &format!("stat -c %s %Y %u %g %a {path}"),
-                    stat_result(1024, 1700000000),
-                )
-                .with_command(&format!("file -b {path}"), file_config_result())
-        });
+        .with_dir("/opt/app-data", vec!["y"])
+        .with_command(
+            "test -L /opt/app-link",
+            ExecResult {
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "readlink -f /opt/app-link",
+            ExecResult {
+                stdout: "/opt/app/bin/x\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+    let exec = [
+        "/opt/app/bin/x",
+        "/opt/app-data/y",
+        "/opt/app.conf",
+        "/opt/app-link",
+    ]
+    .iter()
+    .fold(exec, |exec, path| {
+        exec.with_command(&format!("rpm -qf {path}"), rpm_not_owned())
+            .with_command(
+                &format!("stat -c %s %Y %u %g %a {path}"),
+                stat_result(1024, 1700000000),
+            )
+            .with_command(&format!("file -b {path}"), file_config_result())
+    });
 
-    let cases: &[(&str, &[&str], &[&str])] = &[
-        ("exclude", &["/opt/app"], &[]),
-        ("exclude, trailing slash", &["/opt/app/"], &[]),
-        ("language env", &[], &["/opt/app"]),
-        ("language env, trailing slash", &[], &["/opt/app/"]),
+    // The no-filter case proves the fixture reports `/opt/app/bin/x` at
+    // all, so the filtered cases are not passing vacuously.
+    let everything: &[&str] = &[
+        "/opt/app-data/y",
+        "/opt/app-link",
+        "/opt/app.conf",
+        "/opt/app/bin/x",
     ];
-    for (label, exclude, language_envs) in cases {
+    let not_hidden: &[&str] = &["/opt/app-data/y", "/opt/app-link", "/opt/app.conf"];
+    let cases: &[(&[&str], &[&str], &[&str])] = &[
+        (&[], &[], everything),
+        (&["/opt/app"], &[], not_hidden),
+        (&["/opt/app/"], &[], not_hidden),
+        (&[], &["/opt/app"], not_hidden),
+        (&[], &["/opt/app/"], not_hidden),
+    ];
+    for (exclude, language_envs, expected) in cases {
         let exclude: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
         let language_envs: Vec<String> = language_envs.iter().map(|s| s.to_string()).collect();
         let result = scan_unmanaged_files(&exec, &language_envs, &exclude);
         let mut paths: Vec<&str> = result.items.iter().map(|i| i.path.as_str()).collect();
         paths.sort();
-        assert_eq!(paths, vec!["/opt/app-data/y", "/opt/app.conf"], "{label}");
+        assert_eq!(
+            paths, *expected,
+            "exclude {exclude:?}, language envs {language_envs:?}"
+        );
     }
+
+    // The link must reach the symlink branch, not fall through to the
+    // regular-file branch, or the cases above would not cover it.
+    let result = scan_unmanaged_files(&exec, &[], &[]);
+    let link = result
+        .items
+        .iter()
+        .find(|i| i.path == "/opt/app-link")
+        .expect("no-filter scan reports /opt/app-link");
+    assert_eq!(link.file_type, FileType::Symlink);
+    assert_eq!(link.link_target, "/opt/app/bin/x");
 }
 
 // ── Test 5: /var is NOT a scan root ──────────────────────────────
