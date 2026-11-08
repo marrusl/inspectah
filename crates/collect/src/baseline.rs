@@ -1,5 +1,6 @@
-//! Baseline extraction: pulls a container image and extracts the
-//! installed RPM package list via nsenter + podman.
+//! Baseline extraction: pulls a container image (or uses the copy already
+//! in local storage) and extracts the installed RPM package list via
+//! nsenter + podman.
 
 use std::collections::HashMap;
 
@@ -77,8 +78,9 @@ fn container_name() -> String {
 
 /// Extract baseline package data from a container image.
 ///
-/// Runs the full extraction sequence: pull, create, start, exec rpm,
-/// cleanup, then inspect the image for digest. The container is always
+/// Runs the full extraction sequence: pull (skipped when the image is
+/// already in local storage), create, start, exec rpm, cleanup, then
+/// inspect the image for digest. The container is always
 /// removed when it was successfully created, even on error.
 pub fn extract_baseline(
     executor: &dyn Executor,
@@ -96,14 +98,27 @@ pub fn extract_baseline(
 
     let mut guard = CleanupGuard::new(executor);
 
-    // 1. Pull (with per-line stderr callback for live progress)
-    let pull_result =
-        run_nsenter_with_callback(executor, &["podman", "pull", image_ref], on_pull_line);
-    if !pull_result.success() {
-        return Err(ExtractionError::PullFailed {
-            image_ref: image_ref.to_string(),
-            reason: pull_result.stderr.trim().to_string(),
-        });
+    // 1. Use the local image when present, otherwise pull (with per-line
+    //    stderr callback for live progress). `podman pull` defaults to
+    //    `--policy always` and contacts the registry even when the image is
+    //    already stored, so a disconnected host with a `podman load`ed base
+    //    image would fail here without the existence check. The check is a
+    //    separate command rather than `podman pull --policy missing` so it
+    //    does not depend on which podman release added that flag.
+    let exists_result = run_nsenter(executor, &["podman", "image", "exists", image_ref]);
+    if exists_result.success() {
+        on_pull_line(&format!(
+            "Using local image {image_ref}; not pulling. Remove it with `podman rmi` to pull a fresh copy."
+        ));
+    } else {
+        let pull_result =
+            run_nsenter_with_callback(executor, &["podman", "pull", image_ref], on_pull_line);
+        if !pull_result.success() {
+            return Err(ExtractionError::PullFailed {
+                image_ref: image_ref.to_string(),
+                reason: pull_result.stderr.trim().to_string(),
+            });
+        }
     }
 
     // 2. Create

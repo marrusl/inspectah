@@ -168,8 +168,9 @@ sudo inspectah scan \
   -o ./scan-output.tar.gz
 ```
 
-The scan still runs `podman pull` on the reference it resolves, so the
-staged image has to be that reference.
+The scan uses an image already in local storage instead of pulling it, but
+only under the reference it resolves, so the staged image has to be that
+reference.
 
 ## Specify the base image explicitly
 

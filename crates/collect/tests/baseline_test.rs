@@ -117,48 +117,42 @@ fn baseline_command_ordering() {
     assert!(result.is_ok());
 
     let log = mock.command_log();
+    // Verify ordering: which, image exists, pull, create, start, exec, rm,
+    // inspect. The mock has no `image exists` entry, so it reports the image
+    // absent and the pull runs.
+    let expected = [
+        "which podman",
+        "podman image exists",
+        "podman pull",
+        "podman create",
+        "podman start",
+        "podman exec",
+        "podman rm -f",
+        "podman inspect",
+    ];
     assert!(
-        log.len() >= 7,
-        "expected at least 7 commands, got {}",
-        log.len()
+        log.len() >= expected.len(),
+        "expected at least {} commands, got {:?}",
+        expected.len(),
+        log
     );
-
-    // Verify ordering: which, pull, create, start, exec, rm, inspect.
+    for (i, want) in expected.iter().enumerate() {
+        assert!(
+            log[i].contains(want),
+            "command {i} should be {want}, got: {}",
+            log[i]
+        );
+    }
     assert!(
-        log[0].contains("which podman"),
-        "first command should be which podman, got: {}",
-        log[0]
-    );
-    assert!(
-        log[1].contains("podman pull"),
-        "second command should be pull, got: {}",
-        log[1]
-    );
-    assert!(
-        log[2].contains("podman create"),
-        "third command should be create, got: {}",
-        log[2]
-    );
-    assert!(
-        log[3].contains("podman start"),
-        "fourth command should be start, got: {}",
-        log[3]
-    );
-    assert!(
-        log[4].contains("podman exec") && log[4].contains("rpm"),
-        "fifth command should be exec rpm, got: {}",
-        log[4]
-    );
-    assert!(
-        log[5].contains("podman rm -f"),
-        "sixth command should be rm -f, got: {}",
+        log[5].contains("rpm"),
+        "exec should run rpm, got: {}",
         log[5]
     );
     // The inspect is on the IMAGE ref, not the container name.
     assert!(
-        log[6].contains("podman inspect") && log[6].contains(TEST_IMAGE),
-        "seventh command should inspect the image, got: {}",
-        log[6]
+        log[7].contains(TEST_IMAGE),
+        "inspect should target the image, got: {}",
+        log[7]
     );
 }
 
@@ -171,7 +165,10 @@ fn baseline_create_includes_entrypoint_and_network_none() {
     assert!(result.is_ok());
 
     let log = mock.command_log();
-    let create_cmd = &log[2]; // index 2: which(0), pull(1), create(2)
+    let create_cmd = log
+        .iter()
+        .find(|c| c.contains("podman create"))
+        .expect("create should run");
     assert!(
         create_cmd.contains("--entrypoint"),
         "create must include --entrypoint, got: {}",
@@ -396,4 +393,88 @@ glibc\t0\t2.34\t83.el9\taarch64
         "should not have bash.x86_64 key"
     );
     assert_eq!(data.packages.len(), 3);
+}
+
+const IMAGE_EXISTS_KEY: &str = "nsenter -t 1 -m -u -i -n -- podman image exists";
+
+fn absent_result() -> ExecResult {
+    // `podman image exists` exits 1 with no output when the image is absent.
+    ExecResult {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: 1,
+    }
+}
+
+#[test]
+fn baseline_local_image_present_skips_pull() {
+    let mock = happy_mock().with_command(&format!("{IMAGE_EXISTS_KEY} {TEST_IMAGE}"), ok_result());
+    let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
+
+    let mut lines: Vec<String> = Vec::new();
+    let result = extract_baseline(&mock, &normalized, &mut |l| lines.push(l.to_string()));
+    assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    assert_eq!(result.unwrap().packages.len(), 3);
+
+    let log = mock.command_log();
+    assert!(
+        !log.iter().any(|c| c.contains("podman pull")),
+        "no pull should run when the image is present locally, got: {:?}",
+        log
+    );
+    assert!(
+        log.iter().any(|c| c.contains("podman create")),
+        "extraction should proceed from the local image, got: {:?}",
+        log
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("local image") && l.contains(TEST_IMAGE)),
+        "the progress callback should say the local image is used, got: {:?}",
+        lines
+    );
+}
+
+#[test]
+fn baseline_local_image_absent_pulls() {
+    let mock =
+        happy_mock().with_command(&format!("{IMAGE_EXISTS_KEY} {TEST_IMAGE}"), absent_result());
+    let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
+
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
+    assert!(result.is_ok(), "expected Ok, got {:?}", result);
+
+    let log = mock.command_log();
+    let exists_pos = log
+        .iter()
+        .position(|c| c.contains("podman image exists"))
+        .expect("existence check should run");
+    let pull_pos = log
+        .iter()
+        .position(|c| c.contains(&format!("podman pull {TEST_IMAGE}")))
+        .expect("pull should run when the image is absent");
+    assert!(
+        exists_pos < pull_pos,
+        "existence check must precede the pull, got: {:?}",
+        log
+    );
+}
+
+#[test]
+fn baseline_local_image_absent_pull_fails_returns_pull_failed() {
+    let mock = MockExecutor::new()
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- which podman", ok_result())
+        .with_command_prefix(IMAGE_EXISTS_KEY, absent_result())
+        .with_command_prefix(
+            "nsenter -t 1 -m -u -i -n -- podman pull",
+            fail_result("pull failed: dial tcp: lookup registry.redhat.io: no such host"),
+        );
+    let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
+
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
+    match result {
+        Err(ExtractionError::PullFailed { .. }) => {}
+        other => panic!("expected PullFailed, got {:?}", other),
+    }
 }

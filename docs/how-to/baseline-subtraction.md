@@ -56,7 +56,8 @@ sudo inspectah scan --base-image registry.redhat.io/rhel9/rhel-bootc:9.6
 ```
 
 This overrides all auto-detection and uses the specified image reference
-directly. The image must be pullable from the host where you run the scan.
+directly. The image must be pullable from the host where you run the scan,
+or already in that host's local podman storage.
 
 ### Cross-distro conversion
 
@@ -87,7 +88,8 @@ For disconnected or air-gapped environments, you have two options:
    Without `--base-image`, the scan resolves the image from the host's own
    release, so a RHEL 9.8 host pulls `rhel-bootc:9.8` and ignores a loaded
    `9.6`. Pass `--base-image` with the loaded reference to make the scan use
-   it. The scan still runs `podman pull` on that reference.
+   it. Because the image is already in local storage, the scan uses it and
+   does not contact the registry.
 
    ```bash
    # On a connected machine:
@@ -109,7 +111,10 @@ During a baseline scan, inspectah:
 
 1. **Resolves** the base image reference (auto-detection or CLI override)
 2. **Normalizes** the image reference to a fully qualified form
-3. **Pulls** the container image layers (with progress output)
+3. **Pulls** the container image layers (with progress output), or uses the
+   image already in local storage without pulling. A stored image is not
+   refreshed: pull it again or remove it with `podman rmi` to pick up a newer
+   build
 4. **Extracts** the package manifest from the image
 5. **Compares** each host package against the manifest
 
@@ -121,9 +126,9 @@ the base image.
 
 ### Network requirements
 
-Baseline extraction requires pulling a container image. The host needs
-network access to the registry hosting the target image. For air-gapped
-environments, see the section above on pre-staging the base image via
+Baseline extraction needs the target image. When it is not already in local
+podman storage, the host needs network access to the registry hosting it. For
+air-gapped environments, see the section above on pre-staging the base image via
 `podman save` and `podman load`.
 
 ## Verify the resolved image
