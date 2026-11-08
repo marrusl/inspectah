@@ -53,9 +53,24 @@ different things, on purpose, for different questions:
    because it is the reason `Ord`-based tie-breaking there uses the raw
    string, not `RepoId`'s own folded `Ord`.
 
-If you touch repo-name matching, decide which of the two questions you
-are answering (repo-less yes/no, or full attribution) before reusing
-either function — they are no longer the same logic wearing two names.
+A third, render-side question sits on top of the first:
+**`render/repoless.rs::disabled_repo_install()`** asks whether a package
+the scan left repo-less can install from its own repo with
+`--enablerepo`. It matches `source_repo` against the section ids of the
+*included* repo files by case-insensitive equality (the `Exact` rule,
+which is what `normalize_source_repos` already rewrote `source_repo`
+to), and accepts only a section that is disabled and defines a source.
+It is decided at render rather than at scan because whether the `.repo`
+file ships is a refine decision. The Containerfile renderer, the
+repo-less block and the manual follow-up all ask this one function, and
+any package carrying a `repoless_annotation` stays out of the plain
+`dnf install` list whatever the answer: no enabled repo on the host
+serves it, so a plain install fails with `Unable to find a match`.
+
+If you touch repo-name matching, decide which of these questions you
+are answering (repo-less yes/no, full attribution, or install from a
+disabled repo) before reusing any of the functions — they are no longer
+the same logic wearing different names.
 
 ## Edge case: anaconda
 

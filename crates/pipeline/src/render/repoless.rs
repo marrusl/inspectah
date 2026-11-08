@@ -1,10 +1,51 @@
 use inspectah_core::rpm_filename::StagedName;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::group_render::RenderContext;
-use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::repo::{RepoId, parse_repo_sections};
+use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
 use super::language_packages::sanitize_for_comment;
+use super::safety::sanitize_shell_value;
+
+/// The repo a repo-less package installs from with `--enablerepo`, when
+/// the source host has that repo disabled and this export carries it.
+///
+/// The scan marks a package repo-less when its `source_repo` is not in
+/// `dnf repolist --enabled` and no enabled repo serves it by name. When
+/// that repo is merely disabled (`enabled=0`) in a `.repo` file the export
+/// ships, the package was installed from it on purpose, so the build
+/// installs it from the same repo instead of asking for an upload. This
+/// is decided at render, not at scan, because whether the `.repo` file
+/// ships is a refine decision the scan cannot see.
+///
+/// Returns `None`, leaving the package repo-less, unless all of these
+/// hold: the package is included, it carries a repo-less annotation, its
+/// `source_repo` is a real repo id (not `@commandline` or another `@`
+/// pseudo-repo), an included repo file has a section with that id that
+/// is disabled and defines a source, and the id and the package's name
+/// and arch pass `sanitize_shell_value`. The id is returned as the `.repo`
+/// file spells it, since `--enablerepo` takes it verbatim.
+pub(crate) fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
+    if !pkg.disposition.is_included()
+        || pkg.repoless_annotation.is_empty()
+        || pkg.source_repo.is_empty()
+        || pkg.source_repo.starts_with('@')
+        || sanitize_shell_value(&pkg.name).is_none()
+        || sanitize_shell_value(&pkg.arch).is_none()
+    {
+        return None;
+    }
+    rpm.repo_files
+        .iter()
+        .filter(|f| f.disposition.is_included())
+        .flat_map(|f| parse_repo_sections(&f.content))
+        .find(|sec| sec.id.as_str().eq_ignore_ascii_case(&pkg.source_repo))
+        .filter(|sec| {
+            !sec.enabled && sec.has_source && sanitize_shell_value(sec.id.as_str()).is_some()
+        })
+        .map(|sec| sec.id)
+}
 
 /// Whether an install block is a build instruction or advice.
 ///
@@ -87,10 +128,13 @@ pub fn repoless_rpm_lines(
         None => return Vec::new(),
     };
 
+    // A package that installs from its host-disabled repo renders in the
+    // packages section instead, so it is not offered here a second time.
     let repoless: Vec<_> = rpm_section
         .packages_added
         .iter()
         .filter(|p| !p.repoless_annotation.is_empty())
+        .filter(|p| disabled_repo_install(rpm_section, p).is_none())
         .collect();
 
     if repoless.is_empty() {
