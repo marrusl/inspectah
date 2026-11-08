@@ -26,9 +26,12 @@ use std::path::Path;
 
 /// Lowest regular-user UID (`UID_MIN` in shadow-utils' `/etc/login.defs`).
 pub const NON_SYSTEM_UID_MIN: u32 = 1000;
-/// First UID past the regular-user range (exclusive bound). It is `UID_MAX`
-/// (60000) in shadow-utils' `/etc/login.defs`, and sits below the `setup`
-/// package's `nobody` (65534, home `/`) and the kernel overflow UID 4294967294.
+/// First UID past the regular-user range (exclusive bound). The value is
+/// shadow-utils' default `UID_MAX` (60000) in `/etc/login.defs`, the highest
+/// UID `useradd` assigns automatically, so 60000 is itself a valid regular UID;
+/// it is excluded on purpose to keep this inspector's existing behavior. The
+/// bound sits below the `setup` package's `nobody` (65534, home `/`, also the
+/// kernel's default `overflowuid`) and the `(uid_t)-2` sentinel 4294967294.
 pub const NON_SYSTEM_UID_MAX: u32 = 60000;
 const NON_SYSTEM_GID_MIN: u32 = 1000;
 const NON_SYSTEM_GID_MAX: u32 = 60000; // exclusive

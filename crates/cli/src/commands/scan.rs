@@ -163,7 +163,8 @@ pub struct ScanArgs {
     pub exclude_path: Vec<String>,
 
     /// Scan home directories for non-RPM software.
-    /// Value: 'all' for users with UID >= 1000, or a comma-separated list of usernames.
+    /// Value: 'all' for users with UID 1000 through 59999, or a comma-separated list of usernames.
+    /// A home of / is not scanned.
     #[arg(long, value_name = "all|USER,...")]
     pub scan_home: Option<String>,
 
@@ -1593,7 +1594,7 @@ VARIANT_ID="workstation"
         assert!(result.is_err(), "--scan-home without a value must error");
     }
 
-    // --- Test 2: --scan-home all discovers users with UID >= 1000 ---
+    // --- Test 2: --scan-home all discovers users with UID 1000 through 59999 ---
 
     #[test]
     fn scan_home_all_discovers_regular_users() {
@@ -1611,7 +1612,11 @@ VARIANT_ID="workstation"
         );
 
         let users = resolve_home_users(&exec, "all");
-        assert_eq!(users.len(), 2, "should find 2 users with UID >= 1000");
+        assert_eq!(
+            users.len(),
+            2,
+            "should find 2 users with UID 1000 through 59999"
+        );
         assert_eq!(users[0].0, "deploy");
         assert_eq!(users[0].1, "/home/deploy");
         assert_eq!(users[1].0, "app");
@@ -1885,7 +1890,7 @@ VARIANT_ID="workstation"
     fn scan_home_never_adds_root_or_empty_home() {
         // Every spelling of an unusable home, reached both through `all`
         // (in-range uid) and by naming the user.
-        for home in ["/", "", "//"] {
+        for home in ["/", "", "//", "home/svc", "../etc"] {
             let line = format!("svc:x:1500:1500:svc:{home}:/bin/bash\n");
             let exec = ScanTestExecutor::new()
                 .with_command("getent passwd", getent_ok(&line))
