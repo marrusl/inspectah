@@ -770,9 +770,6 @@ fn packages_section_lines(
     let mut todo_lines = Vec::new();
 
     for pkg in &rpm.packages_added {
-        if super::repoless::disabled_repo_install(rpm, pkg).is_some() {
-            continue;
-        }
         if let Some(line) = manual_follow_up_line(pkg) {
             todo_lines.push(line);
         }
@@ -839,10 +836,19 @@ fn packages_section_lines(
     // served as an active install *and* as a MANUAL block.
     let mut repo_enabling: Vec<(&PackageEntry, String)> = Vec::new();
     let mut demoted: Vec<(&PackageEntry, super::repo_enabling::ServingLoss)> = Vec::new();
+    // Packages installed from a repo the source host has disabled, by repo.
+    // They come from the same selection as the plain list, so a non-leaf
+    // dependency is left to dnf here as it is there, and naming and
+    // multiarch handling match.
+    let mut disabled_repo_installs: std::collections::BTreeMap<RepoId, Vec<String>> =
+        std::collections::BTreeMap::new();
 
-    for pkg in installable_packages {
-        // Suppress packages whose name is covered by a renderable group
-        if group_member_suppressed.contains(&pkg.name) {
+    for pkg in &installable_packages {
+        let disabled_repo = super::repoless::disabled_repo_install(rpm, pkg);
+        // Suppress packages whose name is covered by a renderable group,
+        // except one from a disabled repo: the group transaction does not
+        // enable that repo, so it cannot install the member.
+        if disabled_repo.is_none() && group_member_suppressed.contains(&pkg.name) {
             continue;
         }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
@@ -854,15 +860,18 @@ fn packages_section_lines(
         // gave it, and still owes the operator the FIXME naming what to
         // re-include.
         match super::repo_enabling::repo_enabling_export(rpm, pkg) {
-            super::repo_enabling::RepoEnablingExport::NotEnabling => {
+            super::repo_enabling::RepoEnablingExport::NotEnabling => match disabled_repo {
+                Some(id) => disabled_repo_installs
+                    .entry(id)
+                    .or_default()
+                    .push(install_name),
                 // No enabled repo on the source host serves a repo-less
                 // package, so a plain `dnf install` of it fails with
-                // `Unable to find a match`. It renders from its disabled
-                // repo below, or in the repo-less block.
-                if pkg.repoless_annotation.is_empty() {
-                    install_names.push(install_name);
-                }
-            }
+                // `Unable to find a match`. It renders in the repo-less
+                // block.
+                None if !pkg.repoless_annotation.is_empty() => {}
+                None => install_names.push(install_name),
+            },
             super::repo_enabling::RepoEnablingExport::Served => {
                 repo_enabling.push((pkg, install_name))
             }
@@ -912,22 +921,14 @@ fn packages_section_lines(
     // Packages installed from a repo the source host has disabled: one
     // transaction per repo, so enabling it cannot change what any other
     // package resolves to.
-    let mut disabled_repo_installs: std::collections::BTreeMap<RepoId, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for pkg in &rpm.packages_added {
-        if let Some(id) = super::repoless::disabled_repo_install(rpm, pkg) {
-            disabled_repo_installs
-                .entry(id)
-                .or_default()
-                .push(install_name_for_package(pkg, &duplicate_name_counts));
-        }
-    }
     if !disabled_repo_installs.is_empty() {
-        let count: usize = disabled_repo_installs.values().map(Vec::len).sum();
-        let mut body: Vec<String> = Vec::new();
-        for (id, names) in &mut disabled_repo_installs {
+        for names in disabled_repo_installs.values_mut() {
             names.sort();
             names.dedup();
+        }
+        let count: usize = disabled_repo_installs.values().map(Vec::len).sum();
+        let mut body: Vec<String> = Vec::new();
+        for (id, names) in &disabled_repo_installs {
             if let Some(banner) = crb.banner() {
                 body.push(banner);
             }
@@ -2458,29 +2459,58 @@ mod tests {
         );
     }
 
+    const DISABLED_REPO_ID: &str = "epel-cisco-openh264";
+    const DISABLED_REPO_PATH: &str = "/etc/yum.repos.d/fedora-cisco-openh264.repo";
+    const DISABLED_REPO_CONTENT: &str = "[epel-cisco-openh264]\n\
+         name=openh264\n\
+         metalink=https://example.invalid/metalink\n\
+         enabled=0\n";
+
+    /// Mark `name` as the scan records a package from a repo the host
+    /// keeps disabled: repo-less, with that repo as its `source_repo`.
+    fn make_disabled_repo_package(snap: &mut InspectionSnapshot, name: &str, source_repo: &str) {
+        let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+        for pkg in rpm.packages_added.iter_mut().filter(|p| p.name == name) {
+            pkg.source_repo = source_repo.into();
+            pkg.repoless_annotation = format!(
+                "No repo source: repo '{source_repo}' not in enabled repos, manual resolution needed"
+            );
+        }
+    }
+
     /// A package installed from a repo the source host has disabled
     /// renders once: from that repo with `--enablerepo` while the export
     /// carries the repo's definition, and in the repo-less block
     /// otherwise. Never in the plain package list, where it fails the
-    /// build with `Unable to find a match`.
+    /// build with `Unable to find a match`. It is selected the way the
+    /// plain list selects: an excluded package and a non-leaf dependency
+    /// render nowhere, and group membership does not suppress it.
     #[test]
     fn a_disabled_repo_package_renders_once() {
-        const REPO_ID: &str = "epel-cisco-openh264";
-        const REPO_PATH: &str = "/etc/yum.repos.d/fedora-cisco-openh264.repo";
-        const DISABLED: &str = "[epel-cisco-openh264]\n\
-             name=openh264\n\
-             metalink=https://example.invalid/metalink\n\
-             enabled=0\n";
         const CRB_CONTENT: &str = "[codeready-builder-for-rhel-9-aarch64-rpms]\n\
              baseurl=https://example.invalid/crb\nenabled=1\n";
         const ENABLEREPO: &str = "--enablerepo=epel-cisco-openh264";
         const INSTALL_LINE: &str = "    openh264 \\";
+        const GROUP: &str = "Multimedia";
 
+        #[derive(Clone, Copy)]
         enum Want {
             /// One install, carrying the flag; no repo-less block.
             FromRepo,
-            /// The repo-less block; no flag, no install by name.
-            Repoless,
+            /// The repo-less block; no flag, no install by name. `todo`
+            /// says whether the manual follow-up names it too.
+            Repoless { todo: bool },
+            /// Nowhere: no install, no flag, no repo-less block.
+            Nothing,
+        }
+        #[derive(Clone, Copy)]
+        enum Leaf {
+            /// The snapshot carries no leaf data.
+            Unknown,
+            /// A package nothing else depends on.
+            TopLevel,
+            /// A dependency of another package, left to dnf.
+            Dependency,
         }
         struct Case {
             name: &'static str,
@@ -2488,61 +2518,81 @@ mod tests {
             repo_file: Option<(&'static str, bool)>,
             crb: bool,
             included: bool,
+            state: PackageState,
+            leaf: Leaf,
+            group_member: bool,
             want: Want,
         }
+        const BASE: Case = Case {
+            name: "disabled repo shipped, package included",
+            source_repo: DISABLED_REPO_ID,
+            repo_file: Some((DISABLED_REPO_CONTENT, true)),
+            crb: false,
+            included: true,
+            state: PackageState::Added,
+            leaf: Leaf::Unknown,
+            group_member: false,
+            want: Want::FromRepo,
+        };
         let cases = [
-            Case {
-                name: "disabled repo shipped, package included",
-                source_repo: REPO_ID,
-                repo_file: Some((DISABLED, true)),
-                crb: false,
-                included: true,
-                want: Want::FromRepo,
-            },
+            BASE,
             Case {
                 name: "disabled repo shipped alongside CRB",
-                source_repo: REPO_ID,
-                repo_file: Some((DISABLED, true)),
                 crb: true,
-                included: true,
-                want: Want::FromRepo,
+                ..BASE
             },
             Case {
                 name: "disabled repo not captured",
-                source_repo: REPO_ID,
                 repo_file: None,
-                crb: false,
-                included: true,
-                want: Want::Repoless,
+                want: Want::Repoless { todo: false },
+                ..BASE
             },
             Case {
                 name: "disabled repo excluded in refine",
-                source_repo: REPO_ID,
-                repo_file: Some((DISABLED, false)),
-                crb: false,
-                included: true,
-                want: Want::Repoless,
+                repo_file: Some((DISABLED_REPO_CONTENT, false)),
+                want: Want::Repoless { todo: false },
+                ..BASE
             },
             Case {
                 name: "package excluded in refine",
-                source_repo: REPO_ID,
-                repo_file: Some((DISABLED, true)),
-                crb: false,
                 included: false,
-                want: Want::Repoless,
+                want: Want::Nothing,
+                ..BASE
             },
             Case {
                 name: "@commandline package is unchanged",
                 source_repo: "@commandline",
-                repo_file: Some((DISABLED, true)),
-                crb: false,
-                included: true,
-                want: Want::Repoless,
+                want: Want::Repoless { todo: true },
+                ..BASE
+            },
+            Case {
+                name: "a no-repo state is not installable by name, whatever its repo",
+                state: PackageState::NoRepo,
+                want: Want::Repoless { todo: true },
+                ..BASE
+            },
+            Case {
+                name: "a leaf installs from its repo",
+                leaf: Leaf::TopLevel,
+                ..BASE
+            },
+            Case {
+                name: "a non-leaf dependency is left to dnf",
+                leaf: Leaf::Dependency,
+                want: Want::Nothing,
+                ..BASE
+            },
+            Case {
+                name: "a group member still installs: the group transaction lacks the repo",
+                group_member: true,
+                ..BASE
             },
         ];
 
         for case in &cases {
             let mut snap = snapshot_with_packages(&["openh264", "htop"]);
+            make_disabled_repo_package(&mut snap, "openh264", case.source_repo);
+            let mut ctx = RenderContext::default();
             {
                 let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
                 let pkg = rpm
@@ -2550,22 +2600,41 @@ mod tests {
                     .iter_mut()
                     .find(|p| p.name == "openh264")
                     .expect("fixture has openh264");
-                pkg.source_repo = case.source_repo.into();
-                pkg.repoless_annotation = format!(
-                    "No repo source: repo '{}' not in enabled repos, manual resolution needed",
-                    case.source_repo
-                );
                 pkg.disposition = FindingKind::from_bool(case.included);
+                pkg.state = case.state.clone();
                 if let Some((content, included)) = case.repo_file {
-                    rpm.repo_files.push(repo_file(REPO_PATH, content, included));
+                    rpm.repo_files
+                        .push(repo_file(DISABLED_REPO_PATH, content, included));
                 }
                 if case.crb {
                     rpm.repo_files
                         .push(repo_file("/etc/yum.repos.d/crb.repo", CRB_CONTENT, true));
                 }
+                match case.leaf {
+                    Leaf::Unknown => {}
+                    Leaf::TopLevel => {
+                        rpm.leaf_packages =
+                            Some(vec!["openh264.x86_64".into(), "htop.x86_64".into()]);
+                    }
+                    Leaf::Dependency => {
+                        rpm.leaf_packages = Some(vec!["htop.x86_64".into()]);
+                        rpm.leaf_dep_tree =
+                            serde_json::json!({ "htop.x86_64": ["openh264.x86_64"] });
+                    }
+                }
+                if case.group_member {
+                    rpm.installed_groups = Some(vec![inspectah_core::types::rpm::InstalledGroup {
+                        name: GROUP.into(),
+                        members: vec!["openh264".into()],
+                        optional_installed: vec![],
+                    }]);
+                    ctx.group_states
+                        .insert(GROUP.into(), GroupRenderState::Renderable);
+                }
             }
-            let output = render_containerfile(&snap, None, None);
+            let output = render_containerfile(&snap, None, Some(&ctx));
             let installs = output.lines().filter(|l| *l == INSTALL_LINE).count();
+            let todo = output.contains("# TODO: 'openh264");
 
             match case.want {
                 Want::FromRepo => {
@@ -2592,13 +2661,9 @@ mod tests {
                         "{}: not in the repo-less block:\n{output}",
                         case.name
                     );
-                    assert!(
-                        !output.contains("TODO: 'openh264"),
-                        "{}: not in the manual follow-up:\n{output}",
-                        case.name
-                    );
+                    assert!(!todo, "{}: no manual follow-up:\n{output}", case.name);
                 }
-                Want::Repoless => {
+                Want::Repoless { todo: want_todo } => {
                     assert_eq!(installs, 0, "{}: no install by name:\n{output}", case.name);
                     assert!(
                         !output.contains("--enablerepo"),
@@ -2610,6 +2675,24 @@ mod tests {
                         "{}: the repo-less block keeps it:\n{output}",
                         case.name
                     );
+                    assert_eq!(
+                        todo, want_todo,
+                        "{}: manual follow-up:\n{output}",
+                        case.name
+                    );
+                }
+                Want::Nothing => {
+                    assert_eq!(installs, 0, "{}: no install:\n{output}", case.name);
+                    assert!(
+                        !output.contains("--enablerepo"),
+                        "{}: no flag:\n{output}",
+                        case.name
+                    );
+                    assert!(
+                        !output.contains("openh264"),
+                        "{}: named nowhere:\n{output}",
+                        case.name
+                    );
                 }
             }
             assert!(
@@ -2618,6 +2701,33 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// Both arches of a multiarch pair from a disabled repo install, each
+    /// by `name.arch` as the plain list names them, and the header counts
+    /// what the transaction installs.
+    #[test]
+    fn a_disabled_repo_multiarch_pair_installs_both_arches() {
+        let mut snap = snapshot_with_packages(&["openh264", "htop"]);
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            let mut i686 = rpm.packages_added[0].clone();
+            i686.arch = "i686".into();
+            rpm.packages_added.push(i686);
+            rpm.repo_files
+                .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+        }
+        make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
+
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            output.contains("Packages from repos disabled on the source host (2)"),
+            "{output}"
+        );
+        assert!(output.contains("    openh264.i686 \\"), "{output}");
+        assert!(output.contains("    openh264.x86_64 \\"), "{output}");
+        assert!(!output.contains("    openh264 \\"), "{output}");
     }
 
     #[test]

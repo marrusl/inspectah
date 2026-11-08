@@ -183,9 +183,9 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         // unknown origin. The export installs it from that repo with
         // `--enablerepo`, so it keeps the default the classifier gave it
         // above, as the scan tarball does. This asks the render's own
-        // check rather than restating it, and that check reads the
-        // disposition just set: a package the classifier excluded stays
-        // excluded.
+        // check rather than restating it. The gate only ever excludes, so
+        // a package the classifier excluded, a non-leaf dependency among
+        // them, stays excluded.
         if !rpm.packages_added[i].repoless_annotation.is_empty()
             && disabled_repo_install(rpm, &rpm.packages_added[i]).is_none()
         {

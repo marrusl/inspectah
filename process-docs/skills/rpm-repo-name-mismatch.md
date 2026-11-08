@@ -61,11 +61,19 @@ the scan left repo-less can install from its own repo with
 which is what `normalize_source_repos` already rewrote `source_repo`
 to), and accepts only a section that is disabled and defines a source.
 It is decided at render rather than at scan because whether the `.repo`
-file ships is a refine decision. The Containerfile renderer, the
-repo-less block and the manual follow-up all ask this one function, and
-any package carrying a `repoless_annotation` stays out of the plain
-`dnf install` list whatever the answer: no enabled repo on the host
-serves it, so a plain install fails with `Unable to find a match`.
+file ships is a refine decision. It also requires the package to be
+installable by name (`is_package_installable`), and it does **not** read
+the package's disposition: it says how a package installs, not whether.
+The Containerfile renderer feeds it the plain list's selection (included,
+baseline, leaf and lock rules), so an excluded package and a non-leaf
+dependency render nowhere on either export path; reading the disposition
+here would send a refine-excluded dependency to the repo-less block while
+the scan tarball, where the same dependency is included, filtered it out.
+The Containerfile renderer, the repo-less block and refine's trust gate
+all ask this one function, and any package carrying a
+`repoless_annotation` stays out of the plain `dnf install` list whatever
+the answer: no enabled repo on the host serves it, so a plain install
+fails with `Unable to find a match`.
 
 If you touch repo-name matching, decide which of these questions you
 are answering (repo-less yes/no, full attribution, or install from a

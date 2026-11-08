@@ -11,6 +11,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+use inspectah_core::types::services::{
+    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_refine::session::RefineSession;
@@ -171,6 +174,126 @@ fn scan_tarball_and_unchanged_refine_export_agree_on_the_package() {
         scan_lines,
         about_the_package(&refine),
         "scan:\n{scan}\nrefine:\n{refine}"
+    );
+}
+
+/// Render a snapshot the way the scan tarball does, and return its
+/// Containerfile.
+fn scan_containerfile(snap: &InspectionSnapshot) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    render::render_all(snap, &RenderContext { target: None }, dir.path()).expect("render");
+    std::fs::read_to_string(dir.path().join("Containerfile")).expect("read")
+}
+
+/// Export a session and return the export's Containerfile.
+fn export_containerfile(session: &RefineSession) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tarball = dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    extract_containerfile(&tarball)
+}
+
+/// With leaf data, the disabled-repo transaction takes the plain list's
+/// selection. The leaf `gst-openh264` installs from its repo; its
+/// dependency `openh264`, from the same repo, is left to dnf, which
+/// resolves it inside that transaction. The scan tarball includes the
+/// dependency and filters it at render; refine excludes it by default.
+/// Both must render the same lines, and when refine excludes the leaf
+/// too, nothing installs and the leaf's unit is not enabled.
+#[test]
+fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
+    const LEAF: &str = "gst-openh264";
+    const UNIT: &str = "openh264-helper.service";
+    let mut snap = snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true)));
+    {
+        let rpm = snap.rpm.as_mut().expect("rpm section");
+        let mut leaf = rpm.packages_added[0].clone();
+        leaf.name = LEAF.into();
+        rpm.packages_added.push(leaf);
+        rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
+        rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
+    }
+    snap.services = Some(ServiceSection {
+        state_changes: vec![ServiceStateChange {
+            unit: UNIT.into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: Some(LEAF.into()),
+            aggregate: None,
+            attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
+        }],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+    let about_the_packages = |containerfile: &str| -> Vec<String> {
+        containerfile
+            .lines()
+            .filter(|l| {
+                l.contains("openh264")
+                    || l.contains("disabled on the source host")
+                    || l.contains(UNIT)
+            })
+            .map(str::to_string)
+            .collect()
+    };
+
+    let scan = scan_containerfile(&snap);
+    assert!(
+        scan.lines().any(|l| l == "    gst-openh264 \\"),
+        "the leaf installs:\n{scan}"
+    );
+    assert!(
+        !scan.lines().any(|l| l == INSTALL_LINE),
+        "the dependency is left to dnf, as the plain list leaves one:\n{scan}"
+    );
+    assert!(
+        !scan.contains("# MANUAL: openh264"),
+        "and it is not offered for upload:\n{scan}"
+    );
+
+    let mut session = RefineSession::new(snap);
+    let refine = export_containerfile(&session);
+    assert_eq!(
+        about_the_packages(&scan),
+        about_the_packages(&refine),
+        "scan:\n{scan}\nrefine:\n{refine}"
+    );
+    assert!(
+        refine
+            .lines()
+            .any(|l| l.contains(UNIT) && !l.starts_with('#')),
+        "the installed leaf's unit is enabled:\n{refine}"
+    );
+
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: LEAF.into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
+        .expect("the leaf can be excluded");
+    let excluded = export_containerfile(&session);
+    assert!(
+        !excluded.contains(ENABLEREPO),
+        "nothing installs from the repo:\n{excluded}"
+    );
+    assert!(
+        !excluded
+            .lines()
+            .any(|l| l.contains(UNIT) && !l.starts_with('#')),
+        "no unit of an uninstalled package is enabled:\n{excluded}"
     );
 }
 

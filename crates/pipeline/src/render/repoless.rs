@@ -7,6 +7,7 @@ use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
 use super::language_packages::sanitize_for_comment;
 use super::safety::sanitize_shell_value;
+use super::service_intent::is_package_installable;
 
 /// The repo a repo-less package installs from with `--enablerepo`, when
 /// the source host has that repo disabled and this export carries it.
@@ -22,14 +23,24 @@ use super::safety::sanitize_shell_value;
 /// package from its repo-less trust gate, so the two cannot disagree.
 ///
 /// Returns `None`, leaving the package repo-less, unless all of these
-/// hold: the package is included, it carries a repo-less annotation, its
-/// `source_repo` is a real repo id (not `@commandline` or another `@`
-/// pseudo-repo), an included repo file has a section with that id that
-/// is disabled and defines a source, and the id and the package's name
-/// and arch pass `sanitize_shell_value`. The id is returned as the `.repo`
-/// file spells it, since `--enablerepo` takes it verbatim.
+/// hold: it carries a repo-less annotation, it is installable by name
+/// ([`is_package_installable`]: not a local install or no-repo state, and
+/// its `source_repo` is a real repo id rather than `@commandline`), its
+/// `source_repo` is not another `@` pseudo-repo, an included repo file has
+/// a section with that id that is disabled and defines a source, and the
+/// id and the package's name and arch pass `sanitize_shell_value`. The id
+/// is returned as the `.repo` file spells it, since `--enablerepo` takes
+/// it verbatim.
+///
+/// The package's own disposition is not one of the conditions. This says
+/// how the package installs, not whether it does: an excluded one renders
+/// nowhere, like any other excluded package from a repo, and a non-leaf
+/// dependency the plain list's selection leaves to dnf is not offered in
+/// the repo-less block either. That is what lets a scan tarball, where
+/// such a dependency is included, and a refine export, where its default
+/// is excluded, render it the same way.
 pub fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
-    if !pkg.disposition.is_included()
+    if !is_package_installable(pkg)
         || pkg.repoless_annotation.is_empty()
         || pkg.source_repo.is_empty()
         || pkg.source_repo.starts_with('@')
