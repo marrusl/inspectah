@@ -1049,6 +1049,20 @@ fn scan_npm_packages(
                     manifest_files.insert("package.json".to_string(), content);
                 }
 
+                // High confidence renders an active `COPY` of both manifests
+                // and `npm ci`, and `npm ci` refuses to run without both
+                // (npm 11: `EUSAGE`, with either file alone). So only a
+                // project whose two manifests were both read is high; a
+                // lockfile alone, or a failed read of either file, renders
+                // the commented form for the operator to finish.
+                let confidence = if manifest_files.contains_key("package-lock.json")
+                    && manifest_files.contains_key("package.json")
+                {
+                    "high"
+                } else {
+                    "medium"
+                };
+
                 section.items.push(NonRpmItem {
                     path: rel_path,
                     name: project_dir
@@ -1057,7 +1071,7 @@ fn scan_npm_packages(
                         .to_string_lossy()
                         .to_string(),
                     method: METHOD_NPM_LOCKFILE.to_string(),
-                    confidence: "high".to_string(),
+                    confidence: confidence.to_string(),
                     disposition: FindingKind::included(),
                     packages,
                     manifest_files,
@@ -3821,6 +3835,90 @@ mod tests {
             section.items[0].method, "npm lockfile",
             "lockfile method should be used when both exist"
         );
+    }
+
+    /// High confidence means both manifests were read, because the active
+    /// render copies both and `npm ci` needs both. Every other combination
+    /// comes out below high and renders commented.
+    #[test]
+    fn npm_high_confidence_requires_both_manifests() {
+        const LOCK: &str = "/opt/myapp/package-lock.json";
+        const JSON: &str = "/opt/myapp/package.json";
+        /// Files listed in the project dir, the ones that can be read, and
+        /// the method and confidence the collector must report.
+        type Case<'a> = (&'a str, &'a [&'a str], &'a [&'a str], &'a str, &'a str);
+        let cases: [Case; 5] = [
+            (
+                "both read",
+                &["package-lock.json", "package.json"],
+                &[LOCK, JSON],
+                "npm lockfile",
+                "high",
+            ),
+            (
+                "lockfile only",
+                &["package-lock.json"],
+                &[LOCK],
+                "npm lockfile",
+                "medium",
+            ),
+            (
+                "package.json only",
+                &["package.json"],
+                &[JSON],
+                "npm manifest",
+                "low",
+            ),
+            (
+                "package.json read fails",
+                &["package-lock.json", "package.json"],
+                &[LOCK],
+                "npm lockfile",
+                "medium",
+            ),
+            (
+                "lockfile read fails",
+                &["package-lock.json", "package.json"],
+                &[JSON],
+                "npm lockfile",
+                "medium",
+            ),
+        ];
+        for (case, listed, readable, method, confidence) in cases {
+            let mut exec = MockExecutor::new()
+                .with_dir("/opt", vec!["myapp"])
+                .with_dir("/opt/myapp", listed.to_vec());
+            for path in readable {
+                let content = if *path == LOCK {
+                    package_lock_fixture().to_string()
+                } else {
+                    r#"{"name":"myapp","dependencies":{"express":"^4.18.2"}}"#.to_string()
+                };
+                exec = exec.with_file(path, &content);
+            }
+            // A listed file that cannot be read fails the way an unreadable
+            // file on a host does, rather than by being absent.
+            for name in listed {
+                let path = format!("/opt/myapp/{name}");
+                if !readable.contains(&path.as_str()) {
+                    exec = exec.with_file_error(&path, std::io::ErrorKind::PermissionDenied);
+                }
+            }
+
+            let mut section = NonRpmSoftwareSection::default();
+            scan_npm_packages(&exec, &mut section, false, &default_scan_roots());
+
+            assert_eq!(section.items.len(), 1, "{case}: one item");
+            let item = &section.items[0];
+            assert_eq!(item.method, method, "{case}: method");
+            assert_eq!(item.confidence, confidence, "{case}: confidence");
+            assert_eq!(
+                item.confidence == "high",
+                item.manifest_files.contains_key("package-lock.json")
+                    && item.manifest_files.contains_key("package.json"),
+                "{case}: high exactly when both manifests are held"
+            );
+        }
     }
 
     #[test]

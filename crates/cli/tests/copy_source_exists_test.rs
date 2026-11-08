@@ -288,6 +288,11 @@ const PLAIN_CONFIG_CONTENT: &str = "ServerRoot \"/etc/httpd\"\n";
 /// `COPY language-packages/...` rather than a commented-out suggestion.
 const NPM_PROJECT: &str = "/opt/webapp";
 const NPM_PACKAGE_JSON: &str = r#"{"name": "webapp", "version": "1.0.0"}"#;
+/// A second npm project with a lockfile and no `package.json`. `npm ci`
+/// needs both files, so the collector keeps this below high confidence
+/// and it renders commented: no active `COPY` may name a manifest the
+/// project does not have.
+const NPM_LOCK_ONLY_PROJECT: &str = "/opt/lockonly";
 const NPM_LOCK_JSON: &str = r#"{
   "name": "webapp",
   "lockfileVersion": 3,
@@ -374,10 +379,12 @@ fn populated_host_mock() -> MockExecutor {
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         .with_command("test -d /etc/systemd/system/httpd.service.d", ok(""))
         // -- npm project -----------------------------------------------
-        .with_dir("/opt", vec!["webapp"])
+        .with_dir("/opt", vec!["webapp", "lockonly"])
         .with_dir("/opt/webapp", vec!["package.json", "package-lock.json"])
         .with_file("/opt/webapp/package.json", NPM_PACKAGE_JSON)
         .with_file("/opt/webapp/package-lock.json", NPM_LOCK_JSON)
+        .with_dir("/opt/lockonly", vec!["package-lock.json"])
+        .with_file("/opt/lockonly/package-lock.json", NPM_LOCK_JSON)
 }
 
 /// `collect()` then `validate` then `redact` — the three calls the scan
@@ -475,10 +482,39 @@ fn the_fixture_populates_the_optional_export_directories() {
         "the collector must capture the npm manifests, got {manifests:?}"
     );
 
+    let lock_only = snapshot
+        .non_rpm_software
+        .as_ref()
+        .expect("the non-RPM section")
+        .items
+        .iter()
+        .find(|i| i.path == NPM_LOCK_ONLY_PROJECT.trim_start_matches('/'))
+        .expect("the collector must find the lockfile-only npm project");
+    assert_eq!(
+        lock_only.manifest_files.keys().collect::<Vec<_>>(),
+        vec!["package-lock.json"],
+        "the lockfile-only project holds one manifest"
+    );
+    assert_ne!(
+        lock_only.confidence, "high",
+        "one manifest is never high confidence"
+    );
+
     let dir = tempfile::tempdir().expect("tempdir");
     render::render_all(&snapshot, &RenderContext { target: None }, dir.path()).expect("render");
     let containerfile =
         std::fs::read_to_string(dir.path().join("Containerfile")).expect("Containerfile");
+    assert!(
+        containerfile.contains(&format!("# RUN cd '{NPM_LOCK_ONLY_PROJECT}' && npm ci")),
+        "the lockfile-only project renders commented"
+    );
+    assert!(
+        containerfile
+            .lines()
+            .filter(|l| l.contains(NPM_LOCK_ONLY_PROJECT))
+            .all(|l| l.starts_with('#')),
+        "nothing about the lockfile-only project is active"
+    );
     for expected in [
         "COPY quadlet/",
         "COPY drop-ins/",

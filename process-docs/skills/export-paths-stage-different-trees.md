@@ -35,6 +35,19 @@ to date, all found by hand on a real host rather than by the suite:
 4. An uploaded RPM whose staged name could not be proved: the export
    emitted the `COPY` anyway. That one now demotes to a FIXME.
 
+5. A high-confidence npm project held one manifest (a lockfile with no
+   `package.json`), so the renderer emitted an active `COPY` for a file
+   the writer never staged. `npm ci` needs both files anyway (npm 11
+   exits `EUSAGE` with either alone), so the collector now marks a
+   project high only when it read both, and the writer stages npm
+   manifests only for high-confidence items. **A writer must stage
+   exactly what the active `COPY` lines carry:** staging content for a
+   commented-out block trips the reverse guard below, because the files
+   ship in the export and never reach the image. The fixture carries a
+   lockfile-only project for this case. Medium-confidence pip items
+   still stage their `requirements.txt` under a commented block; no
+   fixture exercises that yet.
+
 ## What to do when adding a staged directory
 
 Put the writer in `crates/pipeline/src/render/` beside the function

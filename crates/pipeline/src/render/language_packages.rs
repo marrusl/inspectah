@@ -360,6 +360,12 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         return lines;
     }
 
+    // Invariant: a high-confidence npm item holds both `package.json` and
+    // `package-lock.json` in `manifest_files`, so both active `COPY` lines
+    // below have a staged source and `npm ci` has the pair it requires.
+    // `scan_npm_packages` (crates/collect/src/inspectors/nonrpm.rs) is
+    // what guarantees it: one manifest, or a failed read of either, is
+    // never high there.
     if effective_confidence == HIGH_CONFIDENCE {
         lines.push(format!(
             "# npm packages: {project_path} (from package-lock.json)"
@@ -597,6 +603,12 @@ pub fn write_language_package_manifests(
         {
             "pip"
         } else if item.method == METHOD_NPM_LOCKFILE {
+            // Stage only what an active `COPY` carries. Below high
+            // confidence the npm block is commented, so its manifests
+            // would ship in the export and never reach the image.
+            if item.confidence != HIGH_CONFIDENCE {
+                continue;
+            }
             "npm"
         } else if item.method == METHOD_GEM_LOCKFILE {
             "gem"
