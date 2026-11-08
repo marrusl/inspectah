@@ -702,7 +702,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             .map(|o| ContextItem {
                 id: format!("omitted-{}", o.unit),
                 title: o.unit.clone(),
-                subtitle: Some(format!("package '{}' not in target image", o.package)),
+                subtitle: Some(o.reason.describe(&o.package)),
                 detail: None,
                 searchable_text: format!("{} omitted {}", o.unit, o.package),
                 ..Default::default()
@@ -725,7 +725,6 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
                     .reasons
                     .iter()
                     .map(|r| match r {
-                        AdvisoryReason::PackageExcluded => "package excluded",
                         AdvisoryReason::PackageUnreachable => "package unreachable",
                         AdvisoryReason::BaselineUnavailable => "baseline unavailable",
                     })

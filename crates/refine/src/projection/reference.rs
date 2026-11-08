@@ -220,7 +220,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         .map(|o| RefOmittedService {
             unit: o.unit.clone(),
             package: o.owning_package.clone(),
-            reason: format!("package '{}' not in target image", o.owning_package),
+            reason: o.reason,
         })
         .collect();
 

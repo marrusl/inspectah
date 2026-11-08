@@ -5,7 +5,8 @@ use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
 use inspectah_pipeline::render::service_intent::{
-    AdvisoryReason, effective_target_packages, is_package_installable, render_service_intent,
+    AdvisoryReason, OmissionReason, effective_target_packages, is_package_installable,
+    render_service_intent,
 };
 
 // ---------------------------------------------------------------------------
@@ -153,56 +154,6 @@ fn test_service_render_plan_omits_proven_absent_service() {
     assert_eq!(plan.omissions.len(), 1);
     assert_eq!(plan.omissions[0].unit, "sssd-kcm.service");
     assert_eq!(plan.omissions[0].owning_package, "sssd");
-}
-
-/// Tiers 2+6 stacked: package excluded AND baseline unavailable → advisory
-/// with both reasons, service still emitted.
-#[test]
-fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
-    let mut snap = InspectionSnapshot::new();
-    snap.rpm = Some(RpmSection {
-        baseline_package_names: Some(vec![]),
-        packages_added: vec![PackageEntry {
-            name: "custom-app".into(),
-            arch: "x86_64".into(),
-            state: PackageState::Added,
-            disposition: FindingKind::excluded(),
-            locked: false,
-            source_repo: "appstream".into(),
-            ..Default::default()
-        }],
-
-        ..Default::default()
-    });
-    snap.services = Some(ServiceSection {
-        state_changes: vec![state_change(
-            "custom-app.service",
-            ServiceUnitState::Enabled,
-            Some(PresetDefault::Disable),
-            Some("custom-app"),
-        )],
-        enabled_units: vec![],
-        disabled_units: vec![],
-        drop_ins: vec![],
-        preset_matched_units: vec![],
-    });
-
-    let plan = render_service_intent(&snap);
-
-    assert!(
-        plan.omissions.is_empty(),
-        "advisory service must not be omitted"
-    );
-    assert_eq!(plan.advisories.len(), 1);
-    assert_eq!(
-        plan.advisories[0].reasons,
-        vec![AdvisoryReason::PackageExcluded]
-    );
-    // Service must still be emitted
-    assert!(
-        plan.lines.iter().any(|l| l.contains("custom-app.service")),
-        "advisory service must still appear in output"
-    );
 }
 
 /// Tier 3: LocalInstall package → PackageUnreachable advisory, service
@@ -511,53 +462,6 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
     );
 }
 
-/// Tiers 2+6 stacked: verify both PackageExcluded and BaselineUnavailable
-/// are present, service is emitted.
-#[test]
-fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
-    let mut snap = InspectionSnapshot::new();
-    snap.rpm = Some(RpmSection {
-        baseline_package_names: Some(vec![]),
-        packages_added: vec![PackageEntry {
-            name: "stacked-pkg".into(),
-            arch: "x86_64".into(),
-            state: PackageState::Added,
-            disposition: FindingKind::excluded(),
-            locked: false,
-            source_repo: "appstream".into(),
-            ..Default::default()
-        }],
-
-        ..Default::default()
-    });
-    snap.services = Some(ServiceSection {
-        state_changes: vec![state_change(
-            "stacked-pkg.service",
-            ServiceUnitState::Disabled,
-            Some(PresetDefault::Enable),
-            Some("stacked-pkg"),
-        )],
-        enabled_units: vec![],
-        disabled_units: vec![],
-        drop_ins: vec![],
-        preset_matched_units: vec![],
-    });
-
-    let plan = render_service_intent(&snap);
-
-    assert!(plan.omissions.is_empty());
-    assert_eq!(plan.advisories.len(), 1);
-    let advisory = &plan.advisories[0];
-    assert_eq!(advisory.unit, "stacked-pkg.service");
-    assert_eq!(advisory.owning_package, "stacked-pkg");
-    assert_eq!(advisory.reasons.len(), 1);
-    assert!(advisory.reasons.contains(&AdvisoryReason::PackageExcluded));
-    assert!(
-        plan.lines.iter().any(|l| l.contains("stacked-pkg.service")),
-        "stacked-advisory service must be emitted"
-    );
-}
-
 /// Present package in config-tree timer → deferred, not omitted, not advisory.
 /// Proves the refactor preserved the existing deferral path.
 #[test]
@@ -792,4 +696,185 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
         served.advisories
     );
     assert!(served.omissions.is_empty());
+}
+
+/// What the decision engine should do with one service.
+#[derive(Debug, PartialEq)]
+enum Expected {
+    Omit(OmissionReason, &'static str),
+    Advise(Vec<AdvisoryReason>),
+    Clean,
+}
+
+/// Every tier of `classify_service_presence` in one table. Tier 2 (all
+/// entries for the owning package excluded) omits the unit and records the
+/// exclusion as the reason; the other tiers are pinned to show the change
+/// left them alone.
+#[test]
+fn test_service_presence_tiers_table() {
+    fn pkg(name: &str, disposition: FindingKind, state: PackageState) -> PackageEntry {
+        PackageEntry {
+            name: name.into(),
+            arch: "x86_64".into(),
+            state,
+            disposition,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        }
+    }
+    let excluded = || FindingKind::excluded();
+    let included = || FindingKind::included();
+
+    struct Case {
+        name: &'static str,
+        baseline: Option<Vec<&'static str>>,
+        added: Vec<PackageEntry>,
+        owner: Option<&'static str>,
+        expected: Expected,
+    }
+    let cases = vec![
+        Case {
+            name: "tier 1: unknown owner emits clean",
+            baseline: Some(vec![]),
+            added: vec![],
+            owner: None,
+            expected: Expected::Clean,
+        },
+        Case {
+            name: "tier 2: excluded package omits with excluded reason",
+            baseline: Some(vec![]),
+            added: vec![pkg("nginx", excluded(), PackageState::Added)],
+            owner: Some("nginx"),
+            expected: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'nginx' was excluded)",
+            ),
+        },
+        Case {
+            name: "tier 2: excluded package, baseline unavailable, still omits",
+            baseline: None,
+            added: vec![pkg("nginx", excluded(), PackageState::Added)],
+            owner: Some("nginx"),
+            expected: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'nginx' was excluded)",
+            ),
+        },
+        Case {
+            name: "tier 2: excluded entry but baseline ships the package emits clean",
+            baseline: Some(vec!["nginx"]),
+            added: vec![pkg("nginx", excluded(), PackageState::Added)],
+            owner: Some("nginx"),
+            expected: Expected::Clean,
+        },
+        Case {
+            name: "tier 3: included but not installable advises unreachable",
+            baseline: Some(vec![]),
+            added: vec![pkg("app", included(), PackageState::LocalInstall)],
+            owner: Some("app"),
+            expected: Expected::Advise(vec![AdvisoryReason::PackageUnreachable]),
+        },
+        Case {
+            name: "tier 3: unreachable stacks baseline unavailable",
+            baseline: None,
+            added: vec![pkg("app", included(), PackageState::LocalInstall)],
+            owner: Some("app"),
+            expected: Expected::Advise(vec![
+                AdvisoryReason::PackageUnreachable,
+                AdvisoryReason::BaselineUnavailable,
+            ]),
+        },
+        Case {
+            name: "tier 4: included and installable emits clean",
+            baseline: Some(vec![]),
+            added: vec![pkg("httpd", included(), PackageState::Added)],
+            owner: Some("httpd"),
+            expected: Expected::Clean,
+        },
+        Case {
+            name: "tier 5: baseline package emits clean",
+            baseline: Some(vec!["sshd"]),
+            added: vec![],
+            owner: Some("sshd"),
+            expected: Expected::Clean,
+        },
+        Case {
+            name: "tier 6: unknown package, no baseline, advises",
+            baseline: None,
+            added: vec![],
+            owner: Some("mystery"),
+            expected: Expected::Advise(vec![AdvisoryReason::BaselineUnavailable]),
+        },
+        Case {
+            name: "tier 7: unknown package with baseline omits as not in target",
+            baseline: Some(vec![]),
+            added: vec![],
+            owner: Some("sssd"),
+            expected: Expected::Omit(
+                OmissionReason::NotInTargetImage,
+                "# Omitted: unit.service (package 'sssd' not in target image)",
+            ),
+        },
+    ];
+
+    for (action_state, preset) in [
+        (ServiceUnitState::Enabled, PresetDefault::Disable),
+        (ServiceUnitState::Disabled, PresetDefault::Enable),
+    ] {
+        for case in &cases {
+            let mut snap = InspectionSnapshot::new();
+            snap.rpm = Some(RpmSection {
+                baseline_package_names: case
+                    .baseline
+                    .as_ref()
+                    .map(|b| b.iter().map(|s| s.to_string()).collect()),
+                packages_added: case.added.clone(),
+                ..Default::default()
+            });
+            snap.services = Some(ServiceSection {
+                state_changes: vec![state_change(
+                    "unit.service",
+                    action_state,
+                    Some(preset),
+                    case.owner,
+                )],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            });
+
+            let plan = render_service_intent(&snap);
+            let in_systemctl = plan
+                .lines
+                .iter()
+                .any(|l| !l.starts_with('#') && l.contains("unit.service"));
+
+            match &case.expected {
+                Expected::Omit(reason, comment) => {
+                    assert_eq!(plan.omissions.len(), 1, "{}", case.name);
+                    assert_eq!(plan.omissions[0].reason, *reason, "{}", case.name);
+                    assert!(
+                        plan.lines.iter().any(|l| l == comment),
+                        "{}: missing {comment:?} in {:?}",
+                        case.name,
+                        plan.lines
+                    );
+                    assert!(!in_systemctl, "{}: omitted unit still acted on", case.name);
+                    assert!(plan.advisories.is_empty(), "{}", case.name);
+                }
+                Expected::Advise(reasons) => {
+                    assert!(plan.omissions.is_empty(), "{}", case.name);
+                    assert_eq!(plan.advisories.len(), 1, "{}", case.name);
+                    assert_eq!(&plan.advisories[0].reasons, reasons, "{}", case.name);
+                    assert!(in_systemctl, "{}: advised unit must stay", case.name);
+                }
+                Expected::Clean => {
+                    assert!(plan.omissions.is_empty(), "{}", case.name);
+                    assert!(plan.advisories.is_empty(), "{}", case.name);
+                    assert!(in_systemctl, "{}: unit must be acted on", case.name);
+                }
+            }
+        }
+    }
 }

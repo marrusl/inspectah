@@ -107,12 +107,39 @@ pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet
 // Service omission / advisory decision engine
 // ---------------------------------------------------------------------------
 
-/// A service that was silently dropped from the Containerfile because its
-/// owning package is proven absent from the target image.
+/// A service that was dropped from the Containerfile because its owning
+/// package is absent from the target image. The omission is recorded as a
+/// `# Omitted:` comment and surfaced through the refine projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceOmission {
     pub unit: String,
     pub owning_package: String,
+    pub reason: OmissionReason,
+}
+
+/// Why a service's owning package is absent from the target image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OmissionReason {
+    /// Every `packages_added` entry for the owning package is excluded.
+    PackageExcluded,
+    /// A baseline is available and the owning package is in neither the
+    /// baseline nor `packages_added`.
+    NotInTargetImage,
+}
+
+impl OmissionReason {
+    /// Human-readable explanation, shared by the Containerfile comment and
+    /// the refine UI so both surfaces say the same thing.
+    pub fn describe(self, owning_package: &str) -> String {
+        match self {
+            OmissionReason::PackageExcluded => {
+                format!("package '{owning_package}' was excluded")
+            }
+            OmissionReason::NotInTargetImage => {
+                format!("package '{owning_package}' not in target image")
+            }
+        }
+    }
 }
 
 /// A service that IS emitted but carries supplemental context about why
@@ -127,8 +154,6 @@ pub struct ServiceAdvisory {
 /// Why a service received an advisory annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdvisoryReason {
-    /// The owning package is in `packages_added` with `include: false`.
-    PackageExcluded,
     /// The owning package is in `packages_added` with `include: true` but
     /// is not installable (LocalInstall / NoRepo / missing source_repo).
     PackageUnreachable,
@@ -147,8 +172,11 @@ pub struct ServiceRenderPlan {
 
 /// Internal classification of whether a service should appear in output.
 enum PresenceDecision {
-    /// Drop this service — owning package proven absent.
-    Omit { owning_package: String },
+    /// Drop this service — owning package absent from the target image.
+    Omit {
+        owning_package: String,
+        reason: OmissionReason,
+    },
     /// Keep this service; optionally attach advisory reasons.
     Emit {
         advisory_reasons: Option<(String, Vec<AdvisoryReason>)>,
@@ -209,14 +237,21 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
 ///
 /// Tier logic (evaluated in order):
 /// 1. `owning_package: None` → always Emit (conservative — unknown owner)
-/// 2. Package in `packages_added` with `include: false` → Emit with
-///    `PackageExcluded` (+ `BaselineUnavailable` if applicable)
+/// 2. Package in `packages_added` with every entry `include: false`, and
+///    not in the baseline → Omit with `OmissionReason::PackageExcluded`.
+///    An exclusion is the strongest absence signal the model has, and
+///    `systemctl enable` on a unit whose package is not installed fails the
+///    build. The one known edge is dnf pulling the excluded package back in
+///    as a dependency of something still included (the renderer passes no
+///    `--exclude`); the recorded omission is what tells the operator to
+///    enable the unit by hand in that case.
 /// 3. Package in `packages_added` with `include: true` but not installable
 ///    → Emit with `PackageUnreachable` (+ `BaselineUnavailable`)
 /// 4. Package in `packages_added` with `include: true` and installable → Emit clean
 /// 5. Package in `target_packages` (baseline) → Emit clean
 /// 6. Package not found anywhere + baseline unavailable → Emit with `BaselineUnavailable`
-/// 7. Package not found anywhere + baseline available → Omit
+/// 7. Package not found anywhere + baseline available → Omit with
+///    `OmissionReason::NotInTargetImage`
 fn classify_service_presence(
     sc: &ServiceStateChange,
     rpm: &RpmSection,
@@ -267,14 +302,15 @@ fn classify_service_presence(
             };
         }
 
-        // Tier 2: all entries are excluded → PackageExcluded
-        let mut reasons = vec![AdvisoryReason::PackageExcluded];
-        if baseline_unavailable {
-            reasons.push(AdvisoryReason::BaselineUnavailable);
+        // Tier 2: all entries are excluded. A baseline that still ships the
+        // package (another arch excluded, say) keeps the unit present, so
+        // fall through to Tier 5 in that case.
+        if !target_packages.contains(pkg_name) {
+            return PresenceDecision::Omit {
+                owning_package: pkg_name.clone(),
+                reason: OmissionReason::PackageExcluded,
+            };
         }
-        return PresenceDecision::Emit {
-            advisory_reasons: Some((pkg_name.clone(), reasons)),
-        };
     }
 
     // Check if the package is in the effective target set (baseline or included-added)
@@ -295,6 +331,7 @@ fn classify_service_presence(
         // Tier 7: baseline available and package not in it — proven absent
         PresenceDecision::Omit {
             owning_package: pkg_name.clone(),
+            reason: OmissionReason::NotInTargetImage,
         }
     }
 }
@@ -375,14 +412,19 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         };
 
         match presence {
-            PresenceDecision::Omit { owning_package } => {
+            PresenceDecision::Omit {
+                owning_package,
+                reason,
+            } => {
                 omission_comments.push(format!(
-                    "# Omitted: {} (package '{}' not in target image)",
-                    u, owning_package
+                    "# Omitted: {} ({})",
+                    u,
+                    reason.describe(&owning_package)
                 ));
                 omissions.push(ServiceOmission {
                     unit: u.clone(),
                     owning_package,
+                    reason,
                 });
                 continue;
             }

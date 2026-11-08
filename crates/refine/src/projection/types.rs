@@ -13,7 +13,7 @@ use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::users::UserGroupDecision;
-use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_pipeline::render::service_intent::{AdvisoryReason, OmissionReason};
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 // ── Decision projection ──────────────────────────────────────────
@@ -112,7 +112,7 @@ pub struct RefDropInItem {
 pub struct RefOmittedService {
     pub unit: String,
     pub package: String,
-    pub reason: String,
+    pub reason: OmissionReason,
 }
 
 #[derive(Debug, Clone)]
