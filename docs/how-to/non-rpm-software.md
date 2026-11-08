@@ -37,7 +37,10 @@ flags add to them; neither removes a default root:
   than one path. A relative path, or a path that does not exist, is
   skipped with a warning.
 - `--scan-home all` adds the home directories of every user with UID
-  1000 through 59999. A home directory of `/` is never added.
+  1000 through 59999. `all` covers users in the regular range only: a
+  user whose UID is outside it, including a directory-service user
+  (SSSD or IdM) mapped above 59999, is not selected and must be named
+  with `--scan-home <user>`. A home directory of `/` is never added.
   `--scan-home alice,bob` adds the home directories of
   the named users instead.
 

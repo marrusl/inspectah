@@ -67,7 +67,7 @@ Usage: inspectah scan [OPTIONS]
 
 The non-RPM software inspector looks in `/opt`, `/srv`, `/usr/local`, and `/var/www` by default. `--scan-home` and `--scan-path` add to that list; neither removes a default root.
 
-- `--scan-home all` adds the home directory of every user with UID 1000 through 59999, the same range the users inspector treats as regular users, so `nobody` (UID 65534, home `/`) is not selected. A home directory of `/` is never added, even for a named user. `--scan-home alice,bob` adds the home directories of the named users. A named user is included whatever its UID, and a name that does not resolve is skipped with a warning.
+- `--scan-home all` adds the home directory of every user with UID 1000 through 59999, the same range the users inspector treats as regular users, so `nobody` (UID 65534, home `/`) is not selected. `all` covers users in the regular range only: a user whose UID is outside it, including a directory-service user (SSSD or IdM) mapped above 59999, is not selected and must be named with `--scan-home <user>`. A home directory of `/` is never added, even for a named user. `--scan-home alice,bob` adds the home directories of the named users. A named user is included whatever its UID, and a name that does not resolve is skipped with a warning.
 - `--scan-path` takes an absolute path. A relative path, or a path that does not exist, is skipped with a warning. A path with fewer than two components (such as `/var`) is accepted with a warning that it is very broad.
 
 
