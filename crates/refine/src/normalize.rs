@@ -3,6 +3,7 @@ use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_pipeline::render::language_packages::is_language_env;
+use inspectah_pipeline::render::repoless::disabled_repo_install;
 use serde_json::Value;
 
 fn is_anaconda_classified(reason: &TriageReason) -> bool {
@@ -174,9 +175,20 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         }
 
         // Repo-less RPMs are pre-excluded — user must explicitly include.
-        // This is the provenance trust gate per spec. Applies to both
-        // empty source_repo and packages from disabled/removed repos.
-        if !rpm.packages_added[i].repoless_annotation.is_empty() {
+        // This is the provenance trust gate per spec. Applies to empty
+        // source_repo, `@commandline`, and packages from removed repos.
+        //
+        // One exemption: a package from a repo the host has disabled,
+        // whose `.repo` file the export carries with a source, is not of
+        // unknown origin. The export installs it from that repo with
+        // `--enablerepo`, so it keeps the default the classifier gave it
+        // above, as the scan tarball does. This asks the render's own
+        // check rather than restating it, and that check reads the
+        // disposition just set: a package the classifier excluded stays
+        // excluded.
+        if !rpm.packages_added[i].repoless_annotation.is_empty()
+            && disabled_repo_install(rpm, &rpm.packages_added[i]).is_none()
+        {
             rpm.packages_added[i].disposition = FindingKind::excluded();
         }
     }

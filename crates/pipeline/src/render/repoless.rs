@@ -17,7 +17,9 @@ use super::safety::sanitize_shell_value;
 /// ships, the package was installed from it on purpose, so the build
 /// installs it from the same repo instead of asking for an upload. This
 /// is decided at render, not at scan, because whether the `.repo` file
-/// ships is a refine decision the scan cannot see.
+/// ships is a refine decision the scan cannot see. Refine's
+/// `normalize_package_defaults` asks the same question to exempt such a
+/// package from its repo-less trust gate, so the two cannot disagree.
 ///
 /// Returns `None`, leaving the package repo-less, unless all of these
 /// hold: the package is included, it carries a repo-less annotation, its
@@ -26,7 +28,7 @@ use super::safety::sanitize_shell_value;
 /// is disabled and defines a source, and the id and the package's name
 /// and arch pass `sanitize_shell_value`. The id is returned as the `.repo`
 /// file spells it, since `--enablerepo` takes it verbatim.
-pub(crate) fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
+pub fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
     if !pkg.disposition.is_included()
         || pkg.repoless_annotation.is_empty()
         || pkg.source_repo.is_empty()
