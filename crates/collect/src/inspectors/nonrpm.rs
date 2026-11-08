@@ -1718,13 +1718,16 @@ fn find_git_configs(
         let child = child_path(dir, entry);
         if entry == ".git" {
             // Found a git repo -- extract remote URL from config.
-            let config_path = format!("{}/.git/config", dir);
+            let config_path = child_path(&child, "config");
             let remote_url = match exec.read_file(Path::new(&config_path)) {
                 Ok(content) => extract_git_remote_url(&content),
                 Err(_) => String::new(),
             };
 
-            let rel_path = dir.trim_start_matches('/').to_string();
+            let rel_path = dir
+                .trim_end_matches('/')
+                .trim_start_matches('/')
+                .to_string();
 
             // Flag if remote URL contains embedded credentials.
             if remote_url.contains('@') && remote_url.contains("://") {
@@ -5696,6 +5699,25 @@ mod tests {
                 found.push(p.to_string())
             });
             assert_eq!(found, vec![expected.to_string()], "root {root:?}");
+        }
+
+        // A repo found directly at a trailing-slash root must read
+        // `/home/bob/.git/config`, not `/home/bob//.git/config`.
+        let config = "[remote \"origin\"]\n\turl = https://example.com/bob/tool.git\n";
+        for root in ["/home/bob/", "/home/bob"] {
+            let exec = MockExecutor::new()
+                .with_dir("/home/bob", vec![".git"])
+                .with_dir("/home/bob/", vec![".git"])
+                .with_file("/home/bob/.git/config", config);
+            let mut section = NonRpmSoftwareSection::default();
+            let mut hints = Vec::new();
+            collect_git_repos(&exec, &mut section, &mut hints, &[root.to_string()]);
+            assert_eq!(section.items.len(), 1, "root {root:?}");
+            assert_eq!(
+                section.items[0].git_remote, "https://example.com/bob/tool.git",
+                "root {root:?}"
+            );
+            assert_eq!(section.items[0].path, "home/bob", "root {root:?}");
         }
     }
 }
