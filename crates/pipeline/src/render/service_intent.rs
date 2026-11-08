@@ -305,11 +305,8 @@ fn classify_service_presence(
         // Tier 2: all entries are excluded. A baseline that still ships the
         // package (another arch excluded, say) keeps the unit present, so
         // fall through to Tier 5 in that case.
-        if !target_packages.contains(pkg_name) {
-            return PresenceDecision::Omit {
-                owning_package: pkg_name.clone(),
-                reason: OmissionReason::PackageExcluded,
-            };
+        if let Some(omit) = excluded_owner(sc, rpm, target_packages) {
+            return omit;
         }
     }
 
@@ -334,6 +331,41 @@ fn classify_service_presence(
             reason: OmissionReason::NotInTargetImage,
         }
     }
+}
+
+/// Tier 2 on its own: the owning package has `packages_added` entries, and
+/// none of them is included nor does the baseline ship it.
+///
+/// `target_packages` holds every included entry's name, so "not in it"
+/// already says no entry for the name is included.
+fn excluded_owner(
+    sc: &ServiceStateChange,
+    rpm: &RpmSection,
+    target_packages: &std::collections::BTreeSet<String>,
+) -> Option<PresenceDecision> {
+    let pkg_name = sc.owning_package.as_ref()?;
+    let has_entry = rpm.packages_added.iter().any(|p| p.name == *pkg_name);
+    (has_entry && !target_packages.contains(pkg_name)).then(|| PresenceDecision::Omit {
+        owning_package: pkg_name.clone(),
+        reason: OmissionReason::PackageExcluded,
+    })
+}
+
+/// The presence decision for an aggregate snapshot.
+///
+/// An aggregate's `packages_added` is leaf-only, so the tiers that read
+/// absence from it (3, 6 and 7) would omit the unit of an auto dependency
+/// that the image does install. Tier 2 reads an explicit exclusion on an
+/// entry that is present, which leaf filtering cannot fake, so it applies
+/// here as it does to a single host; every other unit emits.
+fn aggregate_presence(
+    sc: &ServiceStateChange,
+    rpm: &RpmSection,
+    target_packages: &std::collections::BTreeSet<String>,
+) -> PresenceDecision {
+    excluded_owner(sc, rpm, target_packages).unwrap_or(PresenceDecision::Emit {
+        advisory_reasons: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -383,8 +415,8 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
 
     // Aggregate snapshots use leaf-only packages_added, so
     // classify_service_presence would incorrectly omit services whose
-    // owning package is an auto (non-leaf) dependency. Skip classification
-    // entirely for aggregate — force all services to Emit.
+    // owning package is an auto (non-leaf) dependency. Aggregate applies
+    // Tier 2 alone; see `aggregate_presence`.
     let is_aggregate = snap.aggregate_meta.is_some();
 
     let mut omissions = Vec::new();
@@ -404,9 +436,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         // Evaluate omission BEFORE config-tree deferral — a proven-absent
         // service never becomes deferred fiction.
         let presence = if is_aggregate {
-            PresenceDecision::Emit {
-                advisory_reasons: None,
-            }
+            aggregate_presence(sc, rpm, &target_packages)
         } else {
             classify_service_presence(sc, rpm, &target_packages, baseline_unavailable)
         };

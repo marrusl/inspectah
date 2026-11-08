@@ -1,5 +1,6 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
@@ -575,12 +576,11 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
 
 /// Aggregate mode: `packages_added` is leaf-only, so `classify_service_presence`
 /// would incorrectly omit services owned by auto (non-leaf) packages via
-/// Tier 7. In aggregate mode, skip classification entirely — all services Emit,
-/// no omissions, no package-derived advisories.
+/// Tier 7. In aggregate mode only Tier 2 applies, which this owner (absent
+/// from `packages_added`) does not reach, so the unit emits with no
+/// omission and no package-derived advisory. The tier table pins Tier 2.
 #[test]
 fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
-    use inspectah_core::types::aggregate::AggregateSnapshotMeta;
-
     let mut snap = InspectionSnapshot::new();
     snap.aggregate_meta = Some(AggregateSnapshotMeta {
         label: "test-aggregate".into(),
@@ -731,6 +731,9 @@ fn test_service_presence_tiers_table() {
         added: Vec<PackageEntry>,
         owner: Option<&'static str>,
         expected: Expected,
+        /// The same case on an aggregate snapshot, where only Tier 2 is
+        /// applied and every other tier emits clean.
+        in_aggregate: Expected,
     }
     let cases = vec![
         Case {
@@ -739,6 +742,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: None,
             expected: Expected::Clean,
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 2: excluded package omits with excluded reason",
@@ -746,6 +750,10 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("nginx", excluded(), PackageState::Added)],
             owner: Some("nginx"),
             expected: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'nginx' was excluded)",
+            ),
+            in_aggregate: Expected::Omit(
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
@@ -759,6 +767,10 @@ fn test_service_presence_tiers_table() {
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
+            in_aggregate: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'nginx' was excluded)",
+            ),
         },
         Case {
             name: "tier 2: excluded entry but baseline ships the package emits clean",
@@ -766,6 +778,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("nginx", excluded(), PackageState::Added)],
             owner: Some("nginx"),
             expected: Expected::Clean,
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 3: included but not installable advises unreachable",
@@ -773,6 +786,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("app", included(), PackageState::LocalInstall)],
             owner: Some("app"),
             expected: Expected::Advise(vec![AdvisoryReason::PackageUnreachable]),
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 3: unreachable stacks baseline unavailable",
@@ -783,6 +797,7 @@ fn test_service_presence_tiers_table() {
                 AdvisoryReason::PackageUnreachable,
                 AdvisoryReason::BaselineUnavailable,
             ]),
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 4: included and installable emits clean",
@@ -790,6 +805,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("httpd", included(), PackageState::Added)],
             owner: Some("httpd"),
             expected: Expected::Clean,
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 5: baseline package emits clean",
@@ -797,6 +813,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: Some("sshd"),
             expected: Expected::Clean,
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 6: unknown package, no baseline, advises",
@@ -804,6 +821,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: Some("mystery"),
             expected: Expected::Advise(vec![AdvisoryReason::BaselineUnavailable]),
+            in_aggregate: Expected::Clean,
         },
         Case {
             name: "tier 7: unknown package with baseline omits as not in target",
@@ -814,6 +832,7 @@ fn test_service_presence_tiers_table() {
                 OmissionReason::NotInTargetImage,
                 "# Omitted: unit.service (package 'sssd' not in target image)",
             ),
+            in_aggregate: Expected::Clean,
         },
     ];
 
@@ -821,8 +840,27 @@ fn test_service_presence_tiers_table() {
         (ServiceUnitState::Enabled, PresetDefault::Disable),
         (ServiceUnitState::Disabled, PresetDefault::Enable),
     ] {
-        for case in &cases {
+        for (case, aggregate) in cases
+            .iter()
+            .flat_map(|c| [(c, false), (c, true)].into_iter())
+        {
             let mut snap = InspectionSnapshot::new();
+            if aggregate {
+                snap.aggregate_meta = Some(AggregateSnapshotMeta {
+                    label: "tiers".into(),
+                    host_count: 3,
+                    hostnames: vec!["a".into(), "b".into(), "c".into()],
+                    merged_at: "2026-11-08T00:00:00Z".into(),
+                    baseline_provisional: false,
+                    section_host_counts: Default::default(),
+                });
+            }
+            let (expected, mode) = if aggregate {
+                (&case.in_aggregate, "aggregate")
+            } else {
+                (&case.expected, "single host")
+            };
+            let label = format!("{} ({mode})", case.name);
             snap.rpm = Some(RpmSection {
                 baseline_package_names: case
                     .baseline
@@ -850,29 +888,29 @@ fn test_service_presence_tiers_table() {
                 .iter()
                 .any(|l| !l.starts_with('#') && l.contains("unit.service"));
 
-            match &case.expected {
+            match expected {
                 Expected::Omit(reason, comment) => {
-                    assert_eq!(plan.omissions.len(), 1, "{}", case.name);
-                    assert_eq!(plan.omissions[0].reason, *reason, "{}", case.name);
+                    assert_eq!(plan.omissions.len(), 1, "{}", label);
+                    assert_eq!(plan.omissions[0].reason, *reason, "{}", label);
                     assert!(
                         plan.lines.iter().any(|l| l == comment),
                         "{}: missing {comment:?} in {:?}",
-                        case.name,
+                        label,
                         plan.lines
                     );
-                    assert!(!in_systemctl, "{}: omitted unit still acted on", case.name);
-                    assert!(plan.advisories.is_empty(), "{}", case.name);
+                    assert!(!in_systemctl, "{}: omitted unit still acted on", label);
+                    assert!(plan.advisories.is_empty(), "{}", label);
                 }
                 Expected::Advise(reasons) => {
-                    assert!(plan.omissions.is_empty(), "{}", case.name);
-                    assert_eq!(plan.advisories.len(), 1, "{}", case.name);
-                    assert_eq!(&plan.advisories[0].reasons, reasons, "{}", case.name);
-                    assert!(in_systemctl, "{}: advised unit must stay", case.name);
+                    assert!(plan.omissions.is_empty(), "{}", label);
+                    assert_eq!(plan.advisories.len(), 1, "{}", label);
+                    assert_eq!(&plan.advisories[0].reasons, reasons, "{}", label);
+                    assert!(in_systemctl, "{}: advised unit must stay", label);
                 }
                 Expected::Clean => {
-                    assert!(plan.omissions.is_empty(), "{}", case.name);
-                    assert!(plan.advisories.is_empty(), "{}", case.name);
-                    assert!(in_systemctl, "{}: unit must be acted on", case.name);
+                    assert!(plan.omissions.is_empty(), "{}", label);
+                    assert!(plan.advisories.is_empty(), "{}", label);
+                    assert!(in_systemctl, "{}: unit must be acted on", label);
                 }
             }
         }
