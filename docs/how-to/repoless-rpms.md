@@ -64,7 +64,10 @@ path produced the Containerfile:
   "pre-excluded".
 - **`inspectah refine`** starts every repo-less package excluded, so the
   preview and an untouched export show the cached block commented out.
-  Including the package makes the lines active.
+  Including the package makes the lines active. The one exception is a
+  package from a disabled repository whose `.repo` file the export
+  carries (see
+  [A package from a disabled repository](#a-package-from-a-disabled-repository)).
 
 ### Cached RPM
 
@@ -98,13 +101,9 @@ Cached RPMs are bundled in the tarball under `repoless-packages/`.
 ### Missing RPM
 
 A package with no cached RPM gets three comment lines and nothing else.
-The `openh264` package (disabled repository) and the `units` package
-(local install) both look like this:
+The `units` package (local install) looks like this:
 
 ```dockerfile
-# MANUAL: openh264 (no repo source, RPM not in cache)
-# Provide the RPM via the refine UI upload, add a repo, or uncomment:
-# RUN dnf install openh264
 # MANUAL: units (no repo source, RPM not in cache)
 # Provide the RPM via the refine UI upload, add a repo, or uncomment:
 # RUN dnf install units
@@ -298,23 +297,37 @@ cached; only an included upload gets the "uploaded RPM" wording.
 
 ## A package from a disabled repository
 
-A package whose repository is disabled, such as the `openh264` package in
-the example, is repo-less, but the Containerfile also lists it by name in
-the main `dnf install` list. A build of an export that includes it stops
-at that list:
+A package whose repository is disabled on the source host, such as the
+`openh264` package in the example, is repo-less: no enabled repository
+serves it. The host still has the repository's definition, though, and
+the package was installed from it on purpose. When the export carries
+that `.repo` file, and the disabled section in it defines a `baseurl`,
+`metalink` or `mirrorlist`, the package installs from that repository in
+its own step, with the repository enabled for that step only:
 
-```
-Error: Unable to find a match: openh264
+```dockerfile
+# === Packages from repos disabled on the source host (1) ===
+# 'epel-cisco-openh264' is disabled on the source host (enabled=0); enabled for this install only.
+RUN dnf install -y --enablerepo=epel-cisco-openh264 \
+    openh264 \
+    && dnf clean all \
+    ...
 ```
 
-The copied `.repo` file for that repository carries `enabled=0`, so the
-build cannot find the package. Until you exclude the package or resolve
-it another way, the build fails. On the example host, excluding
-`openh264` let the same export build to completion, with the cached and
-uploaded RPMs installed by `dnf localinstall`. Uploading its RPM did not
-remove the name from the install list. In the capture run the package
-also had no row of its own in the refine package list, though the upload
-route still accepted a file for it by name and architecture.
+When CodeReady Builder is carried, its `--enablerepo` flags are on this
+step too. The package does not appear in the main `dnf install` list,
+the repo-less block or the manual follow-up. Refine treats it the same
+way: it is not pre-excluded, so an untouched export installs it exactly
+as the scan tarball does.
+
+When the export does not carry the `.repo` file, because it was never
+captured or it was excluded, the package is handled like any other
+repo-less package: it appears only in the repo-less block, and refine
+starts it excluded.
+
+The package still has no row of its own in the refine package list, so
+you cannot see or exclude it there. The upload route accepts a file for
+it by name and architecture.
 
 ## Alternatives to bundling RPMs
 
