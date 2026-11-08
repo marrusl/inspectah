@@ -845,20 +845,23 @@ fn packages_section_lines(
         if group_member_suppressed.contains(&pkg.name) {
             continue;
         }
-        // No enabled repo on the source host serves a repo-less package, so
-        // a plain `dnf install` of it fails with `Unable to find a match`.
-        // It renders from its disabled repo below, or in the repo-less
-        // block.
-        if !pkg.repoless_annotation.is_empty() {
-            continue;
-        }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
         if sanitize_shell_value(&install_name).is_none() {
             continue;
         }
+        // The repo-enabling match comes first: a package that lost its
+        // proof carries the repo-less annotation `demote_unserved_repo_enabling`
+        // gave it, and still owes the operator the FIXME naming what to
+        // re-include.
         match super::repo_enabling::repo_enabling_export(rpm, pkg) {
             super::repo_enabling::RepoEnablingExport::NotEnabling => {
-                install_names.push(install_name)
+                // No enabled repo on the source host serves a repo-less
+                // package, so a plain `dnf install` of it fails with
+                // `Unable to find a match`. It renders from its disabled
+                // repo below, or in the repo-less block.
+                if pkg.repoless_annotation.is_empty() {
+                    install_names.push(install_name);
+                }
             }
             super::repo_enabling::RepoEnablingExport::Served => {
                 repo_enabling.push((pkg, install_name))
@@ -2386,6 +2389,41 @@ mod tests {
             .push(owns(name, &[EPEL_REPO_PATH, EPEL_KEY_PATH]));
     }
 
+    /// Refine renders the projected snapshot, where `epel-release` has
+    /// already been demoted and annotated. The annotation used to send it
+    /// past the repo-enabling match, so the FIXME naming the file to
+    /// re-include never rendered and only the MANUAL block remained.
+    #[test]
+    fn a_demoted_repo_enabling_package_keeps_its_fixme_after_projection() {
+        let mut snap = snapshot_with_packages(&["epel-release", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        repo_file_mut(&mut snap, EPEL_REPO_PATH).disposition = FindingKind::excluded();
+        super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+        assert!(
+            !snap
+                .rpm
+                .as_ref()
+                .expect("fixture has an rpm section")
+                .packages_added[0]
+                .repoless_annotation
+                .is_empty(),
+            "the fixture must be the projected, annotated state"
+        );
+
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            output.contains(&format!(
+                "# FIXME: include {EPEL_REPO_PATH} under Configuration Files, or re-include \
+                 repo epel, or upload the RPM; epel-release installs from that repo \
+                 definition, which this export does not carry"
+            )),
+            "{output}"
+        );
+        assert!(output.contains("# MANUAL: epel-release"), "{output}");
+        assert!(!output.contains("    epel-release \\"), "{output}");
+    }
+
     /// The other half of the double render: a `@commandline` package the
     /// scan left repo-less got an active `dnf install` from `source_repo`
     /// alone, next to its own MANUAL block. `@commandline` is not a repo,
@@ -2818,6 +2856,10 @@ RUN dnf install -y \
             assert!(
                 after.contains("# MANUAL: vendor-release"),
                 "{label}: the demoted package must reach the repo-less block:\n{after}"
+            );
+            assert!(
+                after.contains(&expected),
+                "{label}: the annotation must not cost the FIXME:\n{after}"
             );
             assert!(
                 !after.contains(ACTIVE_INSTALL),
