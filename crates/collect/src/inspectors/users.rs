@@ -24,8 +24,12 @@ use std::path::Path;
 // Constants
 // ---------------------------------------------------------------------------
 
-const NON_SYSTEM_UID_MIN: u32 = 1000;
-const NON_SYSTEM_UID_MAX: u32 = 60000; // exclusive
+/// Lowest regular-user UID (`UID_MIN` in shadow-utils' `/etc/login.defs`).
+pub const NON_SYSTEM_UID_MIN: u32 = 1000;
+/// First UID past the regular-user range (exclusive bound). It is `UID_MAX`
+/// (60000) in shadow-utils' `/etc/login.defs`, and sits below the `setup`
+/// package's `nobody` (65534, home `/`) and the kernel overflow UID 4294967294.
+pub const NON_SYSTEM_UID_MAX: u32 = 60000;
 const NON_SYSTEM_GID_MIN: u32 = 1000;
 const NON_SYSTEM_GID_MAX: u32 = 60000; // exclusive
 

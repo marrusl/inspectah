@@ -60,14 +60,14 @@ Usage: inspectah scan [OPTIONS]
 | `-q, --quiet` | bool | `false` | Suppress the scan progress checklist (completion summary still prints). Conflicts with `-v` |
 | `--include-unmanaged` | bool | `false` | Catalog and bundle unmanaged files from `/opt`, `/srv`, `/usr/local`. Prompts with total size before bundling (suppressed by `-y`/`--yes`). |
 | `--exclude-path <PATH>` | string | none | Exclude specific paths from unmanaged file collection. Repeatable. |
-| `--scan-home <all\|USER,...>` | string | none | Scan home directories for non-RPM software. `all` selects users with UID 1000 or higher; otherwise a comma-separated list of usernames. See [Scan roots](#scan-roots-for-non-rpm-software) |
+| `--scan-home <all\|USER,...>` | string | none | Scan home directories for non-RPM software. `all` selects users with UID 1000 through 59999; otherwise a comma-separated list of usernames. See [Scan roots](#scan-roots-for-non-rpm-software) |
 | `--scan-path <PATH>` | string | none | Add extra scan paths for non-RPM software detection. Repeatable. See [Scan roots](#scan-roots-for-non-rpm-software) |
 
 ### Scan roots for non-RPM software
 
 The non-RPM software inspector looks in `/opt`, `/srv`, `/usr/local`, and `/var/www` by default. `--scan-home` and `--scan-path` add to that list; neither removes a default root.
 
-- `--scan-home all` adds the home directory of every user with UID 1000 or higher. `--scan-home alice,bob` adds the home directories of the named users. A named user is included whatever its UID, and a name that does not resolve is skipped with a warning.
+- `--scan-home all` adds the home directory of every user with UID 1000 through 59999, the same range the users inspector treats as regular users, so `nobody` (UID 65534, home `/`) is not selected. A home directory of `/` is never added, even for a named user. `--scan-home alice,bob` adds the home directories of the named users. A named user is included whatever its UID, and a name that does not resolve is skipped with a warning.
 - `--scan-path` takes an absolute path. A relative path, or a path that does not exist, is skipped with a warning. A path with fewer than two components (such as `/var`) is accepted with a warning that it is very broad.
 
 

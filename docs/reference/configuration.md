@@ -49,7 +49,7 @@ for the full command reference.
 | `-q, --quiet` | Suppress the scan progress checklist. Conflicts with `--verbose`. |
 | `--include-unmanaged` | Catalog and bundle unmanaged files from /opt, /srv, /usr/local. Prompts with total size before bundling (suppressed by `-y`/`--yes`). |
 | `--exclude-path <PATH>` | Exclude specific paths from unmanaged file collection. Repeatable. |
-| `--scan-home <all\|USER,...>` | Scan home directories for non-RPM software. `all` covers users with UID 1000 or higher; otherwise give a comma-separated list of usernames. A system user (UID below 1000) is included when named explicitly. An unknown user is skipped with a warning. |
+| `--scan-home <all\|USER,...>` | Scan home directories for non-RPM software. `all` covers users with UID 1000 through 59999; otherwise give a comma-separated list of usernames. A system user (UID below 1000) is included when named explicitly. An unknown user is skipped with a warning. |
 | `--scan-path <PATH>` | Add an extra scan path for non-RPM software detection. Repeatable. Must be an absolute path; a relative or nonexistent path is skipped with a warning. |
 
 ### Non-RPM software scan roots

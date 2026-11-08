@@ -30,7 +30,9 @@ use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::subscription::SubscriptionInspector;
-use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
+use inspectah_collect::inspectors::users::{
+    NON_SYSTEM_UID_MAX, NON_SYSTEM_UID_MIN, UserGroupOptions, UsersGroupsInspector,
+};
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
@@ -238,11 +240,26 @@ fn validate_sensitivity_flags(args: &ScanArgs) -> Result<()> {
     Ok(())
 }
 
+/// Turn a passwd home field into a scan root, or `None` when it cannot be one.
+///
+/// Trailing slashes are trimmed so walks join children with one separator.
+/// `/`, an empty home, and a relative home are rejected: `nobody`'s home is
+/// `/`, and adding it would walk the whole filesystem.
+fn home_scan_root(home: &str) -> Option<String> {
+    let trimmed = home.trim_end_matches('/');
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 /// Resolve home directory users from a `--scan-home` spec.
 ///
-/// Returns `(username, home_dir)` pairs. When `spec` is `"all"`, discovers
-/// users with UID >= 1000 via `getent passwd`. When a comma-separated list,
-/// looks up each user individually (system users with UID < 1000 are included
+/// Returns `(username, home_dir)` pairs, with `home_dir` normalized by
+/// [`home_scan_root`]; users whose home cannot be a scan root are dropped.
+/// When `spec` is `"all"`, discovers users in the regular UID range
+/// (`NON_SYSTEM_UID_MIN..NON_SYSTEM_UID_MAX`) via `getent passwd`. When a
+/// comma-separated list, looks up each user individually (any UID is included
 /// when explicitly named).
 fn resolve_home_users(
     exec: &dyn inspectah_core::traits::executor::Executor,
@@ -256,8 +273,15 @@ fn resolve_home_users(
                 let fields: Vec<&str> = line.split(':').collect();
                 if fields.len() >= 6 {
                     let uid: u32 = fields[2].parse().unwrap_or(0);
-                    if uid >= 1000 {
-                        users.push((fields[0].to_string(), fields[5].to_string()));
+                    if !(NON_SYSTEM_UID_MIN..NON_SYSTEM_UID_MAX).contains(&uid) {
+                        continue;
+                    }
+                    match home_scan_root(fields[5]) {
+                        Some(home) => users.push((fields[0].to_string(), home)),
+                        None => eprintln!(
+                            "Warning: user '{}' has home '{}', which cannot be a scan root, skipping",
+                            fields[0], fields[5]
+                        ),
                     }
                 }
             }
@@ -272,7 +296,13 @@ fn resolve_home_users(
             if result.exit_code == 0 {
                 let fields: Vec<&str> = result.stdout.trim().split(':').collect();
                 if fields.len() >= 6 {
-                    users.push((fields[0].to_string(), fields[5].to_string()));
+                    match home_scan_root(fields[5]) {
+                        Some(home) => users.push((fields[0].to_string(), home)),
+                        None => eprintln!(
+                            "Warning: user '{}' has home '{}', which cannot be a scan root, skipping",
+                            fields[0], fields[5]
+                        ),
+                    }
                 }
             } else {
                 eprintln!("Warning: user '{}' not found, skipping", username);
@@ -1783,6 +1813,127 @@ VARIANT_ID="workstation"
             home_users,
             vec!["all".to_string()],
             "scan_home_users must preserve the 'all' sentinel"
+        );
+    }
+
+    // --- --scan-home never adds / or an empty home as a scan root ---
+
+    /// The stock RHEL 9 passwd entry for `nobody` (from the `setup` package).
+    const STOCK_NOBODY_LINE: &str = "nobody:x:65534:65534:Kernel Overflow User:/:/sbin/nologin";
+
+    fn getent_ok(stdout: &str) -> inspectah_core::traits::executor::ExecResult {
+        inspectah_core::traits::executor::ExecResult {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        }
+    }
+
+    #[test]
+    fn scan_home_all_skips_nobody_and_keeps_regular_user() {
+        let passwd = format!(
+            "root:x:0:0:root:/root:/bin/bash\n{STOCK_NOBODY_LINE}\n\
+             mrussell:x:1000:1000:mrussell:/home/mrussell:/bin/bash\n"
+        );
+        let exec = ScanTestExecutor::new().with_command("getent passwd", getent_ok(&passwd));
+        let args = ScanArgs {
+            scan_home: Some("all".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+
+        assert!(
+            !roots.contains(&"/".to_string()),
+            "nobody's home / must not become a scan root, got {roots:?}"
+        );
+        assert!(
+            roots.contains(&"/home/mrussell".to_string()),
+            "regular user's home must be a scan root, got {roots:?}"
+        );
+    }
+
+    #[test]
+    fn scan_home_all_selects_only_the_regular_uid_range() {
+        // (uid, selected) at and around each bound.
+        let cases: &[(u32, bool)] = &[
+            (999, false),
+            (1000, true),
+            (59999, true),
+            (60000, false),
+            (65534, false),
+            (4294967294, false),
+        ];
+        let passwd: String = cases
+            .iter()
+            .map(|(uid, _)| format!("u{uid}:x:{uid}:{uid}:u:/home/u{uid}:/bin/bash\n"))
+            .collect();
+        let exec = ScanTestExecutor::new().with_command("getent passwd", getent_ok(&passwd));
+
+        let users = resolve_home_users(&exec, "all");
+        let names: Vec<&str> = users.iter().map(|(u, _)| u.as_str()).collect();
+        for (uid, selected) in cases {
+            let name = format!("u{uid}");
+            assert_eq!(
+                names.contains(&name.as_str()),
+                *selected,
+                "uid {uid}: expected selected={selected}, got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_home_never_adds_root_or_empty_home() {
+        // Every spelling of an unusable home, reached both through `all`
+        // (in-range uid) and by naming the user.
+        for home in ["/", "", "//"] {
+            let line = format!("svc:x:1500:1500:svc:{home}:/bin/bash\n");
+            let exec = ScanTestExecutor::new()
+                .with_command("getent passwd", getent_ok(&line))
+                .with_command("getent passwd svc", getent_ok(&line));
+            for spec in ["all", "svc"] {
+                let args = ScanArgs {
+                    scan_home: Some(spec.to_string()),
+                    ..base_args()
+                };
+                let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+                assert_eq!(
+                    roots,
+                    default_scan_roots(),
+                    "home {home:?} via --scan-home {spec} must add no root"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scan_home_named_nobody_adds_no_root() {
+        let exec = ScanTestExecutor::new()
+            .with_command("getent passwd nobody", getent_ok(STOCK_NOBODY_LINE));
+        let args = ScanArgs {
+            scan_home: Some("nobody".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            !roots.contains(&"/".to_string()),
+            "a named user with home / must not add / as a root, got {roots:?}"
+        );
+    }
+
+    #[test]
+    fn scan_home_trailing_slash_home_is_trimmed() {
+        let exec = ScanTestExecutor::new().with_command(
+            "getent passwd bob",
+            getent_ok("bob:x:1001:1001:bob:/home/bob/:/bin/bash\n"),
+        );
+        let args = ScanArgs {
+            scan_home: Some("bob".to_string()),
+            ..base_args()
+        };
+        let (roots, _, _) = build_scan_roots(&args, &exec).unwrap();
+        assert!(
+            roots.contains(&"/home/bob".to_string()),
+            "trailing slash must be trimmed so child paths join cleanly, got {roots:?}"
         );
     }
 

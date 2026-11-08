@@ -269,7 +269,7 @@ Parses `Image=` directives from `.container` Quadlet files to identify container
 | **Snapshot fields** | `non_rpm_software` (`NonRpmSoftwareSection`), `unmanaged_files` (`UnmanagedFileSection`) |
 | **Source** | `inspectors/nonrpm.rs` |
 
-**Scan roots:** `/opt`, `/srv`, `/usr/local`, `/var/www`. Two flags add to them. `--scan-home all|USER,...` adds the home directories of users with UID 1000 or higher (`all`) or of the named users, and `--scan-path PATH` (repeatable) adds an absolute path that exists. A flag path already under a default root, or under another added root, is not added again. Directories matching `node_modules`, `.git`, `.cache`, `.npm`, `__pycache__`, `.tox`, `.venv`, `.eggs`, `target`, `build`, `dist` and `vendor` are pruned during recursive walks.
+**Scan roots:** `/opt`, `/srv`, `/usr/local`, `/var/www`. Two flags add to them. `--scan-home all|USER,...` adds the home directories of users with UID 1000 through 59999 (`all`) or of the named users, never a home of `/`, and `--scan-path PATH` (repeatable) adds an absolute path that exists. A flag path already under a default root, or under another added root, is not added again. Directories matching `node_modules`, `.git`, `.cache`, `.npm`, `__pycache__`, `.tox`, `.venv`, `.eggs`, `target`, `build`, `dist` and `vendor` are pruned during recursive walks.
 
 **What it reads:**
 

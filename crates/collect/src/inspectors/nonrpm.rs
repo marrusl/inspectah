@@ -72,6 +72,14 @@ pub fn default_scan_roots() -> Vec<String> {
     SCAN_ROOTS.iter().map(|s| s.to_string()).collect()
 }
 
+/// Join a directory entry onto `dir` with exactly one separator.
+///
+/// Walks start at a scan root, and a root can be `/` (`--scan-path /`) or carry
+/// a trailing slash, so a plain `format!("{dir}/{entry}")` yields `//home`.
+fn child_path(dir: &str, entry: &str) -> String {
+    format!("{}/{}", dir.trim_end_matches('/'), entry)
+}
+
 /// Ostree-internal /var paths to filter out.
 const OSTREE_VAR_INTERNALS: &[&str] = &["var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"];
 
@@ -510,7 +518,7 @@ fn walk_for_elf_binaries(
     };
 
     for entry in &entries {
-        let child = format!("{}/{}", dir, entry);
+        let child = child_path(dir, entry);
 
         // Check if this is a directory.
         if exec.read_dir(Path::new(&child)).is_ok() {
@@ -697,7 +705,7 @@ fn find_venvs_walk(
     };
 
     for entry in &entries {
-        let child = format!("{}/{}", dir, entry);
+        let child = child_path(dir, entry);
         if entry == "pyvenv.cfg" {
             // Found a venv -- parse its config.
             let system_sp = match exec.read_file(Path::new(&child)) {
@@ -1707,7 +1715,7 @@ fn find_git_configs(
     };
 
     for entry in &entries {
-        let child = format!("{}/{}", dir, entry);
+        let child = child_path(dir, entry);
         if entry == ".git" {
             // Found a git repo -- extract remote URL from config.
             let config_path = format!("{}/.git/config", dir);
@@ -1916,7 +1924,7 @@ fn find_files_matching(
     };
 
     for entry in &entries {
-        let child = format!("{}/{}", root, entry);
+        let child = child_path(root, entry);
         if entry == filename {
             handler(&child);
             continue;
@@ -5664,5 +5672,30 @@ mod tests {
             packages.is_empty(),
             "should not follow symlink outside root to find dist-info dirs"
         );
+    }
+
+    #[test]
+    fn walks_join_children_without_doubled_slash() {
+        // A scan root of `/` (from `--scan-path /`) or with a trailing slash
+        // must not produce `//home/...` children, which the executor cannot
+        // resolve and which print wrongly.
+        let cases: &[(&str, &str)] = &[
+            ("/", "/home/bob/.env"),
+            ("/home/bob/", "/home/bob/.env"),
+            ("/home/bob", "/home/bob/.env"),
+        ];
+        for (root, expected) in cases {
+            let exec = MockExecutor::new()
+                .with_dir("/", vec!["home"])
+                .with_dir("/home", vec!["bob"])
+                .with_dir("/home/bob", vec![".env"])
+                .with_dir("/home/bob/", vec![".env"]);
+            let mut found = Vec::new();
+            let mut visited = HashSet::new();
+            find_files_matching(&exec, root, ".env", root, &mut visited, &mut |p| {
+                found.push(p.to_string())
+            });
+            assert_eq!(found, vec![expected.to_string()], "root {root:?}");
+        }
     }
 }

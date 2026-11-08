@@ -37,7 +37,8 @@ flags add to them; neither removes a default root:
   than one path. A relative path, or a path that does not exist, is
   skipped with a warning.
 - `--scan-home all` adds the home directories of every user with UID
-  1000 or higher. `--scan-home alice,bob` adds the home directories of
+  1000 through 59999. A home directory of `/` is never added.
+  `--scan-home alice,bob` adds the home directories of
   the named users instead.
 
 For example, a Python virtual environment under `/apps/reporting` is

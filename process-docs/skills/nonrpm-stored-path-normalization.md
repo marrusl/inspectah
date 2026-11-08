@@ -51,6 +51,19 @@ collector renders correctly.
 `configtree.rs` also trims leading slashes, but on a different data path
 (config file tree materialization). It is not part of this contract.
 
+## Walk Joins: One Separator
+
+The same doubled-slash slip happens on the way in. A walk starts at a scan
+root, and a root can be `/` (`--scan-path /`) or carry a trailing slash, so
+`format!("{}/{}", dir, entry)` produces `//home/...`. The real filesystem
+resolves that, so the walk still works and the doubled path reaches warnings
+and output; `MockExecutor` does not, so a fixture rooted at `/` silently finds
+nothing. Join walk children with `child_path()` in `nonrpm.rs`, which trims the
+trailing slash first. `--scan-home` homes are trimmed when selected
+(`home_scan_root()` in `crates/cli/src/commands/scan.rs`), which also refuses
+a home of `/`: `nobody`'s home on RHEL is `/`, and as a scan root it turns
+every non-RPM walk into a walk of the whole host.
+
 ## Path Lists Match by Containment, Not Prefix
 
 The unmanaged walks (Tier 2 and `/usr`) compare walked paths against
