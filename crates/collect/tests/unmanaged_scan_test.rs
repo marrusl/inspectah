@@ -262,6 +262,44 @@ fn scan_unmanaged_applies_exclude_paths() {
     );
 }
 
+// ── Test 4b: path lists match on a path boundary ─────────────────
+
+#[test]
+fn scan_unmanaged_path_lists_match_on_path_boundary() {
+    // An entry covers the path itself and everything under it, never a
+    // sibling that merely shares its leading characters.
+    let exec = base_mock()
+        .with_dir("/opt", vec!["app", "app-data", "app.conf"])
+        .with_dir("/opt/app", vec!["bin"])
+        .with_dir("/opt/app/bin", vec!["x"])
+        .with_dir("/opt/app-data", vec!["y"]);
+    let exec = ["/opt/app/bin/x", "/opt/app-data/y", "/opt/app.conf"]
+        .iter()
+        .fold(exec, |exec, path| {
+            exec.with_command(&format!("rpm -qf {path}"), rpm_not_owned())
+                .with_command(
+                    &format!("stat -c %s %Y %u %g %a {path}"),
+                    stat_result(1024, 1700000000),
+                )
+                .with_command(&format!("file -b {path}"), file_config_result())
+        });
+
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        ("exclude", &["/opt/app"], &[]),
+        ("exclude, trailing slash", &["/opt/app/"], &[]),
+        ("language env", &[], &["/opt/app"]),
+        ("language env, trailing slash", &[], &["/opt/app/"]),
+    ];
+    for (label, exclude, language_envs) in cases {
+        let exclude: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+        let language_envs: Vec<String> = language_envs.iter().map(|s| s.to_string()).collect();
+        let result = scan_unmanaged_files(&exec, &language_envs, &exclude);
+        let mut paths: Vec<&str> = result.items.iter().map(|i| i.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["/opt/app-data/y", "/opt/app.conf"], "{label}");
+    }
+}
+
 // ── Test 5: /var is NOT a scan root ──────────────────────────────
 
 #[test]

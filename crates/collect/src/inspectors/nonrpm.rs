@@ -2142,6 +2142,20 @@ pub fn scan_unmanaged_files(
     }
 }
 
+/// Return whether `path` is `prefix` itself or lies under `prefix/`.
+///
+/// Both unmanaged walks match `exclude_paths` and `language_env_paths`
+/// with this, so an entry such as `/opt/app` hides `/opt/app/bin/x` but
+/// not the sibling `/opt/app-data`. A trailing slash on `prefix` is
+/// ignored, since shell completion spells directories that way.
+fn path_is_within(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_for_unmanaged(
     exec: &dyn Executor,
@@ -2168,8 +2182,8 @@ fn walk_for_unmanaged(
         let is_symlink = exec.run("test", &["-L", &child]).exit_code == 0;
 
         if is_symlink {
-            // Layer 1: User-specified exclusions (prefix match).
-            if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+            // Layer 1: User-specified exclusions (path containment).
+            if exclude_paths.iter().any(|ep| path_is_within(&child, ep)) {
                 continue;
             }
 
@@ -2179,7 +2193,10 @@ fn walk_for_unmanaged(
             }
 
             // Layer 3: Tier 1 language environment exclusion.
-            if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+            if language_env_paths
+                .iter()
+                .any(|lp| path_is_within(&child, lp))
+            {
                 continue;
             }
 
@@ -2227,11 +2244,14 @@ fn walk_for_unmanaged(
                 continue;
             }
             // Short-circuit excluded subtrees before recursion.
-            if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+            if exclude_paths.iter().any(|ep| path_is_within(&child, ep)) {
                 continue;
             }
             // Short-circuit Tier 1 language environment subtrees before recursion.
-            if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+            if language_env_paths
+                .iter()
+                .any(|lp| path_is_within(&child, lp))
+            {
                 continue;
             }
             walk_for_unmanaged(
@@ -2248,8 +2268,8 @@ fn walk_for_unmanaged(
             continue;
         }
 
-        // Layer 1: User-specified exclusions (prefix match).
-        if exclude_paths.iter().any(|ep| child.starts_with(ep)) {
+        // Layer 1: User-specified exclusions (path containment).
+        if exclude_paths.iter().any(|ep| path_is_within(&child, ep)) {
             continue;
         }
 
@@ -2259,7 +2279,10 @@ fn walk_for_unmanaged(
         }
 
         // Layer 3: Tier 1 language environment exclusion.
-        if language_env_paths.iter().any(|lp| child.starts_with(lp)) {
+        if language_env_paths
+            .iter()
+            .any(|lp| path_is_within(&child, lp))
+        {
             continue;
         }
 
@@ -2371,7 +2394,7 @@ fn is_pruned_file(path: &str) -> bool {
 ///   pruned: the Tier 2 walk owns it, and reporting it here too would give
 ///   the same file two COPY lines and two independent toggles.
 /// - `exclude_paths` and `language_env_paths` are honored with the same
-///   prefix match the Tier 2 walk uses.
+///   path-containment match (`path_is_within`) the Tier 2 walk uses.
 /// - File metadata (size) is read from `walkdir::DirEntry::metadata()`.
 ///
 /// `fs_root` is where the host filesystem is mounted (`HOST_FS_ROOT` on a
@@ -2408,10 +2431,10 @@ fn walk_usr_for_unmanaged(
             let tier2 = tier2_roots_under_usr
                 .iter()
                 .any(|root| path == *root || path.starts_with(&format!("{root}/")));
-            let excluded = exclude_paths.iter().any(|ep| path.starts_with(ep.as_str()));
+            let excluded = exclude_paths.iter().any(|ep| path_is_within(&path, ep));
             let language_env = language_env_paths
                 .iter()
-                .any(|lp| path.starts_with(lp.as_str()));
+                .any(|lp| path_is_within(&path, lp));
             !(noise || tier2 || excluded || language_env)
         })
     {
@@ -4128,6 +4151,28 @@ mod tests {
         assert!(!is_pruned_file("/usr/share/myapp/config.yaml"));
     }
 
+    #[test]
+    fn test_path_is_within() {
+        let cases = [
+            ("/opt/app", "/opt/app", true),
+            ("/opt/app/bin/x", "/opt/app", true),
+            ("/opt/app/bin/x", "/opt/app/", true),
+            ("/opt/app", "/opt/app/", true),
+            ("/opt/app-data", "/opt/app", false),
+            ("/opt/app-data", "/opt/app/", false),
+            ("/opt/app.conf", "/opt/app", false),
+            ("/opt", "/opt/app", false),
+            ("/opt/app", "/", true),
+        ];
+        for (path, prefix, expected) in cases {
+            assert_eq!(
+                path_is_within(path, prefix),
+                expected,
+                "{path} within {prefix}"
+            );
+        }
+    }
+
     // ---- /usr walk: fixture tree tests ----
 
     /// Directories a stock host's `filesystem` RPM owns, so the walk
@@ -4240,12 +4285,55 @@ mod tests {
     #[test]
     fn test_usr_walk_exclude_path_with_trailing_slash_prunes_contents() {
         // `--exclude-path /usr/lib/myapp/` is how shell completion spells
-        // the directory. The filter is a prefix match, as in the Tier 2
-        // walk, so the trailing slash still prunes everything beneath it.
+        // the directory. The filter ignores a trailing slash, as in the
+        // Tier 2 walk, so it still prunes everything beneath it.
         let root = usr_fixture(&["/usr/lib/myapp/libfoo.so", "/usr/lib/other/libbar.so"]);
         let exclude = vec!["/usr/lib/myapp/".to_string()];
         let paths = walk_fixture(&root, &owned_set(FIXTURE_OWNED_DIRS), &exclude, &[]);
         assert_eq!(paths, vec!["/usr/lib/other".to_string()]);
+    }
+
+    #[test]
+    fn test_usr_walk_path_lists_match_on_path_boundary() {
+        // A path list entry covers the path itself and everything under
+        // it, never a sibling that merely shares its leading characters.
+        let root = usr_fixture(&[
+            "/usr/lib/app/bin/x",
+            "/usr/lib/app-data/y",
+            "/usr/lib/app.conf",
+        ]);
+        let not_hidden = vec![
+            "/usr/lib/app-data".to_string(),
+            "/usr/lib/app.conf".to_string(),
+        ];
+        let cases: &[(&str, &str, &[&str], &[&str])] = &[
+            ("exclude", "/usr/lib/app", &["/usr/lib/app"], &[]),
+            (
+                "exclude, trailing slash",
+                "/usr/lib/app/",
+                &["/usr/lib/app/"],
+                &[],
+            ),
+            ("language env", "/usr/lib/app", &[], &["/usr/lib/app"]),
+            (
+                "language env, trailing slash",
+                "/usr/lib/app/",
+                &[],
+                &["/usr/lib/app/"],
+            ),
+        ];
+        for (label, entry, exclude, language_envs) in cases {
+            let exclude: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+            let language_envs: Vec<String> = language_envs.iter().map(|s| s.to_string()).collect();
+            let mut paths = walk_fixture(
+                &root,
+                &owned_set(FIXTURE_OWNED_DIRS),
+                &exclude,
+                &language_envs,
+            );
+            paths.sort();
+            assert_eq!(paths, not_hidden, "{label} {entry}");
+        }
     }
 
     #[test]

@@ -51,6 +51,16 @@ collector renders correctly.
 `configtree.rs` also trims leading slashes, but on a different data path
 (config file tree materialization). It is not part of this contract.
 
+## Path Lists Match by Containment, Not Prefix
+
+The unmanaged walks (Tier 2 and `/usr`) compare walked paths against
+`exclude_paths` and `language_env_paths` through `path_is_within()` in
+`nonrpm.rs`: a match is the entry itself or anything under `entry/`, with a
+trailing slash on the entry ignored. A bare `str::starts_with` is wrong here,
+because `/opt/app` would also hide `/opt/app-data`. Any new site that tests a
+walked path against one of these lists uses the helper, in both walks, so
+the two detectors keep the same exclusion semantics.
+
 ## History
 
 The nit list recorded this backwards — it named `strip_prefix` as the
