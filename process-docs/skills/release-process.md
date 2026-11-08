@@ -149,6 +149,33 @@ shasum -a 256 inspectah-* | tee /dev/stderr
 Both Linux binaries must report `statically linked`. Confirm the version
 string is the version being released, not the previous one.
 
+**Reading the stamp and the embedded UI on the Linux binaries without
+running them.** `strings -a` works on all three and needs no emulation.
+Stamp (expect exactly one line per binary, identical across all three):
+
+```bash
+for f in inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin; do
+  echo "== $f"
+  strings -a "$f" | grep -oE 'inspectah [0-9][^ ]* \(commit [0-9a-f]+, built [0-9-]+\)' | sort | uniq -c
+done
+```
+
+Embedded UI: the frontend is embedded by path, so the asset names appear
+verbatim. Take the content-hashed names from `crates/web/ui/dist/` and
+count them in each binary (zero means no UI):
+
+```bash
+for f in inspectah-darwin-arm64 inspectah-linux-amd64 inspectah-linux-arm64-bin; do
+  for n in index.html $(ls crates/web/ui/dist/assets | grep -E '^index-'); do
+    printf '%s %s: ' "$f" "$n"; strings -a "$f" | grep -cF "$n"
+  done
+done
+```
+
+Always pipe `strings` through `grep -o` or `grep -c`: the binaries embed
+long unbroken runs of text, and an unanchored `grep` dumps kilobytes per
+match line.
+
 ### The embedded commit hash is never the tag commit
 
 `crates/cli/build.rs` stamps the binary with `git rev-parse --short HEAD`
@@ -342,6 +369,14 @@ the hyphenated form (`0.8.6-beta.5`), not the RPM tilde form.
   The CHANGELOG keeps the skipped version's section as-is; the release
   notes for the new version mention "also included from beta.N" for
   visibility.
+
+- **The Homebrew tap can drift past a skipped release.** The tap formula
+  is bumped by hand after `gh release create`, so a release whose tap bump
+  is forgotten leaves the formula pointing at an older tag. beta.4 was
+  released on GitHub but its tap bump was skipped, and the formula stayed
+  at `0.9.0-beta.3` until the beta.5 bump. Check the formula's current
+  version before editing it, and say in the tap commit body when a
+  release was skipped.
 
 - **Cargo.lock regeneration.** After bumping `Cargo.toml`, run
   `cargo check` to update `Cargo.lock`. Don't forget to stage it.
