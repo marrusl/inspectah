@@ -21,8 +21,8 @@ cannot complete.
 
 It is one command instead of two, but the release that added `--policy` to
 `podman pull` was not confirmed against the documented floor (podman 4.4,
-`README.md`). `podman image exists` has been in podman since 1.x, so the
-two-command form carries no version risk. Revisit only with the floor
+`README.md`). `podman image exists` predates that floor, so the two-command
+form carries no version risk. Revisit only with the floor
 verified on a real EL8 host.
 
 ## What it costs
@@ -40,6 +40,42 @@ pull-progress callback: in the default terminal mode that callback draws a
 transient viewport that is erased when extraction finishes. The source is
 not a field on `BaselineData` because that type is serialized into the
 snapshot.
+
+## Digest of a loaded image
+
+The local branch makes `capture_image_digest` reachable for an image that
+was never pulled. It reads `{{.Digest}}`, falls back to
+`{{index .RepoDigests 0}}`, and returns `DigestFailed` (exit 3) when both
+are empty. Measured on a RHEL 9.8 host with podman 5.8.2, using
+`quay.io/fedora/fedora-minimal:42` and the default `podman save` format:
+
+```
+# after podman pull
+{{.Digest}}               sha256:cfc6a342f07e650527ab8ac56288b390d9442f98c85c20d42ae51b20b0447f74
+{{index .RepoDigests 0}}  quay.io/fedora/fedora-minimal@sha256:09a2061e2cfb85ac8e7fa7f2234d0ace6ad4f2b7dfdf0f257c90405e4f07577d
+{{.Id}}                   d6393d1ed6dbc71bf2516a8851a36a0378369498487ace1ff214f84009a8a75f
+
+# after podman save -o img.tar, podman rmi, podman load -i img.tar
+podman image exists       0
+{{.Digest}}               sha256:8908e471a695a5f0ec293a762486fad0dbc8794cb19e126997e16f5d046a563d
+{{index .RepoDigests 0}}  quay.io/fedora/fedora-minimal@sha256:8908e471a695a5f0ec293a762486fad0dbc8794cb19e126997e16f5d046a563d
+{{.Id}}                   d6393d1ed6dbc71bf2516a8851a36a0378369498487ace1ff214f84009a8a75f
+```
+
+So a loaded image does carry a digest and the scan does not stop at
+`DigestFailed`. The digest is not the registry's, though: `podman load`
+writes a new manifest, so the recorded value matches neither registry
+digest. Only the image ID survives the round trip. Every current consumer
+of `BaselineData.image_digest` is display-only (the baseline table in the
+audit report and README, the HTML report's baseline panel, the refine
+baseline summary and the web banner's 12-character prefix, and the fleet
+aggregate, which copies it). The Containerfile's `FROM` uses the image
+reference, not the digest. Do not start using the digest as a registry pin
+without handling loaded images. Not measured: `podman save --format
+oci-archive`, and podman releases older than 5.8.2.
+
+`baseline_local_image_without_digest_returns_digest_failed` pins the
+empty-digest contract for the local branch with a mock.
 
 ## Test consequence
 
