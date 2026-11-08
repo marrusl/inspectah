@@ -253,6 +253,11 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
 /// write them space-separated. Comparing raw strings would report every such
 /// key as drift even when the kernel runs exactly the configured value, so
 /// whitespace of any kind and amount counts as a single separator here.
+///
+/// This applies to every key, including string-valued ones such as
+/// `kernel.core_pattern` where internal spacing is part of the value, so a
+/// whitespace-only difference there also compares equal. Key-aware comparison
+/// was left out deliberately to keep a single rule for all keys.
 fn sysctl_values_equal(file_val: &str, runtime_val: &str) -> bool {
     file_val
         .split_whitespace()
@@ -520,8 +525,14 @@ mod tests {
                 "1024 65536",
                 true,
             ),
+            (
+                "net.ipv4.ip_local_port_range",
+                "1024  65535",
+                "1024\t65535",
+                false,
+            ),
+            // Guards the parsers' trimming of surrounding whitespace, not the comparator.
             ("kernel.sysrq", "1", "1 ", false),
-            ("kernel.sysrq", "1", "\t1", false),
             ("kernel.sysrq", "1", "0", true),
         ];
         for &(key, file_val, runtime_val, expect_override) in cases {
@@ -548,7 +559,9 @@ mod tests {
             );
             if expect_override {
                 // Stored strings stay raw so the snapshot contract is unchanged.
+                assert_eq!(overrides.len(), 1);
                 assert_eq!(overrides[0].default, file_val);
+                assert_eq!(overrides[0].runtime, runtime_val);
             }
         }
     }
