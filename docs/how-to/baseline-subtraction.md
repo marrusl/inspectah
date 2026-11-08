@@ -35,7 +35,8 @@ matching bootc base:
   `quay.io/centos-bootc/centos-bootc:stream9`. Pass `--base-image` if you want
   a different target.
 
-Once resolved, inspectah pulls the container image and extracts its package
+Once resolved, inspectah uses the container image from local podman storage,
+or pulls it from the registry when it is not stored, and extracts its package
 manifest. Every package on your host that matches the base image is classified
 as **Baseline** and excluded from the generated Containerfile by default.
 
@@ -77,8 +78,9 @@ with the target.
 ## Baseline extraction is mandatory
 
 inspectah requires baseline extraction to classify packages and configurations
-correctly. If the scan cannot pull the target base image, it exits with code 3
-and shows a detailed error with remediation guidance.
+correctly. If the scan cannot get the target base image from local storage or the
+registry, it exits with code 3 and shows a detailed error with remediation
+guidance.
 
 For disconnected or air-gapped environments, you have two options:
 
