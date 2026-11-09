@@ -173,9 +173,19 @@ dependencies: mod_http2, mod_lua` on both. So:
   installed host, not solved, over sets of installed provider ids rather
   than capability names. `(a if c)` pulls a provider of `a` only when some
   installed package (base image included) provides `c`, and never pulls
-  `c`; `unless` and `else` likewise. A provider of `a` that itself makes
-  `c` hold is not pulled either: `(foo >= 2 if foo)` is a version floor,
-  and dnf never installs `foo` for it. `(a or b)` pulls the first
+  `c`; `unless` and `else` likewise. A provider of `a` is held back
+  only when `c` holds through it alone: `c` is evaluated again with that
+  one package left out (`Excluding`), and if it then fails, dnf would not
+  install the package for this dependency. So `(foo >= 2 if foo)`, with
+  foo the only provider, is a version floor and pulls nothing. **Never
+  subtract every provider the condition matches.** Each `or` operand and
+  each provider of a capability holds the condition alone, so
+  `(plugin if (plugin or desktop))` with desktop installed, and
+  `(plugin if feature)` with a base-image package also providing
+  `feature`, both pull `plugin`. Each provider is tested alone, so two
+  added packages that both match `a` and both provide `c` are both
+  pulled, each holding the condition for the other. That is the
+  judged-on-the-host limit below. `(a or b)` pulls the first
   installed operand, and `and` pulls every operand. `with` and `without`
   are per package: `(a with b)` is the packages that provide both, and
   `(a without b)` is the providers of `a` that do not provide `b`. Their
@@ -184,9 +194,13 @@ dependencies: mod_http2, mod_lua` on both. So:
   expression keeps its comparison (`engine >= 2`) and matches only
   providers whose provided version overlaps it, by rpm's `rpmdsCompare`
   rule over `rpmvercmp`. A missing epoch is 0, the release counts only
-  when both sides have one, and an unversioned provide meets any
-  constraint. So `(plugin if engine >= 2 else fallback)` takes `fallback`
-  when only `engine = 1` is installed. Nesting stops at
+  when both sides have one, and an empty release is none. When epoch and
+  version are equal and only one side has a release, the two match
+  outright if the side without one has EQUAL, whatever the other
+  operator (`rpmverOverlap` in `rpmio/rpmver.c`, the same in rpm 4.16 and
+  4.19), so `engine = 2` meets `engine > 2-1`. An unversioned provide
+  meets any constraint. So `(plugin if engine >= 2 else fallback)` takes
+  `fallback` when only `engine = 1` is installed. Nesting stops at
   `MAX_RICH_DEP_DEPTH` (16). `DepExpr` can only be built by its parser,
   so every walk over it is bounded by the same limit, and a long run of
   `(` cannot exhaust the stack.
@@ -205,8 +219,13 @@ credits `addon` even when the target baseline satisfies `base-cap`.
 `desktop`. A joint Supplements whose operands come from two different
 leaves is in neither list. Fixing this means storing the predicates in
 the snapshot and evaluating them at render time. On RHEL 9.8 and 10.2
-the tree still matched an independent libsolv closure check on all 28
-leaves (2026-11-09), so this has no measured effect yet.
+the tree matched an independent libsolv closure check on all 28 leaves,
+at `1be5bd44` and again at `e55a45f7` (2026-11-09), so this has no
+measured effect yet. That check evaluates rich expressions with the
+tree's own rules, so it shows these cases did not occur on those hosts,
+not that the rules are right. Neither run exercised the release-less
+EQUAL match or the per-provider condition check, which came after
+`e55a45f7`.
 
 A test for each of these must fail on the previous graph: a fixture
 whose only route to a package is a requirement form the old parser

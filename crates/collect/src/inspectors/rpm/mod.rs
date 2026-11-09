@@ -3203,14 +3203,35 @@ R\tlibacl.so.1()(64bit)
         assert_eq!(closure("nginx-core.aarch64"), vec!["pcre2.aarch64"]);
     }
 
+    /// The two-field provides index the collector queried before
+    /// `%{PROVIDEFLAGS}` and `%{PROVIDEVERSION}` were added (up to and
+    /// including `1be5bd44`).
+    const LEGACY_PROVIDES_INDEX_FORMAT: &str = "[%{=NAME}.%{=ARCH}\\t%{PROVIDENAME}\\n]";
+
     /// Mock the two rpm queries behind the dependency graph, and a
     /// `--userinstalled` answer naming the leaves.
+    ///
+    /// The provides index is also answered in its legacy two-field form,
+    /// derived from `index_stdout`, so that these fixtures run against an
+    /// older collector fail on the edges it gets wrong, not on an unknown
+    /// mock command (exit 127) sending it to the dnf fallback. It is
+    /// registered last, so it wins where the two keys are the same, as they
+    /// are in a tree whose current constant is still the legacy one.
     fn dep_graph_executor(
         names: &str,
         deps_stdout: &str,
         index_stdout: &str,
         userinstalled: &str,
     ) -> MockExecutor {
+        let legacy_index: String = index_stdout
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.splitn(4, '\t');
+                let id = fields.next()?;
+                let cap = fields.nth(2)?;
+                Some(format!("{id}\t{cap}\n"))
+            })
+            .collect();
         MockExecutor::new()
             .with_command(
                 "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
@@ -3233,6 +3254,14 @@ R\tlibacl.so.1()(64bit)
                 ExecResult {
                     exit_code: 0,
                     stdout: index_stdout.into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", LEGACY_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: legacy_index,
                     stderr: String::new(),
                 },
             )
@@ -3495,6 +3524,58 @@ R\tlibc.so.6()(64bit)
             closure(&result, "langpacks-en.noarch"),
             vec!["glibc-langpack-en.aarch64", "glibc.aarch64"]
         );
+    }
+
+    #[test]
+    fn leaf_closure_fires_joint_rules_in_chains_and_through_cycles() {
+        // leaf reaches a and b. Rule p1 needs a and b. p1 reaches c, which
+        // with a fires rule p2, listed first so it can only fire on a later
+        // pass. p2 leads back to the leaf, and rule p3 needs p2 and the
+        // leaf itself; p3 leads back to p1, already reached. Rule never
+        // needs x, which nothing reaches.
+        let depends_on: HashMap<String, HashSet<String>> = [
+            ("leaf", &["a", "b"][..]),
+            ("p1", &["c"]),
+            ("p2", &["leaf"]),
+            ("p3", &["p1"]),
+        ]
+        .into_iter()
+        .map(|(from, to)| (from.to_string(), ids(to)))
+        .collect();
+        let rule = |groups: &[&[&str]], package: &str| JointSupplement {
+            groups: groups.iter().map(|g| ids(g)).collect(),
+            package: package.to_string(),
+        };
+        let joint = [
+            rule(&[&["c"], &["a"]], "p2"),
+            rule(&[&["p2"], &["leaf"]], "p3"),
+            rule(&[&["x"], &["a"]], "never"),
+            rule(&[&["a"], &["b"]], "p1"),
+        ];
+        assert_eq!(
+            leaf_closure("leaf", &depends_on, &joint),
+            ids(&["a", "b", "c", "leaf", "p1", "p2", "p3"])
+        );
+    }
+
+    #[test]
+    fn classify_deps_rpm_keeps_a_tab_inside_an_index_capability() {
+        // The capability is the index's last field, so a tab inside it is
+        // part of the name. `odd` provides `weird<TAB>cap`; `other`
+        // provides `weird`, the text before the tab, and must not match.
+        let exec = dep_graph_executor(
+            "app odd other",
+            "@@app\nR\tweird\tcap\n@@odd\n@@other\n",
+            "app.noarch\t0\t\tapp\n\
+             odd.noarch\t0\t\tweird\tcap\n\
+             other.noarch\t0\t\tweird\n",
+            "",
+        );
+        let added = ids(&["app.noarch", "odd.noarch", "other.noarch"]);
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
+            .expect("graph should be available")
+            .depends_on;
+        assert_eq!(deps["app.noarch"], ids(&["odd.noarch"]));
     }
 
     #[test]

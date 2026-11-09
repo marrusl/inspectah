@@ -594,16 +594,14 @@ are their dependencies.
 **A self-conditional rich dependency is a version floor, not an edge.**
 `(foo >= 1.2 if foo)` never makes dnf install `foo`. At `1be5bd44` the
 tree evaluated the condition, found `foo` installed and credited it. The
-tree now drops a provider that itself makes the condition hold (see
-[rpm-output-field-parsing](rpm-output-field-parsing.md)). Neither host
-hit the old behaviour: every such dependency on an added package
-targeted a baseline or uninstalled package (`selinux-policy`,
+tree now holds back a provider only when the condition holds through it
+alone (see [rpm-output-field-parsing](rpm-output-field-parsing.md)).
+Neither host hit the old behaviour: every such dependency on an added
+package targeted a baseline or uninstalled package (`selinux-policy`,
 `fedora-release-common`). A rescan that wants to exercise it needs an
-added package whose condition names another added package. The same
-applies to the reworked provides index, which now also prints
-`%{PROVIDEFLAGS}` and `%{PROVIDEVERSION}`. This run did not exercise that
-query, so confirm on rpm 4.16 and 4.19 that it runs once and that no
-`dnf repoquery --requires` follows it.
+added package whose condition names another added package. The next
+subsection confirms the reworked four-field provides index on rpm 4.16
+and 4.19.
 
 ### Measured, 2026-11-09: the reworked tree, and the versioned provides index
 
@@ -631,7 +629,10 @@ Both leaf trees came out identical to the `1be5bd44` run, closure for
 closure, and still matched the libsolv check on 28 of 28 leaves. The
 check now mirrors the rework: libsolv resolves each versioned atom, and
 the script subtracts an `if` condition's witnesses and builds
-Supplements trigger clauses as `DepExpr` does. On these hosts none of
+Supplements trigger clauses as `DepExpr` did at that commit. The tree
+has since stopped subtracting every witness (it holds back a provider
+only when the condition fails without it), so a later run's script has
+to re-evaluate the condition without each provider instead. On these hosts none of
 the new rules changed an edge. No Supplements became a joint rule,
 because `glibc` is in the base image and drops out of the langpack's
 `and`. No self-conditional dependency targeted an added package. Every
