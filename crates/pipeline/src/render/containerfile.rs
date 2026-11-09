@@ -766,15 +766,35 @@ fn packages_section_lines(
         .map(|v| v.iter().cloned().collect())
         .unwrap_or_default();
 
+    let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
+    let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
+    let pulled_in = super::service_intent::pulled_in_by_included(rpm);
+
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
         .iter()
-        .filter(|pkg| pkg.disposition.is_included())
         .filter(|pkg| is_package_installable(pkg))
         .filter(|pkg| {
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
         })
         .filter(|pkg| {
+            // A package from a disabled repo that an included package
+            // depends on is named in its repo's transaction, whatever its
+            // own disposition and leaf status. The dependent's transaction
+            // does not enable that repo, so dnf cannot pull it in there.
+            // The disposition is left as it is: refine's non-leaf default
+            // and an operator's exclusion both still read as excluded.
+            if pulled_in.contains(&canonical_package_id(&pkg.name, &pkg.arch))
+                && matches!(
+                    super::repoless::route_for(rpm, pkg, verified),
+                    PackageRoute::DisabledRepo(_)
+                )
+            {
+                return true;
+            }
+            if !pkg.disposition.is_included() {
+                return false;
+            }
             // Locked packages are already decided — skip leaf filter
             if pkg.locked {
                 return true;
@@ -822,9 +842,6 @@ fn packages_section_lines(
     // multiarch handling match.
     let mut disabled_repo_installs: std::collections::BTreeMap<RepoId, Vec<String>> =
         std::collections::BTreeMap::new();
-
-    let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
-    let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
 
     for pkg in &installable_packages {
         let route = super::repoless::route_for(rpm, pkg, verified);
@@ -2499,8 +2516,9 @@ mod tests {
     /// carries the repo's definition, and in the repo-less block
     /// otherwise. Never in the plain package list, where it fails the
     /// build with `Unable to find a match`. It is selected the way the
-    /// plain list selects: an excluded package and a non-leaf dependency
-    /// render nowhere, and group membership does not suppress it.
+    /// plain list selects, except that a dependency of an included package
+    /// is named whatever its disposition, since the dependent's transaction
+    /// cannot reach the repo. Group membership does not suppress it.
     #[test]
     fn a_disabled_repo_package_renders_once() {
         const CRB_CONTENT: &str = "[codeready-builder-for-rhel-9-aarch64-rpms]\n\
@@ -2530,8 +2548,10 @@ mod tests {
             Unknown,
             /// A package nothing else depends on.
             TopLevel,
-            /// A dependency of another package, left to dnf.
+            /// A dependency of the included leaf `htop`.
             Dependency,
+            /// A dependency of an excluded leaf only.
+            DependencyOfExcluded,
         }
         struct Case {
             name: &'static str,
@@ -2601,8 +2621,19 @@ mod tests {
                 ..BASE
             },
             Case {
-                name: "a non-leaf dependency is left to dnf",
+                name: "a non-leaf dependency of an included package installs from its repo",
                 leaf: Leaf::Dependency,
+                ..BASE
+            },
+            Case {
+                name: "the same dependency, excluded, still installs: it is pulled in",
+                leaf: Leaf::Dependency,
+                included: false,
+                ..BASE
+            },
+            Case {
+                name: "a dependency of an excluded leaf only is not named",
+                leaf: Leaf::DependencyOfExcluded,
                 want: Want::Nothing,
                 ..BASE
             },
@@ -2666,6 +2697,15 @@ mod tests {
                         rpm.leaf_packages = Some(vec!["htop.x86_64".into()]);
                         rpm.leaf_dep_tree =
                             serde_json::json!({ "htop.x86_64": ["openh264.x86_64"] });
+                    }
+                    Leaf::DependencyOfExcluded => {
+                        let mut parent = rpm.packages_added[1].clone();
+                        parent.name = "vlc".into();
+                        parent.disposition = FindingKind::excluded();
+                        rpm.packages_added.push(parent);
+                        rpm.leaf_packages = Some(vec!["htop.x86_64".into(), "vlc.x86_64".into()]);
+                        rpm.leaf_dep_tree =
+                            serde_json::json!({ "vlc.x86_64": ["openh264.x86_64"] });
                     }
                 }
                 if case.group_member {

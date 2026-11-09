@@ -197,11 +197,11 @@ fn export_containerfile(session: &RefineSession) -> String {
     extract_containerfile(&tarball)
 }
 
-/// With leaf data, the disabled-repo transaction takes the plain list's
-/// selection. The leaf `gst-openh264` installs from its repo; its
-/// dependency `openh264`, from the same repo, is left to dnf, which
-/// resolves it inside that transaction. The scan tarball includes the
-/// dependency and filters it at render; refine excludes it by default.
+/// With leaf data, the leaf `gst-openh264` installs from its disabled
+/// repo, and so does its dependency `openh264`: a dependency of an included
+/// package is named in its repo's transaction whatever its disposition.
+/// The scan tarball includes the dependency; refine excludes it by default
+/// and must still name it.
 /// Both must render the same lines, including the unit each package owns,
 /// and when refine excludes the leaf too, nothing installs and neither
 /// unit is enabled.
@@ -258,8 +258,8 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         "the leaf installs:\n{scan}"
     );
     assert!(
-        !scan.lines().any(|l| l == INSTALL_LINE),
-        "the dependency is left to dnf, as the plain list leaves one:\n{scan}"
+        scan.lines().any(|l| l == INSTALL_LINE),
+        "the dependency installs from its repo too:\n{scan}"
     );
     assert!(
         !scan.contains("# MANUAL: openh264"),
@@ -306,6 +306,86 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
             "no unit of an uninstalled package is enabled ({u}):\n{excluded}"
         );
     }
+}
+
+/// A disabled-repo dependency of an included leaf from an enabled repo:
+/// the leaf's own transaction does not enable the disabled repo, so the
+/// dependency is named in that repo's transaction, which runs first. Both
+/// export paths render it the same way, although refine excludes the
+/// non-leaf dependency by default. With the leaf excluded, nothing pulls
+/// the dependency in and it is not named.
+#[test]
+fn a_disabled_repo_dependency_of_an_enabled_repo_leaf_installs_from_its_repo() {
+    const LEAF: &str = "vlc";
+    let mut snap = snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true)));
+    {
+        let rpm = snap.rpm.as_mut().expect("rpm section");
+        rpm.packages_added.push(PackageEntry {
+            name: LEAF.into(),
+            version: "3.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "appstream".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+        rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
+        rpm.leaf_dep_tree = serde_json::json!({ "vlc.x86_64": ["openh264.x86_64"] });
+    }
+    let about_the_packages = |containerfile: &str| -> Vec<String> {
+        containerfile
+            .lines()
+            .filter(|l| {
+                l.contains("openh264")
+                    || l.contains("disabled on the source host")
+                    || l.contains("    vlc")
+            })
+            .map(str::to_string)
+            .collect()
+    };
+
+    let scan = scan_containerfile(&snap);
+    let flagged = scan
+        .find(&format!("RUN dnf install -y {ENABLEREPO}"))
+        .unwrap_or_else(|| panic!("the disabled repo's transaction:\n{scan}"));
+    let named = scan
+        .find(INSTALL_LINE)
+        .unwrap_or_else(|| panic!("the dependency is named:\n{scan}"));
+    let leaf = scan
+        .find("    vlc \\")
+        .unwrap_or_else(|| panic!("the leaf installs:\n{scan}"));
+    assert!(
+        flagged < named && named < leaf,
+        "the dependency is in the flagged transaction, before the leaf's:\n{scan}"
+    );
+
+    let mut session = RefineSession::new(snap);
+    assert!(
+        !openh264_included(&session),
+        "refine starts the non-leaf dependency excluded"
+    );
+    let refine = export_containerfile(&session);
+    assert_eq!(
+        about_the_packages(&scan),
+        about_the_packages(&refine),
+        "scan:\n{scan}\nrefine:\n{refine}"
+    );
+
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: LEAF.into(),
+                arch: "x86_64".into(),
+            },
+            include: false,
+        })
+        .expect("the leaf can be excluded");
+    let excluded = export_containerfile(&session);
+    assert!(
+        !excluded.contains(ENABLEREPO) && !excluded.lines().any(|l| l == INSTALL_LINE),
+        "nothing pulls the dependency in:\n{excluded}"
+    );
 }
 
 /// Refine refuses to toggle a disabled repo, so through the session the
