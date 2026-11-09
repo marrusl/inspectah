@@ -47,6 +47,15 @@ to date, all found by hand on a real host rather than by the suite:
    lockfile-only project for this case. Medium-confidence pip items
    still stage their `requirements.txt` under a commented block; no
    fixture exercises that yet.
+6. A package from a repo the host keeps disabled installs from that repo
+   with `--enablerepo`, so its block carries no `COPY` of a cached RPM.
+   All three `repoless-packages/` writers (the scan tarball's, refine's
+   payload extraction, refine's upload copy) still staged one. They now
+   ask `render::repoless::route_for`, the one routing decision the
+   renderer reads too, and stage a file only for the route that copies
+   it. The scan tarball's writer moved to
+   `render::repoless::write_cached_rpms` for the reason in the next
+   section, and the guard calls it.
 
 ## What to do when adding a staged directory
 
@@ -75,9 +84,14 @@ it. Extend that list when you add a staged directory.
 
 Two things the guard does **not** cover, deliberately:
 
-- `unmanaged/` and `repoless-packages/` are re-extracted from the
-  **source tarball**, not rendered from the snapshot, so a fixture
-  without one cannot exercise them.
+- `unmanaged/` is re-extracted from the **source tarball**, not
+  rendered from the snapshot, so a fixture without one cannot exercise
+  it. `repoless-packages/` is covered since 2026-11-08: the fixture
+  carries two cached repo-less RPMs, one `@commandline` and one from a
+  disabled repo, the CLI half stages them through `write_cached_rpms`,
+  and the refine half exports from a source tarball packed from that
+  tree, with the disabled-repo RPM added as a stale scan would have left
+  it.
 - ~~A file the export silently drops with no `COPY` emitted for it.~~
   **Covered since 2026-11-04** by `assert_every_staged_file_is_copied` in
   the same file, which asks the mirror question: does some `COPY` carry

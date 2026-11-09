@@ -17,7 +17,9 @@ use inspectah_core::types::storage::{
     ETC_TMPFILES_PREFIX, RUN_TMPFILES_PREFIX, USR_TMPFILES_PREFIX, VarDirBacking,
     declaring_unit_label,
 };
+use inspectah_core::types::verified_upload::VerifiedUploads;
 
+use super::repoless::{PackageRoute, route_for};
 use super::service_intent::is_package_installable;
 
 /// The directories a unit file can sit in and still be a unit file this
@@ -199,10 +201,18 @@ impl<'a> Evidence<'a> {
                 .packages_added
                 .iter()
                 .filter(|pkg| pkg.disposition.is_included())
-                // A repo-less entry whose RPM the export carries counts
-                // too: a staged upload or a cached RPM the payload
-                // extraction carries.
-                .filter(|pkg| is_package_installable(pkg) || pkg.uploaded || pkg.repoless_cached)
+                // Installed on the route the Containerfile renders it by.
+                // A repo-less entry counts only when the export carries its
+                // RPM: a staged upload or a cached RPM the payload
+                // extraction carries. No uploads are proved here, so an
+                // upload is taken on `uploaded`, as before.
+                .filter(|pkg| match route_for(rpm, pkg, &VerifiedUploads::new()) {
+                    PackageRoute::ByName => is_package_installable(pkg),
+                    PackageRoute::DisabledRepo(_) => true,
+                    PackageRoute::Upload(_) | PackageRoute::Repoless => {
+                        pkg.uploaded || pkg.repoless_cached
+                    }
+                })
                 // A repo-enabling package whose serving repo the export
                 // dropped is demoted to a FIXME and never installed.
                 .filter(|pkg| {

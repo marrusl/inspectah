@@ -867,9 +867,10 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             .context("failed to bundle unmanaged files")?;
     }
 
-    // Bundle repo-less RPMs from dnf cache into render directory
+    // Bundle repo-less RPMs from dnf cache into render directory, on the
+    // route the Containerfile's repo-less block copies them by.
     if let Some(ref rpm) = snapshot.rpm {
-        bundle_repoless_rpms(&rpm.packages_added, render_dir.path())
+        render::repoless::write_cached_rpms(rpm, render_dir.path())
             .context("failed to bundle repo-less RPMs")?;
     }
 
@@ -1168,31 +1169,6 @@ fn bundle_unmanaged_files(
         } else {
             std::fs::copy(&item.path, &dest)
                 .with_context(|| format!("failed to copy {} to tarball", item.path))?;
-        }
-    }
-    Ok(())
-}
-
-/// Bundle cached repo-less RPMs into the render directory for tarball inclusion.
-///
-/// Copies each package's cached `.rpm` file (identified by `cache_path`)
-/// into `repoless-packages/` under the render directory, using a
-/// canonical NEVRA filename.
-fn bundle_repoless_rpms(
-    packages: &[inspectah_core::types::rpm::PackageEntry],
-    render_dir: &Path,
-) -> Result<()> {
-    let dest_dir = render_dir.join("repoless-packages");
-    for pkg in packages {
-        if let Some(ref cache_path) = pkg.cache_path {
-            std::fs::create_dir_all(&dest_dir).context("failed to create repoless-packages dir")?;
-            let filename = format!(
-                "{}-{}-{}.{}.rpm",
-                pkg.name, pkg.version, pkg.release, pkg.arch
-            );
-            let dest = dest_dir.join(&filename);
-            std::fs::copy(cache_path, &dest)
-                .with_context(|| format!("failed to copy cached RPM {cache_path}"))?;
         }
     }
     Ok(())

@@ -28,6 +28,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::language_packages;
+use super::repoless::PackageRoute;
 use super::safety::{
     ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
 };
@@ -843,12 +844,17 @@ fn packages_section_lines(
     let mut disabled_repo_installs: std::collections::BTreeMap<RepoId, Vec<String>> =
         std::collections::BTreeMap::new();
 
+    let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
+    let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
+
     for pkg in &installable_packages {
-        let disabled_repo = super::repoless::disabled_repo_install(rpm, pkg);
+        let route = super::repoless::route_for(rpm, pkg, verified);
         // Suppress packages whose name is covered by a renderable group,
         // except one from a disabled repo: the group transaction does not
         // enable that repo, so it cannot install the member.
-        if disabled_repo.is_none() && group_member_suppressed.contains(&pkg.name) {
+        if !matches!(route, PackageRoute::DisabledRepo(_))
+            && group_member_suppressed.contains(&pkg.name)
+        {
             continue;
         }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
@@ -860,17 +866,17 @@ fn packages_section_lines(
         // gave it, and still owes the operator the FIXME naming what to
         // re-include.
         match super::repo_enabling::repo_enabling_export(rpm, pkg) {
-            super::repo_enabling::RepoEnablingExport::NotEnabling => match disabled_repo {
-                Some(id) => disabled_repo_installs
+            super::repo_enabling::RepoEnablingExport::NotEnabling => match route {
+                PackageRoute::ByName => install_names.push(install_name),
+                PackageRoute::DisabledRepo(id) => disabled_repo_installs
                     .entry(id)
                     .or_default()
                     .push(install_name),
                 // No enabled repo on the source host serves a repo-less
                 // package, so a plain `dnf install` of it fails with
                 // `Unable to find a match`. It renders in the repo-less
-                // block.
-                None if !pkg.repoless_annotation.is_empty() => {}
-                None => install_names.push(install_name),
+                // block, from the upload when there is one.
+                PackageRoute::Upload(_) | PackageRoute::Repoless => {}
             },
             super::repo_enabling::RepoEnablingExport::Served => {
                 repo_enabling.push((pkg, install_name))
@@ -2701,6 +2707,47 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// An operator's upload wins over the disabled repo: the package renders
+    /// once, from the uploaded RPM in the repo-less block, with no
+    /// `--enablerepo` transaction. Without the upload the same snapshot
+    /// installs from the repo, which is the control.
+    #[test]
+    fn a_verified_upload_wins_over_a_disabled_repo() {
+        const UPLOAD: &str = "openh264-2.4.2-1.el9.x86_64.rpm";
+        let mut snap = snapshot_with_packages(&["openh264", "htop"]);
+        snap.rpm
+            .as_mut()
+            .expect("fixture has an rpm section")
+            .repo_files
+            .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+        make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
+
+        let without = render_containerfile(&snap, None, Some(&RenderContext::default()));
+        assert!(
+            without.contains("--enablerepo=epel-cisco-openh264"),
+            "{without}"
+        );
+
+        let mut ctx = RenderContext::default();
+        ctx.verified_uploads.insert(
+            "openh264.x86_64".into(),
+            inspectah_core::types::verified_upload::VerifiedUpload {
+                canonical: "openh264.x86_64".into(),
+                basename: inspectah_core::rpm_filename::StagedName::parse(UPLOAD)
+                    .expect("a valid basename"),
+                uploaded_version: None,
+            },
+        );
+        let with = render_containerfile(&snap, None, Some(&ctx));
+
+        assert!(!with.contains("--enablerepo"), "{with}");
+        assert!(
+            with.contains(&format!("COPY repoless-packages/{UPLOAD} /tmp/")),
+            "{with}"
+        );
+        assert!(!with.contains("    openh264 \\"), "{with}");
     }
 
     /// Both arches of a multiarch pair from a disabled repo install, each

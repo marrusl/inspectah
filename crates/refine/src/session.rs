@@ -10,6 +10,7 @@ use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
+use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
@@ -3688,6 +3689,7 @@ fn is_single_normal_component(rel: &str) -> bool {
 fn extract_payload_dirs_from_tarball(
     source_tarball: &Path,
     snap: &InspectionSnapshot,
+    verified: &VerifiedUploads,
     out: &Path,
 ) -> Result<(), RefineError> {
     let file = std::fs::File::open(source_tarball)
@@ -3721,6 +3723,10 @@ fn extract_payload_dirs_from_tarball(
     // A NEVRA built from four snapshot fields is only a filename when the
     // allowlist says so; one that is not never reaches the allowlist, and
     // the renderer refuses it on the same test.
+    //
+    // Only the repo-less route copies a cached RPM. A package that installs
+    // from its host-disabled repo has no `COPY` naming the file, so it is
+    // not extracted, whatever the source tarball holds.
     let included_repoless: HashSet<String> = snap
         .rpm
         .as_ref()
@@ -3728,6 +3734,7 @@ fn extract_payload_dirs_from_tarball(
             r.packages_added
                 .iter()
                 .filter(|p| p.disposition.is_included() && p.repoless_cached && !p.uploaded)
+                .filter(|p| route_for(r, p, verified) == PackageRoute::Repoless)
                 .map(|p| format!("{}-{}-{}.{}.rpm", p.name, p.version, p.release, p.arch))
                 .filter(|n| inspectah_core::rpm_filename::validate_staged_name(n).is_ok())
                 .collect()
@@ -4019,7 +4026,11 @@ fn prove_staged_uploads(
         return (proved, warnings);
     };
     for pkg in &rpm.packages_added {
-        if !pkg.uploaded || !pkg.disposition.is_included() {
+        // An upload is only ever matched to a repo-less package, and the
+        // annotation is what puts a verified upload on the upload route
+        // (`route_for`), so every upload proved here is one the
+        // Containerfile copies.
+        if !pkg.uploaded || !pkg.disposition.is_included() || pkg.repoless_annotation.is_empty() {
             continue;
         }
         match upload_dir_canon.ok_or(Refusal::OutsideUploadDir) {
@@ -4241,19 +4252,23 @@ pub fn render_refine_export(
     inspectah_pipeline::render::language_packages::write_language_package_manifests(snap, out)
         .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
+    // Prove the staged uploads before anything is written, so the payload
+    // extraction and the upload copy route each package with the same
+    // verified set the Containerfile renders from. A package whose upload
+    // cannot be proved is demoted to a FIXME and a warning rather than
+    // exported.
+    let (proved, warnings) = prove_staged_uploads(upload_dir_canon, snap);
+    let verified = verified_uploads(&proved);
+
     // 2e. Extract payload files from source tarball for unmanaged files
     //     and repo-less RPMs. These were bundled at scan time and must be
     //     re-extracted into the export tempdir, filtered by include flags.
     if let Some(source) = source_tarball {
-        extract_payload_dirs_from_tarball(source, snap, out)?;
+        extract_payload_dirs_from_tarball(source, snap, &verified, out)?;
     }
 
     // 2f. Copy staged uploads (from the refine UI upload endpoint)
-    //     alongside cached RPMs from the source tarball. Every one is
-    //     proved first; a package whose upload cannot be proved is demoted
-    //     to a FIXME and a warning rather than exported.
-    let (proved, warnings) = prove_staged_uploads(upload_dir_canon, snap);
-    let verified = verified_uploads(&proved);
+    //     alongside cached RPMs from the source tarball.
     copy_proved_uploads(proved, out)?;
 
     // 2g. Materialize compose files (conditional — only when compose files

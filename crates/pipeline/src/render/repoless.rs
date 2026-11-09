@@ -9,6 +9,91 @@ use super::language_packages::sanitize_for_comment;
 use super::safety::sanitize_shell_value;
 use super::service_intent::is_package_installable;
 
+/// How one `packages_added` entry reaches the image.
+///
+/// This is the one routing decision for a package's install, and every
+/// party that acts on it asks [`route_for`]: the Containerfile's package
+/// sections, the repo-less block, refine's trust gate, the `/var` evidence's
+/// install set, and every writer of `repoless-packages/` (the scan
+/// tarball's [`write_cached_rpms`], refine's payload extraction, and
+/// refine's upload copy). A writer stages a file only for a route whose
+/// lines `COPY` it, so no export carries an RPM that nothing installs.
+///
+/// The route says how a package would install, not whether it does: the
+/// package's disposition is applied by each consumer, as it always was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageRoute<'a> {
+    /// Not repo-less: installs by name from a repo the host enables, in the
+    /// plain list or the repo-enabling block.
+    ByName,
+    /// Installs from a repo the source host keeps disabled, in its own
+    /// transaction with `--enablerepo=<id>`. Nothing is staged for it.
+    DisabledRepo(RepoId),
+    /// Repo-less, installed from the operator's upload, which the export
+    /// proved and writes. An upload is a decision the operator made, so it
+    /// wins over a disabled repo the export could install from.
+    Upload(&'a VerifiedUpload),
+    /// Repo-less otherwise: the cached RPM the scan bundled, the FIXME for
+    /// an upload nothing proved, or the MANUAL block.
+    Repoless,
+}
+
+/// The route for `pkg`, given the uploads this export proved.
+///
+/// In order: no repo-less annotation is [`PackageRoute::ByName`]; a
+/// verified upload is [`PackageRoute::Upload`]; a disabled repo the export
+/// can install from ([`disabled_repo_install`]) is
+/// [`PackageRoute::DisabledRepo`]; anything else is
+/// [`PackageRoute::Repoless`]. A cached RPM is not an operator decision, so
+/// it does not outrank the disabled repo. A path with no uploads, the scan
+/// tarball or refine before any upload, passes an empty map.
+pub fn route_for<'a>(
+    rpm: &RpmSection,
+    pkg: &PackageEntry,
+    verified: &'a VerifiedUploads,
+) -> PackageRoute<'a> {
+    if pkg.repoless_annotation.is_empty() {
+        return PackageRoute::ByName;
+    }
+    if let Some(upload) = verified.get(&format!("{}.{}", pkg.name, pkg.arch)) {
+        return PackageRoute::Upload(upload);
+    }
+    match disabled_repo_install(rpm, pkg) {
+        Some(id) => PackageRoute::DisabledRepo(id),
+        None => PackageRoute::Repoless,
+    }
+}
+
+/// Copy each cached repo-less RPM into `repoless-packages/` under
+/// `render_dir`, for the scan tarball.
+///
+/// Only a package routed [`PackageRoute::Repoless`] is staged: a package
+/// that installs from its disabled repo has no `COPY` naming its cached
+/// RPM, and staging it anyway left an export carrying a file nothing
+/// installs. The file is named by the package's NEVRA, the name the
+/// repo-less block copies.
+pub fn write_cached_rpms(rpm: &RpmSection, render_dir: &std::path::Path) -> std::io::Result<()> {
+    let no_uploads = VerifiedUploads::new();
+    let dest_dir = render_dir.join("repoless-packages");
+    for pkg in &rpm.packages_added {
+        let Some(cache_path) = &pkg.cache_path else {
+            continue;
+        };
+        if route_for(rpm, pkg, &no_uploads) != PackageRoute::Repoless {
+            continue;
+        }
+        std::fs::create_dir_all(&dest_dir)?;
+        let filename = format!(
+            "{}-{}-{}.{}.rpm",
+            pkg.name, pkg.version, pkg.release, pkg.arch
+        );
+        std::fs::copy(cache_path, dest_dir.join(&filename)).map_err(|e| {
+            std::io::Error::new(e.kind(), format!("copy cached RPM {cache_path}: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
 /// The repo a repo-less package installs from with `--enablerepo`, when
 /// the source host has that repo disabled and this export carries it.
 ///
@@ -18,9 +103,10 @@ use super::service_intent::is_package_installable;
 /// ships, the package was installed from it on purpose, so the build
 /// installs it from the same repo instead of asking for an upload. This
 /// is decided at render, not at scan, because whether the `.repo` file
-/// ships is a refine decision the scan cannot see. Refine's
-/// `normalize_package_defaults` asks the same question to exempt such a
-/// package from its repo-less trust gate, so the two cannot disagree.
+/// ships is a refine decision the scan cannot see. Callers reach it only
+/// through [`route_for`], which refine's `normalize_package_defaults` asks
+/// too to exempt such a package from its repo-less trust gate, so the two
+/// cannot disagree.
 ///
 /// Returns `None`, leaving the package repo-less, unless all of these
 /// hold: it carries a repo-less annotation, it is installable by name
@@ -39,7 +125,7 @@ use super::service_intent::is_package_installable;
 /// the repo-less block either. That is what lets a scan tarball, where
 /// such a dependency is included, and a refine export, where its default
 /// is excluded, render it the same way.
-pub fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
+fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId> {
     if !is_package_installable(pkg)
         || pkg.repoless_annotation.is_empty()
         || pkg.source_repo.is_empty()
@@ -141,29 +227,31 @@ pub fn repoless_rpm_lines(
         None => return Vec::new(),
     };
 
-    // A package that installs from its host-disabled repo renders in the
-    // packages section instead, so it is not offered here a second time.
+    let empty = VerifiedUploads::new();
+    let verified = render_ctx.map_or(&empty, |c| &c.verified_uploads);
+
+    // A package that installs by name, or from its host-disabled repo,
+    // renders in the packages section instead, so it is not offered here.
     let repoless: Vec<_> = rpm_section
         .packages_added
         .iter()
-        .filter(|p| !p.repoless_annotation.is_empty())
-        .filter(|p| disabled_repo_install(rpm_section, p).is_none())
+        .filter_map(|p| match route_for(rpm_section, p, verified) {
+            PackageRoute::Upload(upload) => Some((p, Some(upload))),
+            PackageRoute::Repoless => Some((p, None)),
+            PackageRoute::ByName | PackageRoute::DisabledRepo(_) => None,
+        })
         .collect();
 
     if repoless.is_empty() {
         return Vec::new();
     }
 
-    let empty = VerifiedUploads::new();
-    let verified = render_ctx.map_or(&empty, |c| &c.verified_uploads);
-
     let mut lines = Vec::new();
     lines.push(String::new());
     lines.push("# === Repo-less RPM packages ===".into());
 
-    for pkg in &repoless {
-        let canonical = format!("{}.{}", pkg.name, pkg.arch);
-        if let Some(upload) = verified.get(&canonical) {
+    for (pkg, upload) in repoless {
+        if let Some(upload) = upload {
             lines.extend(uploaded_lines(pkg, upload));
         } else if pkg.uploaded && pkg.disposition.is_included() {
             lines.push(format!(

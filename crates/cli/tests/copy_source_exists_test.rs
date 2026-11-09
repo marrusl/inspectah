@@ -30,6 +30,7 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
@@ -301,6 +302,20 @@ const NPM_LOCK_JSON: &str = r#"{
   }
 }"#;
 
+/// Two repo-less packages with an RPM in the host's dnf cache. The
+/// `@commandline` one installs from its cached RPM, so `repoless-packages/`
+/// is staged and copied, which is what keeps the reverse guard live over
+/// that directory. The other comes from a repo the host keeps disabled
+/// and whose `.repo` file the export carries: it installs from that repo
+/// with `--enablerepo`, so no export may stage its cached RPM.
+const CACHED_TOOL_RPM: &str = "custom-tool-1.0-1.el9.x86_64.rpm";
+const DISABLED_REPO_RPM: &str = "openh264-2.4.1-1.el9.x86_64.rpm";
+const DISABLED_REPO_FILE: &str = "/etc/yum.repos.d/fedora-cisco-openh264.repo";
+const DISABLED_REPO_CONTENT: &str = "[epel-cisco-openh264]\n\
+     name=openh264\n\
+     metalink=https://example.invalid/metalink\n\
+     enabled=0\n";
+
 const SYSTEMCTL: &str = "UNIT FILE                 STATE     PRESET\n\
                          httpd.service             enabled   enabled\n\
                          \n\
@@ -327,13 +342,44 @@ fn ok(stdout: &str) -> ExecResult {
 }
 
 /// A host that populates the optional export directories: a quadlet, a
-/// service drop-in, an ordinary config file, and an npm project.
-fn populated_host_mock() -> MockExecutor {
+/// service drop-in, an ordinary config file, an npm project, and two
+/// cached repo-less RPMs. The RPMs are real files under `cache_dir`,
+/// because the scan tarball's writer copies them from the host.
+fn populated_host_mock(cache_dir: &Path) -> MockExecutor {
+    let cached: Vec<String> = [CACHED_TOOL_RPM, DISABLED_REPO_RPM]
+        .iter()
+        .map(|name| {
+            let path = cache_dir.join(name);
+            std::fs::write(&path, b"rpm payload").expect("write cached RPM");
+            path.to_string_lossy().into_owned()
+        })
+        .collect();
     MockExecutor::new()
         // -- RPM prerequisite for the config walker --------------------
         .with_command(
             "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
-            ok("0:bash-5.2.26-3.el9.x86_64\n0:nodejs-20.11.0-1.el9.x86_64\n"),
+            ok(
+                "0:bash-5.2.26-3.el9.x86_64\n0:nodejs-20.11.0-1.el9.x86_64\n\
+                0:custom-tool-1.0-1.el9.x86_64\n0:openh264-2.4.1-1.el9.x86_64\n",
+            ),
+        )
+        // -- source repos and the repo-less scan -----------------------
+        .with_command(
+            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+            ok("bash baseos\n"),
+        )
+        .with_command(
+            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n \
+             custom-tool nodejs openh264",
+            ok("custom-tool @commandline\nnodejs appstream\nopenh264 epel-cisco-openh264\n"),
+        )
+        .with_command(
+            "dnf repolist --enabled -q",
+            ok("repo id    repo name\nbaseos     BaseOS\nappstream  AppStream\n"),
+        )
+        .with_command(
+            "find /var/cache/dnf -name *.rpm -type f",
+            ok(&format!("{}\n", cached.join("\n"))),
         )
         .with_command("rpm -Va", ok(""))
         .with_command(
@@ -341,7 +387,12 @@ fn populated_host_mock() -> MockExecutor {
             ok("bash\t/usr/bin/bash\n"),
         )
         // -- /etc walk -------------------------------------------------
-        .with_dir("/etc", vec!["systemd", "httpd", "containers"])
+        .with_dir(
+            "/etc",
+            vec!["systemd", "httpd", "containers", "yum.repos.d"],
+        )
+        .with_dir("/etc/yum.repos.d", vec!["fedora-cisco-openh264.repo"])
+        .with_file(DISABLED_REPO_FILE, DISABLED_REPO_CONTENT)
         .with_dir("/etc/systemd", vec!["system"])
         .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
         .with_dir("/etc/systemd/system/httpd.service.d", vec!["limits.conf"])
@@ -387,8 +438,8 @@ fn populated_host_mock() -> MockExecutor {
         .with_file("/opt/lockonly/package-lock.json", NPM_LOCK_JSON)
 }
 
-/// `collect()` then `validate` then `redact` — the three calls the scan
-/// command makes, in its order.
+/// `collect()` then `validate`, `redact` and the dnf cache scan: the calls
+/// the scan command makes, in its order.
 fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
@@ -408,7 +459,34 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     let validated = validate(collected).expect("the snapshot validates");
     let mut snapshot = validated.state.snapshot;
     redact(&mut snapshot, &RedactOptions::default());
+    if let Some(rpm) = snapshot.rpm.as_mut() {
+        scan_dnf_cache_for_repoless(exec, rpm);
+    }
     snapshot
+}
+
+/// What the scan command stages for its tarball: the render, then the
+/// cached repo-less RPMs.
+fn scan_export(snapshot: &InspectionSnapshot, out: &Path) {
+    render::render_all(snapshot, &RenderContext { target: None }, out).expect("render");
+    render::repoless::write_cached_rpms(snapshot.rpm.as_ref().expect("rpm section"), out)
+        .expect("the cached RPMs are staged");
+}
+
+/// Pack a staged scan export the way the scan command does, under one
+/// top-level directory, so refine can extract payloads from it.
+fn pack(root: &Path, tarball: &Path) {
+    let file = std::fs::File::create(tarball).expect("create tarball");
+    let gz = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+    let mut builder = tar::Builder::new(gz);
+    builder
+        .append_dir_all("host-inspectah", root)
+        .expect("pack the export");
+    builder
+        .into_inner()
+        .expect("finish the tarball")
+        .finish()
+        .expect("flush the tarball");
 }
 
 /// Unpack a `.tar.gz` and return the single top-level directory inside
@@ -436,7 +514,29 @@ fn unpack(tarball: &Path, into: &Path) -> std::path::PathBuf {
 /// real defects went unnoticed.
 #[test]
 fn the_fixture_populates_the_optional_export_directories() {
-    let snapshot = scan_like(&populated_host_mock());
+    let cache = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_like(&populated_host_mock(cache.path()));
+
+    let rpm = snapshot.rpm.as_ref().expect("the rpm section");
+    for name in ["custom-tool", "openh264"] {
+        let pkg = rpm
+            .packages_added
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("the collector must record {name}"));
+        assert!(
+            pkg.repoless_cached && pkg.cache_path.is_some(),
+            "{name} must be repo-less with a cached RPM, got {pkg:?}"
+        );
+    }
+    assert_eq!(
+        rpm.packages_added
+            .iter()
+            .find(|p| p.name == "openh264")
+            .map(|p| p.source_repo.as_str()),
+        Some("epel-cisco-openh264"),
+        "openh264 is recorded from its disabled repo"
+    );
 
     let quadlets: Vec<&str> = snapshot
         .containers
@@ -501,9 +601,13 @@ fn the_fixture_populates_the_optional_export_directories() {
     );
 
     let dir = tempfile::tempdir().expect("tempdir");
-    render::render_all(&snapshot, &RenderContext { target: None }, dir.path()).expect("render");
+    scan_export(&snapshot, dir.path());
     let containerfile =
         std::fs::read_to_string(dir.path().join("Containerfile")).expect("Containerfile");
+    assert!(
+        containerfile.contains("--enablerepo=epel-cisco-openh264"),
+        "openh264 installs from its disabled repo:\n{containerfile}"
+    );
     assert!(
         containerfile.contains(&format!("# RUN cd '{NPM_LOCK_ONLY_PROJECT}' && npm ci")),
         "the lockfile-only project renders commented"
@@ -520,6 +624,7 @@ fn the_fixture_populates_the_optional_export_directories() {
         "COPY drop-ins/",
         "COPY language-packages/npm/",
         "COPY flatpak/",
+        "COPY repoless-packages/custom-tool-",
     ] {
         assert!(
             containerfile.contains(expected),
@@ -536,9 +641,10 @@ fn the_fixture_populates_the_optional_export_directories() {
 /// wrote: the manifest writer lived in the refine crate.
 #[test]
 fn the_cli_scan_export_satisfies_every_copy_it_emits() {
-    let snapshot = scan_like(&populated_host_mock());
+    let cache = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_like(&populated_host_mock(cache.path()));
     let dir = tempfile::tempdir().expect("tempdir");
-    render::render_all(&snapshot, &RenderContext { target: None }, dir.path()).expect("render");
+    scan_export(&snapshot, dir.path());
 
     assert_every_copy_source_exists("CLI scan export", dir.path());
     assert_every_staged_file_is_copied("CLI scan export", dir.path());
@@ -550,10 +656,42 @@ fn the_cli_scan_export_satisfies_every_copy_it_emits() {
 /// it and before the Containerfile referenced it.
 #[test]
 fn the_refine_web_export_satisfies_every_copy_it_emits() {
-    let snapshot = scan_like(&populated_host_mock());
-    let session = RefineSession::new(snapshot);
+    let cache = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_like(&populated_host_mock(cache.path()));
 
+    // Refine extracts the cached RPMs from the scan tarball it was opened
+    // on, so the export is made from one.
     let dir = tempfile::tempdir().expect("tempdir");
+    let staged = dir.path().join("scan");
+    scan_export(&snapshot, &staged);
+    // A scan tarball written before the route was shared also carries the
+    // disabled-repo package's cached RPM. Refine must not extract it.
+    std::fs::copy(
+        cache.path().join(DISABLED_REPO_RPM),
+        staged.join("repoless-packages").join(DISABLED_REPO_RPM),
+    )
+    .expect("stage the stale cached RPM");
+    let source = dir.path().join("scan.tar.gz");
+    pack(&staged, &source);
+
+    let mut session = RefineSession::new(snapshot);
+    // With no baseline the classifier starts both packages excluded, and
+    // the repo-less trust gate would pre-exclude the `@commandline` one in
+    // any case. Include both, so the export has an active COPY to satisfy
+    // and a disabled-repo install whose stale RPM it must leave behind.
+    for name in ["custom-tool", "openh264"] {
+        session
+            .apply(inspectah_refine::types::RefinementOp::SetInclude {
+                item_id: inspectah_refine::types::ItemId::Package {
+                    name: name.into(),
+                    arch: "x86_64".into(),
+                },
+                include: true,
+            })
+            .unwrap_or_else(|e| panic!("{name} can be included: {e:?}"));
+    }
+    session.set_tarball_path(source);
+
     let tarball = dir.path().join("export.tar.gz");
     session
         .export_plan(session.generation())
@@ -567,4 +705,15 @@ fn the_refine_web_export_satisfies_every_copy_it_emits() {
 
     assert_every_copy_source_exists("refine web export", &root);
     assert_every_staged_file_is_copied("refine web export", &root);
+    let containerfile = std::fs::read_to_string(root.join("Containerfile")).expect("read");
+    assert!(
+        containerfile.contains("--enablerepo=epel-cisco-openh264"),
+        "openh264 installs from its disabled repo, so its stale RPM is the case under test:\n{containerfile}"
+    );
+    assert!(
+        root.join("repoless-packages")
+            .join(CACHED_TOOL_RPM)
+            .exists(),
+        "the included cached RPM is extracted, or the reverse guard is vacuous over it"
+    );
 }

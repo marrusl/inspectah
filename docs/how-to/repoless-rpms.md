@@ -329,7 +329,12 @@ starts it excluded.
 
 The package still has no row of its own in the refine package list, so
 you cannot see or exclude it there. The upload route accepts a file for
-it by name and architecture.
+it by name and architecture, and an upload the export verifies takes
+precedence: the package then installs from the uploaded RPM in the
+repo-less block instead of from its repository. An RPM the scan found in
+the dnf cache does not take precedence, and while the package installs
+from its repository, neither the scan tarball nor the refine export
+carries that cached RPM.
 
 ## Alternatives to bundling RPMs
 

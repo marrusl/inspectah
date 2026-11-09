@@ -2,8 +2,9 @@ use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, Tri
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::verified_upload::VerifiedUploads;
 use inspectah_pipeline::render::language_packages::is_language_env;
-use inspectah_pipeline::render::repoless::disabled_repo_install;
+use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 use serde_json::Value;
 
 fn is_anaconda_classified(reason: &TriageReason) -> bool {
@@ -186,9 +187,13 @@ pub fn normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &
         // check rather than restating it. The gate only ever excludes, so
         // a package the classifier excluded, a non-leaf dependency among
         // them, stays excluded.
-        if !rpm.packages_added[i].repoless_annotation.is_empty()
-            && disabled_repo_install(rpm, &rpm.packages_added[i]).is_none()
-        {
+        //
+        // Normalization runs before any upload exists, so the route is
+        // asked with none.
+        if !matches!(
+            route_for(rpm, &rpm.packages_added[i], &VerifiedUploads::new()),
+            PackageRoute::ByName | PackageRoute::DisabledRepo(_)
+        ) {
             rpm.packages_added[i].disposition = FindingKind::excluded();
         }
     }

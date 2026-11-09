@@ -12,7 +12,9 @@ use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection, ConfigShadow,
 };
 use inspectah_core::types::finding::ShadowType;
-use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{
+    FileOwnershipEntry, PackageEntry, PackageState, RepoFile, RpmSection,
+};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{StorageSection, VarDirBacking, VarDirectory};
 use inspectah_core::types::users::UserGroupSection;
@@ -906,6 +908,61 @@ fn a_demoted_repo_enabling_package_is_not_in_the_install_set() {
         &EffectiveBacking::Carried
     );
     assert!(!var_conf(&snap).contains("/var/lib/epelapp"));
+}
+
+/// A package from a repo the source host keeps disabled installs only on
+/// the route the Containerfile renders it by: from that repo while the
+/// export carries its `.repo` file, and not at all once it does not, when
+/// it has no cached or uploaded RPM. Counting it installed in the second
+/// case left the directory it owns unprovisioned in an image without it.
+#[test]
+fn a_disabled_repo_package_is_installed_only_while_its_repo_ships() {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![dir_with_mode(
+            "/var/lib/openh264",
+            VarDirBacking::RpmOwned {
+                package: "openh264".into(),
+            },
+            "0755",
+            0,
+            "root",
+        )],
+        ..Default::default()
+    });
+    let mut pkg = package("openh264", true);
+    pkg.source_repo = "epel-cisco-openh264".into();
+    pkg.repoless_annotation =
+        "No repo source \u{2014} repo 'epel-cisco-openh264' not in enabled repos".into();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![pkg],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/fedora-cisco-openh264.repo".into(),
+            content: "[epel-cisco-openh264]\nmetalink=https://example.invalid/m\nenabled=0\n"
+                .into(),
+            is_default_repo: false,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+        }],
+        baseline_package_names: Some(vec!["filesystem".into()]),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/openh264"),
+        &EffectiveBacking::Carried,
+        "it installs from its repo"
+    );
+
+    snap.rpm.as_mut().expect("rpm").repo_files[0].disposition = FindingKind::excluded();
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/openh264"),
+        &EffectiveBacking::Provision {
+            lost: Some("openh264".into())
+        },
+        "with no repo and no RPM it does not install"
+    );
 }
 
 #[test]
