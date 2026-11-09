@@ -12,6 +12,7 @@ Directory structure and module organization for inspectah. Helps new agents navi
 ├── completions/      # Shell completion scripts
 ├── packaging/        # RPM packaging (COPR)
 ├── release-artifacts/ # Local release binaries (gitignored, not in a clone)
+├── scripts/          # Repo tooling run by the hook and CI (sensitive tarball gate); shell tests in scripts/tests/
 ├── testdata/         # Fixtures for integration tests
 └── tests/            # Fixture tarballs only (tests/e2e/fixtures/), no test code
 ```

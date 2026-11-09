@@ -203,7 +203,9 @@ Two rules that cost people time:
 
 Two hooks run once `core.hooksPath` points at `.githooks/`.
 
-**`pre-commit`** runs three gates, in order: `cargo fmt --check`,
+**`pre-commit`** first checks every staged `*.tar.gz` for preserved
+sensitive content (§ Fixture tarballs are local-only below), on every
+commit. It then runs three gates, in order: `cargo fmt --check`,
 `cargo clippy --workspace --all-targets -- -D clippy::all`, and
 `cargo test --workspace`. The first to fail blocks the commit and prints
 what to fix. The hook runs them only when a staged file could affect
@@ -218,7 +220,8 @@ compilation or test outcomes. This is its test, quoted from
 Three things follow from that expression.
 
 - **A commit with no added, copied, modified, or renamed `.rs`,
-  `Cargo.toml`, `Cargo.lock`, or `build.rs` file gets no check at all.**
+  `Cargo.toml`, `Cargo.lock`, or `build.rs` file gets no cargo gate.**
+  Only the tarball check runs.
   A frontend-only commit under `crates/web/ui/`, a docs-only commit, a
   fixture-only or `.snap`-only commit, and a commit that only deletes
   `.rs` files (`D` is not in the filter) all exit 0 before any gate runs.
@@ -241,6 +244,31 @@ Staged sets and the hook's verdict, checked against that expression:
 | `crates/core/src/lib.rs` edited, with a clippy fix left unstaged | runs, and passes on the working tree while the commit itself would fail clippy |
 | a deleted `.rs` file only | skips |
 | `crates/web/tests/snapshots/contract_snapshots__contract_view.snap` only | skips |
+| `testdata/e2e-fixture.tar.gz` only, produced with `--preserve` | refuses, before the fast path |
+
+### Fixture tarballs are local-only
+
+A scan run with `--preserve`, or with `--no-redaction`, keeps entitlement
+certificates and keys, password hashes or SSH keys in its output. Such
+tarballs, including the rich fleet tarballs the companion fixture tool
+produces by default, are for local use only. A preserve-mode tarball was
+once copied onto a tracked fixture path on purpose and committed;
+`.gitignore` cannot stop a deliberate copy, so the control is a content
+check, `scripts/check-sensitive-tarballs.sh`. The pre-commit hook runs it
+over staged blobs and CI runs it over every tracked `*.tar.gz`.
+
+It refuses a tarball when a member path contains `subscription/entitlement/`,
+or when its `inspection-snapshot.json` has `redaction_state.state` set to
+`sensitive_retained` or `sensitive_snapshot` set to `true`. It also
+refuses a tarball it cannot read, or whose snapshot it cannot parse. A
+tarball with neither a snapshot nor an entitlement member is not inspectah
+output and passes.
+
+The fix is to re-produce the fixture without `--preserve` and without
+`--no-redaction`. To commit one to a private repository on purpose,
+bypass the hook with `git commit --no-verify`; CI in this repository has
+no override. Run the gate's tests with
+`scripts/tests/check-sensitive-tarballs-test.sh`.
 
 **`commit-msg`** refuses any message carrying a `Co-Authored-By:`
 trailer. AI assistance is recorded as one trailer naming both the tool

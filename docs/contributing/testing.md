@@ -48,7 +48,9 @@ whatever row it matches.
 **The hook's trigger.** `.githooks/pre-commit` runs
 `git diff --cached --name-only --diff-filter=ACMR` and matches the result
 against `\.(rs)$|Cargo\.(toml|lock)$|build\.rs$`. When nothing matches it
-exits 0 without running any gate. A commit that only deletes such files
+exits 0 without running any cargo gate. Before that test it always checks
+staged tarballs for preserved sensitive content; see the developer guide,
+§ Fixture tarballs are local-only. A commit that only deletes such files
 matches nothing (`D` is not in the filter), so the hook skips it and you
 run the three Rust gates by hand.
 

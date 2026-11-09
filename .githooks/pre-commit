@@ -3,7 +3,8 @@
 # inspectah pre-commit hook — green-suite + clippy + fmt gate
 #
 # Blocks commits unless cargo fmt, cargo clippy, and cargo test all pass.
-# Skips when no Rust/Cargo files are in the changeset.
+# Skips the cargo gates when no Rust/Cargo files are in the changeset.
+# Always checks staged tarballs for preserved sensitive content first.
 #
 # INSTALL (once per clone):
 #   git config core.hooksPath .githooks
@@ -12,6 +13,14 @@
 #   git commit --no-verify
 
 set -euo pipefail
+
+# --- gate 0: no preserve-mode inspectah output in staged tarballs ---
+#
+# Runs before the fast-path on purpose: a fixture-only commit stages no Rust
+# file, and the fast-path below would let it through unchecked. Reads the
+# staged blobs, so a clean working-tree copy cannot mask a staged one.
+
+"$(git rev-parse --show-toplevel)/scripts/check-sensitive-tarballs.sh" --staged
 
 # --- fast-path: skip when no Rust-relevant files changed ---
 

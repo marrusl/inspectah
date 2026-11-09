@@ -19,11 +19,28 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'testdata/**'
+      - '**.tar.gz'
+      - 'scripts/**'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [main]
 
 jobs:
+  # The CI half of the pre-commit tarball gate: a clone without the hook, or
+  # a commit made with --no-verify, still cannot merge preserve-mode output.
+  # Its own job so a refusal here does not skip the toolchain setup steps
+  # in tier1, which carry no `if:` guard. The runner image ships tar and jq.
+  sensitive-tarballs:
+    name: Sensitive tarball gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the gate
+        run: scripts/tests/check-sensitive-tarballs-test.sh
+      - name: Check tracked tarballs
+        if: ${{ !cancelled() }}
+        run: scripts/check-sensitive-tarballs.sh --tracked
+
   tier1:
     name: Format, Lint, Test
     runs-on: ubuntu-latest
