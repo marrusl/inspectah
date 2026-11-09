@@ -14,17 +14,40 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-/// Entry kind tracker for file-type replacement detection.
+/// The kinds of archive entry an extractor will write. Everything else a
+/// tar header can name is refused by [`EntryKind::classify`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EntryKind {
+pub enum EntryKind {
     Regular,
     Directory,
     Symlink,
 }
 
 impl EntryKind {
+    /// Classify a tar entry type, refusing hardlinks and special files.
+    ///
+    /// `path` only labels the refusal.
+    pub fn classify(entry_type: tar::EntryType, path: &str) -> Result<Self, ArchiveViolation> {
+        let special = |kind| {
+            Err(ArchiveViolation::SpecialFileType {
+                path: path.to_string(),
+                kind,
+            })
+        };
+        match entry_type {
+            tar::EntryType::Regular | tar::EntryType::GNUSparse => Ok(Self::Regular),
+            tar::EntryType::Directory => Ok(Self::Directory),
+            tar::EntryType::Symlink => Ok(Self::Symlink),
+            tar::EntryType::Link => Err(ArchiveViolation::Hardlink(path.to_string())),
+            tar::EntryType::Char => special("char device"),
+            tar::EntryType::Block => special("block device"),
+            tar::EntryType::Fifo => special("FIFO"),
+            _ => special("unknown"),
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Regular => "regular",
@@ -54,6 +77,8 @@ pub enum ArchiveViolation {
         path: String,
         target: String,
     },
+    /// An entry path with no components left once its prefix is removed.
+    EmptyPath(String),
 }
 
 impl std::fmt::Display for ArchiveViolation {
@@ -74,7 +99,144 @@ impl std::fmt::Display for ArchiveViolation {
             Self::SymlinkEscape { path, target } => {
                 write!(f, "symlink escape: {path} -> {target}")
             }
+            Self::EmptyPath(p) => write!(f, "empty path: {p}"),
         }
+    }
+}
+
+// -- confinement primitives ---------------------------------------------
+//
+// Shared by every extractor that writes archive-supplied paths under a
+// root. Together they keep each write inside that root without
+// restricting symlink *targets*: no `..` or absolute component
+// ([`confined_rel`]), no second entry at one path ([`SeenPaths`]), no
+// symlink or non-directory ancestor on disk ([`create_confined_dir`]), and
+// the caller opens the leaf with `create_new`, which never follows a final
+// symlink. A link written this way is never dereferenced by the
+// extraction, so it stays inert data whatever it points at.
+//
+// The ancestor walk and the leaf open are not atomic. That is safe only
+// while the root is a private directory this process alone writes (a
+// fresh tempdir). A caller-supplied root would need `openat`-style
+// resolution instead.
+
+/// A relative path whose every component is [`Component::Normal`]: no
+/// `..`, no root, no prefix, no leading `.`. Joining one onto a directory
+/// cannot name anything outside it lexically; [`create_confined_dir`]
+/// covers what is on disk.
+///
+/// [`Component::Normal`]: std::path::Component::Normal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfinedRel<'a>(&'a Path);
+
+impl<'a> ConfinedRel<'a> {
+    /// The path itself.
+    pub fn as_path(self) -> &'a Path {
+        self.0
+    }
+
+    /// The path without its last component. Empty for a one-component
+    /// path, which [`create_confined_dir`] treats as the root itself.
+    pub fn parent(self) -> ConfinedRel<'a> {
+        ConfinedRel(self.0.parent().unwrap_or(Path::new("")))
+    }
+}
+
+/// Check that `rel` has at least one component and that every component
+/// is an ordinary name.
+///
+/// This is a component test, not a substring test: `foo..bar` is a valid
+/// name and passes. `Path::components` drops interior `.` and repeated
+/// separators, so those are accepted and mean what they would on disk.
+pub fn confined_rel(rel: &str) -> Result<ConfinedRel<'_>, ArchiveViolation> {
+    let path = Path::new(rel);
+    let mut any = false;
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => any = true,
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(ArchiveViolation::AbsolutePath(rel.to_string()));
+            }
+            Component::ParentDir | Component::CurDir => {
+                return Err(ArchiveViolation::PathTraversal(rel.to_string()));
+            }
+        }
+    }
+    if !any {
+        return Err(ArchiveViolation::EmptyPath(rel.to_string()));
+    }
+    Ok(ConfinedRel(path))
+}
+
+/// Create `root/rel` as a directory chain one component at a time and
+/// return it.
+///
+/// An existing component must be a real directory by `symlink_metadata`;
+/// a symlink there is refused even when it resolves to a directory, which
+/// is the case `create_dir_all` would silently write through. A missing
+/// component is made with `create_dir`, so nothing is created before every
+/// ancestor of it has passed. `root` itself is trusted.
+pub fn create_confined_dir(root: &Path, rel: ConfinedRel<'_>) -> std::io::Result<PathBuf> {
+    let mut dir = root.to_path_buf();
+    for component in rel.as_path().components() {
+        dir.push(component);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.file_type().is_dir() => {}
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotADirectory,
+                    format!(
+                        "{} exists and is not a directory",
+                        dir.strip_prefix(root).unwrap_or(&dir).display()
+                    ),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&dir)?,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(dir)
+}
+
+/// The paths one extraction has written, so a second entry at a path
+/// already written fails instead of replacing or writing through it.
+///
+/// Paths are compared by component, so `a//b` and `a/b` are one path. A
+/// repeated directory entry is allowed (tar commonly emits them); any
+/// other repeat is refused. Name variants that only the filesystem
+/// equates (case on a case-insensitive volume) are not caught here, which
+/// is one reason the on-disk checks exist as well.
+#[derive(Debug, Default)]
+pub struct SeenPaths(HashMap<PathBuf, EntryKind>);
+
+impl SeenPaths {
+    /// An empty record.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record an entry of `kind` at `rel`, refusing a repeat.
+    pub fn record(
+        &mut self,
+        rel: ConfinedRel<'_>,
+        kind: EntryKind,
+    ) -> Result<(), ArchiveViolation> {
+        let key: PathBuf = rel.as_path().components().collect();
+        if let Some(&was) = self.0.get(&key) {
+            let path = key.display().to_string();
+            if was != kind {
+                return Err(ArchiveViolation::TypeReplacement {
+                    path,
+                    was: was.label(),
+                    now: kind.label(),
+                });
+            }
+            if kind != EntryKind::Directory {
+                return Err(ArchiveViolation::DuplicatePath(path));
+            }
+        }
+        self.0.insert(key, kind);
+        Ok(())
     }
 }
 
@@ -574,5 +736,76 @@ mod tests {
         let extractor = TarballExtractor::new(tmp.path().join("out"));
         let result = extractor.extract(&tarball_path);
         assert!(result.is_ok(), "duplicate directories should be allowed");
+    }
+
+    #[test]
+    fn confined_rel_accepts_only_ordinary_components() {
+        let cases: &[(&str, bool)] = &[
+            ("opt/app/run", true),
+            ("opt/app/foo..bar", true),
+            ("..foo", true),
+            ("opt//app/./run", true),
+            ("opt/app/", true),
+            ("", false),
+            ("/", false),
+            ("./opt", false),
+            ("..", false),
+            ("opt/../etc", false),
+            ("../../etc/passwd", false),
+            ("/etc/passwd", false),
+        ];
+        for (rel, ok) in cases {
+            assert_eq!(confined_rel(rel).is_ok(), *ok, "{rel:?}");
+        }
+    }
+
+    #[test]
+    fn seen_paths_refuses_a_repeat_by_component() {
+        let mut seen = SeenPaths::new();
+        let dir = confined_rel("opt").unwrap();
+        seen.record(dir, EntryKind::Directory).unwrap();
+        seen.record(dir, EntryKind::Directory)
+            .expect("a repeated directory entry is allowed");
+        seen.record(confined_rel("opt/x").unwrap(), EntryKind::Symlink)
+            .unwrap();
+        let replaced = seen
+            .record(confined_rel("opt//x").unwrap(), EntryKind::Regular)
+            .unwrap_err();
+        assert!(matches!(replaced, ArchiveViolation::TypeReplacement { .. }));
+        seen.record(confined_rel("opt/y").unwrap(), EntryKind::Regular)
+            .unwrap();
+        let repeated = seen
+            .record(confined_rel("opt/y").unwrap(), EntryKind::Regular)
+            .unwrap_err();
+        assert!(matches!(repeated, ArchiveViolation::DuplicatePath(_)));
+    }
+
+    #[test]
+    fn create_confined_dir_refuses_a_non_directory_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+        std::fs::write(root.join("file"), b"").unwrap();
+
+        let made = create_confined_dir(&root, confined_rel("real/a/b").unwrap()).unwrap();
+        assert_eq!(made, root.join("real/a/b"));
+        assert!(std::fs::symlink_metadata(&made).unwrap().is_dir());
+
+        for rel in ["link/a", "link", "file/a"] {
+            let err = create_confined_dir(&root, confined_rel(rel).unwrap()).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::NotADirectory, "{rel}");
+        }
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+        assert_eq!(
+            create_confined_dir(&root, confined_rel("real/a").unwrap().parent()).unwrap(),
+            root.join("real")
+        );
+        assert_eq!(
+            create_confined_dir(&root, confined_rel("real").unwrap().parent()).unwrap(),
+            root
+        );
     }
 }

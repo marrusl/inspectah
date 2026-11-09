@@ -7,6 +7,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::aggregate::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::repo::RepoId;
+use inspectah_pipeline::build::extract::{
+    ArchiveViolation, EntryKind, SeenPaths, confined_rel, create_confined_dir,
+};
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -3625,15 +3628,30 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
 
     let mut wrote_any = false;
 
+    // Each variant path is an absolute host path from a snapshot that
+    // arrived inside the same supplied tarball. One `strip_prefix('/')`
+    // leaves `..` in place and leaves a `//` path absolute, which
+    // `Path::join` lets replace `out`, so every path is confined first.
+    let variant_dir = |path: &str| -> Result<PathBuf, RefineError> {
+        let untrusted = |v: ArchiveViolation| {
+            RefineError::UntrustedSnapshot(format!(
+                "aggregate variant path: {}",
+                sanitize_path_for_log(&v.to_string())
+            ))
+        };
+        let rel = confined_rel(path.strip_prefix('/').unwrap_or(path)).map_err(untrusted)?;
+        let root = confined_rel(AGGREGATE_VARIANTS_DIR).map_err(untrusted)?;
+        let root = create_confined_dir(out, root)?;
+        Ok(create_confined_dir(&root, rel)?)
+    };
+
     // Config file alternatives
     if let Some(ref cfg) = snap.config {
         for entry in &cfg.files {
             if entry.variant_selection == VariantSelection::Alternative {
                 let hash = format!("{:x}", Sha256::digest(entry.content.as_bytes()));
                 let short = &hash[..12];
-                let rel = entry.path.strip_prefix('/').unwrap_or(&entry.path);
-                let dir = out.join("aggregate/variants").join(rel);
-                std::fs::create_dir_all(&dir)?;
+                let dir = variant_dir(&entry.path)?;
                 std::fs::write(dir.join(format!("{short}.content")), &entry.content)?;
                 wrote_any = true;
             }
@@ -3646,9 +3664,7 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
             if dropin.variant_selection == VariantSelection::Alternative {
                 let hash = format!("{:x}", Sha256::digest(dropin.content.as_bytes()));
                 let short = &hash[..12];
-                let rel = dropin.path.strip_prefix('/').unwrap_or(&dropin.path);
-                let dir = out.join("aggregate/variants").join(rel);
-                std::fs::create_dir_all(&dir)?;
+                let dir = variant_dir(&dropin.path)?;
                 std::fs::write(dir.join(format!("{short}.content")), &dropin.content)?;
                 wrote_any = true;
             }
@@ -3661,9 +3677,7 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
             if quadlet.variant_selection == VariantSelection::Alternative {
                 let hash = format!("{:x}", Sha256::digest(quadlet.content.as_bytes()));
                 let short = &hash[..12];
-                let rel = quadlet.path.strip_prefix('/').unwrap_or(&quadlet.path);
-                let dir = out.join("aggregate/variants").join(rel);
-                std::fs::create_dir_all(&dir)?;
+                let dir = variant_dir(&quadlet.path)?;
                 std::fs::write(dir.join(format!("{short}.content")), &quadlet.content)?;
                 wrote_any = true;
             }
@@ -3674,12 +3688,21 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
     Ok(())
 }
 
+/// Where aggregate alternatives are materialized in the export.
+const AGGREGATE_VARIANTS_DIR: &str = "aggregate/variants";
+
 /// The one directory in the export that carries RPM payload, named once
 /// because step 2e, step 2f and the top-level allowlist must agree on it.
 const REPOLESS_DIR: &str = "repoless-packages";
 
 /// The source tarball prefix that routes an entry into [`REPOLESS_DIR`].
 const REPOLESS_PREFIX: &str = "repoless-packages/";
+
+/// The export directory that carries unmanaged-file payload.
+const UNMANAGED_DIR: &str = "unmanaged";
+
+/// The source tarball prefix that routes an entry into [`UNMANAGED_DIR`].
+const UNMANAGED_PREFIX: &str = "unmanaged/";
 
 /// True when `rel` is exactly one ordinary path component: no `..`, no
 /// root, no nesting, nothing that changes meaning when joined onto a
@@ -3756,6 +3779,14 @@ fn extract_payload_dirs_from_tarball(
     // that names a traversal is also the one whose NEVRA the allowlist
     // refuses, so it emptied the set and skipped its own check. The cost
     // is reading a source tarball an export takes nothing from.
+    // Every write below goes through the confinement primitives: an
+    // ordinary-components-only path, one entry per path, real directories
+    // as every ancestor on disk, and `create_new` on the leaf. Symlink
+    // targets are not restricted -- the collector records unmanaged link
+    // targets as absolute `readlink -f` paths -- because nothing here
+    // writes through a link; the packer preserves one rather than
+    // following it.
+    let mut seen = SeenPaths::new();
     for entry in archive
         .entries()
         .map_err(|e| RefineError::TarballError(e.to_string()))?
@@ -3764,7 +3795,8 @@ fn extract_payload_dirs_from_tarball(
         let path = entry
             .path()
             .map_err(|e| RefineError::TarballError(e.to_string()))?;
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().into_owned();
+        let entry_type = entry.header().entry_type();
 
         // Strip the top-level directory prefix from the tarball entry
         // (e.g. "hostname-inspectah/unmanaged/opt/foo" → "unmanaged/opt/foo").
@@ -3773,65 +3805,116 @@ fn extract_payload_dirs_from_tarball(
             .map(|i| &path_str[i + 1..])
             .unwrap_or(&path_str);
 
-        let mut in_repoless = false;
-        let should_extract = if let Some(file_rel) = rel.strip_prefix("unmanaged/") {
-            !file_rel.is_empty() && included_unmanaged.contains(file_rel)
-        } else if let Some(filename) = rel.strip_prefix(REPOLESS_PREFIX) {
-            in_repoless = true;
+        let (dest_rel, kind) = if let Some(file_rel) = rel.strip_prefix(UNMANAGED_PREFIX) {
+            if file_rel.is_empty() {
+                continue;
+            }
             // `tar::Entry::path()` does not clean `..` -- only `unpack_in`
-            // does (tar 0.4.45, `entry.rs:415`) -- so the remainder after
-            // the prefix is checked here, before anything is joined onto
-            // the export directory. Allowlisted or not: an entry that
-            // names more than one ordinary component fails the export
-            // rather than being skipped, because a source tarball holding
-            // one is not a tarball this wrote.
-            if !filename.is_empty() && !is_single_normal_component(filename) {
-                return Err(RefineError::TarballError(format!(
+            // does (tar 0.4.45, `entry.rs:415`). Allowlisted or not, an
+            // entry whose path is not all ordinary components fails the
+            // export, as in `repoless-packages/` below.
+            let dest_rel = confined_rel(rel).map_err(|_| {
+                RefineError::TarballError(format!(
+                    "source tarball entry escapes {UNMANAGED_DIR}: {}",
+                    sanitize_path_for_log(&path_str)
+                ))
+            })?;
+            if !included_unmanaged.contains(file_rel) {
+                continue;
+            }
+            // An unmanaged file legitimately can be a symlink; a hardlink
+            // or a special file is refused.
+            let kind =
+                EntryKind::classify(entry_type, &path_str).map_err(|v| archive_violation(&v))?;
+            (dest_rel, kind)
+        } else if let Some(filename) = rel.strip_prefix(REPOLESS_PREFIX) {
+            if filename.is_empty() {
+                continue;
+            }
+            // Allowlisted or not: an entry that names more than one
+            // ordinary component fails the export rather than being
+            // skipped, because a source tarball holding one is not a
+            // tarball this wrote.
+            let escapes = || {
+                RefineError::TarballError(format!(
                     "source tarball entry escapes {REPOLESS_DIR}: {}",
                     sanitize_path_for_log(&path_str)
-                )));
+                ))
+            };
+            if !is_single_normal_component(filename) {
+                return Err(escapes());
             }
-            !filename.is_empty() && included_repoless.contains(filename)
-        } else {
-            false
-        };
-
-        if should_extract {
-            let entry_type = entry.header().entry_type();
+            if !included_repoless.contains(filename) {
+                continue;
+            }
             // A cached RPM is a regular file. A link at an allowlisted name
             // would make the export's member a pointer at something the
             // scan chose, so it fails the export rather than being
-            // followed or silently dropped. `unmanaged/` keeps its link
-            // handling below: an unmanaged file legitimately can be one.
-            if in_repoless
-                && (entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link)
-            {
+            // followed or silently dropped.
+            if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
                 return Err(RefineError::TarballError(format!(
                     "source tarball entry in {REPOLESS_DIR} is a link, not a regular file: {}",
                     sanitize_path_for_log(&path_str)
                 )));
             }
-            let dest = out.join(rel);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            let kind =
+                EntryKind::classify(entry_type, &path_str).map_err(|v| archive_violation(&v))?;
+            if kind != EntryKind::Regular {
+                return Err(RefineError::TarballError(format!(
+                    "source tarball entry in {REPOLESS_DIR} is not a regular file: {}",
+                    sanitize_path_for_log(&path_str)
+                )));
             }
-            if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
-                // Preserve symlinks rather than dereferencing them.
+            (confined_rel(rel).map_err(|_| escapes())?, kind)
+        } else {
+            continue;
+        };
+
+        seen.record(dest_rel, kind)
+            .map_err(|v| archive_violation(&v))?;
+        let confined_io = |e: std::io::Error| {
+            RefineError::TarballError(format!(
+                "extract {}: {}",
+                sanitize_path_for_log(&path_str),
+                sanitize_path_for_log(&e.to_string())
+            ))
+        };
+        create_confined_dir(out, dest_rel.parent()).map_err(confined_io)?;
+        let dest = out.join(dest_rel.as_path());
+        match kind {
+            EntryKind::Directory => {
+                create_confined_dir(out, dest_rel).map_err(confined_io)?;
+            }
+            EntryKind::Symlink => {
+                // Preserve the link rather than dereferencing it. `symlink`
+                // fails on an existing leaf rather than replacing it.
                 if let Ok(Some(target)) = entry.link_name() {
                     #[cfg(unix)]
-                    std::os::unix::fs::symlink(&target, &dest)
-                        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+                    std::os::unix::fs::symlink(&target, &dest).map_err(confined_io)?;
                 }
-            } else {
-                let mut outfile = std::fs::File::create(&dest)
-                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
-                std::io::copy(&mut entry, &mut outfile)
-                    .map_err(|e| RefineError::TarballError(e.to_string()))?;
+            }
+            EntryKind::Regular => {
+                // `create_new` refuses an existing leaf, including a
+                // symlink, dangling or not, rather than following it.
+                let mut outfile = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&dest)
+                    .map_err(confined_io)?;
+                std::io::copy(&mut entry, &mut outfile).map_err(confined_io)?;
             }
         }
     }
     Ok(())
+}
+
+/// A source tarball entry the confinement primitives refused, as the
+/// export's error. The violation names the entry's path itself.
+fn archive_violation(violation: &ArchiveViolation) -> RefineError {
+    RefineError::TarballError(format!(
+        "source tarball entry refused: {}",
+        sanitize_path_for_log(&violation.to_string())
+    ))
 }
 
 /// Why a staged upload could not be proved fit to export.
@@ -4082,9 +4165,13 @@ fn copy_proved_uploads(proved: Vec<ProvedUpload>, out: &Path) -> Result<(), Refi
     let dest_dir = out.join(REPOLESS_DIR);
     std::fs::create_dir_all(&dest_dir).map_err(|e| RefineError::TarballError(e.to_string()))?;
     // `create_dir_all` succeeds on a symlink that resolves to a directory,
-    // so it is not the check. The reaching input is the `unmanaged/`
-    // extraction branch, which joins snapshot-supplied paths onto the
-    // export directory without a traversal check of its own.
+    // so it is not the check. No export step is known to leave a link at
+    // this path: step 2e writes only through the confinement primitives,
+    // which create real directories and refuse a symlinked ancestor, and
+    // step 2c confines its paths the same way. The check stays anyway.
+    // Every earlier step writes snapshot-derived paths under the same
+    // `out`, this step runs with or without a source tarball, and the next
+    // step that can leave a link here will not announce itself.
     let dir_meta = std::fs::symlink_metadata(&dest_dir)
         .map_err(|e| RefineError::TarballError(format!("{REPOLESS_DIR}: {e}")))?;
     if !dir_meta.file_type().is_dir() {
@@ -8768,5 +8855,407 @@ mod tests {
             pkg.pinned,
             "pin state should survive timeline serialization roundtrip"
         );
+    }
+
+    /// Confinement of the export's writes from the source tarball and the
+    /// aggregate snapshot. Both inputs are supplied by whoever made the
+    /// tarball, so every refusal case asserts three things: the call errs,
+    /// the victim outside the export root still holds its original bytes,
+    /// and nothing at all appeared outside the export root.
+    mod export_write_confinement {
+        use super::*;
+        use inspectah_core::types::aggregate::VariantSelection;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+
+        const ORIGINAL: &[u8] = b"ORIGINAL";
+        const PWNED: &str = "PWNED";
+
+        /// `sandbox/export` is the export root; `sandbox/victim/authorized_keys`
+        /// is what an escape would hit.
+        struct Sandbox {
+            dir: tempfile::TempDir,
+        }
+
+        impl Sandbox {
+            fn new() -> Self {
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::create_dir(dir.path().join("export")).unwrap();
+                std::fs::create_dir(dir.path().join("victim")).unwrap();
+                std::fs::write(dir.path().join("victim/authorized_keys"), ORIGINAL).unwrap();
+                Self { dir }
+            }
+
+            fn root(&self) -> &Path {
+                self.dir.path()
+            }
+
+            fn out(&self) -> PathBuf {
+                self.root().join("export")
+            }
+
+            fn victim_dir(&self) -> PathBuf {
+                self.root().join("victim")
+            }
+
+            /// Every path under the sandbox outside `export/` and the
+            /// source tarball, without following links.
+            fn outside(&self) -> BTreeSet<PathBuf> {
+                walkdir::WalkDir::new(self.root())
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_entry(|e| e.path() != self.out())
+                    .map(|e| {
+                        e.unwrap()
+                            .path()
+                            .strip_prefix(self.root())
+                            .unwrap()
+                            .to_path_buf()
+                    })
+                    .filter(|p| p != Path::new("source.tar.gz"))
+                    .collect()
+            }
+
+            fn assert_contained(&self, before: &BTreeSet<PathBuf>, what: &str) {
+                assert_eq!(
+                    std::fs::read(self.victim_dir().join("authorized_keys")).unwrap(),
+                    ORIGINAL,
+                    "{what}: the victim was written"
+                );
+                assert_eq!(
+                    &self.outside(),
+                    before,
+                    "{what}: something appeared outside the export root"
+                );
+            }
+
+            /// Build `source.tar.gz` from `(path, type, payload-or-target)`
+            /// rows under a `top/` prefix, writing each name into the header
+            /// verbatim: `set_path` refuses `..`, a hostile tarball does not.
+            fn tarball(&self, entries: &[(&str, tar::EntryType, &str)]) -> PathBuf {
+                let path = self.root().join("source.tar.gz");
+                let file = std::fs::File::create(&path).unwrap();
+                let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+                let mut builder = tar::Builder::new(encoder);
+                for (name, entry_type, payload) in entries {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_mode(0o644);
+                    header.set_entry_type(*entry_type);
+                    let full = format!("top/{name}");
+                    assert!(full.len() < 100, "{full} needs a long-name entry");
+                    let field = &mut header.as_old_mut().name;
+                    field.fill(0);
+                    field[..full.len()].copy_from_slice(full.as_bytes());
+                    if *entry_type == tar::EntryType::Regular {
+                        header.set_size(payload.len() as u64);
+                        header.set_cksum();
+                        builder.append(&header, payload.as_bytes()).unwrap();
+                    } else {
+                        header.set_size(0);
+                        if !payload.is_empty() {
+                            header.set_link_name(payload).unwrap();
+                        }
+                        header.set_cksum();
+                        builder.append(&header, std::io::empty()).unwrap();
+                    }
+                }
+                builder.into_inner().unwrap().finish().unwrap();
+                path
+            }
+
+            fn extract(
+                &self,
+                unmanaged: &[&str],
+                entries: &[(&str, tar::EntryType, &str)],
+            ) -> Result<(), RefineError> {
+                let snap = unmanaged_snapshot(unmanaged);
+                let source = self.tarball(entries);
+                extract_payload_dirs_from_tarball(
+                    &source,
+                    &snap,
+                    &VerifiedUploads::new(),
+                    &self.out(),
+                )
+            }
+        }
+
+        fn unmanaged_snapshot(paths: &[&str]) -> InspectionSnapshot {
+            InspectionSnapshot {
+                unmanaged_files: Some(UnmanagedFileSection {
+                    items: paths
+                        .iter()
+                        .map(|p| UnmanagedFile {
+                            path: (*p).into(),
+                            disposition: FindingKind::included(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        }
+
+        /// Run one refusal case: seed, snapshot what is outside, extract,
+        /// then assert all three.
+        fn assert_refused(
+            sandbox: &Sandbox,
+            unmanaged: &[&str],
+            entries: &[(&str, tar::EntryType, &str)],
+            what: &str,
+        ) {
+            let before = sandbox.outside();
+            let result = sandbox.extract(unmanaged, entries);
+            // Containment first: when it fails, the damage is the finding.
+            sandbox.assert_contained(&before, what);
+            assert!(result.is_err(), "{what}: extraction succeeded");
+        }
+
+        #[test]
+        fn route_one_traversal_onto_an_existing_file_is_refused() {
+            let s = Sandbox::new();
+            assert_refused(
+                &s,
+                &["/../../victim/authorized_keys"],
+                &[(
+                    "unmanaged/../../victim/authorized_keys",
+                    tar::EntryType::Regular,
+                    PWNED,
+                )],
+                "route one, existing target",
+            );
+        }
+
+        #[test]
+        fn route_one_traversal_into_a_missing_directory_is_refused() {
+            let s = Sandbox::new();
+            assert_refused(
+                &s,
+                &["/../../newdir/f"],
+                &[("unmanaged/../../newdir/f", tar::EntryType::Regular, PWNED)],
+                "route one, missing directory",
+            );
+            assert!(
+                !s.root().join("newdir").exists(),
+                "a directory was created outside the root"
+            );
+        }
+
+        #[test]
+        fn route_two_symlink_then_file_at_one_path_is_refused() {
+            let s = Sandbox::new();
+            let target = s.victim_dir().join("authorized_keys");
+            assert_refused(
+                &s,
+                &["/opt/x"],
+                &[
+                    (
+                        "unmanaged/opt/x",
+                        tar::EntryType::Symlink,
+                        target.to_str().unwrap(),
+                    ),
+                    ("unmanaged/opt/x", tar::EntryType::Regular, PWNED),
+                ],
+                "route two",
+            );
+        }
+
+        #[test]
+        fn route_two_file_then_symlink_at_one_path_is_refused() {
+            let s = Sandbox::new();
+            let target = s.victim_dir().join("authorized_keys");
+            assert_refused(
+                &s,
+                &["/opt/x"],
+                &[
+                    ("unmanaged/opt/x", tar::EntryType::Regular, PWNED),
+                    (
+                        "unmanaged/opt/x",
+                        tar::EntryType::Symlink,
+                        target.to_str().unwrap(),
+                    ),
+                ],
+                "route two, reversed",
+            );
+        }
+
+        #[test]
+        fn route_2b_file_beneath_a_symlinked_ancestor_is_refused() {
+            let s = Sandbox::new();
+            let target = s.victim_dir();
+            assert_refused(
+                &s,
+                &["/opt/d", "/opt/d/authorized_keys"],
+                &[
+                    (
+                        "unmanaged/opt/d",
+                        tar::EntryType::Symlink,
+                        target.to_str().unwrap(),
+                    ),
+                    (
+                        "unmanaged/opt/d/authorized_keys",
+                        tar::EntryType::Regular,
+                        PWNED,
+                    ),
+                ],
+                "route 2b",
+            );
+        }
+
+        #[test]
+        fn a_symlink_already_under_the_export_root_is_not_written_through() {
+            // The ancestor check reads the disk, not only the entries this
+            // extraction has seen: an earlier export step could leave one.
+            let s = Sandbox::new();
+            std::fs::create_dir(s.out().join("unmanaged")).unwrap();
+            std::os::unix::fs::symlink(s.victim_dir(), s.out().join("unmanaged/opt")).unwrap();
+            assert_refused(
+                &s,
+                &["/opt/authorized_keys"],
+                &[(
+                    "unmanaged/opt/authorized_keys",
+                    tar::EntryType::Regular,
+                    PWNED,
+                )],
+                "pre-existing symlink under the export root",
+            );
+        }
+
+        #[test]
+        fn a_hardlink_entry_is_refused() {
+            let s = Sandbox::new();
+            assert_refused(
+                &s,
+                &["/opt/h"],
+                &[(
+                    "unmanaged/opt/h",
+                    tar::EntryType::Link,
+                    "top/unmanaged/opt/other",
+                )],
+                "hardlink",
+            );
+            assert!(
+                std::fs::symlink_metadata(s.out().join("unmanaged/opt/h")).is_err(),
+                "something was created at the hardlink's path"
+            );
+        }
+
+        #[test]
+        fn a_special_file_entry_is_refused() {
+            for (entry_type, what) in [
+                (tar::EntryType::Fifo, "fifo"),
+                (tar::EntryType::Char, "char device"),
+                (tar::EntryType::Block, "block device"),
+            ] {
+                let s = Sandbox::new();
+                assert_refused(
+                    &s,
+                    &["/opt/dev"],
+                    &[("unmanaged/opt/dev", entry_type, "")],
+                    what,
+                );
+                assert!(
+                    std::fs::symlink_metadata(s.out().join("unmanaged/opt/dev")).is_err(),
+                    "{what}"
+                );
+            }
+        }
+
+        #[test]
+        fn real_unmanaged_symlinks_survive_with_their_absolute_targets() {
+            // The collector records link targets with `readlink -f`, so a
+            // real one is always absolute. It is kept, inert, not refused.
+            let s = Sandbox::new();
+            let result = s.extract(
+                &[
+                    "/opt/app/bin/run",
+                    "/opt/app/etc/app.conf",
+                    "/opt/app/current",
+                ],
+                &[
+                    ("unmanaged/", tar::EntryType::Directory, ""),
+                    ("unmanaged/opt/", tar::EntryType::Directory, ""),
+                    ("unmanaged/opt/app/", tar::EntryType::Directory, ""),
+                    ("unmanaged/opt/app/bin/", tar::EntryType::Directory, ""),
+                    (
+                        "unmanaged/opt/app/bin/run",
+                        tar::EntryType::Regular,
+                        "#!/bin/sh\n",
+                    ),
+                    (
+                        "unmanaged/opt/app/current",
+                        tar::EntryType::Symlink,
+                        "/opt/app/lib/tool-1.2",
+                    ),
+                    ("unmanaged/opt/app/etc/", tar::EntryType::Directory, ""),
+                    (
+                        "unmanaged/opt/app/etc/app.conf",
+                        tar::EntryType::Regular,
+                        "key=value\n",
+                    ),
+                ],
+            );
+            result.expect("a real export extracts");
+            let app = s.out().join("unmanaged/opt/app");
+            let link = std::fs::symlink_metadata(app.join("current")).unwrap();
+            assert!(link.file_type().is_symlink());
+            assert_eq!(
+                std::fs::read_link(app.join("current")).unwrap(),
+                Path::new("/opt/app/lib/tool-1.2")
+            );
+            assert_eq!(std::fs::read(app.join("bin/run")).unwrap(), b"#!/bin/sh\n");
+            assert_eq!(
+                std::fs::read(app.join("etc/app.conf")).unwrap(),
+                b"key=value\n"
+            );
+        }
+
+        #[test]
+        fn a_name_containing_two_dots_extracts() {
+            let s = Sandbox::new();
+            s.extract(
+                &["/opt/app/foo..bar"],
+                &[(
+                    "unmanaged/opt/app/foo..bar",
+                    tar::EntryType::Regular,
+                    "data",
+                )],
+            )
+            .expect("`..` inside a name is not traversal");
+            assert_eq!(
+                std::fs::read(s.out().join("unmanaged/opt/app/foo..bar")).unwrap(),
+                b"data"
+            );
+        }
+
+        #[test]
+        fn aggregate_variant_paths_cannot_leave_the_export_root() {
+            // `aggregate/variants/` plus three `..` reaches the sandbox; a
+            // `//` path is still absolute after one `strip_prefix('/')`, and
+            // `Path::join` lets an absolute path replace the base.
+            let cases: [fn(&Sandbox) -> String; 2] = [
+                |_| "/../../../victim".to_string(),
+                |s| format!("/{}", s.victim_dir().display()),
+            ];
+            for case in cases {
+                let s = Sandbox::new();
+                let path = case(&s);
+                let snap = InspectionSnapshot {
+                    config: Some(ConfigSection {
+                        files: vec![ConfigFileEntry {
+                            path: path.clone(),
+                            content: PWNED.into(),
+                            variant_selection: VariantSelection::Alternative,
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                };
+                let before = s.outside();
+                let result = write_aggregate_variants(&snap, &s.out());
+                s.assert_contained(&before, &path);
+                assert!(result.is_err(), "{path}: aggregate variant write succeeded");
+            }
+        }
     }
 }
