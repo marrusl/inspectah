@@ -46,6 +46,7 @@ use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::baseline_fmt;
+use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
 
@@ -729,6 +730,11 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     } else {
         redact(&mut snapshot, &RedactOptions::default());
     }
+
+    // Exclude auto packages nothing included needs. Before the
+    // --inspect-only branch, so its JSON and the tarball's snapshot carry
+    // the same dispositions.
+    apply_scan_package_defaults(&mut snapshot);
 
     // Scan for unmanaged files when --include-unmanaged is set.
     // Must run after collect() so language environment paths are available

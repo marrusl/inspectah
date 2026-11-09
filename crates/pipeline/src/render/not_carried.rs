@@ -34,6 +34,7 @@
 use std::collections::{HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::FindingKind;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{PackageRoute, route_for};
@@ -124,10 +125,30 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
     Some(classes)
 }
 
+/// Exclude every [`AutoCarriage::Unneeded`] package from a scan snapshot.
+///
+/// This is the scan's default disposition for the class; every other
+/// package is left as it is, and under the fallback nothing changes.
+/// Idempotent: only leaves contribute to [`pulled_in_by_included`], so
+/// excluding auto packages cannot change the class.
+pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
+    let Some(classes) = classify_auto_carriage(snap) else {
+        return;
+    };
+    let Some(rpm) = snap.rpm.as_mut() else {
+        return;
+    };
+    for pkg in &mut rpm.packages_added {
+        let id = format!("{}.{}", pkg.name, pkg.arch);
+        if classes.get(&id) == Some(&AutoCarriage::Unneeded) {
+            pkg.disposition = FindingKind::excluded();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::FindingKind;
     use inspectah_core::types::aggregate::AggregateSnapshotMeta;
     use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
@@ -243,10 +264,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn returns_none_when_the_snapshot_cannot_support_the_judgement() {
-        type Degrade = fn(&mut InspectionSnapshot);
-        let cases: &[(&str, Degrade)] = &[
+    type Degrade = fn(&mut InspectionSnapshot);
+
+    /// Each fallback condition from the module documentation, applied to
+    /// the classified host.
+    fn fallback_cases() -> Vec<(&'static str, Degrade)> {
+        vec![
             ("the collector's unavailable state", |snap| {
                 let rpm = snap.rpm.as_mut().expect("rpm section");
                 rpm.leaf_packages = None;
@@ -269,11 +292,66 @@ mod tests {
                     section_host_counts: Default::default(),
                 });
             }),
-        ];
-        for (why, degrade) in cases {
+        ]
+    }
+
+    #[test]
+    fn returns_none_when_the_snapshot_cannot_support_the_judgement() {
+        for (why, degrade) in fallback_cases() {
             let mut snap = snapshot();
             degrade(&mut snap);
             assert_eq!(classify_auto_carriage(&snap), None, "{why}");
+        }
+    }
+
+    #[test]
+    fn scan_defaults_exclude_unneeded_packages_and_nothing_else() {
+        let before = snapshot();
+        let classes = classify_auto_carriage(&before).expect("leaf data is available");
+        let mut after = before.clone();
+        apply_scan_package_defaults(&mut after);
+
+        let before_pkgs = &before.rpm.as_ref().expect("rpm section").packages_added;
+        let after_pkgs = &after.rpm.as_ref().expect("rpm section").packages_added;
+        assert_eq!(after_pkgs.len(), before_pkgs.len());
+        for (old, new) in before_pkgs.iter().zip(after_pkgs) {
+            let id = format!("{}.{}", old.name, old.arch);
+            if classes[&id] == AutoCarriage::Unneeded {
+                assert_eq!(new.disposition, FindingKind::excluded(), "{id} is Unneeded");
+                let mut rest = new.clone();
+                rest.disposition = old.disposition.clone();
+                assert_eq!(&rest, old, "{id}: only the disposition changes");
+            } else {
+                assert_eq!(new, old, "{id} is not Unneeded and is untouched");
+            }
+        }
+        let mut rest = after.clone();
+        rest.rpm = before.rpm.clone();
+        assert_eq!(rest, before, "nothing outside packages_added changes");
+    }
+
+    #[test]
+    fn scan_defaults_are_idempotent() {
+        let mut once = snapshot();
+        apply_scan_package_defaults(&mut once);
+        let mut twice = once.clone();
+        apply_scan_package_defaults(&mut twice);
+        assert_eq!(twice, once);
+        assert_eq!(
+            classify_auto_carriage(&twice),
+            classify_auto_carriage(&snapshot()),
+            "excluding Unneeded packages leaves the class unchanged"
+        );
+    }
+
+    #[test]
+    fn scan_defaults_change_nothing_under_each_fallback() {
+        for (why, degrade) in fallback_cases() {
+            let mut snap = snapshot();
+            degrade(&mut snap);
+            let before = snap.clone();
+            apply_scan_package_defaults(&mut snap);
+            assert_eq!(snap, before, "{why}");
         }
     }
 }

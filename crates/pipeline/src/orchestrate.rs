@@ -57,6 +57,7 @@ pub fn run_pipeline(
     // Redact
     let mut snapshot = validated.state.snapshot;
     redact(&mut snapshot, &RedactOptions::default());
+    render::not_carried::apply_scan_package_defaults(&mut snapshot);
 
     // Render all artifacts
     let render_context = RenderContext { target: None };
