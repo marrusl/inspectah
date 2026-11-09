@@ -88,21 +88,26 @@ collector now builds one provides index from the rpmdb and looks each
 capability up in it:
 
 ```rust
-const RPM_PROVIDES_INDEX_FORMAT: &str = "[%{=NAME}.%{=ARCH}\\t%{PROVIDENAME}\\n]";
+const RPM_PROVIDES_INDEX_FORMAT: &str =
+    "[%{=NAME}.%{=ARCH}\\t%{PROVIDEFLAGS}\\t%{PROVIDEVERSION}\\t%{PROVIDENAME}\\n]";
 exec.run("rpm", &["-qa", "--queryformat", RPM_PROVIDES_INDEX_FORMAT]);
 ```
 
-One line per provide, identity first, so a line splits on its first tab and
-the arch comes straight from the header rather than from parsing a NEVRA.
-The `=` modifier repeats a scalar for every array element; without it rpm
-rejects scalar and array tags in one `[...]`. A failed index returns `None`
-so classification falls back to dnf, rather than reading as a graph with no
-edges.
+One line per provide: identity, flags, version, capability. The arch comes
+straight from the header rather than from parsing a NEVRA, and the
+capability is last so it stays whole. `PROVIDENAME`, `PROVIDEFLAGS` and
+`PROVIDEVERSION` are parallel arrays of one length, so they share one
+`[...]`. The `=` modifier repeats a scalar for every array element;
+without it rpm rejects scalar and array tags in one `[...]`. The flags
+print in decimal, and only the `RPMSENSE_LESS`, `GREATER` and `EQUAL` bits
+(2, 4, 8) are read. A failed index returns `None` so classification falls
+back to dnf, rather than reading as a graph with no edges.
 
-Capabilities are matched by name with version constraints stripped, as
-`--whatprovides <name>` matches them. A capability with several providers
-credits all of them, which over-counts where only one of a set of
-alternatives is needed.
+A plain requirement matches by name, as `--whatprovides <name>` matches
+it: `%{REQUIRENAME}` carries no version and `%{REQUIREVERSION}` is not
+queried. A capability with several providers credits all of them, which
+over-counts where only one of a set of alternatives is needed. A
+capability inside a rich dependency keeps its comparison; see below.
 
 ## What the dependency tree counts as pulled in
 
@@ -141,22 +146,67 @@ dependencies: mod_http2, mod_lua` on both. So:
   `--whatprovides`, and adding `%{FILENAMES}` to the provides index would
   duplicate the ownership query. Ownership is keyed by name, so a
   multilib pair that both list a path are both credited, as
-  `--whatprovides` would.
+  `--whatprovides` would. **A failed ownership query is `None`, not an
+  empty list.** With a file requirement in play and ownership unknown, the
+  rpm tree returns `None` and classification falls back to dnf, like a
+  failed index. An empty list would silently drop every file-only edge
+  (git to perl-interpreter) from a tree that still reported itself
+  authoritative.
 - **Recommends** (`W`): treated as Requires.
 - **Supplements** (`S`): the reverse. `b` Supplements `x` means `b` is
-  installed when `x` is, so the edge runs from each added provider of `x`
-  to `b`, and only when the whole expression is satisfied on the host.
+  installed when `x` is. **Never turn an `and` into one edge per
+  operand.** For `b` Supplements `(shared-lib and desktop)`, an edge from
+  `shared-lib` lets a leaf that brings only `shared-lib` claim `b`. With
+  no baseline, glibc is added, and `(glibc and (langpacks-en or ...))`
+  would hand the langpack to every leaf that links libc. The expression
+  reduces instead to alternative clauses over added packages
+  (`DepExpr::supplement_triggers`): one group per operand, any member of
+  which satisfies it, and `b` is pulled in once every group of some
+  clause has a member present. An operand that a base-image package
+  satisfies adds no group. An expression that holds through base-image
+  packages alone pulls nothing, because dnf does not act on a Supplements
+  that already held. A one-group clause is an ordinary edge from each
+  member to `b`. A clause with several groups is a `JointSupplement`,
+  which `leaf_closure` fires only when the leaf and what it reaches cover
+  every group. `graph_based_split` counts its package as depended on.
 - **Rich (boolean) dependencies** (`rich_dep.rs`): evaluated against the
-  installed host, not solved. `(a if c)` pulls `a` only when some
+  installed host, not solved, over sets of installed provider ids rather
+  than capability names. `(a if c)` pulls a provider of `a` only when some
   installed package (base image included) provides `c`, and never pulls
-  `c`; `unless` and `else` likewise. `(a or b)` pulls the first installed
-  operand for a requirement and every installed one for a Supplements.
-  `and` and `with` pull every operand; `without` pulls its left side.
+  `c`; `unless` and `else` likewise. A provider of `a` that itself makes
+  `c` hold is not pulled either: `(foo >= 2 if foo)` is a version floor,
+  and dnf never installs `foo` for it. `(a or b)` pulls the first
+  installed operand, and `and` pulls every operand. `with` and `without`
+  are per package: `(a with b)` is the packages that provide both, and
+  `(a without b)` is the providers of `a` that do not provide `b`. Their
+  operands are a separate type (`Match`) that cannot hold `and`, `if` or
+  `unless`, so a mix of those is dropped. A capability in a rich
+  expression keeps its comparison (`engine >= 2`) and matches only
+  providers whose provided version overlaps it, by rpm's `rpmdsCompare`
+  rule over `rpmvercmp`. A missing epoch is 0, the release counts only
+  when both sides have one, and an unversioned provide meets any
+  constraint. So `(plugin if engine >= 2 else fallback)` takes `fallback`
+  when only `engine = 1` is installed. Nesting stops at
+  `MAX_RICH_DEP_DEPTH` (16). `DepExpr` can only be built by its parser,
+  so every walk over it is bounded by the same limit, and a long run of
+  `(` cannot exhaust the stack.
 
 **Still excluded:** Suggests and Enhances (dnf does not install them by
 default). A rich expression that mixes operators in one group, which rpm
-rejects as well, is dropped. The tree is reachability only: it does not
+rejects as well, is dropped. So is a Supplements that expands past
+`MAX_SUPPLEMENT_CLAUSES` (64). The tree is reachability only: it does not
 record which kind of edge put a package there.
+
+**Judged on the source host, not the target.** dnf evaluates `or`
+alternatives and `if` conditions against the base image plus the included
+packages. The tree evaluates them against the host. `(addon or base-cap)`
+credits `addon` even when the target baseline satisfies `base-cap`.
+`(plugin if desktop)` credits `plugin` even when refine excludes
+`desktop`. A joint Supplements whose operands come from two different
+leaves is in neither list. Fixing this means storing the predicates in
+the snapshot and evaluating them at render time. On RHEL 9.8 and 10.2
+the tree still matched an independent libsolv closure check on all 28
+leaves (2026-11-09), so this has no measured effect yet.
 
 A test for each of these must fail on the previous graph: a fixture
 whose only route to a package is a requirement form the old parser

@@ -591,13 +591,19 @@ of the check is therefore not independent. `p.reason` (`group`,
 "needed by no leaf" packages are installer comps installs, and which
 are their dependencies.
 
-**A self-conditional rich dependency credits a false edge.**
-`(foo >= 1.2 if foo)` is a version floor, and dnf never installs `foo`
-for it. Evaluating the condition against the host finds `foo` installed
-and pulls it. Neither host hit this, because every such dependency on an
-added package targeted a baseline or uninstalled package (`selinux-policy`,
-`fedora-release-common`). A package whose condition names an added
-package would get a wrong edge.
+**A self-conditional rich dependency is a version floor, not an edge.**
+`(foo >= 1.2 if foo)` never makes dnf install `foo`. At `1be5bd44` the
+tree evaluated the condition, found `foo` installed and credited it. The
+tree now drops a provider that itself makes the condition hold (see
+[rpm-output-field-parsing](rpm-output-field-parsing.md)). Neither host
+hit the old behaviour: every such dependency on an added package
+targeted a baseline or uninstalled package (`selinux-policy`,
+`fedora-release-common`). A rescan that wants to exercise it needs an
+added package whose condition names another added package. The same
+applies to the reworked provides index, which now also prints
+`%{PROVIDEFLAGS}` and `%{PROVIDEVERSION}`. This run did not exercise that
+query, so confirm on rpm 4.16 and 4.19 that it runs once and that no
+`dnf repoquery --requires` follows it.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
