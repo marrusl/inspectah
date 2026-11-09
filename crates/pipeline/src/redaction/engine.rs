@@ -181,6 +181,68 @@ const SEMICOLON_COMMENT_FILE_NAMES: &[&str] = &["smb.conf"];
 /// File names whose parsers treat a leading `//` as a comment.
 const DOUBLE_SLASH_COMMENT_FILE_NAMES: &[&str] = &["named.conf"];
 
+/// Directory name that marks a systemd configuration tree:
+/// `/etc/systemd/`, `/usr/lib/systemd/`, `/run/systemd/`,
+/// `/etc/containers/systemd/` (quadlets) and the per-user trees.
+const SYSTEMD_DIR: &str = "systemd";
+/// Unit file suffixes read with systemd's unit-file parser: the unit
+/// types, networkd's `.network`/`.netdev`/`.link`, and the quadlet types.
+const SYSTEMD_UNIT_SUFFIXES: &[&str] = &[
+    ".service",
+    ".socket",
+    ".device",
+    ".mount",
+    ".automount",
+    ".swap",
+    ".target",
+    ".path",
+    ".timer",
+    ".slice",
+    ".scope",
+    ".network",
+    ".netdev",
+    ".link",
+    ".container",
+    ".volume",
+    ".kube",
+    ".pod",
+    ".image",
+    ".build",
+];
+/// Suffix of a drop-in directory (`foo.service.d/`, `journald.conf.d/`).
+const DROP_IN_DIR_SUFFIX: &str = ".d";
+/// Suffix of a drop-in file and of a systemd daemon's own configuration.
+const CONF_SUFFIX: &str = ".conf";
+/// Pseudo-path prefix redaction uses for unit content inspectah generates
+/// itself (cron jobs converted to timers), which is staged as a unit.
+const GENERATED_UNIT_PREFIX: &str = "generated:";
+
+/// Returns true if systemd reads the file at `path` with the syntax of
+/// `systemd.syntax(7)`, where a line starting with `#` or `;` is a
+/// comment: a unit under a systemd tree, a `.conf` drop-in in a `*.d/`
+/// directory under one, a daemon configuration such as
+/// `/etc/systemd/journald.conf`, or a generated unit. A `.conf` anywhere
+/// else is not assumed to share that syntax.
+fn is_systemd_syntax(path: &str) -> bool {
+    if let Some(name) = path.strip_prefix(GENERATED_UNIT_PREFIX) {
+        return SYSTEMD_UNIT_SUFFIXES.iter().any(|s| name.ends_with(s));
+    }
+    let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+    let Some((file_name, dirs)) = components.split_last() else {
+        return false;
+    };
+    if !dirs.contains(&SYSTEMD_DIR) {
+        return false;
+    }
+    if SYSTEMD_UNIT_SUFFIXES.iter().any(|s| file_name.ends_with(s)) {
+        return true;
+    }
+    file_name.ends_with(CONF_SUFFIX)
+        && dirs
+            .last()
+            .is_some_and(|parent| parent.ends_with(DROP_IN_DIR_SUFFIX) || *parent == SYSTEMD_DIR)
+}
+
 /// Returns the line-comment markers that are real comment syntax for
 /// the file at `path`. `#` always applies; `;` and `//` apply only to
 /// file types that use them, because elsewhere a line starting with
@@ -195,6 +257,7 @@ fn comment_markers(path: Option<&str>) -> Vec<&'static str> {
         || SEMICOLON_COMMENT_EXTENSIONS
             .iter()
             .any(|ext| file_name.ends_with(ext))
+        || is_systemd_syntax(path)
     {
         markers.push(SEMICOLON_COMMENT);
     }
@@ -2508,6 +2571,51 @@ mod tests {
             ("/etc/php.ini", "; token=example", 0),
             ("/etc/samba/smb.conf", "; password=example", 0),
             ("/etc/yum.repos.d/x.repo", "; password=example", 0),
+            // systemd.syntax(7): units, drop-ins and the daemons' own
+            // configuration files take `#` and `;` comments.
+            (
+                "/etc/systemd/system/example.service",
+                "; password=example",
+                0,
+            ),
+            (
+                "/usr/lib/systemd/system/example.timer",
+                "; password=example",
+                0,
+            ),
+            (
+                "/etc/systemd/system/example.service.d/override.conf",
+                "; password=example",
+                0,
+            ),
+            ("/etc/systemd/journald.conf", "; password=example", 0),
+            (
+                "/etc/systemd/journald.conf.d/50-local.conf",
+                "; password=example",
+                0,
+            ),
+            (
+                "/etc/containers/systemd/app.container",
+                "; password=example",
+                0,
+            ),
+            ("generated:cron-backup.service", "; password=example", 0),
+            // Not systemd syntax: a `.conf` outside a systemd tree, a
+            // unit suffix outside one, and a non-`.conf` file in a
+            // drop-in directory.
+            ("/etc/tmpfiles.d/x.conf", ";password=hunter2", 1),
+            ("/etc/app.d/x.conf", ";password=hunter2", 1),
+            ("/opt/app/example.service", ";password=hunter2", 1),
+            (
+                "/etc/systemd/system/x.service.d/notes.txt",
+                ";password=hunter2",
+                1,
+            ),
+            (
+                "/etc/systemd/system/x.service",
+                "//srv/share/password=hunter2",
+                1,
+            ),
         ];
         for (path, input, want) in cases {
             let findings = scan_content(input, path);

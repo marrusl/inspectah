@@ -154,6 +154,23 @@ Two constraints on that report:
   state at all now, because its key locator verifies the separator
   itself — say that rather than inventing a signal to be symmetrical.
 
+## Comment exemptions follow the file's parser
+
+Redaction skips a line that starts with a comment marker, so each marker
+is a promise about the parser that reads the file. `#` holds everywhere.
+`;` and `//` hold only where that file's parser says so
+(`comment_markers` in `redaction/engine.rs`); elsewhere a line such as
+`//srv/share/password=x` is data and must be scanned. Decide from the
+parser's documentation, not the extension: `.conf` covers both
+`smb.conf` (`;` is a comment) and `sshd_config`-style files (it is not).
+systemd is the case that needs the path, not the name: `systemd.syntax(7)`
+gives units, drop-ins and the daemons' own `.conf` files `#` and `;`
+comments, so the test is a `systemd` directory component plus a unit
+suffix, a `*.d/*.conf` drop-in, or a `.conf` directly in the `systemd`
+directory. Getting it wrong in the narrow direction costs false findings;
+in the wide direction it leaks, so widen only with a table row in
+`test_non_hash_markers_exempt_only_where_they_are_comment_syntax`.
+
 ## Testing it
 
 Assert over the **whole export directory**, not over one named file:
