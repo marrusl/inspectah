@@ -107,6 +107,7 @@ Artifact generators invoked after triage decisions finalized:
 - `secrets.rs` — Redacted secrets summary
 - `tarball.rs` — Snapshot archive packaging
 - `users.rs` — User/group materialization (passwd/group entries)
+- `not_carried.rs`: the not-carried class (`classify_auto_carriage`, `apply_scan_package_defaults`, `not_carried_packages`); the one decider of which auto packages the image leaves out, read by the Containerfile, the audit report, `service_intent.rs` and `var_dirs.rs`
 - `service_intent.rs` — Quadlet/systemd service migration
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`

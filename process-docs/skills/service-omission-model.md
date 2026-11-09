@@ -30,6 +30,15 @@ with no warning anywhere.
 
 - `OmissionReason::PackageExcluded`: every `packages_added` entry for the
   owner is excluded and the baseline does not ship it (Tier 2).
+- `OmissionReason::NotCarried`: the owner is in the not-carried class
+  (`not_carried.rs`): an auto package nothing included pulls in, which
+  the scan excluded. It is chosen over `PackageExcluded` only when every
+  `packages_added` entry with the owner's name is in the not-carried
+  list; one carried arch of that name makes it `PackageExcluded`. It
+  never creates an omission by itself: the unit is omitted only when the
+  presence rules already prove the owner absent, which is why a mixed-arch
+  owner with one carried arch keeps its unit. Wording is
+  `describe(NotCarried)`: `package 'rhc' is not carried: <NOT_CARRIED_REASON>`.
 - `OmissionReason::NotInTargetImage`: a baseline is available and the
   owner is in neither it nor `packages_added` (Tier 7).
 - `AdvisoryReason::PackageUnreachable` and `BaselineUnavailable` for the
@@ -76,3 +85,13 @@ the set is empty, and a leaf that another leaf depends on, or a
 dependency of an auto package included on its own, is not recorded. In
 those cases an excluded package's unit is still omitted although dnf may
 install it, which is the behavior from before the rule existed.
+
+### The not-carried class is this rule applied to auto packages
+
+An auto package that no included package pulls in is excluded by default
+on the scan path, so Tier 2 would omit its unit. `classify_auto_carriage`
+in `not_carried.rs` decides the class and calls `pulled_in_by_included`
+rather than reimplementing it; see `not-carried-auto-packages.md`. The
+`/var` evidence in `var_dirs.rs` asks the same predicate, so a package a
+kept package pulls in counts as carried there whatever its disposition,
+subject to the repo-enabling demotion filter.
