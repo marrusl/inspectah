@@ -27,11 +27,12 @@ pub enum PackageRoute<'a> {
     /// Not repo-less: installs by name from a repo the host enables, in the
     /// plain list or the repo-enabling block.
     ByName,
-    /// Installs from a repo the source host keeps disabled, in its own
-    /// transaction with `--enablerepo=<id>`. Nothing is staged for it.
+    /// Installs from a repo the source host keeps disabled, in the package
+    /// phase's combined install, which carries `--enablerepo=<id>` for
+    /// every such repo. Nothing is staged for it.
     DisabledRepo(RepoId),
     /// Repo-less, installed from the operator's upload, which the export
-    /// proved and writes. An upload is a decision the operator made, so it
+    /// proved and writes, by path in the same combined install. An upload is a decision the operator made, so it
     /// wins over a disabled repo the export could install from.
     Upload(&'a VerifiedUpload),
     /// Repo-less otherwise: the cached RPM the scan bundled, the FIXME for
@@ -40,6 +41,10 @@ pub enum PackageRoute<'a> {
 }
 
 /// The route for `pkg`, given the uploads this export proved.
+///
+/// [`PackageRoute::Repoless`] covers both an included cached RPM, which
+/// also installs by path in the combined install, and the advice-only
+/// outcomes; [`repoless_plan`] tells them apart.
 ///
 /// In order: no repo-less annotation is [`PackageRoute::ByName`]; a
 /// verified upload is [`PackageRoute::Upload`]; a disabled repo the export

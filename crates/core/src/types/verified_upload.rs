@@ -9,7 +9,7 @@
 //! `COPY` or a `RUN` for a package only when the map holds an entry for it.
 //!
 //! The basename is a [`StagedName`], not a `String`. That is the point of
-//! the type: a rendered `RUN dnf localinstall -y /tmp/<basename>` runs as
+//! the type: a rendered `RUN dnf install` naming `/tmp/<basename>` runs as
 //! root at image build time, and there is no constructor that puts an
 //! unvalidated name in this struct for it to interpolate.
 

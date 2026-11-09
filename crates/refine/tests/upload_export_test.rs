@@ -602,7 +602,7 @@ fn an_excluded_package_exports_no_staged_upload() {
 fn a_hostile_staged_filename_reaches_no_copy_and_no_member() {
     // `uploaded: true`, an included package, and a *real file* at a
     // hostile name in the upload directory: the file exists, so the only
-    // thing standing between it and `RUN dnf localinstall -y /tmp/<name>`
+    // thing standing between it and a `RUN dnf install` naming `/tmp/<name>`
     // is the allowlist. Named here so the guard has a reaching input.
     let hostile = "epel-release-9$(id)-1.noarch.rpm";
     let mut h = Harness::new();

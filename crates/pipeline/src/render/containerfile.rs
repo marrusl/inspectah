@@ -705,7 +705,8 @@ fn packages_section_lines(
     // Package Groups: the renderable groups and their member names, so the
     // members can be suppressed from the individual packages section. The
     // `dnf group install` itself is emitted further down, after the
-    // repo-enabling and disabled-repo transactions.
+    // repo-enabling block and the combined local and disabled-repo
+    // install.
     let (renderable_groups, group_member_suppressed): (
         Vec<&inspectah_core::types::rpm::InstalledGroup>,
         std::collections::HashSet<String>,
@@ -802,9 +803,10 @@ fn packages_section_lines(
         })
         .filter(|pkg| {
             // A package from a disabled repo that an included package
-            // depends on is named in its repo's transaction, whatever its
-            // own disposition and leaf status. The dependent's transaction
-            // does not enable that repo, so dnf cannot pull it in there.
+            // depends on is named in the combined install, whatever its
+            // own disposition and leaf status. A plain or group
+            // transaction does not enable that repo, so dnf cannot pull it
+            // in there.
             // The disposition is left as it is: refine's non-leaf default
             // and an operator's exclusion both still read as excluded.
             if pulled_in.contains(&canonical_package_id(&pkg.name, &pkg.arch))
@@ -2847,10 +2849,11 @@ mod tests {
         }
     }
 
-    /// The package transactions run repo-enabling first, then each
-    /// disabled repo's, then the group install, then the plain list. A
-    /// group member or plain package may depend on a disabled-repo package,
-    /// and neither of those transactions enables its repo.
+    /// The package transactions run repo-enabling first, then the combined
+    /// install of the disabled-repo packages and local RPMs, then the group
+    /// install, then the plain list. A group member or plain package may
+    /// depend on a disabled-repo package, and neither of those
+    /// transactions enables its repo.
     #[test]
     fn disabled_repo_transactions_run_before_the_group_and_plain_ones() {
         const GROUP: &str = "Multimedia";
@@ -3093,6 +3096,38 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// The case the multiarch naming fix was for: both arches are non-leaf
+    /// disabled-repo dependencies of an included leaf. Naming came from
+    /// counts over the plain list's selection, which leaves non-leaf
+    /// packages out, so the pair fell back to a bare name and dedup
+    /// collapsed it to one operand.
+    #[test]
+    fn a_non_leaf_multiarch_pair_from_a_disabled_repo_keeps_both_arches() {
+        let mut snap = snapshot_with_packages(&["openh264", "htop"]);
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            let mut i686 = rpm.packages_added[0].clone();
+            i686.arch = "i686".into();
+            rpm.packages_added.push(i686);
+            rpm.repo_files
+                .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+            rpm.leaf_packages = Some(vec!["htop.x86_64".into()]);
+            rpm.leaf_dep_tree =
+                serde_json::json!({ "htop.x86_64": ["openh264.x86_64", "openh264.i686"] });
+        }
+        make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
+
+        let output = render_containerfile(&snap, None, None);
+
+        assert!(
+            output.contains("Packages from repos disabled on the source host (2)"),
+            "{output}"
+        );
+        assert!(output.contains("    openh264.i686 \\"), "{output}");
+        assert!(output.contains("    openh264.x86_64 \\"), "{output}");
+        assert!(!output.contains("    openh264 \\"), "{output}");
     }
 
     /// An operator's upload wins over the disabled repo: the package renders

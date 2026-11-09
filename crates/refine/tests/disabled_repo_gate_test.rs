@@ -199,7 +199,7 @@ fn export_containerfile(session: &RefineSession) -> String {
 
 /// With leaf data, the leaf `gst-openh264` installs from its disabled
 /// repo, and so does its dependency `openh264`: a dependency of an included
-/// package is named in its repo's transaction whatever its disposition.
+/// package is named in the disabled-repo install whatever its disposition.
 /// The scan tarball includes the dependency; refine excludes it by default
 /// and must still name it.
 /// Both must render the same lines, including the unit each package owns,
@@ -310,7 +310,7 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
 
 /// A disabled-repo dependency of an included leaf from an enabled repo:
 /// the leaf's own transaction does not enable the disabled repo, so the
-/// dependency is named in that repo's transaction, which runs first. Both
+/// dependency is named in the disabled-repo install, which runs first. Both
 /// export paths render it the same way, although refine excludes the
 /// non-leaf dependency by default. With the leaf excluded, nothing pulls
 /// the dependency in and it is not named.
