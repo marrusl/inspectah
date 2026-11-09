@@ -174,10 +174,16 @@ dependencies: mod_http2, mod_lua` on both. So:
   than capability names. `(a if c)` pulls a provider of `a` only when some
   installed package (base image included) provides `c`, and never pulls
   `c`; `unless` and `else` likewise. A provider of `a` is held back
-  only when `c` holds through it alone: `c` is evaluated again with that
-  one package left out (`Excluding`), and if it then fails, dnf would not
-  install the package for this dependency. So `(foo >= 2 if foo)`, with
-  foo the only provider, is a version floor and pulls nothing. **Never
+  only when no branch that could be taken requires it: `c` holds through
+  it alone, and the `else`, if there is one, does not select it. `c` is
+  evaluated again with that one package left out (`Excluding`). If it
+  then fails and the `else` does not name the package, dnf would not
+  install it for this dependency. So `(foo >= 2 if foo)`, with foo the
+  only provider, is a version floor and pulls nothing, while
+  `(plugin if (feature unless plugin) else plugin)` with nothing
+  providing `feature` pulls `plugin`: without it the `else` applies and
+  requires it. The `else` is read as the tree reads it elsewhere, so its
+  `or` takes the first installed operand. **Never
   subtract every provider the condition matches.** Each `or` operand and
   each provider of a capability holds the condition alone, so
   `(plugin if (plugin or desktop))` with desktop installed, and
