@@ -677,57 +677,39 @@ fn packages_section_lines(
         lines.extend(section("Module Streams", mod_body));
     }
 
-    // Package Groups — emit `dnf group install` for renderable groups and
-    // collect member names so they can be suppressed from the individual
-    // packages section below.
-    let group_member_suppressed: std::collections::HashSet<String> = {
+    // Package Groups: the renderable groups and their member names, so the
+    // members can be suppressed from the individual packages section. The
+    // `dnf group install` itself is emitted further down, after the
+    // repo-enabling and disabled-repo transactions.
+    let (renderable_groups, group_member_suppressed): (
+        Vec<&inspectah_core::types::rpm::InstalledGroup>,
+        std::collections::HashSet<String>,
+    ) = {
         let mut suppressed = std::collections::HashSet::new();
+        let mut renderable: Vec<&inspectah_core::types::rpm::InstalledGroup> = Vec::new();
 
         if let Some(ctx) = render_ctx
             && let Some(groups) = &rpm.installed_groups
         {
             // Collect renderable groups sorted alphabetically by name
-            let mut renderable: Vec<&inspectah_core::types::rpm::InstalledGroup> = groups
+            renderable = groups
                 .iter()
                 .filter(|g| ctx.is_renderable(&g.name))
                 .collect();
             renderable.sort_by(|a, b| a.name.cmp(&b.name));
 
-            if !renderable.is_empty() {
-                // Build the member suppression set from all renderable groups
-                for g in &renderable {
-                    for member in &g.members {
-                        suppressed.insert(member.clone());
-                    }
-                    // NOTE: optional_installed are NOT suppressed here.
-                    // `dnf group install` does not install optional members,
-                    // so they must appear in the individual packages section.
+            // Build the member suppression set from all renderable groups
+            for g in &renderable {
+                for member in &g.members {
+                    suppressed.insert(member.clone());
                 }
-
-                // Emit group install section
-                let mut grp_body: Vec<String> = Vec::new();
-                if let Some(banner) = crb.banner() {
-                    grp_body.push(banner);
-                }
-                grp_body.push(format!("RUN dnf group install -y{} \\", crb.flags));
-                for g in &renderable {
-                    grp_body.push(format!("    \"{}\" \\", g.name));
-                }
-                grp_body.push("    && dnf clean all \\".into());
-                grp_body.push("    && rm -rf \\".into());
-                grp_body.push("        /var/cache/dnf \\".into());
-                grp_body.push("        /var/lib/dnf/history* \\".into());
-                grp_body.push("        /var/log/dnf* \\".into());
-                grp_body.push("        /var/log/hawkey.log \\".into());
-                grp_body.push("        /var/log/rhsm".into());
-                lines.extend(section(
-                    &format!("Package Groups ({})", renderable.len()),
-                    grp_body,
-                ));
+                // NOTE: optional_installed are NOT suppressed here.
+                // `dnf group install` does not install optional members,
+                // so they must appear in the individual packages section.
             }
         }
 
-        suppressed
+        (renderable, suppressed)
     };
 
     // Provenance comments — explain why group members appear individually.
@@ -735,12 +717,12 @@ fn packages_section_lines(
     // Ungrouped groups emit NO comment — their members silently join the
     // individual packages section (per design: ungrouping = treat as leaf).
     // Degraded groups get an explanatory comment. Optional spillover is
-    // always noted regardless of group state.
+    // always noted regardless of group state. Emitted after the group
+    // install, just before the individual packages they explain.
+    let mut provenance_lines: Vec<String> = Vec::new();
     if let Some(ctx) = render_ctx
         && let Some(groups) = &rpm.installed_groups
     {
-        let mut provenance_lines: Vec<String> = Vec::new();
-
         // Collect by group, sorted alphabetically
         let mut sorted_groups: Vec<&inspectah_core::types::rpm::InstalledGroup> =
             groups.iter().collect();
@@ -758,11 +740,6 @@ fn packages_section_lines(
             if !g.optional_installed.is_empty() {
                 provenance_lines.push(format!("# Optional members from \"{}\"", g.name));
             }
-        }
-
-        if !provenance_lines.is_empty() {
-            lines.extend(provenance_lines);
-            lines.push(String::new());
         }
     }
 
@@ -910,23 +887,13 @@ fn packages_section_lines(
         ));
     }
 
-    if !install_names.is_empty() {
-        install_names.sort();
-        let names: Vec<&str> = install_names.iter().map(|n| n.as_str()).collect();
-        let mut pkg_body: Vec<String> = Vec::new();
-        if let Some(banner) = crb.banner() {
-            pkg_body.push(banner);
-        }
-        pkg_body.extend(dnf_install_lines(&names, &crb));
-        lines.extend(section(
-            &format!("Packages ({})", install_names.len()),
-            pkg_body,
-        ));
-    }
-
     // Packages installed from a repo the source host has disabled: one
     // transaction per repo, so enabling it cannot change what any other
-    // package resolves to.
+    // package resolves to. They run after the repo-enabling block, whose
+    // repos they may resolve against, and before the group and plain
+    // transactions: a group member or a plain-list package can depend on
+    // one, and those transactions do not enable its repo. Installing it
+    // early is harmless when nothing needs it.
     if !disabled_repo_installs.is_empty() {
         for names in disabled_repo_installs.values_mut() {
             names.sort();
@@ -947,6 +914,47 @@ fn packages_section_lines(
         lines.extend(section(
             &format!("Packages from repos disabled on the source host ({count})"),
             body,
+        ));
+    }
+
+    if !renderable_groups.is_empty() {
+        let mut grp_body: Vec<String> = Vec::new();
+        if let Some(banner) = crb.banner() {
+            grp_body.push(banner);
+        }
+        grp_body.push(format!("RUN dnf group install -y{} \\", crb.flags));
+        for g in &renderable_groups {
+            grp_body.push(format!("    \"{}\" \\", g.name));
+        }
+        grp_body.push("    && dnf clean all \\".into());
+        grp_body.push("    && rm -rf \\".into());
+        grp_body.push("        /var/cache/dnf \\".into());
+        grp_body.push("        /var/lib/dnf/history* \\".into());
+        grp_body.push("        /var/log/dnf* \\".into());
+        grp_body.push("        /var/log/hawkey.log \\".into());
+        grp_body.push("        /var/log/rhsm".into());
+        lines.extend(section(
+            &format!("Package Groups ({})", renderable_groups.len()),
+            grp_body,
+        ));
+    }
+
+    if !provenance_lines.is_empty() {
+        lines.extend(provenance_lines);
+        lines.push(String::new());
+    }
+
+    if !install_names.is_empty() {
+        install_names.sort();
+        let names: Vec<&str> = install_names.iter().map(|n| n.as_str()).collect();
+        let mut pkg_body: Vec<String> = Vec::new();
+        if let Some(banner) = crb.banner() {
+            pkg_body.push(banner);
+        }
+        pkg_body.extend(dnf_install_lines(&names, &crb));
+        lines.extend(section(
+            &format!("Packages ({})", install_names.len()),
+            pkg_body,
         ));
     }
 
@@ -2737,6 +2745,56 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    /// The package transactions run repo-enabling first, then each
+    /// disabled repo's, then the group install, then the plain list. A
+    /// group member or plain package may depend on a disabled-repo package,
+    /// and neither of those transactions enables its repo.
+    #[test]
+    fn disabled_repo_transactions_run_before_the_group_and_plain_ones() {
+        const GROUP: &str = "Multimedia";
+        let mut snap = snapshot_with_packages(&["epel-release", "openh264", "htop"]);
+        make_epel_repo_enabling(&mut snap, "epel-release");
+        make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.repo_files
+                .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+            rpm.installed_groups = Some(vec![inspectah_core::types::rpm::InstalledGroup {
+                name: GROUP.into(),
+                members: vec!["gstreamer1".into()],
+                optional_installed: vec![],
+            }]);
+        }
+        let mut ctx = RenderContext::default();
+        ctx.group_states
+            .insert(GROUP.into(), GroupRenderState::Renderable);
+
+        let output = render_containerfile(&snap, None, Some(&ctx));
+        let at = |needle: &str| {
+            output
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
+        };
+        let order = [
+            at("# === Repo-enabling packages (1) ==="),
+            at("# === Packages from repos disabled on the source host (1) ==="),
+            at("# === Package Groups (1) ==="),
+            at("# === Packages (1) ==="),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "transaction order {order:?}:\n{output}"
+        );
+        assert_eq!(
+            output
+                .lines()
+                .filter(|l| l.starts_with("RUN dnf install") && l.contains("--enablerepo="))
+                .count(),
+            1,
+            "one transaction per disabled repo:\n{output}"
+        );
     }
 
     /// An operator's upload wins over the disabled repo: the package renders

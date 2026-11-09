@@ -320,7 +320,9 @@ When CodeReady Builder is carried, its `--enablerepo` flags are on this
 step too. The package does not appear in the main `dnf install` list,
 the repo-less block or the manual follow-up. As in the main list, a
 package that is only a dependency of another one is not named in this
-step, and dnf installs it with the package that needs it. Refine treats it the same
+step, and dnf installs it with the package that needs it. The step runs
+before the `dnf group install` and the main `dnf install` list, so a
+package in either can depend on it. Refine treats it the same
 way: it is not pre-excluded, so an untouched export installs it exactly
 as the scan tarball does.
 
