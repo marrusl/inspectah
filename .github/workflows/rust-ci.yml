@@ -21,13 +21,17 @@ on:
       - 'testdata/**'
       - '**.tar.gz'
       - 'scripts/**'
+      - '.githooks/**'
       - '.github/workflows/rust-ci.yml'
   pull_request:
     branches: [main]
 
 jobs:
-  # The CI half of the pre-commit tarball gate: a clone without the hook, or
-  # a commit made with --no-verify, still cannot merge preserve-mode output.
+  # The CI half of the pre-commit tarball gate, and a backstop only. It runs
+  # after a push: on main the content is already public by then, so a red
+  # run reports a leak and cannot undo it. On a pull request it can stop the
+  # merge, not the upload. The pre-commit hook is what keeps preserve-mode
+  # output from leaving a clone.
   # Its own job so a refusal here does not skip the toolchain setup steps
   # in tier1, which carry no `if:` guard. The runner image ships tar and jq.
   sensitive-tarballs:

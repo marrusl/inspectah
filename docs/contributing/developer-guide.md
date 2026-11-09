@@ -203,7 +203,7 @@ Two rules that cost people time:
 
 Two hooks run once `core.hooksPath` points at `.githooks/`.
 
-**`pre-commit`** first checks every staged `*.tar.gz` for preserved
+**`pre-commit`** first checks every staged tarball for preserved
 sensitive content (§ Fixture tarballs are local-only below), on every
 commit. It then runs three gates, in order: `cargo fmt --check`,
 `cargo clippy --workspace --all-targets -- -D clippy::all`, and
@@ -255,19 +255,26 @@ produces by default, are for local use only. A preserve-mode tarball was
 once copied onto a tracked fixture path on purpose and committed;
 `.gitignore` cannot stop a deliberate copy, so the control is a content
 check, `scripts/check-sensitive-tarballs.sh`. The pre-commit hook runs it
-over staged blobs and CI runs it over every tracked `*.tar.gz`.
+over staged blobs and CI runs it over every tracked file. Both check files
+named `*.tar.gz`, `*.tgz` or `*.tar`, and any other file whose content
+starts with the gzip magic, since refine loads a gzip archive whatever it
+is called.
 
 It refuses a tarball when a member path contains `subscription/entitlement/`,
 or when its `inspection-snapshot.json` has `redaction_state.state` set to
 `sensitive_retained` or `sensitive_snapshot` set to `true`. It also
-refuses a tarball it cannot read, or whose snapshot it cannot parse. A
-tarball with neither a snapshot nor an entitlement member is not inspectah
-output and passes.
+refuses a tarball it cannot read, or whose snapshot it cannot parse, and
+a gzip file that is not a tar archive. A tarball with neither a snapshot
+nor an entitlement member is not inspectah output and passes.
 
 The fix is to re-produce the fixture without `--preserve` and without
 `--no-redaction`. To commit one to a private repository on purpose,
-bypass the hook with `git commit --no-verify`; CI in this repository has
-no override. Run the gate's tests with
+bypass the hook with `git commit --no-verify`. Never bypass it in a clone
+that pushes to a public remote. CI runs the same check, but only after a
+push: on `main` the content is already public by then, and a red run
+reports the leak without undoing it. On a pull request CI can stop the
+merge, not the upload. The hook is the only check that runs before
+anything leaves your clone. Run the gate's tests with
 `scripts/tests/check-sensitive-tarballs-test.sh`.
 
 **`commit-msg`** refuses any message carrying a `Co-Authored-By:`
