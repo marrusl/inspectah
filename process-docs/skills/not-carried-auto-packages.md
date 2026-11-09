@@ -34,8 +34,9 @@ membership, and the module calls `pulled_in_by_included` and never copies
 it. The aggregate guard lives only in `classify_auto_carriage`.
 
 The scan path calls `apply_scan_package_defaults` right after the dnf-cache
-repo-less pass (the only writer of `repoless_annotation`, which the
-classifier reads) and before the `--inspect-only` branch, so the JSON
+repo-less pass (on the scan path the only writer of `repoless_annotation`,
+which the classifier reads; refine's `demote_unserved_repo_enabling` also
+writes it, but runs later, in a session) and before the `--inspect-only` branch, so the JSON
 snapshot and the tarball carry the same dispositions. Nothing after that
 point may write the annotation.
 
@@ -70,7 +71,7 @@ no list is emitted, when:
 Order on every surface: packages owning a unit in `services.enabled_units`
 first, then the rest; each part by name, then arch. The display name is
 `name`, or `name.arch` when the list holds more than one arch of that
-name. All wording comes from the one constant `NOT_CARRIED_REASON`.
+name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
 
 ## What it does not promise
 
@@ -104,8 +105,20 @@ Observations about where a package came from stay here, attributed to the
 hosts they were seen on. The class is defined by `auto_packages` and the
 dependency tree, not by origin, and no surface says otherwise.
 
-(No host measurements are recorded yet; add them here with the host and
-date they were seen on.)
+Measured at commit `e55a45f7` (2026-11-09):
+
+- RHEL 9.8: 38 packages in the class. 18 are recorded by dnf as group
+  installs (for example `cronie`, `firewalld`, `rsyslog`,
+  `insights-client`, `rhc`, `grubby` and `dracut-config-rescue`); the other
+  20 are needed only by those. None was a dependency the tree should have
+  caught.
+- RHEL 10.2: 24 packages in the class.
+
+The snapshot does not record dnf's install reason, so a surface cannot
+say per package why it was not user-installed: on the RHEL 9.8 host the
+group-install reason holds for 18 of the 38 and is indirect for the
+20 that only they need, and an orphan left by `dnf remove` would fall in
+the class too. A measurement at this branch follows.
 
 ## Related
 

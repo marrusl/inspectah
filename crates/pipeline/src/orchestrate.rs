@@ -59,8 +59,9 @@ pub fn run_pipeline(
     redact(&mut snapshot, &RedactOptions::default());
     // Exclude auto packages nothing included needs. Must follow every
     // step that writes `repoless_annotation`, which the class reads. None
-    // does on this path: only the scan command's dnf-cache pass writes it,
-    // and this path runs no such pass.
+    // does on this path: the scan command's dnf-cache pass writes it and this
+    // path runs no such pass, and refine's `demote_unserved_repo_enabling`
+    // runs only in a refine session.
     render::not_carried::apply_scan_package_defaults(&mut snapshot);
 
     // Render all artifacts
