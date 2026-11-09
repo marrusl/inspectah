@@ -39,8 +39,8 @@ use inspectah_core::types::verified_upload::VerifiedUploads;
 use super::repoless::{PackageRoute, route_for};
 use super::service_intent::pulled_in_by_included;
 
-/// `source_repo` of a package the OS installer laid down, which refine's
-/// anaconda classifier decides.
+/// `source_repo` recorded for a package installed at system install time,
+/// which refine's anaconda classifier decides.
 const ANACONDA_SOURCE_REPO: &str = "anaconda";
 
 /// How an added package reaches the target image, for the auto class.
@@ -48,7 +48,7 @@ const ANACONDA_SOURCE_REPO: &str = "anaconda";
 pub enum AutoCarriage {
     /// Not this class: a leaf, not in `auto_packages`, or an auto package
     /// that keeps its existing handling (locked, anaconda-sourced, named in
-    /// the baseline, or routed as an upload or repo-less).
+    /// the baseline, uploaded, or routed repo-less).
     NotAuto,
     /// An auto package an included leaf pulls in (`pulled_in_by_included`).
     PulledIn,
@@ -62,10 +62,12 @@ pub enum AutoCarriage {
 /// documentation's fallback). Takes the whole snapshot so the aggregate
 /// guard lives here and nowhere else.
 ///
-/// The route is taken with no verified uploads, the scan-time view, so a
-/// package is never routed [`PackageRoute::Upload`] here; a repo-less
-/// package with no disabled repo to install from routes
-/// [`PackageRoute::Repoless`].
+/// An upload is read from the package's `uploaded` flag, which refine sets
+/// when it stages one, because the verified uploads only exist inside an
+/// export. The route is taken with no verified uploads, the scan-time view,
+/// so it can never be [`PackageRoute::Upload`] here and is checked for
+/// [`PackageRoute::Repoless`] only: a repo-less package with no disabled
+/// repo to install from.
 pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<String, AutoCarriage>> {
     if snap.aggregate_meta.is_some() {
         return None;
@@ -109,10 +111,8 @@ pub fn classify_auto_carriage(snap: &InspectionSnapshot) -> Option<HashMap<Strin
             } else if pkg.locked
                 || pkg.source_repo == ANACONDA_SOURCE_REPO
                 || baseline.contains(pkg.name.as_str())
-                || matches!(
-                    route_for(rpm, pkg, &no_uploads),
-                    PackageRoute::Upload(_) | PackageRoute::Repoless
-                )
+                || pkg.uploaded
+                || route_for(rpm, pkg, &no_uploads) == PackageRoute::Repoless
             {
                 AutoCarriage::NotAuto
             } else {
@@ -155,6 +155,8 @@ mod tests {
         anaconda.source_repo = ANACONDA_SOURCE_REPO.into();
         let mut repoless = pkg("vendor-agent", "x86_64", true);
         repoless.repoless_annotation = "no enabled repo serves this package".into();
+        let mut uploaded = pkg("vendor-tools", "x86_64", true);
+        uploaded.uploaded = true;
         let packages = vec![
             pkg("httpd", "x86_64", true),
             pkg("cups", "x86_64", false),
@@ -168,8 +170,10 @@ mod tests {
             anaconda,
             pkg("bash", "x86_64", true),
             repoless,
+            uploaded,
         ];
         let auto = [
+            "httpd.x86_64",
             "apr.x86_64",
             "cups-libs.x86_64",
             "firewalld.noarch",
@@ -180,6 +184,7 @@ mod tests {
             "grubby.x86_64",
             "bash.x86_64",
             "vendor-agent.x86_64",
+            "vendor-tools.x86_64",
         ];
         InspectionSnapshot {
             rpm: Some(RpmSection {
@@ -201,7 +206,11 @@ mod tests {
     fn classifies_each_added_package_by_name_arch() {
         use AutoCarriage::*;
         let cases: &[(&str, AutoCarriage, &str)] = &[
-            ("httpd.x86_64", NotAuto, "an included leaf"),
+            (
+                "httpd.x86_64",
+                NotAuto,
+                "an included leaf, also listed as auto",
+            ),
             ("cups.x86_64", NotAuto, "an excluded leaf"),
             ("apr.x86_64", PulledIn, "listed under an included leaf"),
             (
@@ -225,6 +234,7 @@ mod tests {
             ("grubby.x86_64", NotAuto, "anaconda-sourced"),
             ("bash.x86_64", NotAuto, "named in the baseline"),
             ("vendor-agent.x86_64", NotAuto, "routed Repoless"),
+            ("vendor-tools.x86_64", NotAuto, "uploaded"),
         ];
         let classes = classify_auto_carriage(&snapshot()).expect("leaf data is available");
         assert_eq!(classes.len(), cases.len(), "one class per added package");
