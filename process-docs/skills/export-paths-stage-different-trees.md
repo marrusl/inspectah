@@ -40,7 +40,12 @@ to date, all found by hand on a real host rather than by the suite:
    the writer never staged. `npm ci` needs both files anyway (npm 11
    exits `EUSAGE` with either alone), so the collector now marks a
    project high only when it read both, and the writer stages npm
-   manifests only for high-confidence items. **A writer must stage
+   manifests only for high-confidence items. The renderer and the writer
+   both ask `npm_item_is_active`, which also requires both manifests in
+   `manifest_files`, because a snapshot the earlier collector wrote can
+   still say high over one file. The below-high block carries no `COPY`
+   at all, commented or not, since nothing stages its files; it names a
+   missing manifest instead. **A writer must stage
    exactly what the active `COPY` lines carry:** staging content for a
    commented-out block trips the reverse guard below, because the files
    ship in the export and never reach the image. The fixture carries a

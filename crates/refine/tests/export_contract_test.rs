@@ -1065,6 +1065,12 @@ fn export_redacts_package_json_registry_auth() {
     .to_string();
     let mut manifests = HashMap::new();
     manifests.insert("package.json".to_string(), raw);
+    // A high-confidence item holds both manifests; one alone renders
+    // below high and stages nothing.
+    manifests.insert(
+        "package-lock.json".to_string(),
+        r#"{"lockfileVersion": 3}"#.to_string(),
+    );
     snap.non_rpm_software = Some(NonRpmSoftwareSection {
         items: vec![NonRpmItem {
             path: "/opt/myapp".into(),
@@ -1167,6 +1173,12 @@ fn export_redacts_package_lock_json_resolved_auth() {
     .to_string();
     let mut manifests = HashMap::new();
     manifests.insert("package-lock.json".to_string(), raw);
+    // A high-confidence item holds both manifests; one alone renders
+    // below high and stages nothing.
+    manifests.insert(
+        "package.json".to_string(),
+        r#"{"name": "webapp"}"#.to_string(),
+    );
     snap.non_rpm_software = Some(NonRpmSoftwareSection {
         items: vec![NonRpmItem {
             path: "/opt/webapp".into(),

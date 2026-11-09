@@ -329,6 +329,26 @@ fn render_npm_section(items: &[&NonRpmItem], rpm_names: &[String]) -> Vec<String
     lines
 }
 
+/// The two files `npm ci` needs. The active npm block copies both.
+const NPM_MANIFESTS: [&str; 2] = ["package.json", "package-lock.json"];
+
+/// Whether an npm project renders its active install, which is also when
+/// its manifests are staged: included, high confidence, and holding both
+/// manifests.
+///
+/// The last condition is checked here rather than left to the collector,
+/// which now marks a project high only when it read both files. A snapshot
+/// the previous binary wrote can hold a high-confidence item with the
+/// lockfile alone, and nothing about its schema version says so; its
+/// active `COPY` of `package.json` would name a file no export writes.
+fn npm_item_is_active(item: &NonRpmItem) -> bool {
+    item.disposition.is_included()
+        && item.confidence == HIGH_CONFIDENCE
+        && NPM_MANIFESTS
+            .iter()
+            .all(|name| item.manifest_files.contains_key(*name))
+}
+
 fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
     let mut lines = Vec::new();
 
@@ -340,13 +360,6 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         ));
         return lines;
     }
-
-    // Excluded items never render as active, even at high confidence.
-    let effective_confidence = if !item.disposition.is_included() {
-        MEDIUM_CONFIDENCE
-    } else {
-        item.confidence.as_str()
-    };
 
     let hash = env_hash(&item.path);
     let project_path = absolute_path(&item.path);
@@ -360,13 +373,10 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         return lines;
     }
 
-    // Invariant: a high-confidence npm item holds both `package.json` and
-    // `package-lock.json` in `manifest_files`, so both active `COPY` lines
-    // below have a staged source and `npm ci` has the pair it requires.
-    // `scan_npm_packages` (crates/collect/src/inspectors/nonrpm.rs) is
-    // what guarantees it: one manifest, or a failed read of either, is
-    // never high there.
-    if effective_confidence == HIGH_CONFIDENCE {
+    // An excluded item never renders as active, even at high confidence,
+    // and an active one holds both manifests, so both `COPY` lines below
+    // have a staged source and `npm ci` has the pair it requires.
+    if npm_item_is_active(item) {
         lines.push(format!(
             "# npm packages: {project_path} (from package-lock.json)"
         ));
@@ -379,17 +389,28 @@ fn render_npm_item(item: &NonRpmItem) -> Vec<String> {
         ));
         lines.push(format!("RUN cd '{project_path}' && npm ci --production"));
     } else {
-        // Medium confidence: commented out.
+        // Below high, or excluded: advice only. No export stages these
+        // manifests, so the block names no `COPY` an operator could
+        // uncomment into a build failure; it says what is missing instead.
         lines.push(format!(
             "# npm packages: {project_path} (detected via package-lock.json)"
         ));
-        lines.push("# Uncomment after verifying package list is complete:".into());
+        let missing: Vec<&str> = NPM_MANIFESTS
+            .iter()
+            .copied()
+            .filter(|name| !item.manifest_files.contains_key(*name))
+            .collect();
+        if !missing.is_empty() {
+            lines.push(format!(
+                "# Not captured from the source host: {}",
+                missing.join(", ")
+            ));
+        }
+        lines.push(
+            "# The export does not carry this project's manifests. Put package.json and".into(),
+        );
         lines.push(format!(
-            "# COPY language-packages/npm/{hash}/package.json '{project_path}'/package.json"
-        ));
-        lines.push(format!(
-            "# COPY language-packages/npm/{hash}/package-lock.json \
-             '{project_path}'/package-lock.json"
+            "# package-lock.json in '{project_path}' in the image, then uncomment:"
         ));
         lines.push(format!("# RUN cd '{project_path}' && npm ci --production"));
     }
@@ -603,10 +624,10 @@ pub fn write_language_package_manifests(
         {
             "pip"
         } else if item.method == METHOD_NPM_LOCKFILE {
-            // Stage only what an active `COPY` carries. Below high
-            // confidence the npm block is commented, so its manifests
-            // would ship in the export and never reach the image.
-            if item.confidence != HIGH_CONFIDENCE {
+            // Stage only what an active `COPY` carries. Otherwise the npm
+            // block is commented, so its manifests would ship in the
+            // export and never reach the image.
+            if !npm_item_is_active(item) {
                 continue;
             }
             "npm"
@@ -1452,6 +1473,57 @@ mod tests {
         assert!(
             !output.contains("RUN python3 -m venv 'opt/"),
             "must not use relative path: {output}"
+        );
+    }
+
+    /// A snapshot the previous binary wrote can hold a high-confidence npm
+    /// item with one manifest. It renders as below high whatever its
+    /// confidence string says, and the writer stages nothing for it, so no
+    /// active `COPY` names a file the export lacks.
+    #[test]
+    fn a_high_confidence_npm_item_missing_a_manifest_renders_below_high() {
+        for missing in NPM_MANIFESTS {
+            let mut item = npm_item("/opt/legacy", HIGH_CONFIDENCE);
+            item.manifest_files.remove(missing);
+            let snap = test_snap(vec![item], &["nodejs"]);
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                output
+                    .lines()
+                    .all(|l| l.starts_with('#') || l.trim().is_empty()),
+                "{missing} missing: nothing may be active:\n{output}"
+            );
+            assert!(
+                output.contains(&format!("# Not captured from the source host: {missing}")),
+                "{missing} missing: the block names it:\n{output}"
+            );
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_language_package_manifests(&snap, dir.path()).expect("write");
+            assert!(
+                !dir.path().join("language-packages").exists(),
+                "{missing} missing: nothing is staged"
+            );
+        }
+    }
+
+    /// The below-high block is advice the operator can follow: it carries
+    /// no `COPY` of a manifest, commented or not, because no export stages
+    /// one for it.
+    #[test]
+    fn a_below_high_npm_block_offers_no_copy_of_an_unstaged_manifest() {
+        let snap = test_snap(
+            vec![npm_item("/opt/webapp", MEDIUM_CONFIDENCE)],
+            &["nodejs"],
+        );
+        let output = language_package_lines(&snap).join("\n");
+
+        assert!(!output.contains("COPY"), "{output}");
+        assert!(!output.contains("Not captured"), "both are held:\n{output}");
+        assert!(
+            output.contains("# RUN cd '/opt/webapp' && npm ci --production"),
+            "{output}"
         );
     }
 
