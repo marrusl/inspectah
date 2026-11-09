@@ -9122,6 +9122,56 @@ mod tests {
         }
 
         #[test]
+        fn a_symlinked_ancestor_with_a_fresh_leaf_creates_nothing_outside() {
+            // The leaf does not exist in the victim directory, so `create_new`
+            // cannot be what refuses it: only the ancestor check stands between
+            // the entry and a new file outside the root.
+            let s = Sandbox::new();
+            let target = s.victim_dir();
+            assert_refused(
+                &s,
+                &["/opt/d", "/opt/d/planted"],
+                &[
+                    (
+                        "unmanaged/opt/d",
+                        tar::EntryType::Symlink,
+                        target.to_str().unwrap(),
+                    ),
+                    ("unmanaged/opt/d/planted", tar::EntryType::Regular, PWNED),
+                ],
+                "route 2b, fresh leaf",
+            );
+            let s = Sandbox::new();
+            std::fs::create_dir(s.out().join("unmanaged")).unwrap();
+            std::os::unix::fs::symlink(s.victim_dir(), s.out().join("unmanaged/opt")).unwrap();
+            assert_refused(
+                &s,
+                &["/opt/planted"],
+                &[("unmanaged/opt/planted", tar::EntryType::Regular, PWNED)],
+                "pre-existing symlinked ancestor, fresh leaf",
+            );
+        }
+
+        #[test]
+        fn a_symlink_already_at_the_leaf_is_not_written_through() {
+            // No entry in this tarball names the link, so the seen set cannot
+            // refuse it; only `create_new` on the leaf does.
+            let s = Sandbox::new();
+            std::fs::create_dir_all(s.out().join("unmanaged/opt")).unwrap();
+            std::os::unix::fs::symlink(
+                s.victim_dir().join("authorized_keys"),
+                s.out().join("unmanaged/opt/x"),
+            )
+            .unwrap();
+            assert_refused(
+                &s,
+                &["/opt/x"],
+                &[("unmanaged/opt/x", tar::EntryType::Regular, PWNED)],
+                "pre-existing leaf symlink",
+            );
+        }
+
+        #[test]
         fn a_hardlink_entry_is_refused() {
             let s = Sandbox::new();
             assert_refused(

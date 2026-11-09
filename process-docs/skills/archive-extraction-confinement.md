@@ -77,3 +77,8 @@ damage. Build traversal headers by writing the name field directly, since
 `Header::set_path` refuses `..`. Include positive cases (an absolute-target
 symlink survives intact, a `foo..bar` name extracts) to catch over-refusal. The
 cases live in `session.rs` under `export_write_confinement`.
+
+Test each protection on its own: an ancestor-check test must aim at a leaf that
+does not exist, or `create_new` refuses the existing victim and masks a missing
+ancestor check; a leaf test must plant the link on disk, not in the tarball, or
+the seen set refuses it first.
