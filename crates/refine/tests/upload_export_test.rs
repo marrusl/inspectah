@@ -1749,3 +1749,81 @@ fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
     );
     assert_every_staged_file_is_copied(&served);
 }
+
+/// The uploaded package installs before anything that needs it: the
+/// `systemctl enable` of a unit it owns, and the plain install of an
+/// enabled-repo package that depends on it. Installing it in a late
+/// section left both of those to run against a package not yet there.
+#[test]
+fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
+    use inspectah_core::types::services::{
+        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
+    };
+    const UNIT: &str = "openh264-agent.service";
+
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache_path = cache_dir.path().join(OPENH264_CACHED);
+    std::fs::write(&cache_path, b"cached").unwrap();
+    let mut snap = disabled_repo_snapshot(&cache_path);
+    {
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added.push(PackageEntry {
+            name: "vlc".into(),
+            version: "3.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            source_repo: "appstream".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+        rpm.leaf_packages = Some(vec!["vlc.x86_64".into()]);
+        rpm.leaf_dep_tree = serde_json::json!({ "vlc.x86_64": ["openh264.x86_64"] });
+    }
+    snap.services = Some(ServiceSection {
+        state_changes: vec![ServiceStateChange {
+            unit: UNIT.into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: Some("openh264".into()),
+            aggregate: None,
+            attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
+        }],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+    let mut h = Harness::with_snapshot(snap);
+    h.set_include("openh264", "x86_64", true);
+    h.set_include("vlc", "x86_64", true);
+    h.upload(OPENH264_UPLOAD, b"uploaded").unwrap();
+
+    let (out, warnings) = h.export(None);
+    let file = containerfile(&out);
+    assert_eq!(warnings, Vec::<String>::new());
+    let at = |needle: &str| {
+        file.lines()
+            .position(|l| l == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?}:\n{file}"))
+    };
+    let install = at(&format!(
+        "RUN dnf localinstall -y /tmp/{OPENH264_UPLOAD} \\"
+    ));
+    let enable = at(&format!("    {UNIT}"));
+    let dependent = at("    vlc \\");
+    assert!(
+        install < enable && install < dependent,
+        "install at {install}, enable at {enable}, dependent at {dependent}:\n{file}"
+    );
+    assert_eq!(
+        file.matches(&format!("COPY repoless-packages/{OPENH264_UPLOAD}"))
+            .count(),
+        1,
+        "installed once:\n{file}"
+    );
+    assert_every_staged_file_is_copied(&out);
+}

@@ -200,7 +200,7 @@ fn render_containerfile_inner(
             "# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into(),
         );
     }
-    lines.extend(non_rpm_section_lines(snap, render_ctx));
+    lines.extend(non_rpm_section_lines(snap));
 
     // 7. Containers
     if is_degraded(&snap.completeness, InspectorId::Containers) {
@@ -942,6 +942,14 @@ fn packages_section_lines(
         ));
     }
 
+    // Repo-less RPM packages: the verified uploads and cached RPMs this
+    // export installs from file, with the MANUAL and FIXME advice for the
+    // rest kept beside them in one block. They install here, after the
+    // repo-enabling and disabled-repo transactions they may resolve
+    // against and before the group and plain transactions and every
+    // service action, any of which can need them.
+    lines.extend(super::repoless::repoless_rpm_lines(snap, render_ctx));
+
     if !renderable_groups.is_empty() {
         let mut grp_body: Vec<String> = Vec::new();
         if let Some(banner) = crb.banner() {
@@ -1493,10 +1501,7 @@ fn compose_comment_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Non-RPM Software section ---
 
-fn non_rpm_section_lines(
-    snap: &InspectionSnapshot,
-    render_ctx: Option<&RenderContext>,
-) -> Vec<String> {
+fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut lines = Vec::new();
 
     // Language package sections (executable, not advisory).
@@ -1507,9 +1512,6 @@ fn non_rpm_section_lines(
 
     // Unmanaged files section (opt-in via --include-unmanaged)
     lines.extend(super::unmanaged::unmanaged_file_lines(snap));
-
-    // Repo-less RPM packages
-    lines.extend(super::repoless::repoless_rpm_lines(snap, render_ctx));
 
     // Remaining non-RPM items that aren't language packages
     // (ELF binaries, .env files, git repos — still advisory).
@@ -2842,6 +2844,54 @@ mod tests {
                 .count(),
             1,
             "one transaction per disabled repo:\n{output}"
+        );
+    }
+
+    /// A cached repo-less RPM installs in the package phase, before the
+    /// `systemctl enable` of a unit it owns.
+    #[test]
+    fn a_cached_repoless_rpm_installs_before_its_unit_is_enabled() {
+        let mut snap = snapshot_with_packages(&["custom-tool", "htop"]);
+        {
+            let pkg = &mut snap.rpm.as_mut().expect("rpm").packages_added[0];
+            pkg.source_repo = "@commandline".into();
+            pkg.version = "1.0".into();
+            pkg.release = "1.el9".into();
+            pkg.repoless_cached = true;
+            pkg.repoless_annotation = "No repo source \u{2014} cached RPM bundled".into();
+        }
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
+                unit: "custom-tool.service".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+                disposition: FindingKind::included(),
+                locked: false,
+                owning_package: Some("custom-tool".into()),
+                aggregate: None,
+                attention_reason: None,
+                shadow_type: None,
+                shadow_rationale: None,
+            }],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+
+        let output = render_containerfile(&snap, None, None);
+        let at = |needle: &str| {
+            output
+                .lines()
+                .position(|l| l == needle)
+                .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
+        };
+        let install = at("RUN dnf localinstall -y /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
+        let enable = at("    custom-tool.service");
+        assert!(install < enable, "{output}");
+        assert_eq!(
+            output.matches("# === Repo-less RPM packages ===").count(),
+            1
         );
     }
 
