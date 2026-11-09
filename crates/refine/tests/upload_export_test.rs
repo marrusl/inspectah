@@ -1486,3 +1486,154 @@ fn rescan_marks_the_later_of_two_files_for_one_package() {
         "the file that lost stays staged for the operator to remove"
     );
 }
+
+// -- an upload wins over a disabled repo ------------------------------------
+
+/// The host's version of the disabled-repo package, as its cached RPM.
+const OPENH264_CACHED: &str = "openh264-2.4.1-1.el9.x86_64.rpm";
+/// The operator's upload, a newer build of the same package.
+const OPENH264_UPLOAD: &str = "openh264-2.4.2-1.el9.x86_64.rpm";
+
+/// Top-level export members that carry no `COPY` because they are not
+/// image content. The same list, with the same reasons, as
+/// `NOT_IMAGE_CONTENT` in the CLI crate's COPY guard.
+const NOT_IMAGE_CONTENT: &[&str] = &[
+    "Containerfile",
+    "inspection-snapshot.json",
+    "audit-report.md",
+    "schema",
+    "inspectah-users.ks",
+    "inspectah-users.toml",
+    "users",
+    "compose",
+    "aggregate",
+];
+
+/// The reverse COPY guard over an export tarball: every staged file is
+/// carried into the image by some active `COPY`, or lives under a member
+/// that is not image content.
+fn assert_every_staged_file_is_copied(tarball: &Path) {
+    let file = containerfile(tarball);
+    let sources: Vec<String> = active_lines(&file)
+        .into_iter()
+        .filter_map(|l| l.strip_prefix("COPY "))
+        .filter_map(|rest| {
+            let args: Vec<&str> = rest
+                .split_whitespace()
+                .filter(|a| !a.starts_with("--"))
+                .collect();
+            (args.len() >= 2).then(|| args[..args.len() - 1].to_vec())
+        })
+        .flatten()
+        .map(|s| s.trim_matches('\'').trim_end_matches('/').to_string())
+        .collect();
+    let orphaned: Vec<String> = members(tarball)
+        .into_iter()
+        .filter(|(_, m)| m.entry_type.is_file())
+        .map(|(rel, _)| rel)
+        .filter(|rel| !NOT_IMAGE_CONTENT.contains(&rel.split('/').next().unwrap_or(rel)))
+        .filter(|rel| {
+            !sources
+                .iter()
+                .any(|s| rel == s || rel.starts_with(&format!("{s}/")))
+        })
+        .collect();
+    assert!(
+        orphaned.is_empty(),
+        "staged with no COPY: {orphaned:?}\n{file}"
+    );
+}
+
+/// `openh264` from `epel-cisco-openh264`, a repo the host keeps disabled
+/// and whose `.repo` file the export carries, with its RPM in the host's
+/// dnf cache. Without an upload it installs from that repo.
+fn disabled_repo_snapshot(cache_path: &Path) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "openh264".into(),
+            version: "2.4.1".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            source_repo: "epel-cisco-openh264".into(),
+            disposition: FindingKind::included(),
+            repoless_cached: true,
+            cache_path: Some(cache_path.to_string_lossy().into_owned()),
+            repoless_annotation: "No repo source \u{2014} repo 'epel-cisco-openh264' not in \
+                                  enabled repos \u{2014} cached RPM bundled"
+                .into(),
+            ..Default::default()
+        }],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/fedora-cisco-openh264.repo".into(),
+            content: "[epel-cisco-openh264]\nname=openh264\n\
+                      metalink=https://example.invalid/metalink\nenabled=0\n"
+                .into(),
+            is_default_repo: false,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// An upload the export verifies wins over the disabled repo: the package
+/// installs from the uploaded RPM in the repo-less block, with no
+/// `--enablerepo` transaction, and the export stages the upload and
+/// nothing else for it, not even the cached RPM a stale scan tarball
+/// carries.
+#[test]
+fn an_upload_for_a_disabled_repo_package_exports_and_installs_from_the_upload() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache_path = cache_dir.path().join(OPENH264_CACHED);
+    std::fs::write(&cache_path, b"cached").unwrap();
+    let mut h = Harness::with_snapshot(disabled_repo_snapshot(&cache_path));
+    h.set_include("openh264", "x86_64", true);
+
+    // The control: without the upload the package installs from its repo.
+    let (before, _) = h.export(None);
+    assert!(
+        containerfile(&before).contains("--enablerepo=epel-cisco-openh264"),
+        "{}",
+        containerfile(&before)
+    );
+
+    assert_eq!(
+        h.upload(OPENH264_UPLOAD, b"uploaded").unwrap(),
+        UploadMatchKind::VersionDiffers
+    );
+    // A scan tarball holding the cached RPM, as one written before the
+    // route was shared would.
+    let source = source_tarball(
+        h.tmp.path(),
+        &[(
+            &format!("repoless-packages/{OPENH264_CACHED}"),
+            tar::EntryType::Regular,
+            "cached",
+        )],
+    );
+    let (out, warnings) = h.export(Some(&source));
+    let file = containerfile(&out);
+
+    assert_eq!(warnings, Vec::<String>::new());
+    assert!(!file.contains("--enablerepo"), "{file}");
+    assert!(
+        !active_lines(&file).contains(&"    openh264 \\"),
+        "no install by name:\n{file}"
+    );
+    assert_eq!(repoless_active_lines(&file), install_lines(OPENH264_UPLOAD));
+    assert_eq!(
+        repoless_members(&out),
+        BTreeMap::from([(
+            OPENH264_UPLOAD.to_string(),
+            Member {
+                entry_type: tar::EntryType::Regular,
+                bytes: b"uploaded".to_vec(),
+            },
+        )]),
+        "the upload and nothing else is staged for the package"
+    );
+    assert_every_staged_file_is_copied(&out);
+}
