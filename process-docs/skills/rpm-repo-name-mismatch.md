@@ -85,7 +85,7 @@ fails with `Unable to find a match`.
 
 **Install order in the package phase is a correctness rule, not
 layout.** Every step that installs an RPM runs before anything that can
-consume it: repo-enabling packages, then the disabled-repo transactions,
+consume it: repo-enabling packages, then the disabled-repo transaction,
 then the repo-less block (cached and uploaded RPMs through `dnf
 localinstall`, with the MANUAL and FIXME notes kept beside them), then
 `dnf group install`, then the main `dnf install` list. Services, config
@@ -93,6 +93,17 @@ and non-RPM content all come after `packages_section_lines`. The
 repo-less block used to sit with the non-RPM software, which put
 `systemctl enable` of a unit an uploaded RPM ships, and the plain install
 of a package that needs it, ahead of the install itself.
+
+All selected disabled-repo packages install in **one** transaction that
+enables every one of their repos. A transaction per repo, in `RepoId`
+order, broke whenever a package in one disabled repo depended on one in
+another that sorted later. Ordering by the dependency graph was the
+alternative; it cannot see dependencies `leaf_dep_tree` does not record
+and needs a merge for cycles, so it was not taken. The isolation that
+matters still holds: no group or plain-list transaction carries the
+flags. What one transaction gives up is isolation between the disabled
+repos themselves, so a package in one can resolve a dependency from
+another.
 
 If you touch repo-name matching, decide which of these questions you
 are answering (repo-less yes/no, full attribution, or install from a

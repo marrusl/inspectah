@@ -338,7 +338,7 @@ fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
 /// transactions.
 ///
 /// Those five ask for it by name (the disabled-repo one through
-/// [`CrbFlags::with_repo`]). § 3.1's `RUN dnf install -y
+/// [`CrbFlags::with_repos`]). § 3.1's `RUN dnf install -y
 /// policycoreutils-python-utils` at the head of the SELinux block does
 /// not, and cannot: it is a `const` in `selinux.rs` that nothing here
 /// rewrites. Scoping by call site rather than by sweeping `dnf install`
@@ -363,12 +363,15 @@ impl CrbFlags {
         }
     }
 
-    /// These flags plus `--enablerepo=<id>`, for a transaction that also
-    /// needs a repo the source host kept disabled. The banner stays with
-    /// `self`. `id` must already have passed `sanitize_shell_value`.
-    fn with_repo(&self, id: &RepoId) -> CrbFlags {
+    /// These flags plus `--enablerepo=<id>` for each of `ids`, for a
+    /// transaction that also needs repos the source host kept disabled.
+    /// The banner stays with `self`. Every id must already have passed
+    /// `sanitize_shell_value`.
+    fn with_repos<'a>(&self, ids: impl IntoIterator<Item = &'a RepoId>) -> CrbFlags {
         CrbFlags {
-            flags: format!("{} --enablerepo={id}", self.flags),
+            flags: ids.into_iter().fold(self.flags.clone(), |flags, id| {
+                format!("{flags} --enablerepo={id}")
+            }),
             banner_pending: false,
         }
     }
@@ -912,32 +915,43 @@ fn packages_section_lines(
         ));
     }
 
-    // Packages installed from a repo the source host has disabled: one
-    // transaction per repo, so enabling it cannot change what any other
-    // package resolves to. They run after the repo-enabling block, whose
-    // repos they may resolve against, and before the group and plain
-    // transactions: a group member or a plain-list package can depend on
-    // one, and those transactions do not enable its repo. Installing it
-    // early is harmless when nothing needs it.
+    // Packages installed from repos the source host has disabled, in one
+    // transaction that enables every one of those repos. A package in one
+    // disabled repo can depend on a package in another, in either order
+    // and through any number of hops, and one transaction resolves them
+    // all together where a transaction per repo had to guess an order.
+    // Only these packages are named, and no other transaction carries the
+    // flags, so enabling the repos cannot change what a group or a
+    // plain-list package resolves to. It runs after the repo-enabling
+    // block, whose repos it may resolve against, and before the repo-less,
+    // group and plain installs, which can depend on it. Installing a
+    // package early is harmless when nothing needs it.
     if !disabled_repo_installs.is_empty() {
-        for names in disabled_repo_installs.values_mut() {
-            names.sort();
-            names.dedup();
-        }
-        let count: usize = disabled_repo_installs.values().map(Vec::len).sum();
+        let mut names: Vec<&str> = disabled_repo_installs
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        names.sort();
+        names.dedup();
         let mut body: Vec<String> = Vec::new();
-        for (id, names) in &disabled_repo_installs {
-            if let Some(banner) = crb.banner() {
-                body.push(banner);
-            }
+        if let Some(banner) = crb.banner() {
+            body.push(banner);
+        }
+        for id in disabled_repo_installs.keys() {
             body.push(format!(
                 "# '{id}' is disabled on the source host (enabled=0); enabled for this install only."
             ));
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            body.extend(dnf_install_lines(&names, &crb.with_repo(id)));
         }
+        body.extend(dnf_install_lines(
+            &names,
+            &crb.with_repos(disabled_repo_installs.keys()),
+        ));
         lines.extend(section(
-            &format!("Packages from repos disabled on the source host ({count})"),
+            &format!(
+                "Packages from repos disabled on the source host ({})",
+                names.len()
+            ),
             body,
         ));
     }
@@ -2843,7 +2857,56 @@ mod tests {
                 .filter(|l| l.starts_with("RUN dnf install") && l.contains("--enablerepo="))
                 .count(),
             1,
-            "one transaction per disabled repo:\n{output}"
+            "one transaction for the disabled repos:\n{output}"
+        );
+    }
+
+    /// A leaf from one disabled repo depends on a package from another,
+    /// and the repos sort the opposite way round. A transaction per repo in
+    /// id order installed the leaf first, with its dependency's repo still
+    /// disabled. One transaction enabling both resolves them together.
+    #[test]
+    fn disabled_repos_install_together_whatever_their_dependency_order() {
+        const APP_REPO: &str = "/etc/yum.repos.d/a-app.repo";
+        const LIB_REPO: &str = "/etc/yum.repos.d/z-lib.repo";
+        let mut snap = snapshot_with_packages(&["vendor-app", "vendor-lib", "htop"]);
+        make_disabled_repo_package(&mut snap, "vendor-app", "a-app");
+        make_disabled_repo_package(&mut snap, "vendor-lib", "z-lib");
+        {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.repo_files.push(repo_file(
+                APP_REPO,
+                "[a-app]\nbaseurl=https://example.invalid/app\nenabled=0\n",
+                true,
+            ));
+            rpm.repo_files.push(repo_file(
+                LIB_REPO,
+                "[z-lib]\nbaseurl=https://example.invalid/lib\nenabled=0\n",
+                true,
+            ));
+            rpm.leaf_packages = Some(vec!["vendor-app.x86_64".into(), "htop.x86_64".into()]);
+            rpm.leaf_dep_tree = serde_json::json!({ "vendor-app.x86_64": ["vendor-lib.x86_64"] });
+        }
+
+        let output = render_containerfile(&snap, None, None);
+        let flagged: Vec<&str> = output
+            .lines()
+            .filter(|l| l.starts_with("RUN dnf install") && l.contains("--enablerepo="))
+            .collect();
+        assert_eq!(
+            flagged,
+            vec!["RUN dnf install -y --enablerepo=a-app --enablerepo=z-lib \\"],
+            "one transaction enabling both repos:\n{output}"
+        );
+        let body = &output[output.find(flagged[0]).expect("the flagged transaction")..];
+        let body = &body[..body.find("&& dnf clean all").expect("the tail")];
+        assert!(
+            body.contains("    vendor-app \\") && body.contains("    vendor-lib \\"),
+            "both packages in it:\n{output}"
+        );
+        assert!(
+            output.contains("Packages from repos disabled on the source host (2)"),
+            "{output}"
         );
     }
 

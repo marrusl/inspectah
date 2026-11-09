@@ -305,7 +305,9 @@ that `.repo` file, the disabled section in it defines a `baseurl`,
 `metalink` or `mirrorlist`, and the export carries every
 `gpgkey=file://` key the section names, the package installs from that
 repository in its own step, with the repository enabled for that step
-only:
+only. Packages from several disabled repositories share the step, which
+then enables each of those repositories, so a package in one can depend
+on a package in another:
 
 ```dockerfile
 # === Packages from repos disabled on the source host (1) ===
