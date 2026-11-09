@@ -34,7 +34,8 @@ with no warning anywhere.
   (`not_carried.rs`): an auto package nothing included pulls in, which
   the scan excluded. It is chosen over `PackageExcluded` only when every
   `packages_added` entry with the owner's name is in the not-carried
-  list; one carried arch of that name makes it `PackageExcluded`. It
+  list; an excluded entry of that name outside the not-carried class
+  keeps it `PackageExcluded`. It
   never creates an omission by itself: the unit is omitted only when the
   presence rules already prove the owner absent, which is why a mixed-arch
   owner with one carried arch keeps its unit. Wording is
