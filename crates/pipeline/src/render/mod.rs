@@ -30,6 +30,7 @@ pub mod baseline_fmt;
 pub mod report_data;
 
 pub mod language_packages;
+pub mod not_carried;
 pub mod service_intent;
 
 pub mod repo_enabling;
