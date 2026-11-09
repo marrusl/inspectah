@@ -20,7 +20,7 @@ use inspectah_core::types::storage::{
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{PackageRoute, route_for};
-use super::service_intent::is_package_installable;
+use super::service_intent::{is_package_installable, pulled_in_by_included};
 
 /// The directories a unit file can sit in and still be a unit file this
 /// export can reason about.
@@ -141,7 +141,10 @@ struct Evidence<'a> {
     etc_unit_includes: HashMap<&'a str, bool>,
     /// Every path `rpm.file_ownership` names, to its owning package.
     file_owners: HashMap<&'a str, &'a str>,
-    /// The included `packages_added` entries the export installs.
+    /// The names of the `packages_added` entries the export installs:
+    /// the included ones it installs on their own route, and the ones an
+    /// included leaf pulls in ([`pulled_in_by_included`]) whatever their
+    /// own disposition, since dnf installs those with the leaf.
     ///
     /// Deliberately wider than the Containerfile's own install loop,
     /// which also applies the leaf filter, `baseline_suppressed`, and
@@ -153,7 +156,13 @@ struct Evidence<'a> {
     /// package as `Provision`.
     ///
     /// The repo-enabling demotion is the one filter that removes a
-    /// package the image will not have, so it is applied here.
+    /// package the image will not have, so it is applied here, to the
+    /// pulled-in packages as well as the included ones.
+    ///
+    /// Keyed by package name, because `/var` evidence names its owner by
+    /// name (`file_ownership`, `RpmOwned`). `pulled_in_by_included`
+    /// answers in `name.arch` ids, so an entry joins by its own
+    /// `name.arch` and is stored by `name`.
     install_set: HashSet<&'a str>,
     /// `None` means no base set is known, which is not the same as an
     /// empty one: membership cannot be ruled out either way.
@@ -197,21 +206,27 @@ impl<'a> Evidence<'a> {
                         .or_insert(entry.package_name.as_str());
                 }
             }
+            let pulled_in = pulled_in_by_included(rpm);
             install_set = rpm
                 .packages_added
                 .iter()
-                .filter(|pkg| pkg.disposition.is_included())
-                // Installed on the route the Containerfile renders it by.
-                // A repo-less entry counts only when the export carries its
-                // RPM: a staged upload or a cached RPM the payload
-                // extraction carries. No uploads are proved here, so an
-                // upload is taken on `uploaded`, as before.
-                .filter(|pkg| match route_for(rpm, pkg, &VerifiedUploads::new()) {
-                    PackageRoute::ByName => is_package_installable(pkg),
-                    PackageRoute::DisabledRepo(_) => true,
-                    PackageRoute::Upload(_) | PackageRoute::Repoless => {
-                        pkg.uploaded || pkg.repoless_cached
-                    }
+                .filter(|pkg| {
+                    // Installed on the route the Containerfile renders it
+                    // by. A repo-less entry counts only when the export
+                    // carries its RPM: a staged upload or a cached RPM the
+                    // payload extraction carries. No uploads are proved
+                    // here, so an upload is taken on `uploaded`, as before.
+                    let installed_on_its_route = pkg.disposition.is_included()
+                        && match route_for(rpm, pkg, &VerifiedUploads::new()) {
+                            PackageRoute::ByName => is_package_installable(pkg),
+                            PackageRoute::DisabledRepo(_) => true,
+                            PackageRoute::Upload(_) | PackageRoute::Repoless => {
+                                pkg.uploaded || pkg.repoless_cached
+                            }
+                        };
+                    // dnf installs it with the leaf that needs it.
+                    installed_on_its_route
+                        || pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
                 })
                 // A repo-enabling package whose serving repo the export
                 // dropped is demoted to a FIXME and never installed.

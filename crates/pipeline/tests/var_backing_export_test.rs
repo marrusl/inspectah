@@ -1471,3 +1471,176 @@ fn the_audit_report_lists_the_source_verdict_beside_the_export_outcome() {
         "unresolved row missing: {audit}"
     );
 }
+
+// --- auto packages: pulled in versus not carried -----------------------
+
+/// A host with one included leaf, `nginx`, whose auto dependency
+/// `nginx-core` owns the tmpfiles fragment that makes `/var/lib/nginx`,
+/// and three auto packages nothing included needs (`rsyslog`, `audit`,
+/// `insights-client`, the classes measured in the 2026-11-08 build
+/// check), each owning a `/var` directory. The baseline is known and
+/// holds none of them, so carriage comes from the install set alone.
+///
+/// Dispositions start as the collector writes them: everything included.
+/// Each path then sets them the way it would.
+fn auto_packages_snapshot() -> InspectionSnapshot {
+    const NGINX_CONF: &str = "/usr/lib/tmpfiles.d/nginx.conf";
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![
+            dir_with_mode(
+                "/var/lib/nginx",
+                tmpfiles(NGINX_CONF, "d /var/lib/nginx 0770 root root -"),
+                "0770",
+                0,
+                "root",
+            ),
+            dir_with_mode(
+                "/var/lib/rsyslog",
+                VarDirBacking::RpmOwned {
+                    package: "rsyslog".into(),
+                },
+                "0700",
+                0,
+                "root",
+            ),
+            dir_with_mode(
+                "/var/log/audit",
+                VarDirBacking::RpmOwned {
+                    package: "audit".into(),
+                },
+                "0700",
+                0,
+                "root",
+            ),
+            dir_with_mode(
+                "/var/lib/insights",
+                VarDirBacking::RpmOwned {
+                    package: "insights-client".into(),
+                },
+                "0755",
+                0,
+                "root",
+            ),
+        ],
+        ..Default::default()
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: ["nginx", "nginx-core", "rsyslog", "audit", "insights-client"]
+            .into_iter()
+            .map(|name| package(name, true))
+            .collect(),
+        leaf_packages: Some(vec!["nginx.x86_64".into()]),
+        auto_packages: Some(vec![
+            "nginx-core.x86_64".into(),
+            "rsyslog.x86_64".into(),
+            "audit.x86_64".into(),
+            "insights-client.x86_64".into(),
+        ]),
+        leaf_dep_tree: serde_json::json!({ "nginx.x86_64": ["nginx-core.x86_64"] }),
+        file_ownership: vec![FileOwnershipEntry {
+            package_name: "nginx-core".into(),
+            paths: vec![NGINX_CONF.into()],
+        }],
+        baseline_package_names: Some(vec!["filesystem".into()]),
+        ..Default::default()
+    });
+    snap
+}
+
+/// The scan path: the scan's own package defaults applied.
+fn scan_path(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    inspectah_pipeline::render::not_carried::apply_scan_package_defaults(&mut snap);
+    snap
+}
+
+/// The refine path, set by hand: refine starts every non-leaf package
+/// excluded, so the leaf stays included and its auto dependencies do not.
+/// The comparison against a real refine export is in the CLI parity test.
+fn refine_path(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    let rpm = snap.rpm.as_mut().expect("rpm");
+    for pkg in &mut rpm.packages_added {
+        if pkg.name != "nginx" {
+            pkg.disposition = FindingKind::excluded();
+        }
+    }
+    snap
+}
+
+#[test]
+fn an_excluded_dependency_an_included_leaf_pulls_in_is_carried_on_both_paths() {
+    for (label, snap) in [
+        ("scan", scan_path(auto_packages_snapshot())),
+        ("refine", refine_path(auto_packages_snapshot())),
+    ] {
+        assert_eq!(
+            outcome_for(&effective_var_backing(&snap), "/var/lib/nginx"),
+            &EffectiveBacking::Carried,
+            "{label}: dnf installs nginx-core with nginx"
+        );
+        assert!(
+            !var_conf(&snap).contains("/var/lib/nginx"),
+            "{label}: a carried creator's directory is not provisioned again"
+        );
+    }
+}
+
+#[test]
+fn a_directory_an_unneeded_package_owns_is_not_carried_on_the_scan_path() {
+    let snap = scan_path(auto_packages_snapshot());
+    let outcomes = effective_var_backing(&snap);
+    for (path, owner) in [
+        ("/var/lib/rsyslog", "rsyslog"),
+        ("/var/log/audit", "audit"),
+        ("/var/lib/insights", "insights-client"),
+    ] {
+        assert_eq!(
+            outcome_for(&outcomes, path),
+            &EffectiveBacking::Provision {
+                lost: Some(owner.into())
+            },
+            "{path}: nothing included needs {owner}"
+        );
+    }
+    let conf = var_conf(&snap);
+    assert!(conf.contains("d /var/lib/rsyslog 0700 root root -"));
+    assert!(conf.contains("d /var/log/audit 0700 root root -"));
+    assert!(conf.contains("d /var/lib/insights 0755 root root -"));
+}
+
+/// `inspectah-tmpfiles-fragment-comments-contradict-the-install-list`:
+/// the fragment said `/var/lib/nginx` was created by a file "this export
+/// does not carry" while the same export installed `nginx`, which pulls
+/// in the fragment's owner. The comment and the `d` line both follow
+/// from the outcome, so neither appears.
+#[test]
+fn the_tmpfiles_fragment_does_not_call_a_pulled_in_creator_not_carried() {
+    let conf = var_conf(&refine_path(auto_packages_snapshot()));
+    assert!(
+        !conf.contains("/usr/lib/tmpfiles.d/nginx.conf, which this export does not carry"),
+        "the export installs nginx-core as a dependency of nginx:\n{conf}"
+    );
+    assert!(!conf.contains("d /var/lib/nginx "), "{conf}");
+}
+
+/// Being pulled in does not lift the repo-enabling demotion: a package
+/// whose serving repo the export dropped renders as a FIXME and never
+/// installs, so the directory it owns is still provisioned.
+#[test]
+fn a_demoted_repo_enabling_dependency_is_not_carried_by_being_pulled_in() {
+    let mut snap = refine_path(auto_packages_snapshot());
+    let rpm = snap.rpm.as_mut().expect("rpm");
+    let core = rpm
+        .packages_added
+        .iter_mut()
+        .find(|pkg| pkg.name == "nginx-core")
+        .expect("nginx-core");
+    core.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+
+    assert_eq!(
+        outcome_for(&effective_var_backing(&snap), "/var/lib/nginx"),
+        &EffectiveBacking::Provision {
+            lost: Some("/usr/lib/tmpfiles.d/nginx.conf".into())
+        }
+    );
+}
