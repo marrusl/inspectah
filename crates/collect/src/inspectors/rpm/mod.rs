@@ -723,7 +723,7 @@ struct JointSupplement {
     package: String,
 }
 
-/// RPM query format for the dependencies of each added package — sentinel
+/// RPM query format for the dependencies of each added package: sentinel
 /// format, one tagged line per dependency.
 ///
 /// Uses the same `@@name` sentinel pattern as `RPM_FILE_OWNERSHIP_FORMAT`.
@@ -3854,11 +3854,11 @@ Group: Container Management
         // Mock file ownership (required by inspector)
         let file_ownership_output = "\
 @@bash
-R\t/usr/bin/bash
+/usr/bin/bash
 @@vim-enhanced
-R\t/usr/bin/vim
+/usr/bin/vim
 @@httpd
-R\t/usr/sbin/httpd
+/usr/sbin/httpd
 ";
         // Mock dnf group list output
         let group_list_output = "\
