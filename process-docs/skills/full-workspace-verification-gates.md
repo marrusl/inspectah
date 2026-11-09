@@ -1,6 +1,6 @@
 ---
 name: full-workspace-verification-gates
-description: Running the full clippy/test/frontend gate suite correctly — which clippy invocation the hook actually runs versus what a stricter "clean" acceptance needs, why `-D clippy::all --all-targets` cannot pass here, how to count the clippy baseline without overcounting, measured timings for every gate (all under a minute) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
+description: Running the full clippy/test/frontend gate suite correctly: the single clippy command the pre-commit hook and CI both run, what that hook does and does not gate (nothing for a frontend-only commit, `tsc && vite build` but never vitest or Playwright for a mixed commit), measured gate timings (2026-10-31 table, superseded figures noted) and why a slower run means something is wrong, why an agent cannot time its own run, and why periodic `cargo clean` is maintenance rather than risk.
 ---
 
 # Running the Full Verification Gate Suite
@@ -8,24 +8,30 @@ description: Running the full clippy/test/frontend gate suite correctly — whic
 Six things that have each already produced a wrong conclusion in this
 repo's review history.
 
-## 1. The pre-commit hook and CI do not gate what "clippy clean" means here
+## 1. The pre-commit hook and CI run the same clippy command
 
-`.githooks/pre-commit` and `.github/workflows/rust-ci.yml` both run:
+`.githooks/pre-commit` (line 53) and `.github/workflows/rust-ci.yml`
+(line 77) both run:
 
 ```bash
-cargo clippy --workspace -- -W clippy::all
+cargo clippy --workspace --all-targets -- -D clippy::all
 ```
 
-No `--all-targets`, so neither lints a test target at all, and `-W`
-warns rather than denies, so the command exits 0 even with warnings. A
-green hook or a green CI run is evidence the hook ran, not evidence the
-workspace has zero clippy lint.
+CI has run this identical form since `79e46050`. `-D clippy::all`
+denies the `clippy::all` lint group, so one lint in it fails the gate; rustc's own
+warnings, such as an unused variable or a dead function, print and exit
+0 (measured 2026-11-08). `--all-targets` lints test code as well as lib
+and bin targets. A green hook or a green CI run means the workspace
+has no lint from `clippy::all`; it says nothing about compiler warnings.
 
-**The hook also does not gate TypeScript at all.** It fast-paths out
-entirely when no `.rs`/`Cargo.*`/`build.rs` file is staged, so a
-frontend-only commit gets no `tsc`, no `npm test`, and no `npm run
-test:e2e` from the hook. A passing hook on a frontend change says
-nothing about any of the three.
+**The hook does not gate TypeScript.** A frontend-only commit gets
+nothing from it: the fast path at `.githooks/pre-commit:18-27` exits
+before any gate when no `.rs`, `Cargo.*` or `build.rs` file is staged.
+A mixed Rust-plus-UI commit does get `tsc && vite build`, because
+`crates/web/build.rs:30-35` runs `npm run build` inside the clippy gate,
+but it never runs vitest (`npm test`) or Playwright (`npm run
+test:e2e`). A passing hook on a frontend change says nothing about
+either.
 
 ## 2. `cargo clippy --workspace --all-targets -- -D clippy::all` is required and passes
 
@@ -42,7 +48,7 @@ bin targets only, and test code is where warnings accumulate unseen.
 
 ## 3. The gates are fast. A slow run is a symptom, not a budget
 
-Every gate in this workspace finishes in **seconds to about a minute**.
+Every gate in this workspace finishes in **seconds to about a minute and a half**.
 Measured 2026-10-31 on an Apple M3 Pro (12 cores, 36 GB), macOS 27.2,
 `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, workspace at
 `phase-0-refine-ui-fixup`:
@@ -60,12 +66,21 @@ Measured 2026-10-31 on an Apple M3 Pro (12 cores, 36 GB), macOS 27.2,
 | all three hook gates in sequence | warm, nothing changed | 11s |
 | all three hook gates in sequence | after touching `crates/core/src/lib.rs` — every downstream crate rebuilds and every test binary relinks | **47s** |
 
+The clippy command measured in the table is the pre-`fd422ff6` form
+(`-W`, no `--all-targets`). The current gate adds `--all-targets` and
+`-D`, so expect somewhat longer.
+
 An independent measurement the same day on the same machine got 51s for
 the cold `--no-run`, 28-50s for a warm suite, 14s for workspace clippy
 and 65s for the hook. Treat the two sets together as the range: **a
-from-scratch rebuild plus the full suite is one to two minutes, and the
-hook on a realistic change is under a minute.** The spread between the
-two runs is cache state and machine load, nothing structural.
+from-scratch rebuild plus the full suite is two to two and a half
+minutes, and the hook on a realistic change is about a minute to a
+minute and a half** (2026-11-08; the 2026-10-31 runs above came in
+lower, under the old gate). The spread between the two runs is cache
+state and machine load, nothing structural.
+Re-measured 2026-11-08 on the same machine with the current
+`-D clippy::all --all-targets` gate: 43 s for the cold build, 96 s for
+the full suite, and 63 to 88 s for the hook on realistic changes.
 
 There is no per-binary idle. The row that matters is the third one: the
 very first execution of all **77** freshly linked test binaries, none of
@@ -73,7 +88,7 @@ them ever run before, is 29 seconds for all 3010 tests together — well
 under half a second of binary, on average, for the thing that was
 reported as 60-120 seconds of idle each.
 
-**So a run that has not returned in a couple of minutes is not slow, it
+**So a run that has not returned in a few minutes is not slow, it
 is wrong.** Do not wait it out and do not re-run it. Check `ps` and read
 the **elapsed time**:
 

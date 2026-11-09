@@ -11,9 +11,9 @@ Directory structure and module organization for inspectah. Helps new agents navi
 ├── process-docs/     # Specs, plans, and skill files
 ├── completions/      # Shell completion scripts
 ├── packaging/        # RPM packaging (COPR)
-├── release-artifacts/ # Tagged release binaries
+├── release-artifacts/ # Local release binaries (gitignored, not in a clone)
 ├── testdata/         # Fixtures for integration tests
-└── tests/            # Top-level integration tests
+└── tests/            # Fixture tarballs only (tests/e2e/fixtures/), no test code
 ```
 
 ## Crates (workspace members)
@@ -25,10 +25,12 @@ Directory structure and module organization for inspectah. Helps new agents navi
 | `crates/pipeline/` | Orchestrates inspectors, rendering, redaction | No |
 | `crates/refine/` | Interactive triage engine, session persistence | No |
 | `crates/collect/` | System inspectors (RPM, config, services, etc.) | No |
-| `crates/core/` | Types, traits, aggregate data structures (no logic) | No |
+| `crates/core/` | Types, traits, snapshot container, aggregate merge/validate logic | No |
 
-**Dependency direction:** CLI/web → pipeline → refine → collect → core.
-Core has zero dependencies on other crates.
+**Dependency direction**, as the manifests declare it: `core` depends on
+no other workspace crate; `collect` on `core`; `pipeline` on `core` and
+`collect`; `refine` on `core` and `pipeline`; `web` on `core`,
+`pipeline` and `refine`; `cli` on all five.
 
 ## CLI commands
 
@@ -59,6 +61,7 @@ Each module defines the data model for a snapshot section:
 - `subscription.rs` — RHSM entitlement types
 - `system.rs`, `os.rs` — System metadata
 - `finding.rs` — `FindingKind` enum (Actionable/Advisory/Inventory), `ShadowType`, `AdvisoryType`
+- `group_render.rs`, `verified_upload.rs`: group rendering and verified-upload types
 - `symlink_allowlist.rs` — Cross-tree symlink allowlist for /usr → /etc paths
 - `redaction.rs`, `completeness.rs`, `preflight.rs`, `warnings.rs`, `progress.rs`
 
@@ -73,12 +76,16 @@ Each module defines the data model for a snapshot section:
 
 **Location:** `crates/collect/src/inspectors/`
 
-Each inspector implements the `Inspector` trait (`collect()` → section data):
+Each inspector implements the `Inspector` trait (`inspect()` → section data,
+`crates/core/src/traits/inspector.rs:15`). The production inspector list is
+built in `crates/cli/src/commands/scan.rs` (`SubscriptionInspector` is added
+only when the subscription is preserved), and the pipeline runs it through
+`collect()` in `crates/pipeline/src/collect.rs`:
 - `rpm/` — RPM package inventory, modules, repos, classifier
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
 - `config/` — Modified config files via `rpm -Va`
 - `services.rs`, `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
-- `modernization.rs` — Modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.
+- `modernization.rs`: not an `Inspector`, detection rules for modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.
 - `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
 
 **Helper modules:** `crates/collect/src/`
@@ -108,12 +115,13 @@ Artifact generators invoked after triage decisions finalized:
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
 - `readme.rs` — Auto-generated README for output directory
+- `advisory.rs`, `repo_enabling.rs`: advisory rendering and repository enablement
 - `selinux.rs` — SELinux file context rule rendering and the build-time equivalence table (`selinux_equivalences`)
 - `var_dirs.rs` — Effective `/var` directory backing at export time (`VarDirOutcome`, `EffectiveBacking`)
 
 **Section grouping:** `crates/pipeline/src/section_group.rs` — groups findings into report sections
 
-**Pipeline orchestration:** `crates/pipeline/src/orchestrate.rs` — runs inspectors in order
+**Pipeline orchestration:** `crates/pipeline/src/orchestrate.rs`: `run_pipeline` chains collect, validate, redact, render and tarball. Inspector execution itself is `crates/pipeline/src/collect.rs`.
 
 **Build execution:** `crates/pipeline/src/build/` — tarball extraction, RHEL pass-through detection, podman command construction
 
@@ -135,12 +143,13 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
   - `RpmBatchUploadModal.tsx` — Multi-RPM batch upload with auto-matching and conflicts view
 - `hooks/` — React hooks
   - `useRpmUpload.ts` — 5-state RPM upload row machine wired to POST /api/upload-rpm
-  - `useKeyboard.ts` — keyboard shortcuts (keys 6-7 = Language Packages, Unmanaged Files)
+  - `useKeyboard.ts`: keyboard shortcuts (number keys 1-8 jump to section groups from `/api/groups`; without groups, 1-9 jump to flat sections)
   - `useView.ts`, `useMutation.ts` — view data and mutation hooks
 - `api/types.ts` — TypeScript types (LanguagePackageEnv, UnmanagedFileItem, ProvenanceSignals, RpmUploadRowState)
 - `utils/` — utility functions
 - `test-utils/` — test fixtures
-- `e2e/` — Playwright end-to-end tests
+
+Playwright end-to-end tests live beside `src/`, in `crates/web/ui/e2e/`.
 
 **Backend API:** `crates/web/src/` — axum handlers for REST endpoints
   - `upload.rs` — `POST /api/upload-rpm` for repo-less RPM uploads (500 MiB route-specific limit)
@@ -156,6 +165,7 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 - `autosave.rs` — Periodic auto-save during interactive triage
 - `projection/` — Decision projection for renderer consumption
 - `tarball.rs`, `repo_index.rs` — Snapshot archive I/O
+- `baseline_summary.rs`, `group_state.rs`, `types.rs`: baseline summary, section-group state, shared refine types
 
 ## Tests
 
@@ -163,8 +173,8 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
 |----------|------|
 | `crates/*/tests/` | Per-crate integration tests |
 | `crates/web/ui/e2e/` | Playwright browser tests (React UI). Fixtures under `e2e/fixtures/` are hand-maintained, not generated — see `e2e-fixtures-are-hand-maintained.md`. |
-| `crates/web/ui/src/**/__tests__/` | Jest unit tests (React components) |
-| `tests/` | Top-level end-to-end tests |
+| `crates/web/ui/src/**/__tests__/` | Vitest unit tests (React components and hooks) |
+| `tests/e2e/fixtures/` | Fixture tarballs (`factor-topology/`); no test code at the top level |
 | `testdata/` | Fixtures for integration tests |
 
 **Mock executor:** Test doubles with deterministic output keyed by `cmd + " " + args.join(" ")`.
@@ -192,18 +202,18 @@ Diataxis structure for GitHub Pages:
 
 **Location:** `completions/`
 
-Shell completion scripts generated by the CLI build:
-- `bash/inspectah.bash`
-- `zsh/_inspectah`
-- `fish/inspectah.fish`
+Checked-in shell completion scripts:
+- `completions/inspectah.bash`
+- `completions/inspectah.zsh`
+- `completions/inspectah.fish`
 
-Bundled into RPM packages.
+The RPM does not install these files. `packaging/inspectah.spec` generates its own from the built binary with the hidden `inspectah completions <shell>` subcommand.
 
 ## Gotchas
 
 - **Attribution style** — LLM-assisted commits include `Assisted-by: <tool> (<model>)`. No other identifiers.
 - **Build script version:** `crates/cli/build.rs` stamps version metadata at compile time. Don't manually update version strings in code.
-- **Schema versioning:** Snapshot JSON has a `schema_version` field that MUST be bumped when types change. See `snapshot-schema-versioning.md`.
+- **Schema versioning:** Snapshot JSON has a `schema_version` field that MUST be bumped when a change alters what the snapshot serializes, though a new `Option` field with `#[serde(default)]` or a new `SectionData` variant does not. See `snapshot-schema-versioning.md`.
 - **Package identity is `name.arch`** — Never use bare package names. See `package-identity-is-name-dot-arch.md`.
-- **Clippy clean has two different strictness levels** — the pre-commit hook and CI only run `cargo clippy --workspace -- -W clippy::all` (no `--all-targets`, warn not deny), which does not lint test code and cannot block a commit on clippy alone. A stricter `--all-targets -- -D clippy::all` acceptance exists in some plans but cannot pass as a `-D` command once any baseline warning exists. See `full-workspace-verification-gates.md`.
-- **Every gate is fast** — measured on an M3 Pro: a from-scratch `cargo clean` plus build plus the full 3010-test suite is under two minutes, and the pre-commit hook on a realistic change is under one. There is no per-binary startup idle. A run that has not returned in a couple of minutes is a hang, not a slow build; check `ps` elapsed time instead of waiting. `target/` grows (3.8 GB clean, 36 GB when neglected), and a periodic `cargo clean` is cheap maintenance. See `full-workspace-verification-gates.md`.
+- **Clippy clean is one command:** `cargo clippy --workspace --all-targets -- -D clippy::all`, run identically by the pre-commit hook and CI. See `full-workspace-verification-gates.md`.
+- **Every gate is fast** — measured on an M3 Pro: a from-scratch `cargo clean` plus build plus the full 3010-test suite is two to two and a half minutes, and the pre-commit hook on a realistic change is about a minute to a minute and a half (measured 2026-11-08). There is no per-binary startup idle. A run that has not returned in a few minutes is a hang, not a slow build; check `ps` elapsed time instead of waiting. `target/` grows (3.8 GB clean, 36 GB when neglected), and a periodic `cargo clean` is cheap maintenance. See `full-workspace-verification-gates.md`.
