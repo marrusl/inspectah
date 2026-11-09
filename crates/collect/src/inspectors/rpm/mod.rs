@@ -18,7 +18,7 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
-use rich_dep::{Atom, Constraint, DepExpr, OrChoice, Providers};
+use rich_dep::{Atom, Constraint, DepExpr, Providers, SupplementTriggers};
 use std::collections::{HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
@@ -686,7 +686,31 @@ fn classify_deps_dnf(
 /// direct dependencies (rpm `-qR`).
 struct DepGraphResult {
     depends_on: HashMap<String, HashSet<String>>,
+    /// Supplements that need several added packages at once. Always empty
+    /// for the dnf graph, which does not follow Supplements.
+    joint: Vec<JointSupplement>,
     transitive: bool,
+}
+
+/// The direct dependency graph `classify_deps_rpm` builds.
+struct RpmDepGraph {
+    /// `a -> {b, ...}`: installing `a` installs each `b`.
+    depends_on: HashMap<String, HashSet<String>>,
+    /// Supplements no single edge can express (`JointSupplement`).
+    joint: Vec<JointSupplement>,
+}
+
+/// A Supplements that pulls `package` in only when added packages from
+/// every group are present together, such as `(shared-lib and desktop)`
+/// with both added. An edge from each group would let a leaf that brings
+/// only `shared-lib` claim `package`, which dnf would not install for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct JointSupplement {
+    /// Each group is the added packages any one of which satisfies one
+    /// operand of the expression.
+    groups: Vec<HashSet<String>>,
+    /// The supplementing package.
+    package: String,
 }
 
 /// RPM query format for the dependencies of each added package — sentinel
@@ -781,7 +805,8 @@ type PackageDeps = (String, Vec<(Relation, DepExpr)>);
 ///
 /// An edge `a -> b` means installing `a` with dnf defaults installs `b`:
 /// `a` requires or recommends something `b` provides, or `b` supplements
-/// something `a` provides.
+/// something `a` alone provides. A Supplements that needs several added
+/// packages together becomes a `JointSupplement` instead of an edge.
 ///
 /// Returns direct-only deps (caller must walk the graph for transitive closure).
 /// Returns `None` if either query fails.
@@ -789,9 +814,13 @@ fn classify_deps_rpm(
     exec: &dyn Executor,
     added_ids: &HashSet<String>,
     file_ownership: &[FileOwnershipEntry],
-) -> Option<HashMap<String, HashSet<String>>> {
+) -> Option<RpmDepGraph> {
+    let mut joint: Vec<JointSupplement> = Vec::new();
     if added_ids.is_empty() {
-        return Some(HashMap::new());
+        return Some(RpmDepGraph {
+            depends_on: HashMap::new(),
+            joint,
+        });
     }
 
     let mut package_ids: Vec<&String> = added_ids.iter().collect();
@@ -830,6 +859,7 @@ fn classify_deps_rpm(
         .flat_map(|(_, deps)| deps.iter().flat_map(|(_, dep)| dep.caps()))
         .collect();
     let index = ProviderIndex::build(exec, &wanted, file_ownership)?;
+    let is_added = |id: &str| added_ids.contains(id);
 
     for (pkg_name, deps) in &per_pkg_deps {
         let Some(ids) = name_to_ids.get(pkg_name.as_str()) else {
@@ -839,7 +869,7 @@ fn classify_deps_rpm(
             for (relation, dep) in deps {
                 match relation {
                     Relation::Requires | Relation::Recommends => {
-                        for prov_id in dep.pulled(&index, OrChoice::First) {
+                        for prov_id in dep.pulled(&index) {
                             if added_ids.contains(prov_id)
                                 && name_from_id(prov_id) != *pkg_name
                                 && let Some(set) = depends_on.get_mut(package_id.as_str())
@@ -849,15 +879,42 @@ fn classify_deps_rpm(
                         }
                     }
                     Relation::Supplements => {
-                        if !dep.satisfied(&index) {
+                        // `None` (too many clauses) drops the expression,
+                        // as an unreadable one is dropped.
+                        let Some(SupplementTriggers::Clauses(clauses)) =
+                            dep.supplement_triggers(&index, &is_added)
+                        else {
                             continue;
-                        }
-                        for prov_id in dep.pulled(&index, OrChoice::All) {
-                            if added_ids.contains(prov_id)
-                                && name_from_id(prov_id) != *pkg_name
-                                && let Some(set) = depends_on.get_mut(prov_id)
-                            {
-                                set.insert((*package_id).clone());
+                        };
+                        for clause in clauses {
+                            // A package does not pull itself in. A group it
+                            // alone satisfies needs it present already, so
+                            // that clause never fires.
+                            let Some(groups) = clause
+                                .into_iter()
+                                .map(|group| {
+                                    let group: HashSet<String> = group
+                                        .into_iter()
+                                        .filter(|id| name_from_id(id) != *pkg_name)
+                                        .map(str::to_string)
+                                        .collect();
+                                    (!group.is_empty()).then_some(group)
+                                })
+                                .collect::<Option<Vec<_>>>()
+                            else {
+                                continue;
+                            };
+                            if let [group] = groups.as_slice() {
+                                for prov_id in group {
+                                    if let Some(set) = depends_on.get_mut(prov_id) {
+                                        set.insert((*package_id).clone());
+                                    }
+                                }
+                            } else {
+                                joint.push(JointSupplement {
+                                    groups,
+                                    package: (*package_id).clone(),
+                                });
                             }
                         }
                     }
@@ -866,7 +923,7 @@ fn classify_deps_rpm(
         }
     }
 
-    Some(depends_on)
+    Some(RpmDepGraph { depends_on, joint })
 }
 
 /// Parse batched `RPM_DEPS_FORMAT` output into per-package dependency
@@ -1099,14 +1156,16 @@ fn classify_leaf_auto(
     let user_installed = query_user_installed(exec);
 
     // Try rpm-based dep resolution first (fast), fall back to DNF (slow).
-    let graph = if let Some(rpm_deps) = classify_deps_rpm(exec, &added_ids, file_ownership) {
+    let graph = if let Some(rpm_graph) = classify_deps_rpm(exec, &added_ids, file_ownership) {
         DepGraphResult {
-            depends_on: rpm_deps,
+            depends_on: rpm_graph.depends_on,
+            joint: rpm_graph.joint,
             transitive: false,
         }
     } else if let Some(dnf_deps) = classify_deps_dnf(exec, &added_ids) {
         DepGraphResult {
             depends_on: dnf_deps,
+            joint: Vec::new(),
             transitive: true,
         }
     } else {
@@ -1119,7 +1178,7 @@ fn classify_leaf_auto(
         let leaf_set: HashSet<&String> = ui.intersection(&added_ids).collect();
         if leaf_set.is_empty() && !added_ids.is_empty() {
             // Fallback to graph-based when userinstalled has no overlap with added
-            graph_based_split(&added_ids, depends_on)
+            graph_based_split(&added_ids, depends_on, &graph.joint)
         } else {
             let mut l = Vec::new();
             let mut a = Vec::new();
@@ -1133,7 +1192,7 @@ fn classify_leaf_auto(
             (l, a)
         }
     } else {
-        graph_based_split(&added_ids, depends_on)
+        graph_based_split(&added_ids, depends_on, &graph.joint)
     };
 
     leaf.sort();
@@ -1160,28 +1219,9 @@ fn classify_leaf_auto(
             dep_tree.insert(lf.clone(), serde_json::json!(filtered));
         }
     } else {
-        // rpm gives only direct deps; walk the graph (BFS) for transitive closure.
+        // rpm gives only direct deps; walk the graph for transitive closure.
         for lf in &leaf {
-            let mut reachable: HashSet<String> = HashSet::new();
-            let mut stack: Vec<String> = depends_on
-                .get(lf)
-                .map(|deps| deps.iter().cloned().collect())
-                .unwrap_or_default();
-
-            while let Some(dep) = stack.pop() {
-                if reachable.contains(&dep) {
-                    continue;
-                }
-                reachable.insert(dep.clone());
-                if let Some(next_deps) = depends_on.get(&dep) {
-                    for next in next_deps {
-                        if !reachable.contains(next) {
-                            stack.push(next.clone());
-                        }
-                    }
-                }
-            }
-
+            let reachable = leaf_closure(lf, depends_on, &graph.joint);
             let mut filtered: Vec<String> = reachable
                 .into_iter()
                 .filter(|d| auto_set.contains(d.as_str()))
@@ -1194,18 +1234,55 @@ fn classify_leaf_auto(
     LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
 }
 
+/// Everything installing `leaf` installs: the packages reachable along
+/// `depends_on`, plus each joint Supplements whose groups all have a member
+/// among `leaf` and what it reaches, and whatever that package reaches in
+/// turn. The leaf itself is in the set only if a cycle leads back to it.
+fn leaf_closure(
+    leaf: &str,
+    depends_on: &HashMap<String, HashSet<String>>,
+    joint: &[JointSupplement],
+) -> HashSet<String> {
+    let mut reachable: HashSet<String> = HashSet::new();
+    let mut stack: Vec<&str> = depends_on
+        .get(leaf)
+        .map(|deps| deps.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let mut fired = vec![false; joint.len()];
+    loop {
+        while let Some(dep) = stack.pop() {
+            if reachable.insert(dep.to_string())
+                && let Some(next_deps) = depends_on.get(dep)
+            {
+                stack.extend(next_deps.iter().map(String::as_str));
+            }
+        }
+        let present = |id: &String| id == leaf || reachable.contains(id);
+        for (rule, fired) in joint.iter().zip(fired.iter_mut()) {
+            if !*fired && rule.groups.iter().all(|g| g.iter().any(present)) {
+                *fired = true;
+                stack.push(&rule.package);
+            }
+        }
+        if stack.is_empty() {
+            return reachable;
+        }
+    }
+}
+
 /// Graph-based fallback: package identities depended on by other added packages are
-/// auto; package identities not depended on by anything are leaf.
+/// auto; package identities not depended on by anything are leaf. A package a
+/// joint Supplements pulls in counts as depended on.
 fn graph_based_split(
     added_ids: &HashSet<String>,
     depends_on: &HashMap<String, HashSet<String>>,
+    joint: &[JointSupplement],
 ) -> (Vec<String>, Vec<String>) {
     let mut depended_on: HashSet<String> = HashSet::new();
-    for deps in depends_on.values() {
-        for dep in deps {
-            if added_ids.contains(dep) {
-                depended_on.insert(dep.clone());
-            }
+    let edge_targets = depends_on.values().flatten();
+    for dep in edge_targets.chain(joint.iter().map(|rule| &rule.package)) {
+        if added_ids.contains(dep) {
+            depended_on.insert(dep.clone());
         }
     }
     let mut leaf = Vec::new();
@@ -2899,7 +2976,9 @@ R\t/usr/bin/sh
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added_ids, &[])
+            .expect("graph should be available")
+            .depends_on;
         // vim depends on glibc (via libc.so.6()(64bit) → glibc.x86_64).
         assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
         assert!(!deps.get("vim.x86_64").unwrap().contains("glibc.i686"));
@@ -2967,7 +3046,9 @@ R\tlibssl.so.3()(64bit)
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added_ids, &[])
+            .expect("graph should be available")
+            .depends_on;
 
         let only = |id: &str| -> HashSet<String> { [id.to_string()].into_iter().collect() };
         assert_eq!(deps["tree.aarch64"], only("glibc.aarch64"));
@@ -3137,7 +3218,9 @@ R\t/sbin/sysctl
             "procps-ng.aarch64",
             "liberation-sans-fonts.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &owners).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added, &owners)
+            .expect("graph should be available")
+            .depends_on;
         assert_eq!(
             deps["git.aarch64"],
             ids(&["perl-interpreter.aarch64", "bash.aarch64"])
@@ -3234,7 +3317,9 @@ S\tfoo-hardware
             "langpacks-en.noarch",
             "tuned-profiles-foo.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added, &[])
+            .expect("graph should be available")
+            .depends_on;
         assert_eq!(
             deps["langpacks-en.noarch"],
             ids(&["glibc-langpack-en.aarch64"])
@@ -3243,6 +3328,83 @@ S\tfoo-hardware
         assert!(
             deps.values()
                 .all(|d| !d.contains("tuned-profiles-foo.noarch"))
+        );
+    }
+
+    #[test]
+    fn classify_leaf_auto_needs_every_operand_of_a_supplements_and() {
+        // plugin Supplements (shared-lib and desktop), with all of them
+        // added. app needs only shared-lib, so installing app does not
+        // install plugin. desk-app needs both, so it does.
+        let exec = dep_graph_executor(
+            "app desk-app desktop plugin shared-lib",
+            "\
+@@app
+R\tshared-lib
+@@desk-app
+R\tshared-lib
+R\tdesktop
+@@desktop
+@@plugin
+S\t(shared-lib and desktop)
+@@shared-lib
+",
+            "app.noarch\t0\t\tapp\n\
+             desk-app.noarch\t0\t\tdesk-app\n\
+             desktop.noarch\t0\t\tdesktop\n\
+             plugin.noarch\t0\t\tplugin\n\
+             shared-lib.noarch\t0\t\tshared-lib\n",
+            "app.noarch\ndesk-app.noarch\n",
+        );
+        let added: Vec<PackageEntry> = ["app", "desk-app", "desktop", "plugin", "shared-lib"]
+            .iter()
+            .map(|n| make_test_entry(n, "noarch"))
+            .collect();
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        assert_eq!(closure(&result, "app.noarch"), vec!["shared-lib.noarch"]);
+        assert_eq!(
+            closure(&result, "desk-app.noarch"),
+            vec!["desktop.noarch", "plugin.noarch", "shared-lib.noarch"]
+        );
+    }
+
+    #[test]
+    fn classify_leaf_auto_does_not_spread_a_langpack_through_glibc() {
+        // With no baseline, glibc is an added package. glibc-langpack-en's
+        // Supplements needs glibc and a langpack together, so tree, which
+        // needs only glibc, does not install it; langpacks-en does.
+        let exec = dep_graph_executor(
+            "glibc-langpack-en glibc langpacks-en tree",
+            "\
+@@glibc
+@@glibc-langpack-en
+S\t(glibc and (langpacks-en or langpacks-core-en))
+@@langpacks-en
+R\tlibc.so.6()(64bit)
+@@tree
+R\tlibc.so.6()(64bit)
+",
+            "glibc.aarch64\t0\t\tlibc.so.6()(64bit)\n\
+             glibc.aarch64\t8\t2.34-284.el9\tglibc\n\
+             glibc-langpack-en.aarch64\t8\t2.34-284.el9\tglibc-langpack-en\n\
+             langpacks-en.noarch\t8\t3.0-16.el9\tlangpacks-en\n\
+             tree.aarch64\t8\t1.8.0-10.el9\ttree\n",
+            "langpacks-en.noarch\ntree.aarch64\n",
+        );
+        let added: Vec<PackageEntry> = [
+            ("glibc", "aarch64"),
+            ("glibc-langpack-en", "aarch64"),
+            ("langpacks-en", "noarch"),
+            ("tree", "aarch64"),
+        ]
+        .iter()
+        .map(|(n, a)| make_test_entry(n, a))
+        .collect();
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        assert_eq!(closure(&result, "tree.aarch64"), vec!["glibc.aarch64"]);
+        assert_eq!(
+            closure(&result, "langpacks-en.noarch"),
+            vec!["glibc-langpack-en.aarch64", "glibc.aarch64"]
         );
     }
 
@@ -3279,7 +3441,9 @@ R\t(emacs or vim-minimal or nano)
             "nano.aarch64",
             "vim-minimal.aarch64",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added, &[])
+            .expect("graph should be available")
+            .depends_on;
         assert_eq!(
             deps["cockpit-ws.aarch64"],
             ids(&["cockpit-ws-selinux.aarch64", "vim-minimal.aarch64"])
@@ -3320,7 +3484,9 @@ R\tengine
             "foo.noarch",
             "plugin.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added, &[])
+            .expect("graph should be available")
+            .depends_on;
         assert_eq!(deps["app.noarch"], ids(&["fallback.noarch"]));
         assert_eq!(deps["plugin.noarch"], ids(&["engine.noarch"]));
     }
@@ -3392,8 +3558,10 @@ untagged line
     fn classify_deps_rpm_empty_set_returns_empty_graph() {
         let exec = MockExecutor::new();
         let added_ids: HashSet<String> = HashSet::new();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("empty set should return Some");
-        assert!(deps.is_empty());
+        let graph =
+            classify_deps_rpm(&exec, &added_ids, &[]).expect("empty set should return Some");
+        assert!(graph.depends_on.is_empty());
+        assert!(graph.joint.is_empty());
     }
 
     #[test]

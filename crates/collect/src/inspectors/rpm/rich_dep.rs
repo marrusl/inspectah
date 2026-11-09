@@ -28,6 +28,12 @@ use std::collections::HashSet;
 /// deeply enough to exhaust the stack in a recursive parser.
 const MAX_RICH_DEP_DEPTH: usize = 16;
 
+/// How many alternative trigger sets a Supplements expression may expand
+/// to (`DepExpr::supplement_triggers`). An `and` of `or`s multiplies out;
+/// real expressions expand to a handful, and one that expands past this is
+/// dropped rather than grown without bound.
+const MAX_SUPPLEMENT_CLAUSES: usize = 64;
+
 /// What dependency expressions are evaluated against: which installed
 /// packages provide a capability.
 pub(super) trait Providers {
@@ -186,7 +192,7 @@ fn evr_cmp(a: &str, b: &str) -> Ordering {
 ///
 /// Its nesting depth is at most `MAX_RICH_DEP_DEPTH`. The parser is the
 /// only constructor and enforces that, so every recursive walk over the
-/// tree (`caps`, `satisfied`, `pulled`) is bounded by the same limit.
+/// tree (`caps`, `pulled`, `supplement_triggers`) is bounded by the same limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DepExpr {
     root: Node,
@@ -235,15 +241,18 @@ enum Match {
     Any(Vec<Match>),
 }
 
-/// How an `or` picks among its satisfied operands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OrChoice {
-    /// The first satisfied operand: a forward requirement needs only one,
-    /// and on an installed host the first one present satisfies it.
-    First,
-    /// Every satisfied operand: in a reverse (Supplements) expression any
-    /// one of them is enough to pull the package in.
-    All,
+/// When a Supplements expression pulls its package in, in terms of the
+/// added packages: those not in the base image.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SupplementTriggers<'p> {
+    /// The expression holds through packages that are not added, before
+    /// any added package is installed. dnf does not pull a package in for
+    /// a Supplements that already held, so no added package triggers it.
+    AlreadyHolds,
+    /// Alternative clauses. The package is pulled in once every group in
+    /// some clause has a member present; a group is the added packages
+    /// any one of which satisfies one operand. No clause is empty.
+    Clauses(Vec<Vec<HashSet<&'p str>>>),
 }
 
 impl DepExpr {
@@ -286,22 +295,58 @@ impl DepExpr {
         out
     }
 
-    /// Whether the installed host satisfies the expression.
-    pub(super) fn satisfied(&self, index: &dyn Providers) -> bool {
-        self.root.satisfied(index)
-    }
-
     /// The installed packages this expression pulls in. Conditions are
     /// evaluated, never credited: in `(a if b)` only a provider of `a` is
     /// pulled in, and only when `b` is installed. A package that itself
     /// makes the condition hold is not pulled in by it either, so the
     /// version floor `(foo >= 2 if foo)` pulls in nothing: it constrains a
-    /// `foo` that is already there.
-    pub(super) fn pulled<'p>(&self, index: &'p dyn Providers, or: OrChoice) -> HashSet<&'p str> {
+    /// `foo` that is already there. An `or` takes its first satisfied
+    /// operand: a requirement needs only one, and on an installed host the
+    /// first one present satisfies it.
+    pub(super) fn pulled<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
         let mut out = HashSet::new();
-        self.root.collect_pulled(index, or, &mut out);
+        self.root.collect_pulled(index, &mut out);
         out
     }
+
+    /// Read the expression as a Supplements: which added packages, present
+    /// together, pull the supplementing package in. `(a and b)` needs a
+    /// provider of each, so it is one clause of two groups, never two
+    /// independent triggers; `(a or b)` is two clauses. An operand that a
+    /// non-added package satisfies is already true and adds no group.
+    /// `if` and `unless` conditions are judged on the host, and a condition
+    /// that holds through added packages joins the clause as an operand.
+    ///
+    /// Returns `None` when the expression expands to more than
+    /// `MAX_SUPPLEMENT_CLAUSES` clauses.
+    pub(super) fn supplement_triggers<'p>(
+        &self,
+        index: &'p dyn Providers,
+        is_added: &dyn Fn(&str) -> bool,
+    ) -> Option<SupplementTriggers<'p>> {
+        let clauses = self.root.trigger_clauses(index, is_added)?;
+        Some(if clauses.iter().any(Vec::is_empty) {
+            SupplementTriggers::AlreadyHolds
+        } else {
+            SupplementTriggers::Clauses(clauses)
+        })
+    }
+}
+
+/// One alternative of `SupplementTriggers::Clauses`.
+type Clause<'p> = Vec<HashSet<&'p str>>;
+
+/// Every clause of `a` joined with every clause of `b`: the triggers of
+/// `a and b`. `None` past `MAX_SUPPLEMENT_CLAUSES`.
+fn conjoin<'p>(a: Vec<Clause<'p>>, b: &[Clause<'p>]) -> Option<Vec<Clause<'p>>> {
+    if a.len().saturating_mul(b.len()) > MAX_SUPPLEMENT_CLAUSES {
+        return None;
+    }
+    Some(
+        a.iter()
+            .flat_map(|x| b.iter().map(move |y| x.iter().chain(y).cloned().collect()))
+            .collect(),
+    )
 }
 
 impl Node {
@@ -360,26 +405,15 @@ impl Node {
         }
     }
 
-    fn collect_pulled<'p>(
-        &self,
-        index: &'p dyn Providers,
-        or: OrChoice,
-        out: &mut HashSet<&'p str>,
-    ) {
+    fn collect_pulled<'p>(&self, index: &'p dyn Providers, out: &mut HashSet<&'p str>) {
         match self {
             Self::Match(m) => out.extend(m.matching(index)),
             Self::And(xs) => {
-                xs.iter().for_each(|x| x.collect_pulled(index, or, out));
+                xs.iter().for_each(|x| x.collect_pulled(index, out));
             }
             Self::Or(xs) => {
-                let mut satisfied = xs.iter().filter(|x| x.satisfied(index));
-                match or {
-                    OrChoice::First => {
-                        if let Some(x) = satisfied.next() {
-                            x.collect_pulled(index, or, out);
-                        }
-                    }
-                    OrChoice::All => satisfied.for_each(|x| x.collect_pulled(index, or, out)),
+                if let Some(x) = xs.iter().find(|x| x.satisfied(index)) {
+                    x.collect_pulled(index, out);
                 }
             }
             Self::If {
@@ -389,10 +423,10 @@ impl Node {
             } => {
                 if cond.satisfied(index) {
                     let mut pulled = HashSet::new();
-                    then.collect_pulled(index, or, &mut pulled);
+                    then.collect_pulled(index, &mut pulled);
                     out.extend(&pulled - &cond.witnesses(index));
                 } else if let Some(o) = otherwise {
-                    o.collect_pulled(index, or, out);
+                    o.collect_pulled(index, out);
                 }
             }
             Self::Unless {
@@ -401,9 +435,71 @@ impl Node {
                 otherwise,
             } => {
                 if !cond.satisfied(index) {
-                    then.collect_pulled(index, or, out);
+                    then.collect_pulled(index, out);
                 } else if let Some(o) = otherwise {
-                    o.collect_pulled(index, or, out);
+                    o.collect_pulled(index, out);
+                }
+            }
+        }
+    }
+
+    /// This node's triggers as part of a Supplements (`supplement_triggers`).
+    fn trigger_clauses<'p>(
+        &self,
+        index: &'p dyn Providers,
+        is_added: &dyn Fn(&str) -> bool,
+    ) -> Option<Vec<Clause<'p>>> {
+        match self {
+            Self::Match(m) => {
+                let ids = m.matching(index);
+                Some(if ids.is_empty() {
+                    Vec::new()
+                } else if ids.iter().any(|id| !is_added(id)) {
+                    vec![Vec::new()]
+                } else {
+                    vec![vec![ids]]
+                })
+            }
+            Self::And(xs) => xs.iter().try_fold(vec![Vec::new()], |acc, x| {
+                conjoin(acc, &x.trigger_clauses(index, is_added)?)
+            }),
+            Self::Or(xs) => {
+                let mut out = Vec::new();
+                for x in xs {
+                    out.extend(x.trigger_clauses(index, is_added)?);
+                    if out.len() > MAX_SUPPLEMENT_CLAUSES {
+                        return None;
+                    }
+                }
+                Some(out)
+            }
+            Self::If {
+                then,
+                cond,
+                otherwise,
+            } => {
+                let cond_triggers = cond.trigger_clauses(index, is_added)?;
+                if cond.satisfied(index) {
+                    conjoin(then.trigger_clauses(index, is_added)?, &cond_triggers)
+                } else {
+                    otherwise
+                        .as_ref()
+                        .map_or(Some(Vec::new()), |o| o.trigger_clauses(index, is_added))
+                }
+            }
+            Self::Unless {
+                then,
+                cond,
+                otherwise,
+            } => {
+                if cond.satisfied(index) {
+                    let cond_triggers = cond.trigger_clauses(index, is_added)?;
+                    let otherwise = otherwise
+                        .as_ref()
+                        .map_or(Some(Vec::new()), |o| o.trigger_clauses(index, is_added))?;
+                    conjoin(otherwise, &cond_triggers)
+                } else {
+                    then.trigger_clauses(index, is_added)
                 }
             }
         }
@@ -757,24 +853,19 @@ mod tests {
             ("grubby", "grubby"),
             ("python3-dbus", "python3-dbus"),
         ]);
-        let cases: &[(&str, OrChoice, &[&str])] = &[
-            (
-                "(python3-dbus if NetworkManager)",
-                OrChoice::First,
-                &["python3-dbus"],
-            ),
-            ("(grubby if kernel)", OrChoice::First, &[]),
-            ("(a if kernel else c)", OrChoice::First, &["c"]),
-            ("(a unless kernel)", OrChoice::First, &["a"]),
-            ("(a unless b)", OrChoice::First, &[]),
-            ("(z or b or c)", OrChoice::First, &["b"]),
-            ("(z or b or c)", OrChoice::All, &["b", "c"]),
-            ("(z or y)", OrChoice::First, &[]),
-            ("(b and c)", OrChoice::First, &["b", "c"]),
+        let cases: &[(&str, &[&str])] = &[
+            ("(python3-dbus if NetworkManager)", &["python3-dbus"]),
+            ("(grubby if kernel)", &[]),
+            ("(a if kernel else c)", &["c"]),
+            ("(a unless kernel)", &["a"]),
+            ("(a unless b)", &[]),
+            ("(z or b or c)", &["b"]),
+            ("(z or y)", &[]),
+            ("(b and c)", &["b", "c"]),
         ];
-        for (input, or, expected) in cases {
+        for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
-            assert_eq!(expr.pulled(&index, *or), set(expected), "input: {input}");
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
         }
     }
 
@@ -794,13 +885,9 @@ mod tests {
         ];
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
             assert_eq!(
-                expr.pulled(&index, OrChoice::First),
-                set(expected),
-                "input: {input}"
-            );
-            assert_eq!(
-                expr.satisfied(&index),
+                expr.root.satisfied(&index),
                 !expected.is_empty(),
                 "input: {input}"
             );
@@ -831,11 +918,7 @@ mod tests {
         ];
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
-            assert_eq!(
-                expr.pulled(&index, OrChoice::First),
-                set(expected),
-                "input: {input}"
-            );
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
         }
     }
 
@@ -869,6 +952,58 @@ mod tests {
         assert_eq!(
             Constraint::from_provide(RPMSENSE_EQUAL | (1 << 15), "2-1"),
             Some(c(Cmp::Eq, "2-1"))
+        );
+    }
+
+    #[test]
+    fn supplements_need_every_operand_of_an_and() {
+        // `glibc` is in the base image (not added); everything else is.
+        let index = TestIndex(&[
+            ("glibc", "glibc"),
+            ("shared-lib", "shared-lib"),
+            ("desktop", "desktop"),
+            ("langpacks-en", "langpacks-en"),
+            ("langpacks-core-en", "langpacks-core-en"),
+        ]);
+        let is_added = |id: &str| id != "glibc";
+        let triggers = |input: &str| {
+            DepExpr::parse(input)
+                .expect("parses")
+                .supplement_triggers(&index, &is_added)
+                .expect("within the clause limit")
+        };
+        let clauses = |cs: &[&[&[&'static str]]]| {
+            SupplementTriggers::Clauses(
+                cs.iter()
+                    .map(|c| c.iter().map(|g| set(g)).collect())
+                    .collect(),
+            )
+        };
+        assert_eq!(
+            triggers("(shared-lib and desktop)"),
+            clauses(&[&[&["shared-lib"], &["desktop"]]])
+        );
+        assert_eq!(
+            triggers("(glibc and (langpacks-en or langpacks-core-en))"),
+            clauses(&[&[&["langpacks-en"]], &[&["langpacks-core-en"]]])
+        );
+        assert_eq!(
+            triggers("(desktop if shared-lib)"),
+            clauses(&[&[&["desktop"], &["shared-lib"]]])
+        );
+        assert_eq!(triggers("(desktop if glibc)"), clauses(&[&[&["desktop"]]]));
+        assert_eq!(
+            triggers("(glibc or desktop)"),
+            SupplementTriggers::AlreadyHolds
+        );
+        assert_eq!(triggers("(missing and desktop)"), clauses(&[]));
+        // An `and` of `or`s past the clause limit is dropped.
+        let wide = format!("({})", ["(a or b)"; 7].join(" and "));
+        assert_eq!(
+            DepExpr::parse(&wide)
+                .expect("parses")
+                .supplement_triggers(&TestIndex(&[("a", "a"), ("b", "b")]), &|_| true),
+            None
         );
     }
 
