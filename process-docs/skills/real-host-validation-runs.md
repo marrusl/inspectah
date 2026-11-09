@@ -640,6 +640,126 @@ versioned rich dependency picked the same added packages with and
 without its version. To exercise those rules, a host needs an added
 package in each role.
 
+### Measured, 2026-11-09: the not-carried class, scan to build
+
+Run at `af96710c` on the same two hosts. Each was reverted to its clean
+snapshot, given the drift and plants of the rescan above, and scanned as
+root. Package counts reproduce that rescan:
+
+- RHEL 9: 235 added, 28 leaf, 207 auto;
+- RHEL 10: 262 added, 28 leaf, 234 auto.
+
+The expected set is the rescan's list of auto packages that no leaf
+needs.
+
+**The scan's not-carried list equals the expected set**, by `name.arch`:
+38 packages on RHEL 9 and 24 on RHEL 10. The Containerfile block and the
+audit table carry the same count. Against the `e55a45f7` scan, every
+disposition is the same except those packages, which are now excluded.
+Owners of an enabled unit lead the list, then the rest, each part by
+name: `cronie`, `firewalld`, `insights-client` (RHEL 9 only) and
+`rsyslog`.
+
+**`audit` is not in the class here.** The planted `cockpit` pulls it in,
+through `setroubleshoot-server` in the built image, so it stays included
+and every image has it. To see `audit` in the list you need a host
+without `cockpit`.
+
+**No unit was omitted as not carried.** Every unit the class owns was
+enabled at its preset, so it has no `state_changes` row, and no
+`systemctl` line exists to drop. Neither path wrote a `# Omitted:` line
+on either host. To exercise the `NotCarried` reason, a not-carried
+package needs a unit enabled against its preset, such as `rhcd` on
+RHEL 9.
+
+**What moved from the `e55a45f7` scan tarball.** The Containerfile gains
+only the block. The install lines were already leaf names only, so they
+did not change, and neither did the export's file tree.
+`inspectah-var.conf` gains `/var/lib/rsyslog` on both hosts and
+`/var/log/insights-client` on RHEL 9, each with a comment naming the
+creator the export does not carry.
+
+**Scan tarball against an unchanged refine export.** These are the
+permitted differences seen:
+
+- `epel-release` is installed by the RHEL 9 scan and left out of the
+  RHEL 9 refine export. On RHEL 10 it has no repo source, so both paths
+  render it as a manual step.
+- `sshd.service` is enabled in the refine export on both hosts.
+- `inspectah-var.conf` is identical on both paths.
+
+**One difference is outside the permitted list, on both hosts.**
+Refine's list has one more entry, `dnf-plugins-core.noarch` (39 and 25).
+Its only puller in `leaf_dep_tree` is `epel-release`. Refine excludes
+that package as repo-less pending an upload, so nothing included pulls
+`dnf-plugins-core` in. The refine images do not have it, so the refine
+list is right.
+
+The RHEL 10 scan is the side that is off. There, `epel-release` routes
+repo-less and stays included as the manual step, so `dnf-plugins-core`
+counts as pulled in. The image installs neither package, so the scan
+neither installs `dnf-plugins-core` nor lists it. On RHEL 9 the scan
+installs `epel-release` from the copied repo, and the image has both.
+
+When you compare the two snapshots, two more things look like
+differences and are not part of this change:
+
+- Refine's snapshot excludes every pulled-in auto package (169 and 210),
+  while the scan includes them. The install lines still agree, because
+  both paths render leaf names only.
+- The refine export carries nine more `rpm_owned_modified` config files,
+  which the scan excludes by default. The scan's file tree is unchanged
+  from `e55a45f7`. One of the nine is `/etc/crontab`, from the
+  not-carried `crontabs`, so the refine image ships a crontab with no
+  cron.
+
+**COPY sources and builds.** The COPY-source check was clean on all four
+exports.
+
+- **RHEL 9:** both builds passed, in 498 s and 416 s, and ended in
+  `bootc container lint` with the two known warnings.
+- **RHEL 10:** both builds failed at the package install, because
+  `RPM-GPG-KEY-EPEL-10` is missing.
+
+The RHEL 10 cause predates this change. EL10's `epel.repo` writes
+`gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major`.
+`extract_gpg_keys` in `crates/collect/src/inspectors/rpm/repos.rs` does
+not expand dnf variables, so the read fails and the key is skipped
+without a warning. The snapshot then has no `gpg_keys`, and the export
+has no `COPY config/etc/pki/rpm-gpg/`. EL9's file names the key
+literally, so EL9 is unaffected. With the host's key added by hand to a
+copy of each context, under that one `COPY` line, both RHEL 10 exports
+built, in 324 s and 242 s.
+
+**The images.**
+
+- `rpm -q firewalld audit cronie` reports `firewalld` and `cronie` not
+  installed in all four images, and `audit` installed, as above.
+- The units of the class are not found.
+- `sshd`, `httpd`, `nginx`, `pmcd`, `pmie`, `pmlogger` and `tuned` are
+  enabled, as are `iscsi-starter` and `NetworkManager-wait-online` on
+  RHEL 9. `bluetooth` and `kdump` are masked.
+- Every `systemctl` step succeeded.
+
+**Checking the call-site order needs an auto repo-less package.** With
+the standard plants, every repo-less or disabled-repo package
+(`epel-release`, `openh264`) is a leaf, and leaves are never in the
+class, so the main scans cannot tell the order. After the builds, on
+RHEL 10:
+
+```
+dnf download dos2unix                    # under the proxy workaround
+sudo dnf install -y ./dos2unix-*.rpm
+sudo mkdir -p /var/cache/dnf/local/packages && sudo cp dos2unix-*.rpm /var/cache/dnf/local/packages/
+sudo dnf mark remove dos2unix            # now auto, from_repo @commandline
+```
+
+The rescan has `dos2unix.aarch64` in `auto_packages`, needed by no
+leaf, annotated as a cached repo-less RPM, and included. The scan
+installs it with `COPY repoless-packages/...`, and the not-carried
+block is byte-identical to the main scan's, with 24 entries. Classified
+before the repo-less pass, it would have been in the class.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a

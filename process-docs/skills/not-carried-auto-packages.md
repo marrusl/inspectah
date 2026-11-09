@@ -118,7 +118,27 @@ The snapshot does not record dnf's install reason, so a surface cannot
 say per package why it was not user-installed: on the RHEL 9.8 host the
 group-install reason holds for 18 of the 38 and is indirect for the
 20 that only they need, and an orphan left by `dnf remove` would fall in
-the class too. A measurement at this branch follows.
+the class too.
+
+Measured at commit `af96710c` (2026-11-09), same hosts, drift and plants
+(details in `real-host-validation-runs.md`):
+
+- The scan's list is the same 38 and 24 packages, by `name.arch`. Owners
+  of an enabled unit lead: `cronie`, `firewalld`, `insights-client` (RHEL
+  9 only) and `rsyslog`. `audit` is not in the class on these hosts,
+  because the planted `cockpit` pulls it in.
+- No unit was omitted as `NotCarried`: every unit the class owns was
+  enabled at its preset, so no `systemctl` line existed to drop.
+- An unchanged refine export lists one package more on each host,
+  `dnf-plugins-core`, whose only puller is `epel-release`, which refine
+  excludes as repo-less. On RHEL 10 the scan keeps that `epel-release`
+  included as a manual step, so the scan neither installs nor lists
+  `dnf-plugins-core`.
+- In every image built, `firewalld` and `cronie` are absent and the
+  `systemctl` steps succeed.
+- A cached `@commandline` package marked as a dependency (`dnf mark
+  remove`) stays out of the class and is installed from its cached RPM,
+  which confirms the call-site order.
 
 ## Related
 
