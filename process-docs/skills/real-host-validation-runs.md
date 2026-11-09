@@ -422,6 +422,77 @@ Why the two paths could disagree at all, and what the guard does not
 cover, is in
 [export-paths-stage-different-trees](export-paths-stage-different-trees.md).
 
+### Measured, 2026-11-08: disabled-repo and repo-less exports build
+
+This is the first `podman build` of the disabled-repo and repo-less
+render paths, at `f85f4297`, on RHEL 9.8 aarch64 against
+`rhel-bootc:9.8`, after a standard drift run. Five contexts were built:
+the scan tarball, an untouched refine export, one with `nginx` excluded,
+one with an uploaded RPM, and a scan with a cached repo-less RPM. All
+five passed with no `COPY` source missing. Each ended in
+`bootc container lint` with the two known warnings. `--layers=true` was
+not needed this time, but the proxy workaround still was.
+
+**Planting a disabled-repo package.** On EL9, `epel-release` ships
+`epel-cisco-openh264.repo` with its main section enabled, so a standard
+drift run leaves the repo already enabled:
+
+```
+sudo dnf install -y openh264
+sudo sed -i '0,/^enabled=1/s//enabled=0/' /etc/yum.repos.d/epel-cisco-openh264.repo
+```
+
+The scan then renders `openh264` in its own block, with
+`--enablerepo=epel-cisco-openh264`, and the build log shows it resolved
+from that repo. The edit makes the `.repo` file an RPM-modified config,
+and the image keeps it disabled. Installing `epel-release` after the
+repo `COPY` leaves the `.rpmnew` that the Containerfile comment
+predicts.
+
+**Planting a cached repo-less RPM.** The collector looks for cached RPMs
+with `find /var/cache/dnf -name '*.rpm'`, so a planted copy anywhere
+under that tree counts:
+
+```
+dnf download dos2unix
+sudo dnf install -y ./dos2unix-*.rpm            # from_repo @commandline
+sudo mkdir -p /var/cache/dnf/local/packages && sudo cp dos2unix-*.rpm /var/cache/dnf/local/packages/
+```
+
+With both plants in place, the scan tarball's single combined step is
+`dnf install -y --enablerepo=epel-cisco-openh264 openh264 /tmp/dos2unix-*.rpm`.
+The build resolved both packages in one transaction (`Install 2
+Packages`, one from `@commandline` and one from the disabled repo).
+
+**Uploading over the API.** The multipart field must be named `file`.
+The response says whether the RPM matched a package:
+
+```
+curl -X POST localhost:8642/api/upload-rpm -F "file=@openh264-2.3.1-1.el9.aarch64.rpm"
+# {"match_kind":"exact","matched":"openh264.aarch64","status":"matched",...}
+```
+
+A matched upload bumps the generation. Read it again from `/api/view`
+before calling `/api/tarball`. An RPM for a package with no repo-less
+annotation comes back `"status":"unmatched"` and changes nothing.
+`epel-release` installed from a URL is such a package, although it is
+`@commandline`. A matched upload of a disabled-repo package replaces its
+`--enablerepo` install with a `COPY` and a `/tmp` path.
+
+**The drift proxy reaches plain ssh commands too.**
+`/etc/profile.d/proxy.sh` is sourced for non-interactive ssh shells, so
+`dnf download` as the login user fails with
+`Could not resolve proxy: proxy.internal`. Run it under the same
+`env -u HTTP_PROXY -u HTTPS_PROXY -u NO_PROXY` as the build.
+
+**A remote `pkill -f` matches its own shell.** `pkill -f "inspectah refine"`
+inside `ssh host '...'` also kills the `bash -c` that carries the
+pattern, so nothing after it runs. Use `pgrep -a inspectah`, which
+matches the process name, to check, and run the kill on its own.
+
+Timings for a full build of the drifted export, measured on the guest
+with `date +%s`: 337 s to 476 s per context, run one at a time.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
