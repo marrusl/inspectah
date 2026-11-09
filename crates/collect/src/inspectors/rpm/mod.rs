@@ -148,10 +148,13 @@ impl RpmInspector {
     /// produces a sentinel format: each package starts with a `@@name`
     /// header line, followed by its file paths (one per line). Groups
     /// results by package name into `FileOwnershipEntry` structs.
-    fn query_file_ownership(&self, exec: &dyn Executor) -> Vec<FileOwnershipEntry> {
+    ///
+    /// Returns `None` when the query fails, so the dependency tree can tell
+    /// "no file is owned" from "ownership is unknown".
+    fn query_file_ownership(&self, exec: &dyn Executor) -> Option<Vec<FileOwnershipEntry>> {
         let result = exec.run("rpm", &["-qa", "--queryformat", RPM_FILE_OWNERSHIP_FORMAT]);
         if !result.success() {
-            return Vec::new();
+            return None;
         }
 
         let mut pkg_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -169,13 +172,15 @@ impl RpmInspector {
             }
         }
 
-        pkg_map
-            .into_iter()
-            .map(|(package_name, paths)| FileOwnershipEntry {
-                package_name,
-                paths,
-            })
-            .collect()
+        Some(
+            pkg_map
+                .into_iter()
+                .map(|(package_name, paths)| FileOwnershipEntry {
+                    package_name,
+                    paths,
+                })
+                .collect(),
+        )
     }
 
     fn collect_supplementary(
@@ -376,8 +381,13 @@ impl Inspector for RpmInspector {
             inspector: inspector_id,
             step: StepId::ResolvingDepTree,
         });
-        let leaf_classification =
-            classify_leaf_auto(exec, &packages_added, &baseline_name_set, &file_ownership);
+        let leaf_classification = classify_leaf_auto(
+            exec,
+            &packages_added,
+            &baseline_name_set,
+            file_ownership.as_deref(),
+        );
+        let file_ownership = file_ownership.unwrap_or_default();
         let dep_tree_outcome = if leaf_classification.leaf_packages.is_none() {
             StepOutcome::Degraded {
                 reason: "dependency classification unavailable".into(),
@@ -809,11 +819,12 @@ type PackageDeps = (String, Vec<(Relation, DepExpr)>);
 /// packages together becomes a `JointSupplement` instead of an edge.
 ///
 /// Returns direct-only deps (caller must walk the graph for transitive closure).
-/// Returns `None` if either query fails.
+/// Returns `None` if either query fails, or if a file requirement needs
+/// `file_ownership` and the ownership query failed (`None`).
 fn classify_deps_rpm(
     exec: &dyn Executor,
     added_ids: &HashSet<String>,
-    file_ownership: &[FileOwnershipEntry],
+    file_ownership: Option<&[FileOwnershipEntry]>,
 ) -> Option<RpmDepGraph> {
     let mut joint: Vec<JointSupplement> = Vec::new();
     if added_ids.is_empty() {
@@ -1028,12 +1039,13 @@ struct Provide {
 
 impl ProviderIndex {
     /// Look up every capability in `wanted`. Returns `None` if the provides
-    /// index query fails, so classification falls back to dnf rather than
-    /// reading as a graph with no edges.
+    /// index query fails, or if `wanted` holds a file path and file ownership
+    /// is unavailable, so classification falls back to dnf rather than
+    /// reading as a graph missing those edges.
     fn build(
         exec: &dyn Executor,
         wanted: &HashSet<&str>,
-        file_ownership: &[FileOwnershipEntry],
+        file_ownership: Option<&[FileOwnershipEntry]>,
     ) -> Option<Self> {
         let mut providers: HashMap<String, Vec<Provide>> = HashMap::new();
         if wanted.is_empty() {
@@ -1092,7 +1104,10 @@ impl ProviderIndex {
         }
 
         if !wanted_paths.is_empty() {
-            for entry in file_ownership {
+            // Most file requirements (`/usr/bin/perl`) are answered only by
+            // ownership. Without it those edges would vanish while the tree
+            // still looked complete.
+            for entry in file_ownership? {
                 let Some(ids) = ids_by_name.get(entry.package_name.as_str()) else {
                     continue;
                 };
@@ -1149,7 +1164,7 @@ fn classify_leaf_auto(
     exec: &dyn Executor,
     packages_added: &[PackageEntry],
     baseline_names: &HashSet<String>,
-    file_ownership: &[FileOwnershipEntry],
+    file_ownership: Option<&[FileOwnershipEntry]>,
 ) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
@@ -2017,7 +2032,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
 
         assert_eq!(
             classification.leaf_packages,
@@ -2070,7 +2085,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
 
         assert_eq!(
             classification.leaf_packages,
@@ -2129,6 +2144,76 @@ mod tests {
         assert_eq!(rpm.leaf_packages, None);
         assert_eq!(rpm.auto_packages, None);
         assert_eq!(rpm.leaf_dep_tree, serde_json::json!({}));
+    }
+
+    #[test]
+    fn rpm_inspector_does_not_trust_the_tree_when_file_ownership_fails() {
+        // git reaches perl-interpreter only through /usr/bin/perl, which
+        // only file ownership answers. With the ownership query failing,
+        // the rpm tree would drop that edge yet look complete, so
+        // classification falls back to dnf; here dnf fails too, so it is
+        // marked unavailable.
+        let exec = build_leaf_classification_executor(
+            "\
+0:git-2.47.3-1.el9.aarch64
+0:perl-interpreter-5.32.1-481.el9.aarch64
+",
+        )
+        .with_command(
+            &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "error: rpmdb open failed".into(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 0,
+                stdout: "git.aarch64\n".into(),
+                stderr: String::new(),
+            },
+        )
+        .with_command(
+            &format!(
+                "rpm -q --queryformat {} git perl-interpreter",
+                RPM_DEPS_FORMAT
+            ),
+            ExecResult {
+                exit_code: 0,
+                stdout: "@@git\nR\t/usr/bin/perl\n@@perl-interpreter\n".into(),
+                stderr: String::new(),
+            },
+        )
+        .with_command(
+            &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+            ExecResult {
+                exit_code: 0,
+                stdout: "git.aarch64\t8\t2.47.3-1.el9\tgit\n\
+                         perl-interpreter.aarch64\t8\t4:5.32.1-481.el9\tperl-interpreter\n"
+                    .into(),
+                stderr: String::new(),
+            },
+        );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+        assert_eq!(rpm.leaf_packages, None);
+        assert_eq!(rpm.leaf_dep_tree, serde_json::json!({}));
+        assert!(rpm.file_ownership.is_empty());
     }
 
     #[test]
@@ -2226,7 +2311,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
 
         assert_eq!(
             classification.leaf_packages,
@@ -2343,7 +2428,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
 
         // Both vim and kernel stay in leaf (empty baseline — no suppression)
         let mut expected_leaf = vec!["kernel.x86_64".to_string(), "vim.x86_64".to_string()];
@@ -2571,7 +2656,7 @@ mod tests {
         ];
 
         // No baseline provided — auto includes all non-leaf added packages
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
         assert_eq!(
             classification.leaf_packages,
             Some(vec!["vim.x86_64".to_string()])
@@ -2621,7 +2706,7 @@ mod tests {
         ];
 
         let baseline: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
-        let classification = classify_leaf_auto(&exec, &added, &baseline, &[]);
+        let classification = classify_leaf_auto(&exec, &added, &baseline, Some(&[]));
 
         assert_eq!(
             classification.leaf_packages,
@@ -2739,7 +2824,9 @@ mod tests {
         );
 
         let inspector = RpmInspector::new();
-        let entries = inspector.query_file_ownership(&exec);
+        let entries = inspector
+            .query_file_ownership(&exec)
+            .expect("query succeeds");
 
         assert_eq!(entries.len(), 3, "should have 3 packages");
 
@@ -2777,7 +2864,9 @@ mod tests {
         );
 
         let inspector = RpmInspector::new();
-        let entries = inspector.query_file_ownership(&exec);
+        let entries = inspector
+            .query_file_ownership(&exec)
+            .expect("query succeeds");
         assert!(entries.is_empty(), "empty output should produce no entries");
     }
 
@@ -2795,8 +2884,8 @@ mod tests {
         let inspector = RpmInspector::new();
         let entries = inspector.query_file_ownership(&exec);
         assert!(
-            entries.is_empty(),
-            "failed command should produce no entries"
+            entries.is_none(),
+            "a failed query must not read as owning nothing"
         );
     }
 
@@ -2976,7 +3065,7 @@ R\t/usr/bin/sh
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[])
+        let deps = classify_deps_rpm(&exec, &added_ids, Some(&[]))
             .expect("graph should be available")
             .depends_on;
         // vim depends on glibc (via libc.so.6()(64bit) → glibc.x86_64).
@@ -3046,7 +3135,7 @@ R\tlibssl.so.3()(64bit)
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[])
+        let deps = classify_deps_rpm(&exec, &added_ids, Some(&[]))
             .expect("graph should be available")
             .depends_on;
 
@@ -3105,7 +3194,7 @@ R\tlibacl.so.1()(64bit)
             make_test_entry("libacl", "aarch64"),
             make_test_entry("pcre2", "aarch64"),
         ];
-        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
         let tree = result.leaf_dep_tree.as_object().expect("dep tree object");
         let closure = |leaf: &str| -> Vec<String> {
             serde_json::from_value(tree[leaf].clone()).expect("closure is a string list")
@@ -3218,7 +3307,7 @@ R\t/sbin/sysctl
             "procps-ng.aarch64",
             "liberation-sans-fonts.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &owners)
+        let deps = classify_deps_rpm(&exec, &added, Some(&owners))
             .expect("graph should be available")
             .depends_on;
         assert_eq!(
@@ -3279,7 +3368,7 @@ R\tlibnghttp2.so.14()(64bit)
         .map(|(n, a)| make_test_entry(n, a))
         .collect();
 
-        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &owners);
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&owners));
         assert_eq!(
             closure(&result, "git.aarch64"),
             vec!["perl-interpreter.aarch64"]
@@ -3317,7 +3406,7 @@ S\tfoo-hardware
             "langpacks-en.noarch",
             "tuned-profiles-foo.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[])
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
             .expect("graph should be available")
             .depends_on;
         assert_eq!(
@@ -3360,7 +3449,7 @@ S\t(shared-lib and desktop)
             .iter()
             .map(|n| make_test_entry(n, "noarch"))
             .collect();
-        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
         assert_eq!(closure(&result, "app.noarch"), vec!["shared-lib.noarch"]);
         assert_eq!(
             closure(&result, "desk-app.noarch"),
@@ -3400,7 +3489,7 @@ R\tlibc.so.6()(64bit)
         .iter()
         .map(|(n, a)| make_test_entry(n, a))
         .collect();
-        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), Some(&[]));
         assert_eq!(closure(&result, "tree.aarch64"), vec!["glibc.aarch64"]);
         assert_eq!(
             closure(&result, "langpacks-en.noarch"),
@@ -3441,7 +3530,7 @@ R\t(emacs or vim-minimal or nano)
             "nano.aarch64",
             "vim-minimal.aarch64",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[])
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
             .expect("graph should be available")
             .depends_on;
         assert_eq!(
@@ -3484,7 +3573,7 @@ R\tengine
             "foo.noarch",
             "plugin.noarch",
         ]);
-        let deps = classify_deps_rpm(&exec, &added, &[])
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
             .expect("graph should be available")
             .depends_on;
         assert_eq!(deps["app.noarch"], ids(&["fallback.noarch"]));
@@ -3535,7 +3624,39 @@ untagged line
             );
 
         let added_ids: HashSet<String> = ["tree.aarch64"].iter().map(|s| s.to_string()).collect();
-        assert!(classify_deps_rpm(&exec, &added_ids, &[]).is_none());
+        assert!(classify_deps_rpm(&exec, &added_ids, Some(&[])).is_none());
+    }
+
+    #[test]
+    fn classify_deps_rpm_needs_file_ownership_only_for_file_requirements() {
+        // A file requirement with ownership unknown sends classification to
+        // the dnf fallback. Without one, ownership is not needed.
+        let index = "git.aarch64\t0\t\tgit\n\
+                     perl-interpreter.aarch64\t0\t\tperl-interpreter\n";
+        let added = ids(&["git.aarch64", "perl-interpreter.aarch64"]);
+        let with_path = dep_graph_executor(
+            "git perl-interpreter",
+            "@@git\nR\t/usr/bin/perl\n",
+            index,
+            "",
+        );
+        assert!(classify_deps_rpm(&with_path, &added, None).is_none());
+        let owners = [ownership("perl-interpreter", &["/usr/bin/perl"])];
+        let deps = classify_deps_rpm(&with_path, &added, Some(&owners))
+            .expect("graph should be available")
+            .depends_on;
+        assert_eq!(deps["git.aarch64"], ids(&["perl-interpreter.aarch64"]));
+
+        let no_path = dep_graph_executor(
+            "git perl-interpreter",
+            "@@git\nR\tperl-interpreter\n",
+            index,
+            "",
+        );
+        let deps = classify_deps_rpm(&no_path, &added, None)
+            .expect("graph should be available")
+            .depends_on;
+        assert_eq!(deps["git.aarch64"], ids(&["perl-interpreter.aarch64"]));
     }
 
     #[test]
@@ -3550,7 +3671,7 @@ untagged line
         );
 
         let added_ids: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
-        let deps = classify_deps_rpm(&exec, &added_ids, &[]);
+        let deps = classify_deps_rpm(&exec, &added_ids, Some(&[]));
         assert!(deps.is_none());
     }
 
@@ -3559,7 +3680,7 @@ untagged line
         let exec = MockExecutor::new();
         let added_ids: HashSet<String> = HashSet::new();
         let graph =
-            classify_deps_rpm(&exec, &added_ids, &[]).expect("empty set should return Some");
+            classify_deps_rpm(&exec, &added_ids, Some(&[])).expect("empty set should return Some");
         assert!(graph.depends_on.is_empty());
         assert!(graph.joint.is_empty());
     }
@@ -3670,7 +3791,7 @@ R\tlibc.so.6()(64bit)
         ];
 
         let baseline = HashSet::new();
-        let result = classify_leaf_auto(&exec, &packages, &baseline, &[]);
+        let result = classify_leaf_auto(&exec, &packages, &baseline, Some(&[]));
         // httpd is leaf (nothing depends on it).
         assert_eq!(result.leaf_packages, Some(vec!["httpd.x86_64".to_string()]));
         // apr and glibc are auto.
