@@ -22,6 +22,9 @@
   - **Containerfile:** a comment block in the packages section, following the `# Omitted:` pattern: a header line with the count, then one line per package naming any unit it had enabled, for example `#   firewalld (firewalld.service was enabled)`.
   - **`audit-report.md`:** a "Not carried" table in the Packages group with the columns Package, Source repo, Enabled units, Reason.
   - **Ordering, on every surface:** packages that own a unit in `services.enabled_units` first, then the rest, each part sorted by name.
+- **Neutral reason wording (Mark, 2026-11-09).** Every surface says "not user-installed on the source host, and nothing this image installs needs it". The snapshot does not record dnf's install reason, so the renderer cannot say "installed by the OS installer" per package: on the measured RHEL 9.8 host that is true for 18 of the 38 and indirect for the 20 that only they need, and an orphan left by `dnf remove` would fall in the class too. No install-reason collection and no snapshot format change.
+- **"Was enabled", read from `enabled_units` (Mark, 2026-11-09).** The per-package lines and the ordering use enablement as `services.enabled_units` records it. Running state at scan time is not collected.
+- **List and flip together (Mark, 2026-11-09).** Tasks 1 to 10 ship as one change: the scan path's default moves to excluded in the same release that adds the visible list. Rationale: the tree matched libsolv's closures on two real hosts (28 of 28 leaves on RHEL 9.8 and on RHEL 10.2), and the list makes every exclusion visible. The alternative was to ship the list first with no disposition change, reading the class as "included but unneeded", and flip the default a release later once real scans confirmed the list. It was rejected because the scan path would keep the inconsistency option B exists to remove for another release, with services and `/var` treating as present packages the image does not install.
 - **Later and separate (not in this plan's execution):** a refine UI group with one-click include, owned by the web frontend owner, and possibly an `x-export-warnings` entry for packages whose units were enabled. Tasks 11 and 12 record them.
 
 ## Out of scope
@@ -75,7 +78,7 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
 
 ### The snapshot format does not change
 
-No field is added, renamed or retyped, so `SCHEMA_VERSION` stays at 25. What changes is a value: the scan path writes `disposition` excluded for these packages where the collector left it included. A refine session overwrites package dispositions in `normalize_package_defaults` anyway, so it reads a new scan snapshot and an old one the same way. **If any task finds it needs a new field (for example dnf's install reason, see "Needs a decision"), stop and ask before adding it.**
+No field is added, renamed or retyped, so `SCHEMA_VERSION` stays at 25. What changes is a value: the scan path writes `disposition` excluded for these packages where the collector left it included. A refine session overwrites package dispositions in `normalize_package_defaults` anyway, so it reads a new scan snapshot and an old one the same way. **If any task finds it needs a new field (for example dnf's install reason), stop and ask before adding it.**
 
 ### Fallback: no leaf or dependency data never excludes everything
 
@@ -290,11 +293,6 @@ Possibly add an `x-export-warnings` entry when a not-carried package owned a uni
 
 ---
 
-## Needs a decision before execution
-
-1. **The reason wording.** The agreed example said "installed by the OS installer on the source host". The snapshot does not record dnf's install reason, so the renderer cannot know that per package. On the measured hosts it is true for the 18 group installs and indirect for the 20 that only they need, and on another host an orphan left by `dnf remove` would fall in the class too. This plan uses "not user-installed on the source host, and nothing this image installs needs it". Saying "installed by the OS installer" truthfully needs dnf's reason in the snapshot, which is a format change.
-2. **"Enabled", not "running".** Ordering reads `services.enabled_units`, which records enablement, not whether a unit was running at scan time. The plan says "was enabled" on every surface.
-
 ## Risks
 
 - **A running firewall, audit daemon and cron daemon leave the image by default.** That is the decision, and the list is the mitigation, but a reader who never opens the audit report or reads Containerfile comments will not notice. The list's ordering puts these first; Task 12 is the stronger mitigation and is deferred.
@@ -304,4 +302,4 @@ Possibly add an `x-export-warnings` entry when a not-carried package owned a uni
 
 ### The strongest case against this plan
 
-Applying the default on the scan path makes the scan tarball depend on the leaf tree in a way it did not before. Today a wrong tree on the scan path costs a stray `systemctl` line or a `/var` directory not provisioned; after this plan a wrong tree silently removes a package's unit and provisions around it, and the only signal is a comment line. The tree has been rewritten twice in a week (`c397f274`, then the file, weak and rich rework) and the one item that would make it judge the target, not the host, is deferred. A more cautious sequence would ship the visible list first with no disposition change (Tasks 3 to 5 against an "included but unneeded" reading), let one release of real scans confirm the list matches what operators expect, and only then flip the default. What would settle it: a third real host with a different install profile (a minimal install, or one with a desktop group) whose not-carried list contains no package the built image turns out to need. Task 10 covers two hosts, both from the same profile.
+Applying the default on the scan path makes the scan tarball depend on the leaf tree in a way it did not before. Today a wrong tree on the scan path costs a stray `systemctl` line or a `/var` directory not provisioned; after this plan a wrong tree silently removes a package's unit and provisions around it, and the only signal is a comment line. The tree has been rewritten twice in a week (`c397f274`, then the file, weak and rich rework) and the one item that would make it judge the target, not the host, is deferred. The list-first sequence in the Decision record answers that risk more cautiously, at the cost of a release of inconsistent scan output. What would show the decision wrong: a third real host with a different install profile (a minimal install, or one with a desktop group) whose not-carried list contains no package the built image turns out to need. Task 10 covers two hosts, both from the same profile.
