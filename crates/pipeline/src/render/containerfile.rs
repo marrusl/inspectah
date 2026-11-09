@@ -28,6 +28,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::language_packages;
+use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
     ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
@@ -1043,6 +1044,8 @@ fn packages_section_lines(
         ));
     }
 
+    lines.extend(not_carried_lines(snap));
+
     if !todo_lines.is_empty() {
         lines.push(String::new());
         lines.extend(section("Manual Follow-up Required", todo_lines));
@@ -1084,6 +1087,31 @@ fn packages_section_lines(
         }
     }
 
+    lines
+}
+
+/// The `# Not carried:` block: a header with the reason and count, then
+/// one line per [`not_carried_packages`] entry, in its order, naming any
+/// units the package had enabled. Comments only, so nothing in it is
+/// installed. Empty, with no header, when the list is.
+fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    let list = not_carried_packages(snap);
+    if list.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "# Not carried: {NOT_CARRIED_REASON} ({})",
+        list.len()
+    )];
+    for pkg in &list {
+        let name = pkg.display_name();
+        lines.push(match pkg.enabled_units.as_slice() {
+            [] => format!("#   {name}"),
+            [unit] => format!("#   {name} ({unit} was enabled)"),
+            units => format!("#   {name} ({} were enabled)", units.join(", ")),
+        });
+    }
+    lines.push(String::new());
     lines
 }
 
@@ -6906,5 +6934,184 @@ RUN dnf install -y \
             content.contains("not guaranteed"),
             "must include warning comment, got: {content}"
         );
+    }
+
+    // --- Not carried block -------------------------------------------------
+
+    /// A host with one leaf and five auto packages nothing it needs:
+    /// `cronie` owns two enabled units, `firewalld` one, and both arches of
+    /// `glibc` are unneeded, so each prints as `name.arch`. Dispositions are
+    /// as collected; the not-carried list stays empty until they are set.
+    fn not_carried_host() -> InspectionSnapshot {
+        use inspectah_core::types::services::ServiceSection;
+        let auto = |name: &str, arch: &str| PackageEntry {
+            name: name.into(),
+            arch: arch.into(),
+            state: PackageState::Added,
+            source_repo: "baseos".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                auto("httpd", "x86_64"),
+                auto("apr", "x86_64"),
+                auto("dracut-config-rescue", "x86_64"),
+                auto("firewalld", "noarch"),
+                auto("cronie", "x86_64"),
+                auto("glibc", "x86_64"),
+                auto("glibc", "i686"),
+            ],
+            leaf_packages: Some(vec!["httpd.x86_64".into()]),
+            auto_packages: Some(
+                [
+                    "apr.x86_64",
+                    "dracut-config-rescue.x86_64",
+                    "firewalld.noarch",
+                    "cronie.x86_64",
+                    "glibc.x86_64",
+                    "glibc.i686",
+                ]
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect(),
+            ),
+            leaf_dep_tree: serde_json::json!({ "httpd.x86_64": ["apr.x86_64"] }),
+            file_ownership: vec![
+                owns("firewalld", &["/usr/lib/systemd/system/firewalld.service"]),
+                owns(
+                    "cronie",
+                    &[
+                        "/usr/lib/systemd/system/crond.service",
+                        "/usr/lib/systemd/system/crond-backup.timer",
+                    ],
+                ),
+            ],
+            ..Default::default()
+        });
+        snap.services = Some(ServiceSection {
+            enabled_units: vec![
+                "firewalld.service".into(),
+                "crond.service".into(),
+                "crond-backup.timer".into(),
+            ],
+            ..Default::default()
+        });
+        snap
+    }
+
+    fn scanned_not_carried_host() -> InspectionSnapshot {
+        let mut snap = not_carried_host();
+        super::super::not_carried::apply_scan_package_defaults(&mut snap);
+        snap
+    }
+
+    /// The `# Not carried:` block: its header through the line before the
+    /// next blank line. Empty when the output has no header.
+    fn not_carried_block(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .skip_while(|l| !l.starts_with("# Not carried:"))
+            .take_while(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn not_carried_block_lists_each_package_after_the_install_lines() {
+        let output = render_containerfile(&scanned_not_carried_host(), None, None);
+
+        assert_eq!(
+            not_carried_block(&output),
+            [
+                format!("# Not carried: {NOT_CARRIED_REASON} (5)").as_str(),
+                "#   cronie (crond-backup.timer, crond.service were enabled)",
+                "#   firewalld (firewalld.service was enabled)",
+                "#   dracut-config-rescue",
+                "#   glibc.i686",
+                "#   glibc.x86_64",
+            ],
+            "{output}"
+        );
+
+        let header = output.find("# Not carried:").expect("block is rendered");
+        let install = output
+            .find("# === Packages (")
+            .expect("the leaf is installed");
+        assert!(
+            install < header,
+            "the block follows the install lines:\n{output}"
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn not_carried_block_is_absent_without_a_list() {
+        let cases: Vec<(&str, InspectionSnapshot)> = vec![
+            (
+                "dispositions as collected leave the list empty",
+                not_carried_host(),
+            ),
+            ("no leaf data, so no classification", {
+                let mut snap = not_carried_host();
+                let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+                rpm.leaf_packages = None;
+                rpm.auto_packages = None;
+                super::super::not_carried::apply_scan_package_defaults(&mut snap);
+                snap
+            }),
+        ];
+        for (why, snap) in cases {
+            let output = render_containerfile(&snap, None, None);
+            assert!(!output.contains("Not carried"), "{why}:\n{output}");
+        }
+    }
+
+    #[test]
+    fn not_carried_block_is_comments_only() {
+        let snap = scanned_not_carried_host();
+        let output = render_containerfile(&snap, None, None);
+        let block = not_carried_block(&output);
+        assert!(!block.is_empty(), "the fixture lists packages");
+        assert!(block.iter().all(|l| l.starts_with('#')), "{output}");
+
+        let listed = super::super::not_carried::not_carried_packages(&snap);
+        let installed: Vec<&str> = output
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .flat_map(str::split_whitespace)
+            .collect();
+        for pkg in &listed {
+            for name in [pkg.name.clone(), pkg.display_name()] {
+                assert!(
+                    !installed.contains(&name.as_str()),
+                    "{name} is installed:\n{output}"
+                );
+            }
+        }
+    }
+
+    /// Refine's leaf default keeps leaves as decided and excludes every
+    /// auto package. Set by hand here, it renders the same block as the
+    /// scan defaults; the cross-crate check against refine's export lives
+    /// in the CLI crate.
+    #[test]
+    fn not_carried_block_matches_under_leaf_default_dispositions() {
+        let mut leaf_default = not_carried_host();
+        let rpm = leaf_default
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section");
+        let leaves = rpm.leaf_packages.clone().expect("fixture has leaf data");
+        for pkg in &mut rpm.packages_added {
+            if !leaves.contains(&canonical_package_id(&pkg.name, &pkg.arch)) {
+                pkg.disposition = FindingKind::excluded();
+            }
+        }
+
+        let scan = render_containerfile(&scanned_not_carried_host(), None, None);
+        let refine_like = render_containerfile(&leaf_default, None, None);
+        assert!(!not_carried_block(&scan).is_empty(), "{scan}");
+        assert_eq!(not_carried_block(&refine_like), not_carried_block(&scan));
     }
 }

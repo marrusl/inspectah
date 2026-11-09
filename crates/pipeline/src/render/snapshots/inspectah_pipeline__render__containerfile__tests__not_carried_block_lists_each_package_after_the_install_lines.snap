@@ -1,0 +1,26 @@
+---
+source: crates/pipeline/src/render/containerfile.rs
+expression: output
+---
+# FROM line omitted — target image could not be determined. Use --base-image to specify.
+
+# === Packages (1) ===
+RUN dnf install -y \
+    httpd \
+    && dnf clean all \
+    && rm -rf \
+        /var/cache/dnf \
+        /var/lib/dnf/history* \
+        /var/log/dnf* \
+        /var/log/hawkey.log \
+        /var/log/rhsm
+
+# Not carried: not user-installed on the source host, and nothing this image installs needs it (5)
+#   cronie (crond-backup.timer, crond.service were enabled)
+#   firewalld (firewalld.service was enabled)
+#   dracut-config-rescue
+#   glibc.i686
+#   glibc.x86_64
+
+# === Validate bootc compatibility ===
+RUN bootc container lint

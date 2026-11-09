@@ -44,6 +44,12 @@ use super::service_intent::pulled_in_by_included;
 /// which refine's anaconda classifier decides.
 const ANACONDA_SOURCE_REPO: &str = "anaconda";
 
+/// Why a not-carried package is left out of the image, as every surface
+/// states it: the Containerfile block, the audit table and the service
+/// omission reason.
+pub const NOT_CARRIED_REASON: &str =
+    "not user-installed on the source host, and nothing this image installs needs it";
+
 /// How an added package reaches the target image, for the auto class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoCarriage {
