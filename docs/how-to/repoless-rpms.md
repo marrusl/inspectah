@@ -301,9 +301,11 @@ A package whose repository is disabled on the source host, such as the
 `openh264` package in the example, is repo-less: no enabled repository
 serves it. The host still has the repository's definition, though, and
 the package was installed from it on purpose. When the export carries
-that `.repo` file, and the disabled section in it defines a `baseurl`,
-`metalink` or `mirrorlist`, the package installs from that repository in
-its own step, with the repository enabled for that step only:
+that `.repo` file, the disabled section in it defines a `baseurl`,
+`metalink` or `mirrorlist`, and the export carries every
+`gpgkey=file://` key the section names, the package installs from that
+repository in its own step, with the repository enabled for that step
+only:
 
 ```dockerfile
 # === Packages from repos disabled on the source host (1) ===
@@ -322,8 +324,8 @@ step, and dnf installs it with the package that needs it. Refine treats it the s
 way: it is not pre-excluded, so an untouched export installs it exactly
 as the scan tarball does.
 
-When the export does not carry the `.repo` file, because it was never
-captured or it was excluded, the package is handled like any other
+When the export does not carry the `.repo` file or a key it names,
+because it was never captured or it was excluded, the package is handled like any other
 repo-less package: it appears only in the repo-less block, and refine
 starts it excluded.
 

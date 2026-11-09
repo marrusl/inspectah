@@ -59,7 +59,9 @@ the scan left repo-less can install from its own repo with
 `--enablerepo`. It matches `source_repo` against the section ids of the
 *included* repo files by case-insensitive equality (the `Exact` rule,
 which is what `normalize_source_repos` already rewrote `source_repo`
-to), and accepts only a section that is disabled and defines a source.
+to), and accepts only a section that is disabled, defines a source, and
+names no `gpgkey=file://` key the export leaves out (`keys_included`,
+shared with the repo-enabling proof).
 It is decided at render rather than at scan because whether the `.repo`
 file ships is a refine decision. It also requires the package to be
 installable by name (`is_package_installable`), and it does **not** read

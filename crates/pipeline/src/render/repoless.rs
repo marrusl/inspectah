@@ -6,6 +6,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::verified_upload::{VerifiedUpload, VerifiedUploads};
 
 use super::language_packages::sanitize_for_comment;
+use super::repo_enabling::keys_included;
 use super::safety::sanitize_shell_value;
 use super::service_intent::is_package_installable;
 
@@ -113,8 +114,9 @@ pub fn write_cached_rpms(rpm: &RpmSection, render_dir: &std::path::Path) -> std:
 /// ([`is_package_installable`]: not a local install or no-repo state, and
 /// its `source_repo` is a real repo id rather than `@commandline`), its
 /// `source_repo` is not another `@` pseudo-repo, an included repo file has
-/// a section with that id that is disabled and defines a source, and the
-/// id and the package's name and arch pass `sanitize_shell_value`. The id
+/// a section with that id that is disabled and defines a source, every
+/// `gpgkey=file://` key that section names is an included key (dnf cannot
+/// verify the package without it), and the id and the package's name and arch pass `sanitize_shell_value`. The id
 /// is returned as the `.repo` file spells it, since `--enablerepo` takes
 /// it verbatim.
 ///
@@ -141,7 +143,10 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
         .flat_map(|f| parse_repo_sections(&f.content))
         .find(|sec| sec.id.as_str().eq_ignore_ascii_case(&pkg.source_repo))
         .filter(|sec| {
-            !sec.enabled && sec.has_source && sanitize_shell_value(sec.id.as_str()).is_some()
+            !sec.enabled
+                && sec.has_source
+                && keys_included(rpm, &sec.gpg_key_paths)
+                && sanitize_shell_value(sec.id.as_str()).is_some()
         })
         .map(|sec| sec.id)
 }

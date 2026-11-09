@@ -2498,6 +2498,11 @@ mod tests {
         const ENABLEREPO: &str = "--enablerepo=epel-cisco-openh264";
         const INSTALL_LINE: &str = "    openh264 \\";
         const GROUP: &str = "Multimedia";
+        const KEY_PATH: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-cisco";
+        const KEYED: &str = "[epel-cisco-openh264]\n\
+             metalink=https://example.invalid/metalink\n\
+             enabled=0\n\
+             gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-cisco\n";
 
         #[derive(Clone, Copy)]
         enum Want {
@@ -2527,6 +2532,8 @@ mod tests {
             state: PackageState,
             leaf: Leaf,
             group_member: bool,
+            /// The section names a `gpgkey=file://` key: `Some(included)`.
+            key: Option<bool>,
             want: Want,
         }
         const BASE: Case = Case {
@@ -2538,6 +2545,7 @@ mod tests {
             state: PackageState::Added,
             leaf: Leaf::Unknown,
             group_member: false,
+            key: None,
             want: Want::FromRepo,
         };
         let cases = [
@@ -2593,6 +2601,25 @@ mod tests {
                 group_member: true,
                 ..BASE
             },
+            Case {
+                name: "the section's GPG key ships",
+                repo_file: Some((KEYED, true)),
+                key: Some(true),
+                ..BASE
+            },
+            Case {
+                name: "the section's GPG key is excluded",
+                repo_file: Some((KEYED, true)),
+                key: Some(false),
+                want: Want::Repoless { todo: false },
+                ..BASE
+            },
+            Case {
+                name: "the section's GPG key was never captured",
+                repo_file: Some((KEYED, true)),
+                want: Want::Repoless { todo: false },
+                ..BASE
+            },
         ];
 
         for case in &cases {
@@ -2615,6 +2642,9 @@ mod tests {
                 if case.crb {
                     rpm.repo_files
                         .push(repo_file("/etc/yum.repos.d/crb.repo", CRB_CONTENT, true));
+                }
+                if let Some(included) = case.key {
+                    rpm.gpg_keys.push(repo_file(KEY_PATH, "", included));
                 }
                 match case.leaf {
                     Leaf::Unknown => {}
