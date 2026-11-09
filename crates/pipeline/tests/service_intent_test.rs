@@ -5,6 +5,7 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
+use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::service_intent::{
     AdvisoryReason, OmissionReason, effective_target_packages, is_package_installable,
     render_service_intent,
@@ -971,5 +972,295 @@ fn test_service_presence_tiers_table() {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Not carried: the omission reason for an auto package nothing needs
+// ---------------------------------------------------------------------------
+
+const RHC_NOT_CARRIED: &str = "package 'rhc' is not carried: not user-installed on the source host, and nothing this image installs needs it";
+
+#[test]
+fn not_carried_describes_the_class_in_the_shared_wording() {
+    assert_eq!(OmissionReason::NotCarried.describe("rhc"), RHC_NOT_CARRIED);
+}
+
+fn added(name: &str, arch: &str, disposition: FindingKind) -> PackageEntry {
+    PackageEntry {
+        name: name.into(),
+        arch: arch.into(),
+        state: PackageState::Added,
+        disposition,
+        source_repo: "appstream".into(),
+        ..Default::default()
+    }
+}
+
+/// A scan snapshot with full leaf data: `packages` are every added entry
+/// (all included, as the collector records them), `leaves` and `autos` are
+/// `name.arch` ids, and `tree` is the leaf dependency tree. The baseline
+/// ships none of them.
+fn leaf_snapshot(
+    packages: Vec<PackageEntry>,
+    leaves: &[&str],
+    autos: &[&str],
+    tree: serde_json::Value,
+    changes: Vec<ServiceStateChange>,
+) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(vec!["bash".into()]),
+        packages_added: packages,
+        leaf_packages: Some(leaves.iter().map(|s| s.to_string()).collect()),
+        auto_packages: Some(autos.iter().map(|s| s.to_string()).collect()),
+        leaf_dep_tree: tree,
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        state_changes: changes,
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+    snap
+}
+
+/// The unit is in no `systemctl` line of the plan.
+fn acted_on(lines: &[String], unit: &str) -> bool {
+    lines
+        .iter()
+        .any(|l| !l.starts_with('#') && l.split_whitespace().any(|w| w == unit))
+}
+
+/// Units owned by an auto package nothing included pulls in are omitted on
+/// the scan path as not carried, whatever the action: enable, disable or
+/// mask.
+#[test]
+fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() {
+    let cases = [
+        (
+            "rhcd.service",
+            "rhc",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+        ),
+        (
+            "firewalld.service",
+            "firewalld",
+            ServiceUnitState::Disabled,
+            Some(PresetDefault::Enable),
+        ),
+        (
+            "kdump.service",
+            "kexec-tools",
+            ServiceUnitState::Masked,
+            None,
+        ),
+    ];
+    for (unit, owner, state, preset) in cases {
+        let mut snap = leaf_snapshot(
+            vec![
+                added("vim", "x86_64", FindingKind::included()),
+                added(owner, "x86_64", FindingKind::included()),
+            ],
+            &["vim.x86_64"],
+            &[&format!("{owner}.x86_64")],
+            serde_json::json!({ "vim.x86_64": [] }),
+            vec![state_change(unit, state, preset, Some(owner))],
+        );
+        apply_scan_package_defaults(&mut snap);
+
+        let plan = render_service_intent(&snap);
+        assert!(!acted_on(&plan.lines, unit), "{unit}: {:?}", plan.lines);
+        assert_eq!(plan.omissions.len(), 1, "{unit}");
+        assert_eq!(
+            plan.omissions[0].reason,
+            OmissionReason::NotCarried,
+            "{unit}"
+        );
+        let comment = format!(
+            "# Omitted: {unit} (package '{owner}' is not carried: not user-installed on the source host, and nothing this image installs needs it)"
+        );
+        assert!(
+            plan.lines.contains(&comment),
+            "{unit}: missing {comment:?} in {:?}",
+            plan.lines
+        );
+    }
+}
+
+#[test]
+fn rhcd_renders_the_exact_not_carried_comment() {
+    let mut snap = leaf_snapshot(
+        vec![
+            added("vim", "x86_64", FindingKind::included()),
+            added("rhc", "x86_64", FindingKind::included()),
+        ],
+        &["vim.x86_64"],
+        &["rhc.x86_64"],
+        serde_json::json!({ "vim.x86_64": [] }),
+        vec![state_change(
+            "rhcd.service",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("rhc"),
+        )],
+    );
+    apply_scan_package_defaults(&mut snap);
+    let plan = render_service_intent(&snap);
+    assert!(
+        plan.lines
+            .contains(&format!("# Omitted: rhcd.service ({RHC_NOT_CARRIED})")),
+        "{:?}",
+        plan.lines
+    );
+}
+
+/// The presence rules decide omission, not the list: `foo.i686` is not
+/// carried, but an included leaf pulls in `foo.x86_64`, so `foo` is in the
+/// image and its unit stays.
+#[test]
+fn a_not_carried_arch_does_not_omit_a_unit_another_arch_carries() {
+    let mut snap = leaf_snapshot(
+        vec![
+            added("app", "x86_64", FindingKind::included()),
+            added("foo", "x86_64", FindingKind::included()),
+            added("foo", "i686", FindingKind::included()),
+        ],
+        &["app.x86_64"],
+        &["foo.x86_64", "foo.i686"],
+        serde_json::json!({ "app.x86_64": ["foo.x86_64"] }),
+        vec![state_change(
+            "foo.service",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("foo"),
+        )],
+    );
+    apply_scan_package_defaults(&mut snap);
+    let listed: Vec<String> = inspectah_pipeline::render::not_carried::not_carried_packages(&snap)
+        .iter()
+        .map(|p| format!("{}.{}", p.name, p.arch))
+        .collect();
+    assert_eq!(
+        listed,
+        vec!["foo.i686".to_string()],
+        "the fixture's premise"
+    );
+
+    let plan = render_service_intent(&snap);
+    assert!(plan.omissions.is_empty(), "{:?}", plan.omissions);
+    assert!(acted_on(&plan.lines, "foo.service"), "{:?}", plan.lines);
+}
+
+/// Excluding a leaf makes its auto dependency unneeded, so the
+/// dependency's unit is omitted as not carried, not as excluded: nothing
+/// included needs the package, which is why it is absent. The leaf's own
+/// unit keeps `PackageExcluded`, since a leaf is outside the class.
+#[test]
+fn an_excluded_leaf_makes_its_dependency_not_carried_and_stays_excluded_itself() {
+    let mut snap = leaf_snapshot(
+        vec![
+            added("cockpit", "x86_64", FindingKind::excluded()),
+            added("cockpit-ws", "x86_64", FindingKind::included()),
+        ],
+        &["cockpit.x86_64"],
+        &["cockpit-ws.x86_64"],
+        serde_json::json!({ "cockpit.x86_64": ["cockpit-ws.x86_64"] }),
+        vec![
+            state_change(
+                "cockpit.socket",
+                ServiceUnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("cockpit-ws"),
+            ),
+            state_change(
+                "cockpit-leaf.service",
+                ServiceUnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("cockpit"),
+            ),
+        ],
+    );
+    apply_scan_package_defaults(&mut snap);
+    let plan = render_service_intent(&snap);
+
+    let reasons: Vec<(&str, OmissionReason)> = plan
+        .omissions
+        .iter()
+        .map(|o| (o.unit.as_str(), o.reason))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            ("cockpit.socket", OmissionReason::NotCarried),
+            ("cockpit-leaf.service", OmissionReason::PackageExcluded),
+        ]
+    );
+    assert!(plan.lines.contains(&"# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)".to_string()));
+    assert!(
+        plan.lines.contains(
+            &"# Omitted: cockpit-leaf.service (package 'cockpit' was excluded)".to_string()
+        )
+    );
+}
+
+/// `NotCarried` needs every entry of the owner's name in the list. An
+/// operator-excluded leaf of the same name is outside the class, so the
+/// reason stays `PackageExcluded`.
+#[test]
+fn an_owner_with_an_entry_outside_the_list_stays_excluded() {
+    let mut snap = leaf_snapshot(
+        vec![
+            added("vim", "x86_64", FindingKind::included()),
+            added("foo", "x86_64", FindingKind::included()),
+            added("foo", "i686", FindingKind::excluded()),
+        ],
+        &["vim.x86_64", "foo.i686"],
+        &["foo.x86_64"],
+        serde_json::json!({ "vim.x86_64": [], "foo.i686": [] }),
+        vec![state_change(
+            "foo.service",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("foo"),
+        )],
+    );
+    apply_scan_package_defaults(&mut snap);
+    let plan = render_service_intent(&snap);
+    assert_eq!(plan.omissions.len(), 1, "{:?}", plan.lines);
+    assert_eq!(plan.omissions[0].reason, OmissionReason::PackageExcluded);
+}
+
+/// An auto package an included leaf pulls in is in the image: its unit
+/// keeps its `systemctl` line, excluded or not.
+#[test]
+fn a_pulled_in_auto_package_keeps_its_unit() {
+    for disposition in [FindingKind::included(), FindingKind::excluded()] {
+        let mut snap = leaf_snapshot(
+            vec![
+                added("cockpit", "x86_64", FindingKind::included()),
+                added("cockpit-ws", "x86_64", disposition.clone()),
+            ],
+            &["cockpit.x86_64"],
+            &["cockpit-ws.x86_64"],
+            serde_json::json!({ "cockpit.x86_64": ["cockpit-ws.x86_64"] }),
+            vec![state_change(
+                "cockpit.socket",
+                ServiceUnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some("cockpit-ws"),
+            )],
+        );
+        apply_scan_package_defaults(&mut snap);
+        let plan = render_service_intent(&snap);
+        assert!(
+            plan.omissions.is_empty(),
+            "{disposition:?}: {:?}",
+            plan.lines
+        );
+        assert!(acted_on(&plan.lines, "cockpit.socket"), "{:?}", plan.lines);
     }
 }

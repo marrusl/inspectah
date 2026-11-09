@@ -20,7 +20,7 @@ use inspectah_refine::types::{ItemId, RefinementOp};
 
 const UNIT: &str = "cockpit.socket";
 const ENABLED: &str = "    cockpit.socket";
-const OMITTED: &str = "# Omitted: cockpit.socket (package 'cockpit-ws' was excluded)";
+const OMITTED: &str = "# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)";
 
 fn package(name: &str) -> PackageEntry {
     PackageEntry {
@@ -175,4 +175,38 @@ fn a_dependency_whose_parent_is_excluded_too_loses_its_unit() {
         refine.contains(OMITTED) && !refine.lines().any(|l| l == ENABLED),
         "nothing included pulls cockpit-ws in:\n{refine}"
     );
+}
+
+#[test]
+fn an_excluded_parent_omits_the_dependency_unit_alike_on_both_paths() {
+    let mut scan_snap = snapshot();
+    scan_snap
+        .rpm
+        .as_mut()
+        .expect("rpm section")
+        .packages_added
+        .iter_mut()
+        .find(|p| p.name == "cockpit")
+        .expect("cockpit")
+        .disposition = FindingKind::excluded();
+    render::not_carried::apply_scan_package_defaults(&mut scan_snap);
+    let scan = scan_containerfile(&scan_snap);
+
+    let mut session = RefineSession::new(snapshot());
+    set_include(&mut session, "cockpit", false);
+    let refine = export_containerfile(&session);
+
+    let omitted = |containerfile: &str| -> Vec<String> {
+        containerfile
+            .lines()
+            .filter(|l| l.starts_with("# Omitted:"))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        omitted(&scan),
+        vec![OMITTED.to_string()],
+        "scan tarball:\n{scan}"
+    );
+    assert_eq!(omitted(&refine), omitted(&scan), "refine export:\n{refine}");
 }

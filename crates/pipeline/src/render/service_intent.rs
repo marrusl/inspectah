@@ -2,6 +2,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceAction, ServiceStateChange};
 
+use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::safety::sanitize_shell_value;
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,12 @@ pub enum OmissionReason {
     /// A baseline is available and the owning package is in neither the
     /// baseline nor `packages_added`.
     NotInTargetImage,
+    /// The owning package is absent, as for [`Self::PackageExcluded`], and
+    /// every `packages_added` entry of its name is in the not-carried list
+    /// (`not_carried::not_carried_packages`). Nothing included needs it,
+    /// which is why it is absent, so this wins over `PackageExcluded` even
+    /// when an operator's exclusion led there.
+    NotCarried,
 }
 
 impl OmissionReason {
@@ -184,6 +191,9 @@ impl OmissionReason {
             }
             OmissionReason::NotInTargetImage => {
                 format!("package '{owning_package}' not in target image")
+            }
+            OmissionReason::NotCarried => {
+                format!("package '{owning_package}' is not carried: {NOT_CARRIED_REASON}")
             }
         }
     }
@@ -286,7 +296,9 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
 /// 1. `owning_package: None` → always Emit (conservative — unknown owner)
 /// 2. Package in `packages_added` with every entry `include: false`, not
 ///    in the baseline, and not pulled in by an included package
-///    ([`pulled_in_by_included`]) → Omit with `OmissionReason::PackageExcluded`.
+///    ([`pulled_in_by_included`]) → Omit with `OmissionReason::NotCarried`
+///    when every entry of the name is in `not_carried`, else
+///    `OmissionReason::PackageExcluded`.
 ///    A pulled-in package is in the image, so it falls through to Tier 5.
 ///    An exclusion is the strongest absence signal the model has, and
 ///    `systemctl enable` on a unit whose package is not installed fails the
@@ -305,6 +317,7 @@ fn classify_service_presence(
     sc: &ServiceStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
+    not_carried: &std::collections::HashSet<String>,
     baseline_unavailable: bool,
 ) -> PresenceDecision {
     let pkg_name = match &sc.owning_package {
@@ -354,7 +367,7 @@ fn classify_service_presence(
         // Tier 2: all entries are excluded. A baseline that still ships the
         // package (another arch excluded, say) keeps the unit present, so
         // fall through to Tier 5 in that case.
-        if let Some(omit) = excluded_owner(sc, rpm, target_packages) {
+        if let Some(omit) = excluded_owner(sc, rpm, target_packages, not_carried) {
             return omit;
         }
     }
@@ -388,16 +401,34 @@ fn classify_service_presence(
 ///
 /// `target_packages` holds every included or pulled-in entry's name, so
 /// "not in it" already says no entry for the name is either.
+///
+/// The presence check alone decides the omission; `not_carried` (the
+/// `name.arch` ids of the not-carried list) only names the reason:
+/// [`OmissionReason::NotCarried`] when every entry of the name is listed,
+/// [`OmissionReason::PackageExcluded`] otherwise.
 fn excluded_owner(
     sc: &ServiceStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
+    not_carried: &std::collections::HashSet<String>,
 ) -> Option<PresenceDecision> {
     let pkg_name = sc.owning_package.as_ref()?;
-    let has_entry = rpm.packages_added.iter().any(|p| p.name == *pkg_name);
-    (has_entry && !target_packages.contains(pkg_name)).then(|| PresenceDecision::Omit {
+    let mut entries = rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.name == *pkg_name)
+        .peekable();
+    if entries.peek().is_none() || target_packages.contains(pkg_name) {
+        return None;
+    }
+    let reason = if entries.all(|p| not_carried.contains(&format!("{}.{}", p.name, p.arch))) {
+        OmissionReason::NotCarried
+    } else {
+        OmissionReason::PackageExcluded
+    };
+    Some(PresenceDecision::Omit {
         owning_package: pkg_name.clone(),
-        reason: OmissionReason::PackageExcluded,
+        reason,
     })
 }
 
@@ -412,8 +443,9 @@ fn aggregate_presence(
     sc: &ServiceStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
+    not_carried: &std::collections::HashSet<String>,
 ) -> PresenceDecision {
-    excluded_owner(sc, rpm, target_packages).unwrap_or(PresenceDecision::Emit {
+    excluded_owner(sc, rpm, target_packages, not_carried).unwrap_or(PresenceDecision::Emit {
         advisory_reasons: None,
     })
 }
@@ -448,6 +480,11 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
 
     let target_packages = effective_target_packages(rpm);
     let baseline_unavailable = rpm.baseline_package_names.is_none();
+    // Empty for an aggregate, which `not_carried` never classifies.
+    let not_carried: std::collections::HashSet<String> = not_carried_packages(snap)
+        .into_iter()
+        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
+        .collect();
 
     let included_changes: Vec<_> = services
         .state_changes
@@ -486,9 +523,15 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         // Evaluate omission BEFORE config-tree deferral — a proven-absent
         // service never becomes deferred fiction.
         let presence = if is_aggregate {
-            aggregate_presence(sc, rpm, &target_packages)
+            aggregate_presence(sc, rpm, &target_packages, &not_carried)
         } else {
-            classify_service_presence(sc, rpm, &target_packages, baseline_unavailable)
+            classify_service_presence(
+                sc,
+                rpm,
+                &target_packages,
+                &not_carried,
+                baseline_unavailable,
+            )
         };
 
         match presence {
