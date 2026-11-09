@@ -17,7 +17,6 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
@@ -702,14 +701,30 @@ struct DepGraphResult {
 /// ```
 const RPM_REQUIRES_FORMAT: &str = "@@%{NAME}\\n[%{REQUIRENAME}\\n]";
 
-/// Build a dependency graph using batched `rpm -q` + `rpm -q --whatprovides`.
+/// RPM query format for the installed provides index: one line per
+/// provided capability, `name.arch<TAB>capability`.
+///
+/// `%{PROVIDENAME}` is an array tag. `%{=NAME}` and `%{=ARCH}` use the `=`
+/// modifier, which repeats a scalar for every array element; without it rpm
+/// rejects the mix of scalar and array tags inside `[...]` (see
+/// `RPM_FILE_OWNERSHIP_FORMAT`). The identity comes first because it never
+/// contains a tab, so each line splits on its first tab.
+///
+/// ```text
+/// glibc.x86_64<TAB>libc.so.6()(64bit)
+/// glibc.x86_64<TAB>glibc(x86-64)
+/// openssl-libs.x86_64<TAB>libssl.so.3()(64bit)
+/// ```
+const RPM_PROVIDES_INDEX_FORMAT: &str = "[%{=NAME}.%{=ARCH}\\t%{PROVIDENAME}\\n]";
+
+/// Build a dependency graph from two `rpm` queries.
 ///
 /// Queries all packages' requires in a single batched `rpm -q --queryformat`
 /// call using sentinel headers, then resolves capabilities to provider
-/// packages via batched `rpm -q --whatprovides` calls.
+/// packages through one `rpm -qa` provides index (`resolve_all_providers`).
 ///
 /// Returns direct-only deps (caller must walk the graph for transitive closure).
-/// Returns `None` if `rpm -q --queryformat` fails on the probe.
+/// Returns `None` if either query fails.
 fn classify_deps_rpm(
     exec: &dyn Executor,
     added_ids: &HashSet<String>,
@@ -718,15 +733,8 @@ fn classify_deps_rpm(
         return Some(HashMap::new());
     }
 
-    // Build a set of plain names (without .arch) for added packages.
-    let added_names: HashSet<&str> = added_ids.iter().map(|id| name_from_id(id)).collect();
-
     let mut package_ids: Vec<&String> = added_ids.iter().collect();
     package_ids.sort();
-
-    // NEVRA regex: extract name from e.g. "glibc-2.34-60.el9.x86_64"
-    let name_re = Regex::new(r"^(.+?)-\d").expect("NEVRA regex must compile");
-    let batch_size = 50;
 
     let mut depends_on: HashMap<String, HashSet<String>> = HashMap::new();
     for package_id in added_ids {
@@ -756,7 +764,7 @@ fn classify_deps_rpm(
     let per_pkg_caps = parse_sentinel_requires(&result.stdout);
 
     // Collect ALL unique capabilities across all packages, resolve them
-    // in batched --whatprovides calls, then distribute per-package.
+    // against the provides index, then distribute per-package.
     let all_caps: Vec<String> = {
         let mut set: HashSet<String> = HashSet::new();
         for (_, caps) in &per_pkg_caps {
@@ -767,15 +775,8 @@ fn classify_deps_rpm(
         v
     };
 
-    // Build cap→provider_ids map from batched resolution.
-    let cap_providers = resolve_all_providers(
-        exec,
-        &all_caps,
-        &added_names,
-        added_ids,
-        &name_re,
-        batch_size,
-    );
+    // Build cap→provider_ids map from the provides index.
+    let cap_providers = resolve_all_providers(exec, &all_caps, added_ids)?;
 
     // Distribute resolved providers to each package by its own cap list.
     for (pkg_name, caps) in &per_pkg_caps {
@@ -869,72 +870,50 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
     caps
 }
 
-/// Resolve all unique capabilities to provider packages in batched
-/// `--whatprovides` calls. Returns a map from capability name to the
-/// canonical `name.arch` IDs that provide it (filtered to `added_ids`).
+/// Resolve every capability to the packages that provide it, from one
+/// `rpm -qa` provides index. Returns a map from capability name to the
+/// canonical `name.arch` IDs that provide it (filtered to `added_ids`), or
+/// `None` if the index query fails.
 ///
-/// Since `rpm -q --whatprovides cap1 cap2 ...` returns a flat list of
-/// NEVRAs without per-cap attribution, providers from a single chunk
-/// are attributed to every cap in that chunk. This is the same
-/// granularity as the previous per-package batching (chunks of 50).
+/// Each capability maps to its own providers only. Resolving a batch of
+/// capabilities with `rpm -q --whatprovides cap1 cap2 ...` cannot do that:
+/// the output is a flat list of NEVRAs with nothing saying which capability
+/// a line answers, and crediting every provider in a batch to every
+/// capability in it made unrelated packages depend on each other.
+///
+/// Capabilities are matched by name, as `--whatprovides <name>` matches
+/// them; version constraints were already stripped from the requires.
 fn resolve_all_providers(
     exec: &dyn Executor,
     all_caps: &[String],
-    added_names: &HashSet<&str>,
     added_ids: &HashSet<String>,
-    name_re: &Regex,
-    batch_size: usize,
-) -> HashMap<String, HashSet<String>> {
+) -> Option<HashMap<String, HashSet<String>>> {
     let mut cap_providers: HashMap<String, HashSet<String>> = HashMap::new();
 
     if all_caps.is_empty() {
-        return cap_providers;
+        return Some(cap_providers);
     }
 
-    for chunk in all_caps.chunks(batch_size) {
-        let mut args: Vec<&str> = vec!["-q", "--whatprovides"];
-        args.extend(chunk.iter().map(|s| s.as_str()));
+    let result = exec.run("rpm", &["-qa", "--queryformat", RPM_PROVIDES_INDEX_FORMAT]);
+    if !result.success() {
+        return None;
+    }
 
-        let result = exec.run("rpm", &args);
-        if !result.success() {
+    let wanted: HashSet<&str> = all_caps.iter().map(String::as_str).collect();
+    for line in result.stdout.lines() {
+        let Some((provider_id, cap)) = line.split_once('\t') else {
             continue;
-        }
-
-        // Collect providers for this chunk.
-        let mut chunk_providers: HashSet<String> = HashSet::new();
-        for pline in result.stdout.lines() {
-            let pline = pline.trim();
-            if pline.is_empty() || pline.contains("no package provides") {
-                continue;
-            }
-
-            let provider_name = if let Some(m) = name_re.captures(pline) {
-                m.get(1).map(|g| g.as_str())
-            } else {
-                pline.split_once('-').map(|(n, _)| n)
-            };
-
-            if let Some(pname) = provider_name
-                && added_names.contains(pname)
-            {
-                let provider_arch = pline.rsplit_once('.').map(|(_, a)| a).unwrap_or("");
-                let candidate_id = format!("{}.{}", pname, provider_arch);
-                if added_ids.contains(&candidate_id) {
-                    chunk_providers.insert(candidate_id);
-                }
-            }
-        }
-
-        // Attribute all chunk providers to every cap in this chunk.
-        for cap in chunk {
+        };
+        let cap = cap.trim();
+        if wanted.contains(cap) && added_ids.contains(provider_id) {
             cap_providers
-                .entry(cap.clone())
+                .entry(cap.to_string())
                 .or_default()
-                .extend(chunk_providers.iter().cloned());
+                .insert(provider_id.to_string());
         }
     }
 
-    cap_providers
+    Some(cap_providers)
 }
 
 /// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency)
@@ -2734,14 +2713,18 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
                     stderr: String::new(),
                 },
             )
-            // Global batched --whatprovides: all unique caps sorted.
+            // Provides index. glibc.i686 provides only the 32-bit soname and
+            // is not in the added set; it must not be credited for vim.
             .with_command(
-                "rpm -q --whatprovides basesystem libc.so.6()(64bit) libncurses.so.6()(64bit)",
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "basesystem-11-13.el9.noarch\n\
-                             glibc-2.34-60.el9.x86_64\n\
-                             ncurses-libs-6.2-8.el9.x86_64\n"
+                    stdout: "basesystem.noarch\tbasesystem\n\
+                             glibc.x86_64\tglibc(x86-64)\n\
+                             glibc.x86_64\tlibc.so.6()(64bit)\n\
+                             glibc.i686\tlibc.so.6\n\
+                             ncurses-libs.x86_64\tlibncurses.so.6()(64bit)\n\
+                             vim.x86_64\tvim(x86-64)\n"
                         .into(),
                     stderr: String::new(),
                 },
@@ -2752,8 +2735,9 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
             .map(|s| s.to_string())
             .collect();
         let deps = classify_deps_rpm(&exec, &added_ids).expect("graph should be available");
-        // vim depends on glibc (via libc.so.6 → glibc-2.34-60.el9.x86_64).
+        // vim depends on glibc (via libc.so.6()(64bit) → glibc.x86_64).
         assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
+        assert!(!deps.get("vim.x86_64").unwrap().contains("glibc.i686"));
         // ncurses-libs is not in added_ids, so it should not appear.
         assert!(
             !deps
@@ -2764,6 +2748,150 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
         );
         // glibc has no deps in the added set (basesystem is not in added_ids).
         assert!(deps.get("glibc.x86_64").unwrap().is_empty());
+    }
+
+    #[test]
+    fn classify_deps_rpm_maps_each_capability_to_its_own_provider() {
+        // Three unrelated packages whose requirements all land in one
+        // provider-resolution batch. Each capability has a different
+        // provider, and each package must depend only on the provider of
+        // its own capability.
+        let exec = MockExecutor::new()
+            .with_command(
+                &format!(
+                    "rpm -q --queryformat {} glibc nginx-core openssl-libs pcre2 tree wget",
+                    RPM_REQUIRES_FORMAT
+                ),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "\
+@@glibc
+@@nginx-core
+libpcre2-8.so.0()(64bit)
+@@openssl-libs
+@@pcre2
+@@tree
+libc.so.6()(64bit)
+@@wget
+libssl.so.3()(64bit)
+"
+                    .into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc.aarch64\tlibc.so.6()(64bit)\n\
+                             pcre2.aarch64\tlibpcre2-8.so.0()(64bit)\n\
+                             openssl-libs.aarch64\tlibssl.so.3()(64bit)\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added_ids: HashSet<String> = [
+            "glibc.aarch64",
+            "nginx-core.aarch64",
+            "openssl-libs.aarch64",
+            "pcre2.aarch64",
+            "tree.aarch64",
+            "wget.aarch64",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let deps = classify_deps_rpm(&exec, &added_ids).expect("graph should be available");
+
+        let only = |id: &str| -> HashSet<String> { [id.to_string()].into_iter().collect() };
+        assert_eq!(deps["tree.aarch64"], only("glibc.aarch64"));
+        assert_eq!(deps["wget.aarch64"], only("openssl-libs.aarch64"));
+        assert_eq!(deps["nginx-core.aarch64"], only("pcre2.aarch64"));
+    }
+
+    #[test]
+    fn classify_leaf_auto_gives_disjoint_leaves_disjoint_closures() {
+        // tree needs libacl; nginx-core needs pcre2. Neither leaf's closure
+        // may contain the other leaf's dependency.
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "tree.aarch64\nnginx-core.aarch64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!(
+                    "rpm -q --queryformat {} libacl nginx-core pcre2 tree",
+                    RPM_REQUIRES_FORMAT
+                ),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "\
+@@libacl
+@@nginx-core
+libpcre2-8.so.0()(64bit)
+@@pcre2
+@@tree
+libacl.so.1()(64bit)
+"
+                    .into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "libacl.aarch64\tlibacl.so.1()(64bit)\n\
+                             pcre2.aarch64\tlibpcre2-8.so.0()(64bit)\n"
+                        .into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added = vec![
+            make_test_entry("tree", "aarch64"),
+            make_test_entry("nginx-core", "aarch64"),
+            make_test_entry("libacl", "aarch64"),
+            make_test_entry("pcre2", "aarch64"),
+        ];
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let tree = result.leaf_dep_tree.as_object().expect("dep tree object");
+        let closure = |leaf: &str| -> Vec<String> {
+            serde_json::from_value(tree[leaf].clone()).expect("closure is a string list")
+        };
+        assert_eq!(closure("tree.aarch64"), vec!["libacl.aarch64"]);
+        assert_eq!(closure("nginx-core.aarch64"), vec!["pcre2.aarch64"]);
+    }
+
+    #[test]
+    fn classify_deps_rpm_returns_none_when_provides_index_fails() {
+        // A failed index must not read as "no dependencies": returning None
+        // sends classification to the dnf fallback instead.
+        let exec = MockExecutor::new()
+            .with_command(
+                &format!("rpm -q --queryformat {} tree", RPM_REQUIRES_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "@@tree\nlibc.so.6()(64bit)\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: "error: rpmdb open failed".into(),
+                },
+            );
+
+        let added_ids: HashSet<String> = ["tree.aarch64"].iter().map(|s| s.to_string()).collect();
+        assert!(classify_deps_rpm(&exec, &added_ids).is_none());
     }
 
     #[test]
@@ -2863,12 +2991,13 @@ libc.so.6()(64bit)
                     stderr: String::new(),
                 },
             )
-            // Global batched --whatprovides: all unique caps sorted.
             .with_command(
-                "rpm -q --whatprovides libapr-1.so.0()(64bit) libc.so.6()(64bit)",
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "apr-1.7.0-12.el9.x86_64\nglibc-2.34-60.el9.x86_64\n".into(),
+                    stdout: "apr.x86_64\tlibapr-1.so.0()(64bit)\n\
+                             glibc.x86_64\tlibc.so.6()(64bit)\n"
+                        .into(),
                     stderr: String::new(),
                 },
             );
