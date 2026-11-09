@@ -73,7 +73,11 @@ package (the scan tarball leaves the same package included) and an
 operator's explicit exclusion alike.
 
 `pulled_in_by_included` in `service_intent.rs` is the one answer:
-every auto dependency `leaf_dep_tree` lists under an included leaf.
+every auto dependency `leaf_dep_tree` lists under a leaf the export
+installs (`installs_on_its_own_route`). An included leaf that renders
+only as a manual step (a `# TODO`, the repo-less `# MANUAL` block with
+no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
+serving repo was dropped) is never installed, so it pulls nothing in.
 `effective_target_packages` adds those names, so Tier 2 falls through to
 Tier 5 for them, in single-host and aggregate mode. The disabled-repo
 package selection in `containerfile.rs` asks the same function; do not
@@ -93,5 +97,7 @@ on the scan path, so Tier 2 would omit its unit. `classify_auto_carriage`
 in `not_carried.rs` decides the class and calls `pulled_in_by_included`
 rather than reimplementing it; see `not-carried-auto-packages.md`. The
 `/var` evidence in `var_dirs.rs` asks the same predicate, so a package a
-kept package pulls in counts as carried there whatever its disposition,
-subject to the repo-enabling demotion filter.
+leaf the export installs pulls in counts as carried there whatever its
+disposition, subject to the repo-enabling demotion filter. Its own
+install set uses `installs_on_its_own_route` too, so the two cannot
+disagree about which leaves are installed.

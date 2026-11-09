@@ -1623,6 +1623,79 @@ fn the_tmpfiles_fragment_does_not_call_a_pulled_in_creator_not_carried() {
     assert!(!conf.contains("d /var/lib/nginx "), "{conf}");
 }
 
+/// An included leaf the export never installs pulls nothing in, so the
+/// directory its excluded dependency owns is still provisioned. Before,
+/// any included leaf credited its dependencies, and a manual-only leaf
+/// left the directory with no creator and no provisioning. A leaf the
+/// export installs, on any route, still carries it.
+#[test]
+fn only_a_leaf_the_export_installs_carries_its_dependency_directories() {
+    fn repoless(pkg: &mut PackageEntry) {
+        pkg.source_repo = "@commandline".into();
+        pkg.repoless_annotation = "No repo source".into();
+    }
+    type Leaf = fn(&mut PackageEntry);
+    let cases: [(&str, Leaf, bool); 5] = [
+        ("installable by name", |_| {}, true),
+        (
+            "repo-less with a cached RPM",
+            |pkg| {
+                repoless(pkg);
+                pkg.repoless_cached = true;
+            },
+            true,
+        ),
+        (
+            "repo-less with an uploaded RPM",
+            |pkg| {
+                repoless(pkg);
+                pkg.uploaded = true;
+            },
+            true,
+        ),
+        ("repo-less with no RPM (MANUAL)", repoless, false),
+        (
+            "repo-enabling, serving repo dropped (FIXME)",
+            |pkg| {
+                pkg.source_repo = "@commandline".into();
+                pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+            },
+            false,
+        ),
+    ];
+
+    for (leaf_kind, make_leaf, carried) in cases {
+        let mut snap = refine_path(auto_packages_snapshot());
+        let rpm = snap.rpm.as_mut().expect("rpm");
+        make_leaf(
+            rpm.packages_added
+                .iter_mut()
+                .find(|pkg| pkg.name == "nginx")
+                .expect("nginx"),
+        );
+        let outcome = outcome_for(&effective_var_backing(&snap), "/var/lib/nginx").clone();
+        if carried {
+            assert_eq!(outcome, EffectiveBacking::Carried, "{leaf_kind}");
+            assert!(
+                !var_conf(&snap).contains("d /var/lib/nginx "),
+                "{leaf_kind}"
+            );
+        } else {
+            assert_eq!(
+                outcome,
+                EffectiveBacking::Provision {
+                    lost: Some("/usr/lib/tmpfiles.d/nginx.conf".into())
+                },
+                "{leaf_kind}"
+            );
+            assert!(
+                var_conf(&snap).contains("d /var/lib/nginx 0770 root root -"),
+                "{leaf_kind}"
+            );
+        }
+    }
+}
+
 /// Being pulled in does not lift the repo-enabling demotion: a package
 /// whose serving repo the export dropped renders as a FIXME and never
 /// installs, so the directory it owns is still provisioned.

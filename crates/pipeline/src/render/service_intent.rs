@@ -2,7 +2,11 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceAction, ServiceStateChange};
 
+use inspectah_core::types::verified_upload::VerifiedUploads;
+
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
+use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
+use super::repoless::{PackageRoute, route_for};
 use super::safety::sanitize_shell_value;
 
 // ---------------------------------------------------------------------------
@@ -87,15 +91,43 @@ pub fn is_package_installable(pkg: &PackageEntry) -> bool {
     manual_follow_up_reason(pkg).is_none()
 }
 
-/// The canonical `name.arch` ids of `packages_added` entries that an
-/// included leaf pulls in as a dependency, whatever their own disposition.
+/// Whether the export installs `pkg` itself, on the route the
+/// Containerfile renders it by.
 ///
-/// A package something included depends on is in the image: dnf installs
+/// It must be included, and then: a package installed by name must be
+/// installable ([`is_package_installable`]), one from a host-disabled repo
+/// always is, and a repo-less one only when the export carries its RPM (an
+/// upload, taken on `uploaded` since no uploads are proved here, or a
+/// cached RPM). A repo-enabling package whose serving repo the export
+/// dropped is demoted to a FIXME and never installed. An included package
+/// that fails this renders as a manual step only: a `# TODO`, `# MANUAL`
+/// or `# FIXME` comment.
+pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) -> bool {
+    pkg.disposition.is_included()
+        && match route_for(rpm, pkg, &VerifiedUploads::new()) {
+            PackageRoute::ByName => is_package_installable(pkg),
+            PackageRoute::DisabledRepo(_) => true,
+            PackageRoute::Upload(_) | PackageRoute::Repoless => pkg.uploaded || pkg.repoless_cached,
+        }
+        && !matches!(repo_enabling_export(rpm, pkg), RepoEnablingExport::Lost(_))
+}
+
+/// The canonical `name.arch` ids of `packages_added` entries that a leaf
+/// the export installs pulls in as a dependency, whatever their own
+/// disposition.
+///
+/// A package something installed depends on is in the image: dnf installs
 /// it with the package that needs it. That holds for refine's default
 /// exclusion of a non-leaf package and for an operator's explicit
 /// exclusion alike, so "excluded" never means "absent" for such a package.
 /// This is the one place that answers the question; the service tiers and
 /// the package selection both ask it.
+///
+/// A leaf contributes only when [`installs_on_its_own_route`] holds for
+/// it. An included leaf the export renders as a manual step (no repo
+/// serves it and no RPM is carried, or a repo-enabling package demoted for
+/// a dropped repo) is never installed by the image, so dnf never resolves
+/// its dependencies either.
 ///
 /// The answer comes from `leaf_dep_tree`, which maps each leaf to the
 /// transitive closure of its auto (non-leaf) dependencies. Two limits
@@ -113,14 +145,14 @@ pub fn pulled_in_by_included(rpm: &RpmSection) -> std::collections::HashSet<Stri
     let Some(tree) = rpm.leaf_dep_tree.as_object() else {
         return std::collections::HashSet::new();
     };
-    let included: std::collections::HashSet<String> = rpm
+    let installed: std::collections::HashSet<String> = rpm
         .packages_added
         .iter()
-        .filter(|pkg| pkg.disposition.is_included())
+        .filter(|pkg| installs_on_its_own_route(rpm, pkg))
         .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
         .collect();
     tree.iter()
-        .filter(|(leaf, _)| included.contains(leaf.as_str()))
+        .filter(|(leaf, _)| installed.contains(leaf.as_str()))
         .filter_map(|(_, deps)| deps.as_array())
         .flatten()
         .filter_map(|dep| dep.as_str())

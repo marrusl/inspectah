@@ -9,8 +9,12 @@ carried**.
 ## The class
 
 An entry of `packages_added` is in the class when it is in
-`auto_packages` and no included package pulls it in, as
+`auto_packages` and no leaf the export installs pulls it in, as
 `service_intent::pulled_in_by_included` answers from `leaf_dep_tree`.
+A leaf counts only when `installs_on_its_own_route` holds for it: an
+included leaf the export renders only as a manual step (no repo serves
+it and no RPM is carried, or a repo-enabling package demoted for a
+dropped repo) is never installed, so its dependencies are not pulled in.
 Identity is `name.arch`.
 
 It is never in the class, and keeps its existing handling, when it is:
@@ -132,8 +136,10 @@ Measured at commit `af96710c` (2026-11-09), same hosts, drift and plants
 - An unchanged refine export lists one package more on each host,
   `dnf-plugins-core`, whose only puller is `epel-release`, which refine
   excludes as repo-less. On RHEL 10 the scan keeps that `epel-release`
-  included as a manual step, so the scan neither installs nor lists
-  `dnf-plugins-core`.
+  included as a manual step, so the scan neither installed nor listed
+  `dnf-plugins-core`. A leaf left as a manual step no longer pulls
+  anything in, so the scan should now list `dnf-plugins-core` there as
+  well; that has not been measured on a host.
 - In every image built, `firewalld` and `cronie` are absent and the
   `systemctl` steps succeed.
 - A cached `@commandline` package marked as a dependency (`dnf mark

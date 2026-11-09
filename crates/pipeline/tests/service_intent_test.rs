@@ -6,9 +6,10 @@ use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
+use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::service_intent::{
     AdvisoryReason, OmissionReason, effective_target_packages, is_package_installable,
-    render_service_intent,
+    pulled_in_by_included, render_service_intent,
 };
 
 // ---------------------------------------------------------------------------
@@ -1263,4 +1264,116 @@ fn a_pulled_in_auto_package_keeps_its_unit() {
         );
         assert!(acted_on(&plan.lines, "cockpit.socket"), "{:?}", plan.lines);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Which leaves contribute to `pulled_in_by_included`
+// ---------------------------------------------------------------------------
+
+/// The annotation the scan's dnf-cache pass writes on a repo-less package.
+const REPOLESS_NOTE: &str = "No repo source";
+
+/// An included leaf the export renders as a manual step is never
+/// installed, so dnf never resolves its dependencies: they are not pulled
+/// in. A leaf the export does install, on whatever route, pulls them in.
+#[test]
+fn only_a_leaf_the_export_installs_pulls_in_its_dependencies() {
+    fn repoless(pkg: &mut PackageEntry) {
+        pkg.source_repo = "@commandline".into();
+        pkg.repoless_annotation = REPOLESS_NOTE.into();
+    }
+    type Root = fn(&mut PackageEntry);
+    let cases: [(&str, Root, bool); 7] = [
+        ("installable by name", |_| {}, true),
+        (
+            "repo-less with a cached RPM",
+            |pkg| {
+                repoless(pkg);
+                pkg.repoless_cached = true;
+            },
+            true,
+        ),
+        (
+            "repo-less with an uploaded RPM",
+            |pkg| {
+                repoless(pkg);
+                pkg.uploaded = true;
+            },
+            true,
+        ),
+        ("repo-less with no RPM (MANUAL)", repoless, false),
+        (
+            "installed from a local file, no repo (TODO)",
+            |pkg| pkg.state = PackageState::LocalInstall,
+            false,
+        ),
+        (
+            "repo-enabling, serving repo dropped (FIXME)",
+            |pkg| {
+                pkg.source_repo = "@commandline".into();
+                pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+            },
+            false,
+        ),
+        (
+            "excluded",
+            |pkg| pkg.disposition = FindingKind::excluded(),
+            false,
+        ),
+    ];
+
+    for (root_kind, make_root, pulls_in) in cases {
+        let mut root = added("vendor-app", "x86_64", FindingKind::included());
+        make_root(&mut root);
+        let rpm = RpmSection {
+            packages_added: vec![root, added("vendor-lib", "x86_64", FindingKind::excluded())],
+            leaf_packages: Some(vec!["vendor-app.x86_64".into()]),
+            auto_packages: Some(vec!["vendor-lib.x86_64".into()]),
+            leaf_dep_tree: serde_json::json!({ "vendor-app.x86_64": ["vendor-lib.x86_64"] }),
+            ..Default::default()
+        };
+        assert_eq!(
+            pulled_in_by_included(&rpm).contains("vendor-lib.x86_64"),
+            pulls_in,
+            "{root_kind}"
+        );
+    }
+}
+
+/// The scan path's half of the case seen on a RHEL 10 host: an included
+/// leaf the scan renders as MANUAL (`epel-release`) used to make its only
+/// dependency (`dnf-plugins-core`) read as pulled in, so the scan neither
+/// installed nor listed it. It is now not carried, and its unit is
+/// omitted as such.
+#[test]
+fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
+    let mut epel = added("epel-release", "noarch", FindingKind::included());
+    epel.source_repo = "@commandline".into();
+    epel.repoless_annotation = REPOLESS_NOTE.into();
+    let mut snap = leaf_snapshot(
+        vec![
+            epel,
+            added("dnf-plugins-core", "noarch", FindingKind::included()),
+        ],
+        &["epel-release.noarch"],
+        &["dnf-plugins-core.noarch"],
+        serde_json::json!({ "epel-release.noarch": ["dnf-plugins-core.noarch"] }),
+        vec![state_change(
+            "dnf-plugins-core.timer",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("dnf-plugins-core"),
+        )],
+    );
+    apply_scan_package_defaults(&mut snap);
+
+    let listed: Vec<String> = not_carried_packages(&snap)
+        .into_iter()
+        .map(|pkg| pkg.name)
+        .collect();
+    assert_eq!(listed, ["dnf-plugins-core"]);
+    let plan = render_service_intent(&snap);
+    assert_eq!(plan.omissions.len(), 1, "{:?}", plan.lines);
+    assert_eq!(plan.omissions[0].reason, OmissionReason::NotCarried);
+    assert!(!acted_on(&plan.lines, "dnf-plugins-core.timer"));
 }

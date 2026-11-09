@@ -2,8 +2,10 @@
 //! needs.
 //!
 //! An added package is in the class when it is in `auto_packages` (not
-//! user-installed on the source host) and no included package pulls it in,
-//! as [`pulled_in_by_included`] answers from `leaf_dep_tree`. Identity is
+//! user-installed on the source host) and no leaf the export installs
+//! pulls it in, as [`pulled_in_by_included`] answers from `leaf_dep_tree`.
+//! An included leaf the export renders only as a manual step pulls nothing
+//! in, since the image never installs it. Identity is
 //! `name.arch` throughout. [`classify_auto_carriage`] is the one decider:
 //! no function outside this module decides membership, and every other
 //! function here reaches the class through it.
@@ -57,7 +59,8 @@ pub enum AutoCarriage {
     /// that keeps its existing handling (locked, anaconda-sourced, named in
     /// the baseline, uploaded, or routed repo-less).
     NotAuto,
-    /// An auto package an included leaf pulls in (`pulled_in_by_included`).
+    /// An auto package a leaf the export installs pulls in
+    /// (`pulled_in_by_included`).
     PulledIn,
     /// An auto package nothing included pulls in.
     Unneeded,
