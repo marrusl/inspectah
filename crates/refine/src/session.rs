@@ -1042,11 +1042,19 @@ impl RefineSession {
     /// result with [`RefineSession::set_uploaded`], so a match that is never
     /// placed leaves the session exactly as it was.
     pub fn match_uploaded_rpm(&self, filename: &str) -> Option<UploadMatch> {
-        let rpm = self.original.rpm.as_ref()?;
+        // Match against the projection, not the scan: a repo-enabling
+        // package whose serving repo this export no longer carries is
+        // demoted there, and its FIXME asks for exactly this upload. A
+        // package takes an upload when its route is not an install by name.
+        let projected = self.snapshot_projected();
+        let rpm = projected.rpm.as_ref()?;
+        let no_uploads = VerifiedUploads::new();
+        let takes_upload =
+            |pkg: &PackageEntry| route_for(rpm, pkg, &no_uploads) != PackageRoute::ByName;
 
         // Try exact NEVRA match first (backwards compat)
         for pkg in &rpm.packages_added {
-            if pkg.repoless_annotation.is_empty() {
+            if !takes_upload(pkg) {
                 continue;
             }
             let expected = format!(
@@ -1087,7 +1095,7 @@ impl RefineSession {
 
         for candidate in &candidates {
             for pkg in &rpm.packages_added {
-                if pkg.repoless_annotation.is_empty() {
+                if !takes_upload(pkg) {
                     continue;
                 }
                 if pkg.name == *candidate && pkg.arch == extracted_arch {

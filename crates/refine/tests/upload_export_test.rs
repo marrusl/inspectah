@@ -1637,3 +1637,115 @@ fn an_upload_for_a_disabled_repo_package_exports_and_installs_from_the_upload() 
     );
     assert_every_staged_file_is_copied(&out);
 }
+
+// -- a demoted repo-enabling package takes an upload -------------------------
+
+/// The upload for the demoted `vendor-release`.
+const VENDOR_UPLOAD: &str = "vendor-release-1-1.el9.noarch.rpm";
+/// The FIXME a demoted `vendor-release` renders while nothing settles it.
+const VENDOR_FIXME: &str = "# FIXME: include /etc/yum.repos.d/bootstrap.repo under Configuration \
+                            Files, or re-include repo bootstrap, or upload the RPM; vendor-release \
+                            installs from that repo definition, which this export does not carry";
+
+/// `vendor-release`, installed `@commandline` and served by `[bootstrap]`,
+/// so it is repo-enabling and installs by name while `bootstrap.repo`
+/// ships. `bootstrap-tool` gives the section a member of its own, which
+/// the repo control needs before it lets the operator drop the section.
+fn repo_enabling_snapshot() -> InspectionSnapshot {
+    let package = |name: &str, arch: &str, source_repo: &str| PackageEntry {
+        name: name.into(),
+        version: "1".into(),
+        release: "1.el9".into(),
+        arch: arch.into(),
+        source_repo: source_repo.into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut vendor = package("vendor-release", "noarch", "@commandline");
+    vendor.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("bootstrap")];
+    let mut snap = InspectionSnapshot::new();
+    // A baseline, so the classifier keeps `bootstrap-tool` included and
+    // the section has a member to drop.
+    snap.baseline = Some(inspectah_core::baseline::BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-11-08T00:00:00Z".into(),
+    });
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![vendor, package("bootstrap-tool", "x86_64", "bootstrap")],
+        repo_files: vec![inspectah_core::types::rpm::RepoFile {
+            path: "/etc/yum.repos.d/bootstrap.repo".into(),
+            content: "[bootstrap]\nbaseurl=https://example.invalid/bootstrap\nenabled=1\n".into(),
+            is_default_repo: false,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+fn set_include_bootstrap(h: &mut Harness, include: bool) {
+    h.session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo {
+                path: "bootstrap".into(),
+            },
+            include,
+        })
+        .expect("the section is toggleable");
+}
+
+/// The FIXME of a demoted repo-enabling package asks for an upload, and
+/// the upload is accepted: matching reads the projection, where the
+/// demotion lives. The export then installs from the upload and the FIXME
+/// is gone. Re-including the repo serves the package by name again, and
+/// the upload is neither used nor staged.
+#[test]
+fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
+    let mut h = Harness::with_snapshot(repo_enabling_snapshot());
+    h.set_include("vendor-release", "noarch", true);
+    set_include_bootstrap(&mut h, false);
+
+    let (demoted, _) = h.export(None);
+    assert!(
+        containerfile(&demoted).contains(VENDOR_FIXME),
+        "the control: the demotion asks for an upload:\n{}",
+        containerfile(&demoted)
+    );
+
+    assert_eq!(
+        h.upload(VENDOR_UPLOAD, b"vendor").unwrap(),
+        UploadMatchKind::Exact,
+        "the upload the FIXME asks for is accepted"
+    );
+    let (out, warnings) = h.export(None);
+    let file = containerfile(&out);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert!(
+        !file.contains(VENDOR_FIXME),
+        "the upload settles it:\n{file}"
+    );
+    assert_eq!(repoless_active_lines(&file), install_lines(VENDOR_UPLOAD));
+    assert_eq!(
+        repoless_members(&out).keys().collect::<Vec<_>>(),
+        vec![VENDOR_UPLOAD]
+    );
+    assert_every_staged_file_is_copied(&out);
+
+    set_include_bootstrap(&mut h, true);
+    let (served, warnings) = h.export(None);
+    let file = containerfile(&served);
+    assert_eq!(warnings, Vec::<String>::new());
+    assert!(
+        active_lines(&file).contains(&"    vendor-release \\"),
+        "served by its repo again, it installs by name:\n{file}"
+    );
+    assert_eq!(repoless_active_lines(&file), Vec::<String>::new(), "{file}");
+    assert!(
+        repoless_members(&served).is_empty(),
+        "the upload is not staged without a COPY"
+    );
+    assert_every_staged_file_is_copied(&served);
+}

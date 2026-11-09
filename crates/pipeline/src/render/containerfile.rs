@@ -877,7 +877,13 @@ fn packages_section_lines(
             super::repo_enabling::RepoEnablingExport::Served => {
                 repo_enabling.push((pkg, install_name))
             }
-            super::repo_enabling::RepoEnablingExport::Lost(loss) => demoted.push((pkg, loss)),
+            // A demoted package the operator uploaded an RPM for installs
+            // from it in the repo-less block, which settles the FIXME.
+            super::repo_enabling::RepoEnablingExport::Lost(loss) => {
+                if !matches!(route, PackageRoute::Upload(_)) {
+                    demoted.push((pkg, loss));
+                }
+            }
         }
     }
 
