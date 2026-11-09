@@ -1,6 +1,10 @@
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION, SnapshotError};
 use inspectah_core::types::kernelboot::KernelBootSection;
+use inspectah_core::types::repo::RepoId;
+use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, RpmSection};
 use inspectah_core::types::selinux::SelinuxSection;
+use inspectah_core::types::services::ServiceSection;
+use std::collections::BTreeSet;
 
 /// Keys that moved off `KernelBootSection` when the config walker took
 /// ownership of the files behind them.
@@ -106,4 +110,118 @@ fn schema_25_does_not_serialize_the_relocated_section_lists() {
             "selinux must not serialize `{key}`: the config walker owns those files"
         );
     }
+}
+
+/// The serialized keys of a fully populated `PackageEntry`.
+const PACKAGE_ENTRY_KEYS: &[&str] = &[
+    "acknowledged",
+    "aggregate",
+    "arch",
+    "cache_path",
+    "disposition",
+    "epoch",
+    "locked",
+    "name",
+    "release",
+    "repo_attribution",
+    "repo_enabling_from",
+    "repoless_annotation",
+    "repoless_cached",
+    "source_repo",
+    "state",
+    "uploaded",
+    "uploaded_version",
+    "version",
+];
+
+/// The serialized keys of a fully populated `RpmSection`.
+const RPM_SECTION_KEYS: &[&str] = &[
+    "auto_packages",
+    "base_image",
+    "base_image_only",
+    "baseline_module_streams",
+    "baseline_package_names",
+    "baseline_suppressed",
+    "dnf_history_removed",
+    "duplicate_packages",
+    "file_ownership",
+    "gpg_keys",
+    "installed_groups",
+    "leaf_authority_hosts",
+    "leaf_dep_tree",
+    "leaf_packages",
+    "leaf_total_hosts",
+    "module_stream_conflicts",
+    "module_streams",
+    "multiarch_packages",
+    "ostree_overrides",
+    "ostree_removals",
+    "packages_added",
+    "repo_files",
+    "rpm_va",
+    "version_changes",
+    "version_locks",
+    "versionlock_command_output",
+];
+
+/// The serialized keys of a `ServiceSection`.
+const SERVICE_SECTION_KEYS: &[&str] = &[
+    "disabled_units",
+    "drop_ins",
+    "enabled_units",
+    "preset_matched_units",
+    "state_changes",
+];
+
+fn serialized_keys<T: serde::Serialize>(value: &T) -> BTreeSet<String> {
+    serde_json::to_value(value)
+        .expect("snapshot types serialize")
+        .as_object()
+        .expect("snapshot struct serializes as an object")
+        .keys()
+        .cloned()
+        .collect()
+}
+
+fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
+    keys.iter().map(|k| (*k).to_string()).collect()
+}
+
+/// The snapshot format guard: schema 25 and the key sets of the package
+/// and service structs are pinned. Serde ignores unknown fields and
+/// defaults missing ones, so a field added, renamed or removed with
+/// `#[serde(default)]` passes every round-trip test; this one fails
+/// instead. Every `skip_serializing_if` field is set to a non-default
+/// value so it appears.
+#[test]
+fn schema_25_format_guard_pins_package_and_service_keys() {
+    assert_eq!(SCHEMA_VERSION, 25);
+
+    let package = PackageEntry {
+        locked: true,
+        acknowledged: true,
+        repo_enabling_from: vec![RepoId::new("appstream")],
+        repoless_annotation: "annotated".into(),
+        repoless_cached: true,
+        uploaded: true,
+        cache_path: Some("/var/cache/dnf/x.rpm".into()),
+        uploaded_version: Some("1.0-1".into()),
+        ..Default::default()
+    };
+    assert_eq!(serialized_keys(&package), expected_keys(PACKAGE_ENTRY_KEYS));
+
+    let rpm = RpmSection {
+        packages_added: vec![package],
+        baseline_suppressed: Some(vec!["bash".into()]),
+        leaf_authority_hosts: Some(1),
+        leaf_total_hosts: Some(1),
+        installed_groups: Some(vec![InstalledGroup::default()]),
+        ..Default::default()
+    };
+    assert_eq!(serialized_keys(&rpm), expected_keys(RPM_SECTION_KEYS));
+
+    assert_eq!(
+        serialized_keys(&ServiceSection::default()),
+        expected_keys(SERVICE_SECTION_KEYS)
+    );
 }
