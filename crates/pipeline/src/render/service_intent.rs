@@ -86,18 +86,64 @@ pub fn is_package_installable(pkg: &PackageEntry) -> bool {
     manual_follow_up_reason(pkg).is_none()
 }
 
+/// The canonical `name.arch` ids of `packages_added` entries that an
+/// included leaf pulls in as a dependency, whatever their own disposition.
+///
+/// A package something included depends on is in the image: dnf installs
+/// it with the package that needs it. That holds for refine's default
+/// exclusion of a non-leaf package and for an operator's explicit
+/// exclusion alike, so "excluded" never means "absent" for such a package.
+/// This is the one place that answers the question; the service tiers and
+/// the package selection both ask it.
+///
+/// The answer comes from `leaf_dep_tree`, which maps each leaf to the
+/// transitive closure of its auto (non-leaf) dependencies. Two limits
+/// follow from what the tree records, and both fall back to treating the
+/// package by its disposition alone, which is what the renderer did before
+/// this existed:
+///
+/// - With no dependency data (`leaf_packages` unavailable, the tree empty)
+///   the set is empty, so an excluded dependency reads as absent and its
+///   unit is omitted even when dnf installs it.
+/// - The tree lists only auto dependencies of leaves. A leaf another leaf
+///   depends on, or a dependency of an auto package an operator included
+///   on its own, is not in it.
+pub fn pulled_in_by_included(rpm: &RpmSection) -> std::collections::HashSet<String> {
+    let Some(tree) = rpm.leaf_dep_tree.as_object() else {
+        return std::collections::HashSet::new();
+    };
+    let included: std::collections::HashSet<String> = rpm
+        .packages_added
+        .iter()
+        .filter(|pkg| pkg.disposition.is_included())
+        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
+        .collect();
+    tree.iter()
+        .filter(|(leaf, _)| included.contains(leaf.as_str()))
+        .filter_map(|(_, deps)| deps.as_array())
+        .flatten()
+        .filter_map(|dep| dep.as_str())
+        .map(str::to_string)
+        .collect()
+}
+
 /// Compute the set of package *names* (not `name.arch`) that the target
 /// image is expected to contain. This merges baseline package names with
-/// user-included added packages.
+/// user-included added packages and the added packages an included one
+/// pulls in ([`pulled_in_by_included`]).
 pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet<String> {
     let mut names = std::collections::BTreeSet::new();
     if let Some(baseline) = &rpm.baseline_package_names {
         names.extend(baseline.iter().cloned());
     }
+    let pulled_in = pulled_in_by_included(rpm);
     names.extend(
         rpm.packages_added
             .iter()
-            .filter(|pkg| pkg.disposition.is_included())
+            .filter(|pkg| {
+                pkg.disposition.is_included()
+                    || pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
+            })
             .map(|pkg| pkg.name.clone()),
     );
     names
@@ -120,7 +166,8 @@ pub struct ServiceOmission {
 /// Why a service's owning package is absent from the target image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmissionReason {
-    /// Every `packages_added` entry for the owning package is excluded.
+    /// Every `packages_added` entry for the owning package is excluded,
+    /// and no included package pulls it in as a dependency.
     PackageExcluded,
     /// A baseline is available and the owning package is in neither the
     /// baseline nor `packages_added`.
@@ -237,8 +284,10 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
 ///
 /// Tier logic (evaluated in order):
 /// 1. `owning_package: None` → always Emit (conservative — unknown owner)
-/// 2. Package in `packages_added` with every entry `include: false`, and
-///    not in the baseline → Omit with `OmissionReason::PackageExcluded`.
+/// 2. Package in `packages_added` with every entry `include: false`, not
+///    in the baseline, and not pulled in by an included package
+///    ([`pulled_in_by_included`]) → Omit with `OmissionReason::PackageExcluded`.
+///    A pulled-in package is in the image, so it falls through to Tier 5.
 ///    An exclusion is the strongest absence signal the model has, and
 ///    `systemctl enable` on a unit whose package is not installed fails the
 ///    build. The one known edge is dnf pulling the excluded package back in
@@ -334,10 +383,11 @@ fn classify_service_presence(
 }
 
 /// Tier 2 on its own: the owning package has `packages_added` entries, and
-/// none of them is included nor does the baseline ship it.
+/// none of them is included, pulled in by an included package, or shipped
+/// by the baseline.
 ///
-/// `target_packages` holds every included entry's name, so "not in it"
-/// already says no entry for the name is included.
+/// `target_packages` holds every included or pulled-in entry's name, so
+/// "not in it" already says no entry for the name is either.
 fn excluded_owner(
     sc: &ServiceStateChange,
     rpm: &RpmSection,

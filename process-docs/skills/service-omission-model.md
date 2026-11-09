@@ -54,13 +54,25 @@ The audit report (`audit-report.md` and `.html`) lists a unit's row
 without saying it was omitted. That is true of Tier 7 as well and was
 left as is; no new surface was built for omissions.
 
-## A known trap: the refine leaf default
+## Excluded is not absent
 
-Refine's `normalize_package_defaults` excludes a non-leaf package by
-default, while the scan tarball leaves it included and filters it from
-the install list at render. Tier 2 reads the disposition, so a unit owned
-by a dependency package (a socket in `cockpit-ws` under the leaf
-`cockpit`, say) is emitted in the scan tarball and omitted in an
-unchanged refine export, although dnf installs the package in both
-images. Whether a default exclusion counts as an exclusion for Tier 2 is
-an open decision; check its status before relying on either behavior.
+"Excluded" means the package will not be in the image. A package that an
+included package depends on is in the image whatever its disposition,
+because dnf installs it with the package that needs it, so Tier 2 must
+not omit its unit. That covers refine's default exclusion of a non-leaf
+package (the scan tarball leaves the same package included) and an
+operator's explicit exclusion alike.
+
+`pulled_in_by_included` in `service_intent.rs` is the one answer:
+every auto dependency `leaf_dep_tree` lists under an included leaf.
+`effective_target_packages` adds those names, so Tier 2 falls through to
+Tier 5 for them, in single-host and aggregate mode. The disabled-repo
+package selection in `containerfile.rs` asks the same function; do not
+write a second copy.
+
+Its limits are the tree's. `leaf_dep_tree` maps each leaf to the
+transitive closure of its **auto** dependencies only. With no leaf data
+the set is empty, and a leaf that another leaf depends on, or a
+dependency of an auto package included on its own, is not recorded. In
+those cases an excluded package's unit is still omitted although dnf may
+install it, which is the behavior from before the rule existed.

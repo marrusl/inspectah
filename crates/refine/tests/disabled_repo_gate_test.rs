@@ -202,12 +202,14 @@ fn export_containerfile(session: &RefineSession) -> String {
 /// dependency `openh264`, from the same repo, is left to dnf, which
 /// resolves it inside that transaction. The scan tarball includes the
 /// dependency and filters it at render; refine excludes it by default.
-/// Both must render the same lines, and when refine excludes the leaf
-/// too, nothing installs and the leaf's unit is not enabled.
+/// Both must render the same lines, including the unit each package owns,
+/// and when refine excludes the leaf too, nothing installs and neither
+/// unit is enabled.
 #[test]
 fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
     const LEAF: &str = "gst-openh264";
     const UNIT: &str = "openh264-helper.service";
+    const DEP_UNIT: &str = "openh264-dep.service";
     let mut snap = snapshot(REPO_ID, Some((DISABLED_WITH_SOURCE, true)));
     {
         let rpm = snap.rpm.as_mut().expect("rpm section");
@@ -217,19 +219,22 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
         rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
     }
+    let unit = |name: &str, owner: &str| ServiceStateChange {
+        unit: name.into(),
+        current_state: ServiceUnitState::Enabled,
+        default_state: Some(PresetDefault::Disable),
+        disposition: FindingKind::included(),
+        locked: false,
+        owning_package: Some(owner.into()),
+        aggregate: None,
+        attention_reason: None,
+        shadow_type: None,
+        shadow_rationale: None,
+    };
     snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: UNIT.into(),
-            current_state: ServiceUnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            owning_package: Some(LEAF.into()),
-            aggregate: None,
-            attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
-        }],
+        // The dependency owns a unit too. dnf installs it with the leaf,
+        // so its unit is enabled although refine excludes it by default.
+        state_changes: vec![unit(UNIT, LEAF), unit(DEP_UNIT, "openh264")],
         enabled_units: vec![],
         disabled_units: vec![],
         drop_ins: vec![],
@@ -268,12 +273,16 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         about_the_packages(&refine),
         "scan:\n{scan}\nrefine:\n{refine}"
     );
-    assert!(
-        refine
-            .lines()
-            .any(|l| l.contains(UNIT) && !l.starts_with('#')),
-        "the installed leaf's unit is enabled:\n{refine}"
-    );
+    for (u, whose) in [(UNIT, "the leaf's"), (DEP_UNIT, "the dependency's")] {
+        for (path, containerfile) in [("scan", &scan), ("refine", &refine)] {
+            assert!(
+                containerfile
+                    .lines()
+                    .any(|l| l.contains(u) && !l.starts_with('#')),
+                "{path}: {whose} unit is enabled:\n{containerfile}"
+            );
+        }
+    }
 
     session
         .apply(RefinementOp::SetInclude {
@@ -289,12 +298,14 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         !excluded.contains(ENABLEREPO),
         "nothing installs from the repo:\n{excluded}"
     );
-    assert!(
-        !excluded
-            .lines()
-            .any(|l| l.contains(UNIT) && !l.starts_with('#')),
-        "no unit of an uninstalled package is enabled:\n{excluded}"
-    );
+    for u in [UNIT, DEP_UNIT] {
+        assert!(
+            !excluded
+                .lines()
+                .any(|l| l.contains(u) && !l.starts_with('#')),
+            "no unit of an uninstalled package is enabled ({u}):\n{excluded}"
+        );
+    }
 }
 
 /// Refine refuses to toggle a disabled repo, so through the session the

@@ -734,6 +734,9 @@ fn test_service_presence_tiers_table() {
         /// The same case on an aggregate snapshot, where only Tier 2 is
         /// applied and every other tier emits clean.
         in_aggregate: Expected,
+        /// `Some(parent_included)`: a leaf `parent` whose dependency tree
+        /// lists the owner, included or not.
+        pulled_in_by: Option<bool>,
     }
     let cases = vec![
         Case {
@@ -742,6 +745,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: None,
             expected: Expected::Clean,
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -753,6 +757,7 @@ fn test_service_presence_tiers_table() {
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
+            pulled_in_by: None,
             in_aggregate: Expected::Omit(
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
@@ -767,6 +772,7 @@ fn test_service_presence_tiers_table() {
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
+            pulled_in_by: None,
             in_aggregate: Expected::Omit(
                 OmissionReason::PackageExcluded,
                 "# Omitted: unit.service (package 'nginx' was excluded)",
@@ -778,6 +784,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("nginx", excluded(), PackageState::Added)],
             owner: Some("nginx"),
             expected: Expected::Clean,
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -786,6 +793,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("app", included(), PackageState::LocalInstall)],
             owner: Some("app"),
             expected: Expected::Advise(vec![AdvisoryReason::PackageUnreachable]),
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -797,6 +805,7 @@ fn test_service_presence_tiers_table() {
                 AdvisoryReason::PackageUnreachable,
                 AdvisoryReason::BaselineUnavailable,
             ]),
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -805,6 +814,7 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("httpd", included(), PackageState::Added)],
             owner: Some("httpd"),
             expected: Expected::Clean,
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -813,6 +823,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: Some("sshd"),
             expected: Expected::Clean,
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -821,6 +832,7 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: Some("mystery"),
             expected: Expected::Advise(vec![AdvisoryReason::BaselineUnavailable]),
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
         },
         Case {
@@ -832,7 +844,41 @@ fn test_service_presence_tiers_table() {
                 OmissionReason::NotInTargetImage,
                 "# Omitted: unit.service (package 'sssd' not in target image)",
             ),
+            pulled_in_by: None,
             in_aggregate: Expected::Clean,
+        },
+        Case {
+            name: "tier 2: an excluded dependency of an included leaf is present",
+            baseline: Some(vec![]),
+            added: vec![pkg("cockpit-ws", excluded(), PackageState::Added)],
+            owner: Some("cockpit-ws"),
+            expected: Expected::Clean,
+            pulled_in_by: Some(true),
+            in_aggregate: Expected::Clean,
+        },
+        Case {
+            name: "tier 2: an included dependency of an included leaf emits clean",
+            baseline: Some(vec![]),
+            added: vec![pkg("cockpit-ws", included(), PackageState::Added)],
+            owner: Some("cockpit-ws"),
+            expected: Expected::Clean,
+            pulled_in_by: Some(true),
+            in_aggregate: Expected::Clean,
+        },
+        Case {
+            name: "tier 2: an excluded dependency of an excluded leaf omits",
+            baseline: Some(vec![]),
+            added: vec![pkg("cockpit-ws", excluded(), PackageState::Added)],
+            owner: Some("cockpit-ws"),
+            expected: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'cockpit-ws' was excluded)",
+            ),
+            pulled_in_by: Some(false),
+            in_aggregate: Expected::Omit(
+                OmissionReason::PackageExcluded,
+                "# Omitted: unit.service (package 'cockpit-ws' was excluded)",
+            ),
         },
     ];
 
@@ -861,12 +907,23 @@ fn test_service_presence_tiers_table() {
                 (&case.expected, "single host")
             };
             let label = format!("{} ({mode})", case.name);
+            let mut added = case.added.clone();
+            let mut leaf_dep_tree = serde_json::json!({});
+            if let (Some(parent_included), Some(owner)) = (case.pulled_in_by, case.owner) {
+                added.push(pkg(
+                    "parent",
+                    FindingKind::from_bool(parent_included),
+                    PackageState::Added,
+                ));
+                leaf_dep_tree = serde_json::json!({ "parent.x86_64": [format!("{owner}.x86_64")] });
+            }
             snap.rpm = Some(RpmSection {
                 baseline_package_names: case
                     .baseline
                     .as_ref()
                     .map(|b| b.iter().map(|s| s.to_string()).collect()),
-                packages_added: case.added.clone(),
+                packages_added: added,
+                leaf_dep_tree,
                 ..Default::default()
             });
             snap.services = Some(ServiceSection {
