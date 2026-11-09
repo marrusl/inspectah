@@ -96,7 +96,7 @@ COPY language-packages/npm/23f9725da273/package-lock.json '/opt/webapp'/package-
 RUN cd '/opt/webapp' && npm ci --production
 
 # npm global packages: /usr/local/lib/node_modules (detected via npm list -g)
-RUN npm install -g '@angular/cli' '@types/node' 'pm2' 'typescript'
+RUN npm install -g -- '@angular/cli' '@types/node' 'pm2' 'typescript'
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `sudo inspectah scan`.

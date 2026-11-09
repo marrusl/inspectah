@@ -488,6 +488,9 @@ fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
         ));
     }
 
+    // Quoting stops the shell, not npm: a token such as `--prefix=/x`
+    // would still parse as an npm option. The `--` in front of the list
+    // ends option parsing, so every token is a package spec.
     let pkg_list = pkg_list.join(" ");
 
     if effective_confidence == HIGH_CONFIDENCE {
@@ -499,10 +502,10 @@ fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
                     .into(),
             );
         }
-        lines.push(format!("RUN npm install -g {pkg_list}"));
+        lines.push(format!("RUN npm install -g -- {pkg_list}"));
     } else {
         lines.push(format!("# npm global packages: {prefix} ({method_label})"));
-        lines.push(format!("# RUN npm install -g {pkg_list}"));
+        lines.push(format!("# RUN npm install -g -- {pkg_list}"));
     }
 
     lines
@@ -1708,7 +1711,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g 'pm2' 'typescript'"),
+            output.contains("RUN npm install -g -- 'pm2' 'typescript'"),
             "unpinned packages must not include version: {output}"
         );
         assert!(
@@ -1731,7 +1734,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g 'pm2@5.3.0' 'typescript@5.4.2'"),
+            output.contains("RUN npm install -g -- 'pm2@5.3.0' 'typescript@5.4.2'"),
             "pinned packages must include version: {output}"
         );
     }
@@ -1758,7 +1761,7 @@ mod tests {
             "unpinned package must not include version: {output}"
         );
         assert!(
-            output.contains("RUN npm install -g 'pm2@5.3.0' 'typescript'"),
+            output.contains("RUN npm install -g -- 'pm2@5.3.0' 'typescript'"),
             "mixed pin state must be respected: {output}"
         );
     }
@@ -1777,7 +1780,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g '@angular/cli'"),
+            output.contains("RUN npm install -g -- '@angular/cli'"),
             "scoped packages must be rendered correctly: {output}"
         );
     }
@@ -1975,7 +1978,7 @@ mod tests {
             "must warn about rejected packages: {output}"
         );
         assert!(
-            output.contains("RUN npm install -g 'pm2'"),
+            output.contains("RUN npm install -g -- 'pm2'"),
             "safe package must still render: {output}"
         );
         assert!(
@@ -2019,7 +2022,7 @@ mod tests {
                 &["nodejs"],
             );
             let output = language_package_lines(&snap).join("\n");
-            let expected = format!("RUN npm install -g 'pm2@5.3.0' '{evil}@1.0.0'");
+            let expected = format!("RUN npm install -g -- 'pm2@5.3.0' '{evil}@1.0.0'");
             assert_eq!(
                 active_lines(&output),
                 vec![expected.as_str()],
@@ -2045,7 +2048,7 @@ mod tests {
             );
             assert_eq!(
                 active_lines(&output),
-                vec!["RUN npm install -g 'pm2'"],
+                vec!["RUN npm install -g -- 'pm2'"],
                 "{evil:?}: {output}"
             );
             assert!(!output.contains("evil"), "{evil:?}: {output}");
@@ -2062,8 +2065,36 @@ mod tests {
                 &["nodejs"],
             );
             let output = language_package_lines(&snap).join("\n");
-            let expected = format!("RUN npm install -g '{name}'");
+            let expected = format!("RUN npm install -g -- '{name}'");
             assert_eq!(active_lines(&output), vec![expected.as_str()], "{output}");
+        }
+    }
+
+    /// Quoting stops the shell, not npm: a token such as `--prefix=/x`
+    /// still parses as an npm option and moves the install. Every token
+    /// renders after `--`, which ends npm's option parsing, on the active
+    /// line and on the commented one.
+    #[test]
+    fn npm_global_option_like_tokens_render_after_the_separator() {
+        for (confidence, expected) in [
+            (HIGH_CONFIDENCE, "RUN npm install -g -- 'pm2' '--prefix=/x'"),
+            (
+                MEDIUM_CONFIDENCE,
+                "# RUN npm install -g -- 'pm2' '--prefix=/x'",
+            ),
+        ] {
+            let mut item = npm_global_item(
+                "/usr/local/lib/node_modules",
+                confidence,
+                vec![("pm2", "5.3.0", false), ("--prefix=/x", "1.0.0", false)],
+            );
+            item.disposition = FindingKind::included();
+            let snap = test_snap(vec![item], &["nodejs"]);
+            let output = language_package_lines(&snap).join("\n");
+            assert!(
+                output.lines().any(|l| l == expected),
+                "{confidence}: expected {expected:?} in: {output}"
+            );
         }
     }
 
