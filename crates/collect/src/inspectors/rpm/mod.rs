@@ -3581,6 +3581,47 @@ R\tengine
     }
 
     #[test]
+    fn classify_deps_rpm_pulls_a_self_conditional_branch_when_the_base_holds_the_condition() {
+        // desktop and feature-base are base-image packages (not added).
+        // Each `if` condition holds through one of them without the
+        // branch's own package, so dnf installs the branch. foo is the only
+        // provider of foo, so its version floor still pulls nothing.
+        let exec = dep_graph_executor(
+            "app foo plugin plugin2",
+            "\
+@@app
+R\t(plugin if (plugin or desktop))
+R\t(plugin2 if feature)
+R\t(foo >= 2 if foo)
+@@foo
+@@plugin
+@@plugin2
+",
+            "app.noarch\t8\t1.0-1\tapp\n\
+             desktop.noarch\t8\t1.0-1\tdesktop\n\
+             feature-base.noarch\t0\t\tfeature\n\
+             foo.noarch\t8\t2.1-3.el9\tfoo\n\
+             plugin.noarch\t8\t1.0-1\tplugin\n\
+             plugin2.noarch\t8\t1.0-1\tplugin2\n\
+             plugin2.noarch\t0\t\tfeature\n",
+            "",
+        );
+        let added = ids(&[
+            "app.noarch",
+            "foo.noarch",
+            "plugin.noarch",
+            "plugin2.noarch",
+        ]);
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
+            .expect("graph should be available")
+            .depends_on;
+        assert_eq!(
+            deps["app.noarch"],
+            ids(&["plugin.noarch", "plugin2.noarch"])
+        );
+    }
+
+    #[test]
     fn parse_sentinel_deps_reads_tags_and_skips_rpmlib() {
         let parsed = parse_sentinel_deps(
             "\

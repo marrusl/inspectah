@@ -43,6 +43,21 @@ pub(super) trait Providers {
     fn providers(&self, atom: &Atom) -> HashSet<&str>;
 }
 
+/// An index with one installed package left out, to ask whether an `if`
+/// condition would still hold without it (`Node::collect_pulled`).
+struct Excluding<'a> {
+    index: &'a dyn Providers,
+    id: &'a str,
+}
+
+impl Providers for Excluding<'_> {
+    fn providers(&self, atom: &Atom) -> HashSet<&str> {
+        let mut out = self.index.providers(atom);
+        out.remove(self.id);
+        out
+    }
+}
+
 /// A capability as a dependency names it, with its version comparison if
 /// it has one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,12 +323,15 @@ impl DepExpr {
 
     /// The installed packages this expression pulls in. Conditions are
     /// evaluated, never credited: in `(a if b)` only a provider of `a` is
-    /// pulled in, and only when `b` is installed. A package that itself
-    /// makes the condition hold is not pulled in by it either, so the
-    /// version floor `(foo >= 2 if foo)` pulls in nothing: it constrains a
-    /// `foo` that is already there. An `or` takes its first satisfied
-    /// operand: a requirement needs only one, and on an installed host the
-    /// first one present satisfies it.
+    /// pulled in, and only when `b` is installed. A package the condition
+    /// holds only through is not pulled in by it either, so the version
+    /// floor `(foo >= 2 if foo)` pulls in nothing when foo is the only
+    /// provider: it constrains a `foo` that is already there. When another
+    /// package also makes the condition hold, as a base-image provider of
+    /// `feature` does in `(plugin if feature)`, the branch is pulled in
+    /// whether or not it provides the condition too. An `or` takes its
+    /// first satisfied operand: a requirement needs only one, and on an
+    /// installed host the first one present satisfies it.
     pub(super) fn pulled<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
         let mut out = HashSet::new();
         self.root.collect_pulled(index, &mut out);
@@ -435,7 +453,15 @@ impl Node {
                 if cond.satisfied(index) {
                     let mut pulled = HashSet::new();
                     then.collect_pulled(index, &mut pulled);
-                    out.extend(&pulled - &cond.witnesses(index));
+                    // A provider the condition holds only through is not
+                    // pulled in by it: without that package the condition
+                    // fails and nothing is required. One that some other
+                    // package also satisfies the condition without is.
+                    out.extend(
+                        pulled
+                            .into_iter()
+                            .filter(|&id| cond.satisfied(&Excluding { index, id })),
+                    );
                 } else if let Some(o) = otherwise {
                     o.collect_pulled(index, out);
                 }
@@ -513,25 +539,6 @@ impl Node {
                     then.trigger_clauses(index, is_added)
                 }
             }
-        }
-    }
-
-    /// The installed packages that make this node hold when it is a
-    /// condition: the providers of every capability it matches on.
-    fn witnesses<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
-        match self {
-            Self::Match(m) => m.matching(index),
-            Self::And(xs) | Self::Or(xs) => xs.iter().flat_map(|x| x.witnesses(index)).collect(),
-            Self::If {
-                then, otherwise, ..
-            }
-            | Self::Unless {
-                then, otherwise, ..
-            } => then
-                .witnesses(index)
-                .into_iter()
-                .chain(otherwise.iter().flat_map(|o| o.witnesses(index)))
-                .collect(),
         }
     }
 
@@ -926,6 +933,38 @@ mod tests {
             ("(foo >= 2 if foo)", &[]),
             ("(foo-devel = 2.1-3 if foo)", &["foo-devel"]),
             ("(foo-devel = 2.1-4 if foo)", &[]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn a_branch_provider_is_held_back_only_when_the_condition_needs_it() {
+        // `base` stands for a base-image package: it provides `feature`
+        // and `desktop`, so a condition on either holds without plugin.
+        // Only foo provides foo, and only plugin provides `plugin-cap`.
+        let index = TestIndex(&[
+            ("plugin", "plugin"),
+            ("plugin", "feature"),
+            ("plugin", "plugin-cap"),
+            ("base", "feature"),
+            ("base", "desktop"),
+            ("helper", "helper"),
+            ("foo", "foo = 2.1-3"),
+        ]);
+        let cases: &[(&str, &[&str])] = &[
+            // The condition holds through `desktop` alone.
+            ("(plugin if (plugin or desktop))", &["plugin"]),
+            // The condition holds through base's `feature` alone.
+            ("(plugin if feature)", &["plugin"]),
+            // A version floor on the only foo: without foo the condition
+            // fails, so nothing is required.
+            ("(foo >= 2 if foo)", &[]),
+            // The condition needs plugin; helper is still required.
+            ("((plugin and helper) if plugin-cap)", &["helper"]),
+            ("(plugin if (plugin-cap and desktop))", &[]),
         ];
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
