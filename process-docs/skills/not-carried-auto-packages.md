@@ -14,7 +14,9 @@ An entry of `packages_added` is in the class when it is in
 A leaf counts only when `installs_on_its_own_route` holds for it: an
 included leaf the export renders only as a manual step (no repo serves
 it and no RPM is carried, or a repo-enabling package demoted for a
-dropped repo) is never installed, so its dependencies are not pulled in.
+dropped repo with no upload) is never installed, so its dependencies are
+not pulled in. A demoted package that was uploaded installs from the
+upload, so it still counts.
 Identity is `name.arch`.
 
 It is never in the class, and keeps its existing handling, when it is:

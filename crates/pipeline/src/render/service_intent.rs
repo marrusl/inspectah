@@ -99,9 +99,11 @@ pub fn is_package_installable(pkg: &PackageEntry) -> bool {
 /// always is, and a repo-less one only when the export carries its RPM (an
 /// upload, taken on `uploaded` since no uploads are proved here, or a
 /// cached RPM). A repo-enabling package whose serving repo the export
-/// dropped is demoted to a FIXME and never installed. An included package
-/// that fails this renders as a manual step only: a `# TODO`, `# MANUAL`
-/// or `# FIXME` comment.
+/// dropped is demoted to a FIXME and not installed, unless it was
+/// uploaded: the Containerfile then installs it from the upload in the
+/// repo-less block, as it does any uploaded repo-less package. An
+/// included package that fails this renders as a manual step only: a
+/// `# TODO`, `# MANUAL` or `# FIXME` comment.
 pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) -> bool {
     pkg.disposition.is_included()
         && match route_for(rpm, pkg, &VerifiedUploads::new()) {
@@ -109,7 +111,7 @@ pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) ->
             PackageRoute::DisabledRepo(_) => true,
             PackageRoute::Upload(_) | PackageRoute::Repoless => pkg.uploaded || pkg.repoless_cached,
         }
-        && !matches!(repo_enabling_export(rpm, pkg), RepoEnablingExport::Lost(_))
+        && (pkg.uploaded || !matches!(repo_enabling_export(rpm, pkg), RepoEnablingExport::Lost(_)))
 }
 
 /// The canonical `name.arch` ids of `packages_added` entries that a leaf
@@ -126,8 +128,8 @@ pub(crate) fn installs_on_its_own_route(rpm: &RpmSection, pkg: &PackageEntry) ->
 /// A leaf contributes only when [`installs_on_its_own_route`] holds for
 /// it. An included leaf the export renders as a manual step (no repo
 /// serves it and no RPM is carried, or a repo-enabling package demoted for
-/// a dropped repo) is never installed by the image, so dnf never resolves
-/// its dependencies either.
+/// a dropped repo with no upload) is never installed by the image, so dnf
+/// never resolves its dependencies either.
 ///
 /// The answer comes from `leaf_dep_tree`, which maps each leaf to the
 /// transitive closure of its auto (non-leaf) dependencies. Two limits

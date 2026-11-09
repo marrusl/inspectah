@@ -2557,6 +2557,96 @@ mod tests {
         assert!(!output.contains("    epel-release \\"), "{output}");
     }
 
+    /// A demoted repo-enabling leaf the operator uploaded installs from the
+    /// upload, so dnf resolves its dependencies: an excluded dependency
+    /// from a host-disabled repo is still named in that repo's
+    /// transaction and keeps its `systemctl enable`. Without the upload
+    /// the leaf is a FIXME only, which is the control: the dependency is
+    /// not named, is not carried, and its unit is omitted as such.
+    #[test]
+    fn an_uploaded_demoted_leaf_still_pulls_in_its_dependencies() {
+        const UPLOAD: &str = "epel-release-9-1.el9.x86_64.rpm";
+        const ENABLEREPO: &str = "RUN dnf install -y --enablerepo=epel-cisco-openh264 \\";
+
+        let host = |uploaded: bool| {
+            let mut snap = snapshot_with_packages(&["epel-release", "openh264"]);
+            make_epel_repo_enabling(&mut snap, "epel-release");
+            repo_file_mut(&mut snap, EPEL_REPO_PATH).disposition = FindingKind::excluded();
+            {
+                let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+                rpm.repo_files
+                    .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO_CONTENT, true));
+                rpm.packages_added[0].uploaded = uploaded;
+                rpm.packages_added[1].disposition = FindingKind::excluded();
+                rpm.baseline_package_names = Some(vec!["bash".into()]);
+                rpm.leaf_packages = Some(vec!["epel-release.x86_64".into()]);
+                rpm.auto_packages = Some(vec!["openh264.x86_64".into()]);
+                rpm.leaf_dep_tree =
+                    serde_json::json!({ "epel-release.x86_64": ["openh264.x86_64"] });
+            }
+            make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
+            super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
+            snap.services = Some(inspectah_core::types::services::ServiceSection {
+                state_changes: vec![inspectah_core::types::services::ServiceStateChange {
+                    unit: "openh264.service".into(),
+                    current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                    default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    owning_package: Some("openh264".into()),
+                    aggregate: None,
+                    attention_reason: None,
+                    shadow_type: None,
+                    shadow_rationale: None,
+                }],
+                enabled_units: vec![],
+                disabled_units: vec![],
+                drop_ins: vec![],
+                preset_matched_units: vec![],
+            });
+            snap
+        };
+
+        // Uploaded: the leaf installs from the upload.
+        let mut ctx = RenderContext::default();
+        ctx.verified_uploads.insert(
+            "epel-release.x86_64".into(),
+            inspectah_core::types::verified_upload::VerifiedUpload {
+                canonical: "epel-release.x86_64".into(),
+                basename: inspectah_core::rpm_filename::StagedName::parse(UPLOAD)
+                    .expect("a valid basename"),
+                uploaded_version: None,
+            },
+        );
+        let output = render_containerfile(&host(true), None, Some(&ctx));
+        assert!(
+            output.contains(&format!("    /tmp/{UPLOAD} \\")),
+            "the leaf installs from its upload:\n{output}"
+        );
+        assert!(output.contains(ENABLEREPO), "{output}");
+        assert!(
+            output.lines().any(|l| l == "    openh264 \\"),
+            "the dependency is named in its repo's transaction:\n{output}"
+        );
+        assert!(
+            output
+                .lines()
+                .any(|l| !l.starts_with('#') && l.contains("openh264.service")),
+            "the dependency keeps its unit:\n{output}"
+        );
+        assert!(!output.contains("# Omitted: openh264.service"), "{output}");
+
+        // The control: no upload, so the leaf is a FIXME only.
+        let output = render_containerfile(&host(false), None, Some(&RenderContext::default()));
+        assert!(output.contains("# FIXME: include"), "{output}");
+        assert!(!output.contains(ENABLEREPO), "{output}");
+        assert!(!output.lines().any(|l| l == "    openh264 \\"), "{output}");
+        assert!(
+            output.contains("# Omitted: openh264.service (package 'openh264' is not carried"),
+            "{output}"
+        );
+    }
+
     /// The other half of the double render: a `@commandline` package the
     /// scan left repo-less got an active `dnf install` from `source_repo`
     /// alone, next to its own MANUAL block. `@commandline` is not a repo,

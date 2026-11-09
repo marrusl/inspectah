@@ -156,7 +156,9 @@ struct Evidence<'a> {
     ///
     /// The repo-enabling demotion is the one filter that removes a
     /// package the image will not have, so it is applied here, to the
-    /// pulled-in packages as well as the included ones.
+    /// pulled-in packages as well as the included ones. An included one
+    /// that was uploaded installs from the upload, so the demotion does
+    /// not remove it.
     ///
     /// Keyed by package name, because `/var` evidence names its owner by
     /// name (`file_ownership`, `RpmOwned`). `pulled_in_by_included`
@@ -211,17 +213,17 @@ impl<'a> Evidence<'a> {
                 .iter()
                 .filter(|pkg| {
                     // Installed on the route the Containerfile renders it
-                    // by, or by dnf with the installed leaf that needs it.
+                    // by, which already applies the repo-enabling
+                    // demotion and its upload recovery, or by dnf with the
+                    // installed leaf that needs it. A pulled-in
+                    // repo-enabling package whose serving repo the export
+                    // dropped is demoted to a FIXME and never installed.
                     installs_on_its_own_route(rpm, pkg)
-                        || pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
-                })
-                // A repo-enabling package whose serving repo the export
-                // dropped is demoted to a FIXME and never installed.
-                .filter(|pkg| {
-                    !matches!(
-                        super::repo_enabling::repo_enabling_export(rpm, pkg),
-                        super::repo_enabling::RepoEnablingExport::Lost(_)
-                    )
+                        || (pulled_in.contains(&format!("{}.{}", pkg.name, pkg.arch))
+                            && !matches!(
+                                super::repo_enabling::repo_enabling_export(rpm, pkg),
+                                super::repo_enabling::RepoEnablingExport::Lost(_)
+                            ))
                 })
                 .map(|pkg| pkg.name.as_str())
                 .collect();

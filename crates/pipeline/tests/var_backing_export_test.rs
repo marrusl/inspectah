@@ -1635,7 +1635,7 @@ fn only_a_leaf_the_export_installs_carries_its_dependency_directories() {
         pkg.repoless_annotation = "No repo source".into();
     }
     type Leaf = fn(&mut PackageEntry);
-    let cases: [(&str, Leaf, bool); 5] = [
+    let cases: [(&str, Leaf, bool); 6] = [
         ("installable by name", |_| {}, true),
         (
             "repo-less with a cached RPM",
@@ -1661,6 +1661,15 @@ fn only_a_leaf_the_export_installs_carries_its_dependency_directories() {
                 pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
             },
             false,
+        ),
+        (
+            "repo-enabling, serving repo dropped, uploaded",
+            |pkg| {
+                repoless(pkg);
+                pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+                pkg.uploaded = true;
+            },
+            true,
         ),
     ];
 

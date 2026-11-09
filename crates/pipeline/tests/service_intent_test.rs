@@ -1283,7 +1283,7 @@ fn only_a_leaf_the_export_installs_pulls_in_its_dependencies() {
         pkg.repoless_annotation = REPOLESS_NOTE.into();
     }
     type Root = fn(&mut PackageEntry);
-    let cases: [(&str, Root, bool); 7] = [
+    let cases: [(&str, Root, bool); 8] = [
         ("installable by name", |_| {}, true),
         (
             "repo-less with a cached RPM",
@@ -1314,6 +1314,16 @@ fn only_a_leaf_the_export_installs_pulls_in_its_dependencies() {
                 pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
             },
             false,
+        ),
+        (
+            "repo-enabling, serving repo dropped, uploaded",
+            |pkg| {
+                pkg.source_repo = "@commandline".into();
+                pkg.repo_enabling_from = vec![inspectah_core::types::repo::RepoId::new("epel")];
+                pkg.repoless_annotation = REPOLESS_NOTE.into();
+                pkg.uploaded = true;
+            },
+            true,
         ),
         (
             "excluded",

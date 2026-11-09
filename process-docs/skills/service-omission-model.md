@@ -78,7 +78,9 @@ every auto dependency `leaf_dep_tree` lists under a leaf the export
 installs (`installs_on_its_own_route`). An included leaf that renders
 only as a manual step (a `# TODO`, the repo-less `# MANUAL` block with
 no cached or uploaded RPM, or the repo-enabling `# FIXME` after its
-serving repo was dropped) is never installed, so it pulls nothing in.
+serving repo was dropped and with no upload) is never installed, so it
+pulls nothing in. A demoted repo-enabling package that was uploaded
+installs from the upload in the repo-less block, so it still counts.
 `effective_target_packages` adds those names, so Tier 2 falls through to
 Tier 5 for them, in single-host and aggregate mode. The disabled-repo
 package selection in `containerfile.rs` asks the same function; do not
