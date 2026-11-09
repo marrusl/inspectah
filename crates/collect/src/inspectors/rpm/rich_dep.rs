@@ -456,12 +456,16 @@ impl Node {
                     // A provider the condition holds only through is not
                     // pulled in by it: without that package the condition
                     // fails and nothing is required. One that some other
-                    // package also satisfies the condition without is.
-                    out.extend(
-                        pulled
-                            .into_iter()
-                            .filter(|&id| cond.satisfied(&Excluding { index, id })),
-                    );
+                    // package also satisfies the condition without is. So is
+                    // one the `else` selects, since the `else` is what
+                    // applies when the condition fails.
+                    let mut required_otherwise = HashSet::new();
+                    if let Some(o) = otherwise {
+                        o.collect_pulled(index, &mut required_otherwise);
+                    }
+                    out.extend(pulled.into_iter().filter(|&id| {
+                        required_otherwise.contains(id) || cond.satisfied(&Excluding { index, id })
+                    }));
                 } else if let Some(o) = otherwise {
                     o.collect_pulled(index, out);
                 }
@@ -965,6 +969,13 @@ mod tests {
             // The condition needs plugin; helper is still required.
             ("((plugin and helper) if plugin-cap)", &["helper"]),
             ("(plugin if (plugin-cap and desktop))", &[]),
+            // Nothing provides `missing`, so the condition holds only
+            // while helper is installed. Without helper the `else` applies
+            // and requires helper, so the expression needs it either way.
+            (
+                "(helper if (missing unless helper) else helper)",
+                &["helper"],
+            ),
         ];
         for (input, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");

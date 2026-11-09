@@ -3662,6 +3662,25 @@ R\tengine
     }
 
     #[test]
+    fn classify_deps_rpm_keeps_a_branch_provider_its_else_also_requires() {
+        // Nothing provides feature, so `(feature unless plugin)` holds only
+        // while plugin is installed. Without plugin the `else` applies and
+        // requires plugin, so app needs plugin whichever branch is taken.
+        let exec = dep_graph_executor(
+            "app plugin",
+            "@@app\nR\t(plugin if (feature unless plugin) else plugin)\n@@plugin\n",
+            "app.noarch\t8\t1.0-1\tapp\n\
+             plugin.noarch\t8\t1.0-1\tplugin\n",
+            "",
+        );
+        let added = ids(&["app.noarch", "plugin.noarch"]);
+        let deps = classify_deps_rpm(&exec, &added, Some(&[]))
+            .expect("graph should be available")
+            .depends_on;
+        assert_eq!(deps["app.noarch"], ids(&["plugin.noarch"]));
+    }
+
+    #[test]
     fn classify_deps_rpm_pulls_a_self_conditional_branch_when_the_base_holds_the_condition() {
         // desktop and feature-base are base-image packages (not added).
         // Each `if` condition holds through one of them without the
