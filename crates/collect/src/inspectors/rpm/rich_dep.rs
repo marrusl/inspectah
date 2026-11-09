@@ -10,31 +10,46 @@
 //! condition holds when some installed package provides it, and an `or`
 //! picks among the operands that are installed.
 
-/// One dependency expression.
+/// How deeply rich expressions may nest. Real ones nest two or three
+/// levels; rpm sets no limit, so a malformed or hostile line could nest
+/// deeply enough to exhaust the stack in a recursive parser.
+const MAX_RICH_DEP_DEPTH: usize = 16;
+
+/// One parsed dependency expression.
+///
+/// Its nesting depth is at most `MAX_RICH_DEP_DEPTH`. The parser is the
+/// only constructor and enforces that, so every recursive walk over the
+/// tree (`caps`, `satisfied`, `pulled_caps`) is bounded by the same limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum DepExpr {
+pub(super) struct DepExpr {
+    root: Node,
+}
+
+/// One node of a dependency expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Node {
     /// A capability name, version constraint stripped.
     Cap(String),
     /// `(a and b ...)`: every operand.
-    And(Vec<DepExpr>),
+    And(Vec<Node>),
     /// `(a or b ...)`: any operand.
-    Or(Vec<DepExpr>),
+    Or(Vec<Node>),
     /// `(a with b ...)`: one package matching every operand. Treated as
     /// `and`, which credits the same providers when one package matches.
-    With(Vec<DepExpr>),
+    With(Vec<Node>),
     /// `(a without b)`: a package matching `a` and not `b`. Treated as `a`.
-    Without(Box<DepExpr>),
+    Without(Box<Node>),
     /// `(then if cond)` or `(then if cond else otherwise)`.
     If {
-        then: Box<DepExpr>,
-        cond: Box<DepExpr>,
-        otherwise: Option<Box<DepExpr>>,
+        then: Box<Node>,
+        cond: Box<Node>,
+        otherwise: Option<Box<Node>>,
     },
     /// `(then unless cond)` or `(then unless cond else otherwise)`.
     Unless {
-        then: Box<DepExpr>,
-        cond: Box<DepExpr>,
-        otherwise: Option<Box<DepExpr>>,
+        then: Box<Node>,
+        cond: Box<Node>,
+        otherwise: Option<Box<Node>>,
     },
 }
 
@@ -53,36 +68,54 @@ impl DepExpr {
     /// Parse one dependency line as rpm prints it in `%{REQUIRENAME}` and
     /// the weak-dependency tags. Returns `None` for a rich expression this
     /// parser does not understand (unbalanced parentheses, operators mixed
-    /// in one group), so the caller drops it as it did before rich
-    /// dependencies were read at all.
+    /// in one group, nesting deeper than `MAX_RICH_DEP_DEPTH`), so the
+    /// caller drops it as it did before rich dependencies were read at all.
     pub(super) fn parse(line: &str) -> Option<Self> {
         let line = line.trim();
-        if line.starts_with('(') {
+        let root = if line.starts_with('(') {
             let mut parser = Parser {
                 src: line.as_bytes(),
                 pos: 0,
+                depth: 0,
             };
             let expr = parser.group()?;
             parser.skip_ws();
-            (parser.pos == parser.src.len()).then_some(expr)
+            (parser.pos == parser.src.len()).then_some(expr)?
         } else if line.is_empty() {
-            None
+            return None;
         } else {
             // `%{REQUIRENAME}` and the weak tags hold the name alone, with
             // the version in a separate tag, so the whole line is the
             // capability. Splitting it would truncate a path with a space.
-            Some(Self::Cap(line.to_string()))
-        }
+            Node::Cap(line.to_string())
+        };
+        Some(Self { root })
     }
 
     /// Every capability name in the expression, conditions included, so
     /// the caller can look all of them up in one pass over the index.
     pub(super) fn caps(&self) -> Vec<&str> {
         let mut out = Vec::new();
-        self.collect_caps(&mut out);
+        self.root.collect_caps(&mut out);
         out
     }
 
+    /// Whether the installed host satisfies the expression.
+    pub(super) fn satisfied(&self, installed: &dyn Fn(&str) -> bool) -> bool {
+        self.root.satisfied(installed)
+    }
+
+    /// The capabilities whose providers this expression pulls in, given
+    /// what is installed. Conditions are evaluated, never credited: in
+    /// `(a if b)` only `a` is pulled in, and only when `b` is installed.
+    pub(super) fn pulled_caps(&self, installed: &dyn Fn(&str) -> bool, or: OrChoice) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.root.collect_pulled(installed, or, &mut out);
+        out
+    }
+}
+
+impl Node {
     fn collect_caps<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
             Self::Cap(c) => out.push(c),
@@ -109,8 +142,7 @@ impl DepExpr {
         }
     }
 
-    /// Whether the installed host satisfies the expression.
-    pub(super) fn satisfied(&self, installed: &dyn Fn(&str) -> bool) -> bool {
+    fn satisfied(&self, installed: &dyn Fn(&str) -> bool) -> bool {
         match self {
             Self::Cap(c) => installed(c),
             Self::And(xs) | Self::With(xs) => xs.iter().all(|x| x.satisfied(installed)),
@@ -139,15 +171,6 @@ impl DepExpr {
                 }
             }
         }
-    }
-
-    /// The capabilities whose providers this expression pulls in, given
-    /// what is installed. Conditions are evaluated, never credited: in
-    /// `(a if b)` only `a` is pulled in, and only when `b` is installed.
-    pub(super) fn pulled_caps(&self, installed: &dyn Fn(&str) -> bool, or: OrChoice) -> Vec<&str> {
-        let mut out = Vec::new();
-        self.collect_pulled(installed, or, &mut out);
-        out
     }
 
     fn collect_pulled<'a>(
@@ -209,6 +232,8 @@ impl DepExpr {
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    /// Groups currently open, checked against `MAX_RICH_DEP_DEPTH`.
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -244,7 +269,7 @@ impl Parser<'_> {
 
     /// An operand: a nested group, or a capability with an optional
     /// version comparison (`foo >= 1.0`) that is read and dropped.
-    fn operand(&mut self) -> Option<DepExpr> {
+    fn operand(&mut self) -> Option<Node> {
         self.skip_ws();
         if self.peek() == Some(b'(') {
             return self.group();
@@ -260,16 +285,17 @@ impl Parser<'_> {
         } else {
             self.pos = save;
         }
-        Some(DepExpr::Cap(name))
+        Some(Node::Cap(name))
     }
 
     /// A parenthesised group: operands joined by one kind of operator,
     /// except `if`/`unless` which take an optional `else`.
-    fn group(&mut self) -> Option<DepExpr> {
-        if self.peek() != Some(b'(') {
+    fn group(&mut self) -> Option<Node> {
+        if self.peek() != Some(b'(') || self.depth == MAX_RICH_DEP_DEPTH {
             return None;
         }
         self.pos += 1;
+        self.depth += 1;
         let mut operands = vec![self.operand()?];
         let mut ops: Vec<String> = Vec::new();
         loop {
@@ -285,11 +311,12 @@ impl Parser<'_> {
                 }
             }
         }
+        self.depth -= 1;
         build_group(operands, &ops)
     }
 }
 
-fn build_group(mut operands: Vec<DepExpr>, ops: &[String]) -> Option<DepExpr> {
+fn build_group(mut operands: Vec<Node>, ops: &[String]) -> Option<Node> {
     let ops: Vec<&str> = ops.iter().map(String::as_str).collect();
     match ops.as_slice() {
         [] => operands.pop(),
@@ -299,13 +326,13 @@ fn build_group(mut operands: Vec<DepExpr>, ops: &[String]) -> Option<DepExpr> {
             let cond = Box::new(operands.pop()?);
             let then = Box::new(operands.pop()?);
             Some(if ops[0] == "if" {
-                DepExpr::If {
+                Node::If {
                     then,
                     cond,
                     otherwise,
                 }
             } else {
-                DepExpr::Unless {
+                Node::Unless {
                     then,
                     cond,
                     otherwise,
@@ -314,12 +341,12 @@ fn build_group(mut operands: Vec<DepExpr>, ops: &[String]) -> Option<DepExpr> {
         }
         ["without"] => {
             operands.pop();
-            Some(DepExpr::Without(Box::new(operands.pop()?)))
+            Some(Node::Without(Box::new(operands.pop()?)))
         }
         [first, rest @ ..] if rest.iter().all(|op| op == first) => match *first {
-            "and" => Some(DepExpr::And(operands)),
-            "or" => Some(DepExpr::Or(operands)),
-            "with" => Some(DepExpr::With(operands)),
+            "and" => Some(Node::And(operands)),
+            "or" => Some(Node::Or(operands)),
+            "with" => Some(Node::With(operands)),
             _ => None,
         },
         _ => None,
@@ -330,19 +357,19 @@ fn build_group(mut operands: Vec<DepExpr>, ops: &[String]) -> Option<DepExpr> {
 mod tests {
     use super::*;
 
-    fn cap(s: &str) -> DepExpr {
-        DepExpr::Cap(s.to_string())
+    fn cap(s: &str) -> Node {
+        Node::Cap(s.to_string())
     }
 
     #[test]
     fn parses_plain_and_rich_forms() {
         // Forms measured in `rpm -qa` output on UBI 8 and UBI 9.
-        let cases: &[(&str, Option<DepExpr>)] = &[
+        let cases: &[(&str, Option<Node>)] = &[
             ("libc.so.6()(64bit)", Some(cap("libc.so.6()(64bit)"))),
             ("/usr/bin/perl", Some(cap("/usr/bin/perl"))),
             (
                 "(python3-dbus if NetworkManager)",
-                Some(DepExpr::If {
+                Some(Node::If {
                     then: Box::new(cap("python3-dbus")),
                     cond: Box::new(cap("NetworkManager")),
                     otherwise: None,
@@ -350,7 +377,7 @@ mod tests {
             ),
             (
                 "(glibc-gconv-extra(aarch-64) = 2.34-284.el9_8.4 if redhat-rpm-config)",
-                Some(DepExpr::If {
+                Some(Node::If {
                     then: Box::new(cap("glibc-gconv-extra(aarch-64)")),
                     cond: Box::new(cap("redhat-rpm-config")),
                     otherwise: None,
@@ -358,34 +385,38 @@ mod tests {
             ),
             (
                 "(python3.9dist(idna) < 3 with python3.9dist(idna) >= 2.5)",
-                Some(DepExpr::With(vec![
+                Some(Node::With(vec![
                     cap("python3.9dist(idna)"),
                     cap("python3.9dist(idna)"),
                 ])),
             ),
             (
                 "(a or (b and c))",
-                Some(DepExpr::Or(vec![
+                Some(Node::Or(vec![
                     cap("a"),
-                    DepExpr::And(vec![cap("b"), cap("c")]),
+                    Node::And(vec![cap("b"), cap("c")]),
                 ])),
             ),
             (
                 "(a unless b else c)",
-                Some(DepExpr::Unless {
+                Some(Node::Unless {
                     then: Box::new(cap("a")),
                     cond: Box::new(cap("b")),
                     otherwise: Some(Box::new(cap("c"))),
                 }),
             ),
-            ("(a without b)", Some(DepExpr::Without(Box::new(cap("a"))))),
+            ("(a without b)", Some(Node::Without(Box::new(cap("a"))))),
             // Mixed operators in one group are invalid in rpm too.
             ("(a and b or c)", None),
             ("(a and b", None),
             ("(a and b) trailing", None),
         ];
         for (input, expected) in cases {
-            assert_eq!(&DepExpr::parse(input), expected, "input: {input}");
+            assert_eq!(
+                &DepExpr::parse(input).map(|e| e.root),
+                expected,
+                "input: {input}"
+            );
         }
     }
 
@@ -415,6 +446,16 @@ mod tests {
                 "input: {input}"
             );
         }
+    }
+
+    #[test]
+    fn deep_nesting_is_rejected_without_overflowing_the_stack() {
+        let deep = "(".repeat(200_000);
+        assert_eq!(DepExpr::parse(&deep), None);
+        // The limit itself parses; one more level does not.
+        let nested = |n: usize| format!("{}a{}", "(".repeat(n), ")".repeat(n));
+        assert!(DepExpr::parse(&nested(MAX_RICH_DEP_DEPTH)).is_some());
+        assert_eq!(DepExpr::parse(&nested(MAX_RICH_DEP_DEPTH + 1)), None);
     }
 
     #[test]
