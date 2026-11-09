@@ -144,11 +144,35 @@ impl Constraint {
     }
 
     /// Whether the two version ranges overlap, by rpm's rule
-    /// (`rpmdsCompare`): compare the two EVRs, then check that the
-    /// operators leave some version in common.
+    /// (`rpmdsCompare`, which calls `rpmverOverlap`): compare the two EVRs,
+    /// then check that the operators leave some version in common. A
+    /// missing epoch is 0, and the release counts only when both sides
+    /// have one, so `foo >= 2.0` accepts `2.0-1`.
     fn overlaps(&self, other: &Self) -> bool {
         let (a, b) = (self.cmp, other.cmp);
-        match evr_cmp(&self.evr, &other.evr) {
+        let (ea, va, ra) = split_evr(&self.evr);
+        let (eb, vb, rb) = split_evr(&other.evr);
+        let sense = match rpmvercmp(ea, eb).then_with(|| rpmvercmp(va, vb)) {
+            Ordering::Equal => match (ra, rb) {
+                (Some(ra), Some(rb)) => rpmvercmp(ra, rb),
+                // Epoch and version are equal and at most one side has a
+                // release. rpm then counts a match outright when the side
+                // without a release has EQUAL, before looking at the other
+                // side's operator, so `engine = 2` meets `engine > 2-1`.
+                // `rpmverOverlap` in rpmio/rpmver.c, lines 74-85, the same
+                // in rpm-4.16.1-release and rpm-4.19.1.1-release:
+                //   } else {
+                //     /* always matches if the side with no release has SENSE_EQUAL */
+                //     if ((v1->r && *v1->r && (f2 & RPMSENSE_EQUAL)) ||
+                //         (v2->r && *v2->r && (f1 & RPMSENSE_EQUAL))) {
+                //       result = 1;
+                (Some(_), None) if b.equal() => return true,
+                (None, Some(_)) if a.equal() => return true,
+                _ => Ordering::Equal,
+            },
+            sense => sense,
+        };
+        match sense {
             Ordering::Less => a.greater() || b.less(),
             Ordering::Greater => a.less() || b.greater(),
             Ordering::Equal => {
@@ -160,7 +184,8 @@ impl Constraint {
 
 /// Split `[epoch:]version[-release]` as rpm does (`rpmverParse`): the
 /// epoch is a leading run of digits before `:`, the release follows the
-/// last `-`.
+/// last `-`. A missing epoch reads as `0`, and an empty release as none,
+/// as `rpmverOverlap` tests `v->r && *v->r`.
 fn split_evr(evr: &str) -> (&str, &str, Option<&str>) {
     let digits = evr.bytes().take_while(u8::is_ascii_digit).count();
     let (epoch, rest) = match evr[digits..].strip_prefix(':') {
@@ -168,24 +193,10 @@ fn split_evr(evr: &str) -> (&str, &str, Option<&str>) {
         None => ("", evr),
     };
     let (version, release) = match rest.rsplit_once('-') {
-        Some((v, r)) => (v, Some(r)),
+        Some((v, r)) => (v, Some(r).filter(|r| !r.is_empty())),
         None => (rest, None),
     };
     (if epoch.is_empty() { "0" } else { epoch }, version, release)
-}
-
-/// Compare two EVRs as rpm does (`rpmverCmp`): a missing epoch is 0, and
-/// the release counts only when both sides have one, so `foo >= 2.0`
-/// accepts `2.0-1`.
-fn evr_cmp(a: &str, b: &str) -> Ordering {
-    let (ea, va, ra) = split_evr(a);
-    let (eb, vb, rb) = split_evr(b);
-    rpmvercmp(ea, eb)
-        .then_with(|| rpmvercmp(va, vb))
-        .then_with(|| match (ra, rb) {
-            (Some(ra), Some(rb)) if !ra.is_empty() && !rb.is_empty() => rpmvercmp(ra, rb),
-            _ => Ordering::Equal,
-        })
 }
 
 /// One parsed dependency expression.
@@ -923,6 +934,28 @@ mod tests {
     }
 
     #[test]
+    fn a_release_less_equal_provide_meets_a_strict_comparison_on_its_version() {
+        // `engine = 2` carries no release. Against `engine > 2-1` rpm
+        // compares epoch and version only, finds them equal, and counts
+        // the match because the release-less side has EQUAL.
+        let index = TestIndex(&[
+            ("engine", "engine = 2"),
+            ("plugin", "plugin"),
+            ("fallback", "fallback"),
+        ]);
+        let cases: &[(&str, &[&str])] = &[
+            ("(plugin if engine > 2-1 else fallback)", &["plugin"]),
+            ("(plugin if engine < 2-1 else fallback)", &["plugin"]),
+            ("(plugin if engine > 2 else fallback)", &["fallback"]),
+            ("(plugin if engine > 1.9-1 else fallback)", &["plugin"]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(expr.pulled(&index), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
     fn constraints_overlap_as_rpm_compares_them() {
         let c = |cmp, evr: &str| Constraint {
             cmp,
@@ -939,12 +972,35 @@ mod tests {
             (c(Cmp::Eq, "1.0~rc1-1"), c(Cmp::Ge, "1.0"), false),
             (c(Cmp::Ge, "3"), c(Cmp::Lt, "2"), false),
             (c(Cmp::Ge, "3"), c(Cmp::Gt, "2"), true),
+            // Epoch and version equal, one side without a release: rpm
+            // counts a match when that side has EQUAL, whatever the other
+            // side's operator (`rpmverOverlap`).
+            (c(Cmp::Eq, "2"), c(Cmp::Gt, "2-1"), true),
+            (c(Cmp::Eq, "2"), c(Cmp::Lt, "2-1"), true),
+            (c(Cmp::Ge, "2"), c(Cmp::Lt, "2-1"), true),
+            (c(Cmp::Le, "2"), c(Cmp::Gt, "2-1"), true),
+            (c(Cmp::Eq, "1:2"), c(Cmp::Gt, "1:2-1"), true),
+            // An empty release is no release.
+            (c(Cmp::Eq, "2-"), c(Cmp::Gt, "2-1"), true),
+            // Without EQUAL on the release-less side, the ordinary bits
+            // decide; with the versions different the rule does not apply.
+            (c(Cmp::Gt, "2"), c(Cmp::Eq, "2-1"), false),
+            (c(Cmp::Lt, "2"), c(Cmp::Eq, "2-1"), false),
+            (c(Cmp::Gt, "2"), c(Cmp::Lt, "2-1"), false),
+            (c(Cmp::Eq, "2"), c(Cmp::Gt, "3-1"), false),
+            (c(Cmp::Eq, "2"), c(Cmp::Gt, "2"), false),
         ];
+        // rpm's overlap is symmetric, so check both operand orders.
         for (provided, wanted, expected) in cases {
             assert_eq!(
                 provided.overlaps(&wanted),
                 expected,
                 "{provided:?} against {wanted:?}"
+            );
+            assert_eq!(
+                wanted.overlaps(&provided),
+                expected,
+                "{wanted:?} against {provided:?}"
             );
         }
         // An unversioned provide meets any constraint.
