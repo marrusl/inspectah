@@ -548,6 +548,57 @@ export printed `# Omitted: iscsi-starter.service` while the image held
 the built image before reading an `# Omitted:` comment as proof that a
 package is absent.
 
+### Measured, 2026-11-09: weak, file and rich edges, on EL9 and EL10
+
+Rescanned at `1be5bd44` on RHEL 9.8 (rpm 4.16.1.3) and RHEL 10.2
+(rpm 4.19.1.1), both aarch64, after a standard drift run plus `cockpit`
+and `pcp-zeroconf`. Both rpm versions accept the tagged
+`[R\t…][W\t…][S\t…]` requires query. The exec audit shows it once, then
+the provides index once, with no `dnf repoquery --requires` after it.
+On each host, all 28 leaf closures matched the libsolv check below.
+
+**Planting on EL10.** The driftify standard profile runs on RHEL 10.
+The `openh264` disabled-repo plant does not: EPEL 10 has no
+`epel-cisco-openh264.repo`, and dnf finds no `openh264`. `pcp-zeroconf`
+behaves differently on EL10. It hard-requires `pcp-pmda-bpftrace`, and
+`bcc` Recommends `kernel-devel`, so the install pulls 94 packages,
+including `gcc`, `gcc-toolset-15-*`, `clang-libs` and Perl. Its leaf
+closure is 110 packages, against 10 on EL9. That is correct, not a
+collapsed tree. Expect it before reading a large closure as a defect.
+
+**Weak dependencies reach the image.** `rhel-bootc:9.8` and `:10.2`
+both report `install_weak_deps` as `True`
+(`podman run <image> python3 -c 'import dnf; print(dnf.Base().conf.install_weak_deps)'`).
+So a Recommends edge in the tree is a package the build installs.
+
+**An independent closure check, with no rpm parsing of our own.** Run
+it on the guest under `sudo python3 -I`. The dnf API resolves
+capabilities and file paths through libsolv:
+
+```python
+import dnf
+b = dnf.Base(); b.fill_sack(load_system_repo=True, load_available_repos=False)
+inst = b.sack.query().installed()
+providers = {f"{p.name}.{p.arch}" for p in inst.filter(provides=cap)}
+# per package: p.requires, p.recommends, p.supplements are reldep lists
+```
+
+Build edges from those lists with the inspector's rule, walk from each
+leaf, and filter the result to the auto set. Rich expressions come back
+as strings starting with `(`, and you evaluate them yourself. That part
+of the check is therefore not independent. `p.reason` (`group`,
+`dependency`, `weak-dependency`, `user`) tells you which of the
+"needed by no leaf" packages are installer comps installs, and which
+are their dependencies.
+
+**A self-conditional rich dependency credits a false edge.**
+`(foo >= 1.2 if foo)` is a version floor, and dnf never installs `foo`
+for it. Evaluating the condition against the host finds `foo` installed
+and pulls it. Neither host hit this, because every such dependency on an
+added package targeted a baseline or uninstalled package (`selinux-policy`,
+`fedora-release-common`). A package whose condition names an added
+package would get a wrong edge.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
