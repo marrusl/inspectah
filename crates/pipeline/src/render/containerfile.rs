@@ -1094,6 +1094,12 @@ fn packages_section_lines(
 /// one line per [`not_carried_packages`] entry, in its order, naming any
 /// units the package had enabled. Comments only, so nothing in it is
 /// installed. Empty, with no header, when the list is.
+///
+/// The name and the units come from the snapshot, which an imported one
+/// can fill with anything, so each is sanitized: a newline in either
+/// would end the comment and turn the rest into an active instruction.
+/// Exclusion keeps these packages away from the install-token checks, so
+/// nothing upstream has screened them.
 fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let list = not_carried_packages(snap);
     if list.is_empty() {
@@ -1104,8 +1110,13 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
         list.len()
     )];
     for pkg in &list {
-        let name = pkg.display_name();
-        lines.push(match pkg.enabled_units.as_slice() {
+        let name = language_packages::sanitize_for_comment(&pkg.display_name());
+        let units: Vec<String> = pkg
+            .enabled_units
+            .iter()
+            .map(|unit| language_packages::sanitize_for_comment(unit))
+            .collect();
+        lines.push(match units.as_slice() {
             [] => format!("#   {name}"),
             [unit] => format!("#   {name} ({unit} was enabled)"),
             units => format!("#   {name} ({} were enabled)", units.join(", ")),
@@ -7113,5 +7124,90 @@ RUN dnf install -y \
         let refine_like = render_containerfile(&leaf_default, None, None);
         assert!(!not_carried_block(&scan).is_empty(), "{scan}");
         assert_eq!(not_carried_block(&refine_like), not_carried_block(&scan));
+    }
+
+    /// A snapshot field that reaches the block carrying a newline cannot
+    /// end the comment: each hostile field still renders as one `#` line,
+    /// and no line outside a comment carries the payload.
+    #[test]
+    fn not_carried_block_keeps_hostile_fields_inside_the_comment() {
+        const PAYLOAD: &str = "\nRUN touch /tmp/injected\n#";
+
+        /// Add an auto package nothing needs, so it is in the class.
+        fn add_unneeded(snap: &mut InspectionSnapshot, name: &str, arch: &str) {
+            let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+            rpm.packages_added.push(PackageEntry {
+                name: name.into(),
+                arch: arch.into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            });
+            rpm.auto_packages
+                .as_mut()
+                .expect("fixture has auto data")
+                .push(format!("{name}.{arch}"));
+        }
+
+        let cases: Vec<(&str, InspectionSnapshot)> = vec![
+            ("package name", {
+                let mut snap = not_carried_host();
+                add_unneeded(&mut snap, &format!("unused{PAYLOAD}"), "x86_64");
+                snap
+            }),
+            ("arch of an arch-qualified display name", {
+                let mut snap = not_carried_host();
+                add_unneeded(&mut snap, "twoarch", "x86_64");
+                add_unneeded(&mut snap, "twoarch", &format!("i686{PAYLOAD}"));
+                snap
+            }),
+            ("enabled unit name", {
+                let mut snap = not_carried_host();
+                let unit = format!("evil{PAYLOAD}.service");
+                snap.rpm
+                    .as_mut()
+                    .expect("fixture has an rpm section")
+                    .file_ownership
+                    .push(owns(
+                        "firewalld",
+                        &[format!("/usr/lib/systemd/system/{unit}").as_str()],
+                    ));
+                snap.services
+                    .as_mut()
+                    .expect("fixture has a services section")
+                    .enabled_units
+                    .push(unit);
+                snap
+            }),
+        ];
+
+        for (field, mut snap) in cases {
+            super::super::not_carried::apply_scan_package_defaults(&mut snap);
+            let listed = super::super::not_carried::not_carried_packages(&snap).len();
+            let output = render_containerfile(&snap, None, None);
+            let block = not_carried_block(&output);
+
+            assert_eq!(
+                block.len(),
+                listed + 1,
+                "{field}: one header and one line per package:\n{output}"
+            );
+            assert!(
+                block.iter().all(|l| l.starts_with('#')),
+                "{field}:\n{output}"
+            );
+            assert!(
+                block.iter().any(|l| l.contains("RUN touch /tmp/injected")),
+                "{field}: the payload is listed, escaped:\n{output}"
+            );
+            assert!(
+                output
+                    .lines()
+                    .filter(|l| l.contains("injected"))
+                    .all(|l| l.starts_with('#')),
+                "{field}: the payload stays in a comment:\n{output}"
+            );
+        }
     }
 }
