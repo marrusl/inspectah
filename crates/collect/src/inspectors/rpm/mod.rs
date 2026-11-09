@@ -18,7 +18,7 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
-use rich_dep::{DepExpr, OrChoice, Providers};
+use rich_dep::{Atom, Constraint, DepExpr, OrChoice, Providers};
 use std::collections::{HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
@@ -720,20 +720,24 @@ const RPM_DEPS_FORMAT: &str = "@@%{NAME}\\n\
                                [S\\t%{SUPPLEMENTNAME}\\n]";
 
 /// RPM query format for the installed provides index: one line per
-/// provided capability, `name.arch<TAB>capability`.
+/// provided capability, `name.arch<TAB>flags<TAB>version<TAB>capability`.
 ///
-/// `%{PROVIDENAME}` is an array tag. `%{=NAME}` and `%{=ARCH}` use the `=`
-/// modifier, which repeats a scalar for every array element; without it rpm
-/// rejects the mix of scalar and array tags inside `[...]` (see
-/// `RPM_FILE_OWNERSHIP_FORMAT`). The identity comes first because it never
-/// contains a tab, so each line splits on its first tab.
+/// `%{PROVIDENAME}`, `%{PROVIDEFLAGS}` and `%{PROVIDEVERSION}` are parallel
+/// arrays of the same length, so they share one `[...]`. `%{=NAME}` and
+/// `%{=ARCH}` use the `=` modifier, which repeats a scalar for every array
+/// element; without it rpm rejects the mix of scalar and array tags inside
+/// `[...]` (see `RPM_FILE_OWNERSHIP_FORMAT`). The flags print in decimal;
+/// only the comparison bits are read (`Constraint::from_provide`), and an
+/// unversioned provide prints `0` and an empty version. The capability
+/// comes last, so a name with a tab in it stays whole.
 ///
 /// ```text
-/// glibc.x86_64<TAB>libc.so.6()(64bit)
-/// glibc.x86_64<TAB>glibc(x86-64)
-/// openssl-libs.x86_64<TAB>libssl.so.3()(64bit)
+/// glibc.x86_64<TAB>8<TAB>2.34-60.el9<TAB>glibc
+/// glibc.x86_64<TAB>0<TAB><TAB>libc.so.6()(64bit)
+/// openssl-libs.x86_64<TAB>0<TAB><TAB>libssl.so.3()(64bit)
 /// ```
-const RPM_PROVIDES_INDEX_FORMAT: &str = "[%{=NAME}.%{=ARCH}\\t%{PROVIDENAME}\\n]";
+const RPM_PROVIDES_INDEX_FORMAT: &str =
+    "[%{=NAME}.%{=ARCH}\\t%{PROVIDEFLAGS}\\t%{PROVIDEVERSION}\\t%{PROVIDENAME}\\n]";
 
 /// How a dependency line relates its package to the capability it names.
 ///
@@ -938,8 +942,11 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
 /// answers, and crediting every provider in a batch to every capability in
 /// it made unrelated packages depend on each other.
 ///
-/// Capabilities are matched by name, as `--whatprovides <name>` matches
-/// them; version constraints were already stripped. A file-path
+/// A plain requirement is matched by name, as `--whatprovides <name>`
+/// matches it, since its version is not queried. A capability inside a
+/// rich dependency carries its version comparison, and only providers whose
+/// provided version meets it count (`Atom::accepts`), so a condition such
+/// as `engine >= 2` fails when only `engine = 1` is installed. A file-path
 /// capability (`/usr/bin/perl`) is provided by a package that lists it in
 /// its provides (bash provides `/bin/sh`) or owns the file, the two places
 /// `--whatprovides` looks. Paths are compared in their `/usr` form, since
@@ -950,7 +957,16 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
 /// dependency's condition can be checked against the whole host; the
 /// caller filters edges to the added set.
 struct ProviderIndex {
-    providers: HashMap<String, HashSet<String>>,
+    providers: HashMap<String, Vec<Provide>>,
+}
+
+/// One installed package's provide of a capability.
+struct Provide {
+    /// The provider's canonical `name.arch` id.
+    id: String,
+    /// The provided version, `None` when unversioned. File ownership
+    /// provides a path without a version.
+    version: Option<Constraint>,
 }
 
 impl ProviderIndex {
@@ -962,7 +978,7 @@ impl ProviderIndex {
         wanted: &HashSet<&str>,
         file_ownership: &[FileOwnershipEntry],
     ) -> Option<Self> {
-        let mut providers: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut providers: HashMap<String, Vec<Provide>> = HashMap::new();
         if wanted.is_empty() {
             return Some(Self { providers });
         }
@@ -984,7 +1000,10 @@ impl ProviderIndex {
         // the index lists every installed id.
         let mut ids_by_name: HashMap<&str, HashSet<&str>> = HashMap::new();
         for line in result.stdout.lines() {
-            let Some((provider_id, cap)) = line.split_once('\t') else {
+            let mut fields = line.splitn(4, '\t');
+            let (Some(provider_id), Some(flags), Some(version), Some(cap)) =
+                (fields.next(), fields.next(), fields.next(), fields.next())
+            else {
                 continue;
             };
             ids_by_name
@@ -992,11 +1011,18 @@ impl ProviderIndex {
                 .or_default()
                 .insert(provider_id);
             let cap = cap.trim();
+            // Unparsable flags read as an unversioned provide, which matches
+            // by name as every capability did before versions were read.
+            let provided = flags
+                .trim()
+                .parse()
+                .ok()
+                .and_then(|flags| Constraint::from_provide(flags, version.trim()));
             let mut credit = |cap: &str| {
-                providers
-                    .entry(cap.to_string())
-                    .or_default()
-                    .insert(provider_id.to_string());
+                providers.entry(cap.to_string()).or_default().push(Provide {
+                    id: provider_id.to_string(),
+                    version: provided.clone(),
+                });
             };
             if wanted.contains(cap) {
                 credit(cap);
@@ -1018,7 +1044,10 @@ impl ProviderIndex {
                         providers
                             .entry((*spelling).to_string())
                             .or_default()
-                            .extend(ids.iter().map(|id| (*id).to_string()));
+                            .extend(ids.iter().map(|id| Provide {
+                                id: (*id).to_string(),
+                                version: None,
+                            }));
                     }
                 }
             }
@@ -1029,12 +1058,13 @@ impl ProviderIndex {
 }
 
 impl Providers for ProviderIndex {
-    fn providers(&self, cap: &str) -> HashSet<&str> {
+    fn providers(&self, atom: &Atom) -> HashSet<&str> {
         self.providers
-            .get(cap)
+            .get(atom.name())
             .into_iter()
             .flatten()
-            .map(String::as_str)
+            .filter(|p| atom.accepts(p.version.as_ref()))
+            .map(|p| p.id.as_str())
             .collect()
     }
 }
@@ -2854,12 +2884,12 @@ R\t/usr/bin/sh
                 &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "basesystem.noarch\tbasesystem\n\
-                             glibc.x86_64\tglibc(x86-64)\n\
-                             glibc.x86_64\tlibc.so.6()(64bit)\n\
-                             glibc.i686\tlibc.so.6\n\
-                             ncurses-libs.x86_64\tlibncurses.so.6()(64bit)\n\
-                             vim.x86_64\tvim(x86-64)\n"
+                    stdout: "basesystem.noarch\t0\t\tbasesystem\n\
+                             glibc.x86_64\t0\t\tglibc(x86-64)\n\
+                             glibc.x86_64\t0\t\tlibc.so.6()(64bit)\n\
+                             glibc.i686\t0\t\tlibc.so.6\n\
+                             ncurses-libs.x86_64\t0\t\tlibncurses.so.6()(64bit)\n\
+                             vim.x86_64\t0\t\tvim(x86-64)\n"
                         .into(),
                     stderr: String::new(),
                 },
@@ -2918,9 +2948,9 @@ R\tlibssl.so.3()(64bit)
                 &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "glibc.aarch64\tlibc.so.6()(64bit)\n\
-                             pcre2.aarch64\tlibpcre2-8.so.0()(64bit)\n\
-                             openssl-libs.aarch64\tlibssl.so.3()(64bit)\n"
+                    stdout: "glibc.aarch64\t0\t\tlibc.so.6()(64bit)\n\
+                             pcre2.aarch64\t0\t\tlibpcre2-8.so.0()(64bit)\n\
+                             openssl-libs.aarch64\t0\t\tlibssl.so.3()(64bit)\n"
                         .into(),
                     stderr: String::new(),
                 },
@@ -2981,8 +3011,8 @@ R\tlibacl.so.1()(64bit)
                 &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "libacl.aarch64\tlibacl.so.1()(64bit)\n\
-                             pcre2.aarch64\tlibpcre2-8.so.0()(64bit)\n"
+                    stdout: "libacl.aarch64\t0\t\tlibacl.so.1()(64bit)\n\
+                             pcre2.aarch64\t0\t\tlibpcre2-8.so.0()(64bit)\n"
                         .into(),
                     stderr: String::new(),
                 },
@@ -3077,14 +3107,14 @@ R\t/sbin/sysctl
 @@perl-interpreter
 @@procps-ng
 ",
-            "bash.aarch64\tbash\n\
-             bash.aarch64\t/bin/sh\n\
-             git.aarch64\tgit\n\
-             httpd.aarch64\thttpd\n\
-             mailcap.noarch\tmailcap\n\
-             perl-interpreter.aarch64\tperl-interpreter\n\
-             procps-ng.aarch64\tprocps-ng\n\
-             liberation-sans-fonts.noarch\tliberation-sans-fonts\n",
+            "bash.aarch64\t0\t\tbash\n\
+             bash.aarch64\t0\t\t/bin/sh\n\
+             git.aarch64\t0\t\tgit\n\
+             httpd.aarch64\t0\t\thttpd\n\
+             mailcap.noarch\t0\t\tmailcap\n\
+             perl-interpreter.aarch64\t0\t\tperl-interpreter\n\
+             procps-ng.aarch64\t0\t\tprocps-ng\n\
+             liberation-sans-fonts.noarch\t0\t\tliberation-sans-fonts\n",
             "",
         );
         let owners = [
@@ -3142,12 +3172,12 @@ W\tmod_http2
 R\tlibnghttp2.so.14()(64bit)
 @@perl-interpreter
 ",
-            "git.aarch64\tgit\n\
-             httpd.aarch64\thttpd\n\
-             libnghttp2.aarch64\tlibnghttp2.so.14()(64bit)\n\
-             mailcap.noarch\tmailcap\n\
-             mod_http2.aarch64\tmod_http2\n\
-             perl-interpreter.aarch64\tperl-interpreter\n",
+            "git.aarch64\t0\t\tgit\n\
+             httpd.aarch64\t0\t\thttpd\n\
+             libnghttp2.aarch64\t0\t\tlibnghttp2.so.14()(64bit)\n\
+             mailcap.noarch\t0\t\tmailcap\n\
+             mod_http2.aarch64\t0\t\tmod_http2\n\
+             perl-interpreter.aarch64\t0\t\tperl-interpreter\n",
             "git.aarch64\nhttpd.aarch64\n",
         );
         let owners = [
@@ -3193,10 +3223,10 @@ S\t(glibc and (langpacks-en or langpacks-core-en))
 @@tuned-profiles-foo
 S\tfoo-hardware
 ",
-            "glibc.aarch64\tglibc\n\
-             glibc-langpack-en.aarch64\tglibc-langpack-en\n\
-             langpacks-en.noarch\tlangpacks-en\n\
-             tuned-profiles-foo.noarch\ttuned-profiles-foo\n",
+            "glibc.aarch64\t0\t\tglibc\n\
+             glibc-langpack-en.aarch64\t0\t\tglibc-langpack-en\n\
+             langpacks-en.noarch\t0\t\tlangpacks-en\n\
+             tuned-profiles-foo.noarch\t0\t\ttuned-profiles-foo\n",
             "",
         );
         let added = ids(&[
@@ -3234,12 +3264,12 @@ R\t(emacs or vim-minimal or nano)
 @@nano
 @@vim-minimal
 ",
-            "cockpit-ws.aarch64\tcockpit-ws\n\
-             cockpit-ws-selinux.aarch64\tcockpit-ws-selinux\n\
-             grubby.aarch64\tgrubby\n\
-             nano.aarch64\tnano\n\
-             selinux-policy-targeted.noarch\tselinux-policy-targeted\n\
-             vim-minimal.aarch64\tvim-minimal\n",
+            "cockpit-ws.aarch64\t0\t\tcockpit-ws\n\
+             cockpit-ws-selinux.aarch64\t0\t\tcockpit-ws-selinux\n\
+             grubby.aarch64\t0\t\tgrubby\n\
+             nano.aarch64\t0\t\tnano\n\
+             selinux-policy-targeted.noarch\t0\t\tselinux-policy-targeted\n\
+             vim-minimal.aarch64\t0\t\tvim-minimal\n",
             "",
         );
         let added = ids(&[
@@ -3254,6 +3284,45 @@ R\t(emacs or vim-minimal or nano)
             deps["cockpit-ws.aarch64"],
             ids(&["cockpit-ws-selinux.aarch64", "vim-minimal.aarch64"])
         );
+    }
+
+    #[test]
+    fn classify_deps_rpm_checks_versions_in_rich_dependencies() {
+        // Only engine 1 is installed, so `engine >= 2` fails and the
+        // `else` branch applies. insights-client's selinux-policy floor,
+        // measured on RHEL 9.8, here aimed at an added package: a version
+        // floor on a package already present is not a reason to install
+        // it, so app gains no edge to foo. A plain requirement still
+        // matches by name, as before.
+        let exec = dep_graph_executor(
+            "app engine fallback foo plugin",
+            "\
+@@app
+W\t(plugin if engine >= 2 else fallback)
+R\t(foo >= 2.0 if foo)
+@@engine
+@@fallback
+@@foo
+@@plugin
+R\tengine
+",
+            "app.noarch\t8\t1.0-1\tapp\n\
+             engine.noarch\t8\t1-1.el9\tengine\n\
+             fallback.noarch\t8\t1.0-1\tfallback\n\
+             foo.noarch\t8\t2.1-3.el9\tfoo\n\
+             plugin.noarch\t8\t2.0-1\tplugin\n",
+            "",
+        );
+        let added = ids(&[
+            "app.noarch",
+            "engine.noarch",
+            "fallback.noarch",
+            "foo.noarch",
+            "plugin.noarch",
+        ]);
+        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        assert_eq!(deps["app.noarch"], ids(&["fallback.noarch"]));
+        assert_eq!(deps["plugin.noarch"], ids(&["engine.noarch"]));
     }
 
     #[test]
@@ -3401,8 +3470,8 @@ R\tlibc.so.6()(64bit)
                 &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "apr.x86_64\tlibapr-1.so.0()(64bit)\n\
-                             glibc.x86_64\tlibc.so.6()(64bit)\n"
+                    stdout: "apr.x86_64\t0\t\tlibapr-1.so.0()(64bit)\n\
+                             glibc.x86_64\t0\t\tlibc.so.6()(64bit)\n"
                         .into(),
                     stderr: String::new(),
                 },

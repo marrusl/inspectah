@@ -12,7 +12,15 @@
 //! of installed packages, not on capability names, because `with` and
 //! `without` are defined per package: `(a with b)` needs one package that
 //! provides both.
+//!
+//! A capability inside a rich expression keeps its version comparison
+//! (`engine >= 2`), and only providers whose provided version satisfies it
+//! count, compared as rpm compares them (`Constraint::overlaps`). A plain
+//! requirement carries no version here: `%{REQUIREVERSION}` is not queried,
+//! so it matches by name, as `rpm -q --whatprovides <name>` would.
 
+use super::parser::rpmvercmp;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 /// How deeply rich expressions may nest. Real ones nest two or three
@@ -24,8 +32,154 @@ const MAX_RICH_DEP_DEPTH: usize = 16;
 /// packages provide a capability.
 pub(super) trait Providers {
     /// The installed packages, as canonical `name.arch` ids, that provide
-    /// `cap`. Empty when nothing installed provides it.
-    fn providers(&self, cap: &str) -> HashSet<&str>;
+    /// `atom` at a version it accepts (`Atom::accepts`). Empty when nothing
+    /// installed does.
+    fn providers(&self, atom: &Atom) -> HashSet<&str>;
+}
+
+/// A capability as a dependency names it, with its version comparison if
+/// it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Atom {
+    name: String,
+    constraint: Option<Constraint>,
+}
+
+impl Atom {
+    /// The capability name.
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Whether a provide of this capability, at `provided` version, meets
+    /// the atom's constraint. An unversioned atom accepts every provide and
+    /// an unversioned provide meets every constraint, as in rpm.
+    pub(super) fn accepts(&self, provided: Option<&Constraint>) -> bool {
+        match (&self.constraint, provided) {
+            (Some(wanted), Some(provided)) => provided.overlaps(wanted),
+            _ => true,
+        }
+    }
+}
+
+/// A version comparison: an operator and the `[epoch:]version[-release]`
+/// it compares against, on either side of a dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Constraint {
+    cmp: Cmp,
+    evr: String,
+}
+
+/// A dependency's comparison operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cmp {
+    Lt,
+    Le,
+    Eq,
+    Ge,
+    Gt,
+}
+
+/// rpm's `RPMSENSE_LESS`, `RPMSENSE_GREATER` and `RPMSENSE_EQUAL` bits, as
+/// `%{PROVIDEFLAGS}` prints them in decimal. Other bits in the flags mark
+/// where a dependency came from, not how it compares.
+const RPMSENSE_LESS: u32 = 1 << 1;
+const RPMSENSE_GREATER: u32 = 1 << 2;
+const RPMSENSE_EQUAL: u32 = 1 << 3;
+
+impl Cmp {
+    fn from_sense(less: bool, greater: bool, equal: bool) -> Option<Self> {
+        match (less, greater, equal) {
+            (true, false, false) => Some(Self::Lt),
+            (true, false, true) => Some(Self::Le),
+            (false, false, true) => Some(Self::Eq),
+            (false, true, true) => Some(Self::Ge),
+            (false, true, false) => Some(Self::Gt),
+            _ => None,
+        }
+    }
+
+    /// An operator as written in a rich dependency (`<`, `<=`, `=`, `==`,
+    /// `>=`, `>`).
+    fn from_operator(op: &str) -> Option<Self> {
+        if op.is_empty() || !op.bytes().all(|b| matches!(b, b'<' | b'>' | b'=')) {
+            return None;
+        }
+        Self::from_sense(op.contains('<'), op.contains('>'), op.contains('='))
+    }
+
+    fn less(self) -> bool {
+        matches!(self, Self::Lt | Self::Le)
+    }
+
+    fn greater(self) -> bool {
+        matches!(self, Self::Gt | Self::Ge)
+    }
+
+    fn equal(self) -> bool {
+        matches!(self, Self::Le | Self::Eq | Self::Ge)
+    }
+}
+
+impl Constraint {
+    /// A provide's version from the provides index: `%{PROVIDEFLAGS}` and
+    /// `%{PROVIDEVERSION}`. `None` for an unversioned provide, which rpm
+    /// treats as meeting any constraint.
+    pub(super) fn from_provide(flags: u32, evr: &str) -> Option<Self> {
+        let cmp = Cmp::from_sense(
+            flags & RPMSENSE_LESS != 0,
+            flags & RPMSENSE_GREATER != 0,
+            flags & RPMSENSE_EQUAL != 0,
+        )?;
+        (!evr.is_empty()).then(|| Self {
+            cmp,
+            evr: evr.to_string(),
+        })
+    }
+
+    /// Whether the two version ranges overlap, by rpm's rule
+    /// (`rpmdsCompare`): compare the two EVRs, then check that the
+    /// operators leave some version in common.
+    fn overlaps(&self, other: &Self) -> bool {
+        let (a, b) = (self.cmp, other.cmp);
+        match evr_cmp(&self.evr, &other.evr) {
+            Ordering::Less => a.greater() || b.less(),
+            Ordering::Greater => a.less() || b.greater(),
+            Ordering::Equal => {
+                (a.equal() && b.equal()) || (a.less() && b.less()) || (a.greater() && b.greater())
+            }
+        }
+    }
+}
+
+/// Split `[epoch:]version[-release]` as rpm does (`rpmverParse`): the
+/// epoch is a leading run of digits before `:`, the release follows the
+/// last `-`.
+fn split_evr(evr: &str) -> (&str, &str, Option<&str>) {
+    let digits = evr.bytes().take_while(u8::is_ascii_digit).count();
+    let (epoch, rest) = match evr[digits..].strip_prefix(':') {
+        Some(rest) => (&evr[..digits], rest),
+        None => ("", evr),
+    };
+    let (version, release) = match rest.rsplit_once('-') {
+        Some((v, r)) => (v, Some(r)),
+        None => (rest, None),
+    };
+    (if epoch.is_empty() { "0" } else { epoch }, version, release)
+}
+
+/// Compare two EVRs as rpm does (`rpmverCmp`): a missing epoch is 0, and
+/// the release counts only when both sides have one, so `foo >= 2.0`
+/// accepts `2.0-1`.
+fn evr_cmp(a: &str, b: &str) -> Ordering {
+    let (ea, va, ra) = split_evr(a);
+    let (eb, vb, rb) = split_evr(b);
+    rpmvercmp(ea, eb)
+        .then_with(|| rpmvercmp(va, vb))
+        .then_with(|| match (ra, rb) {
+            (Some(ra), Some(rb)) if !ra.is_empty() && !rb.is_empty() => rpmvercmp(ra, rb),
+            _ => Ordering::Equal,
+        })
 }
 
 /// One parsed dependency expression.
@@ -70,8 +224,8 @@ enum Node {
 /// rejected there by the parser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Match {
-    /// A capability name, version constraint stripped.
-    Cap(String),
+    /// A capability, with its version comparison if it has one.
+    Cap(Atom),
     /// `(a with b ...)`: packages that match every operand.
     With(Vec<Match>),
     /// `(a without b)`: packages that match `a` and not `b`.
@@ -116,7 +270,10 @@ impl DepExpr {
             // `%{REQUIRENAME}` and the weak tags hold the name alone, with
             // the version in a separate tag, so the whole line is the
             // capability. Splitting it would truncate a path with a space.
-            Node::Match(Match::Cap(line.to_string()))
+            Node::Match(Match::Cap(Atom {
+                name: line.to_string(),
+                constraint: None,
+            }))
         };
         Some(Self { root })
     }
@@ -136,7 +293,10 @@ impl DepExpr {
 
     /// The installed packages this expression pulls in. Conditions are
     /// evaluated, never credited: in `(a if b)` only a provider of `a` is
-    /// pulled in, and only when `b` is installed.
+    /// pulled in, and only when `b` is installed. A package that itself
+    /// makes the condition hold is not pulled in by it either, so the
+    /// version floor `(foo >= 2 if foo)` pulls in nothing: it constrains a
+    /// `foo` that is already there.
     pub(super) fn pulled<'p>(&self, index: &'p dyn Providers, or: OrChoice) -> HashSet<&'p str> {
         let mut out = HashSet::new();
         self.root.collect_pulled(index, or, &mut out);
@@ -228,7 +388,9 @@ impl Node {
                 otherwise,
             } => {
                 if cond.satisfied(index) {
-                    then.collect_pulled(index, or, out);
+                    let mut pulled = HashSet::new();
+                    then.collect_pulled(index, or, &mut pulled);
+                    out.extend(&pulled - &cond.witnesses(index));
                 } else if let Some(o) = otherwise {
                     o.collect_pulled(index, or, out);
                 }
@@ -244,6 +406,25 @@ impl Node {
                     o.collect_pulled(index, or, out);
                 }
             }
+        }
+    }
+
+    /// The installed packages that make this node hold when it is a
+    /// condition: the providers of every capability it matches on.
+    fn witnesses<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
+        match self {
+            Self::Match(m) => m.matching(index),
+            Self::And(xs) | Self::Or(xs) => xs.iter().flat_map(|x| x.witnesses(index)).collect(),
+            Self::If {
+                then, otherwise, ..
+            }
+            | Self::Unless {
+                then, otherwise, ..
+            } => then
+                .witnesses(index)
+                .into_iter()
+                .chain(otherwise.iter().flat_map(|o| o.witnesses(index)))
+                .collect(),
         }
     }
 
@@ -265,7 +446,7 @@ impl Node {
 impl Match {
     fn collect_caps<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
-            Self::Cap(c) => out.push(c),
+            Self::Cap(atom) => out.push(&atom.name),
             Self::With(xs) | Self::Any(xs) => xs.iter().for_each(|x| x.collect_caps(out)),
             Self::Without(a, b) => {
                 a.collect_caps(out);
@@ -277,7 +458,7 @@ impl Match {
     /// The installed packages this selector matches.
     fn matching<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
         match self {
-            Self::Cap(c) => index.providers(c),
+            Self::Cap(atom) => index.providers(atom),
             Self::With(xs) => {
                 let mut sets = xs.iter().map(|x| x.matching(index));
                 let first = sets.next().unwrap_or_default();
@@ -335,7 +516,7 @@ impl Parser<'_> {
     }
 
     /// An operand: a nested group, or a capability with an optional
-    /// version comparison (`foo >= 1.0`) that is read and dropped.
+    /// version comparison (`foo >= 1.0`).
     fn operand(&mut self) -> Option<Node> {
         self.skip_ws();
         if self.peek() == Some(b'(') {
@@ -344,15 +525,16 @@ impl Parser<'_> {
         let name = self.word()?.to_string();
         let save = self.pos;
         self.skip_ws();
-        let is_cmp = matches!(self.peek(), Some(b'<' | b'>' | b'='));
-        if is_cmp {
-            self.word()?; // the comparison operator
+        let constraint = if matches!(self.peek(), Some(b'<' | b'>' | b'=')) {
+            let cmp = Cmp::from_operator(self.word()?)?;
             self.skip_ws();
-            self.word()?; // the version it compares against
+            let evr = self.word()?.to_string();
+            Some(Constraint { cmp, evr })
         } else {
             self.pos = save;
-        }
-        Some(Node::Match(Match::Cap(name)))
+            None
+        };
+        Some(Node::Match(Match::Cap(Atom { name, constraint })))
     }
 
     /// A parenthesised group: operands joined by one kind of operator,
@@ -433,7 +615,20 @@ mod tests {
     use super::*;
 
     fn mcap(s: &str) -> Match {
-        Match::Cap(s.to_string())
+        Match::Cap(Atom {
+            name: s.to_string(),
+            constraint: None,
+        })
+    }
+
+    fn mcap_v(s: &str, cmp: Cmp, evr: &str) -> Match {
+        Match::Cap(Atom {
+            name: s.to_string(),
+            constraint: Some(Constraint {
+                cmp,
+                evr: evr.to_string(),
+            }),
+        })
     }
 
     fn cap(s: &str) -> Node {
@@ -441,13 +636,26 @@ mod tests {
     }
 
     /// An installed host as (package id, capability it provides) pairs.
+    /// A capability written `name = evr` is a versioned provide.
     struct TestIndex(&'static [(&'static str, &'static str)]);
 
     impl Providers for TestIndex {
-        fn providers(&self, cap: &str) -> HashSet<&str> {
+        fn providers(&self, atom: &Atom) -> HashSet<&str> {
             self.0
                 .iter()
-                .filter(|(_, c)| *c == cap)
+                .filter(|(_, c)| {
+                    let (name, provided) = match c.split_once(" = ") {
+                        Some((name, evr)) => (
+                            name,
+                            Some(Constraint {
+                                cmp: Cmp::Eq,
+                                evr: evr.to_string(),
+                            }),
+                        ),
+                        None => (*c, None),
+                    };
+                    name == atom.name() && atom.accepts(provided.as_ref())
+                })
                 .map(|(id, _)| *id)
                 .collect()
         }
@@ -474,7 +682,11 @@ mod tests {
             (
                 "(glibc-gconv-extra(aarch-64) = 2.34-284.el9_8.4 if redhat-rpm-config)",
                 Some(Node::If {
-                    then: Box::new(cap("glibc-gconv-extra(aarch-64)")),
+                    then: Box::new(Node::Match(mcap_v(
+                        "glibc-gconv-extra(aarch-64)",
+                        Cmp::Eq,
+                        "2.34-284.el9_8.4",
+                    ))),
                     cond: Box::new(cap("redhat-rpm-config")),
                     otherwise: None,
                 }),
@@ -482,8 +694,8 @@ mod tests {
             (
                 "(python3.9dist(idna) < 3 with python3.9dist(idna) >= 2.5)",
                 Some(Node::Match(Match::With(vec![
-                    mcap("python3.9dist(idna)"),
-                    mcap("python3.9dist(idna)"),
+                    mcap_v("python3.9dist(idna)", Cmp::Lt, "3"),
+                    mcap_v("python3.9dist(idna)", Cmp::Ge, "2.5"),
                 ]))),
             ),
             (
@@ -523,6 +735,8 @@ mod tests {
             // do not.
             ("(a with (b and c))", None),
             ("(a without (b if c))", None),
+            // `!=` is not an rpm operator.
+            ("(a != 1 if b)", None),
         ];
         for (input, expected) in cases {
             assert_eq!(
@@ -591,6 +805,71 @@ mod tests {
                 "input: {input}"
             );
         }
+    }
+
+    #[test]
+    fn versioned_conditions_and_alternatives_check_the_provided_version() {
+        // Only `engine = 1` is installed, so `engine >= 2` does not hold.
+        // `foo >= 2 if foo` is a version floor on an installed foo, not a
+        // reason to install foo; it holds or fails, and pulls in nothing.
+        let index = TestIndex(&[
+            ("engine", "engine = 1-1"),
+            ("plugin", "plugin = 2-1"),
+            ("fallback", "fallback = 1-1"),
+            ("foo", "foo = 2.1-3"),
+            ("foo-devel", "foo-devel = 2.1-3"),
+        ]);
+        let cases: &[(&str, &[&str])] = &[
+            ("(plugin if engine >= 2 else fallback)", &["fallback"]),
+            ("(plugin if engine >= 1 else fallback)", &["plugin"]),
+            ("(plugin if engine < 2)", &["plugin"]),
+            ("(plugin >= 3 or fallback)", &["fallback"]),
+            ("(plugin >= 2 or fallback)", &["plugin"]),
+            ("(foo >= 2 if foo)", &[]),
+            ("(foo-devel = 2.1-3 if foo)", &["foo-devel"]),
+            ("(foo-devel = 2.1-4 if foo)", &[]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(
+                expr.pulled(&index, OrChoice::First),
+                set(expected),
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn constraints_overlap_as_rpm_compares_them() {
+        let c = |cmp, evr: &str| Constraint {
+            cmp,
+            evr: evr.to_string(),
+        };
+        // (provide, requirement, overlaps)
+        let cases = [
+            (c(Cmp::Eq, "1-1"), c(Cmp::Ge, "2"), false),
+            (c(Cmp::Eq, "2.0-1"), c(Cmp::Ge, "2.0"), true),
+            (c(Cmp::Eq, "2.0-1"), c(Cmp::Eq, "2.0-2"), false),
+            (c(Cmp::Eq, "2.0-1"), c(Cmp::Lt, "2.0-2"), true),
+            (c(Cmp::Eq, "1:1.0-1"), c(Cmp::Ge, "2.0"), true),
+            (c(Cmp::Eq, "0:2.0-1"), c(Cmp::Eq, "2.0-1"), true),
+            (c(Cmp::Eq, "1.0~rc1-1"), c(Cmp::Ge, "1.0"), false),
+            (c(Cmp::Ge, "3"), c(Cmp::Lt, "2"), false),
+            (c(Cmp::Ge, "3"), c(Cmp::Gt, "2"), true),
+        ];
+        for (provided, wanted, expected) in cases {
+            assert_eq!(
+                provided.overlaps(&wanted),
+                expected,
+                "{provided:?} against {wanted:?}"
+            );
+        }
+        // An unversioned provide meets any constraint.
+        assert_eq!(Constraint::from_provide(0, ""), None);
+        assert_eq!(
+            Constraint::from_provide(RPMSENSE_EQUAL | (1 << 15), "2-1"),
+            Some(c(Cmp::Eq, "2-1"))
+        );
     }
 
     #[test]
