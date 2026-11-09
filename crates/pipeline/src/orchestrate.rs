@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
+use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
@@ -57,16 +58,27 @@ pub fn run_pipeline(
     // Redact
     let mut snapshot = validated.state.snapshot;
     redact(&mut snapshot, &RedactOptions::default());
+    // Annotate repo-less RPMs with dnf cache paths, as the scan command
+    // does. This pass writes `repoless_annotation`, which the defaults
+    // below read: without it a repo-less package routes by name and an
+    // unneeded one is excluded instead of keeping its repo-less handling.
+    if let Some(rpm) = snapshot.rpm.as_mut() {
+        scan_dnf_cache_for_repoless(executor, rpm);
+    }
+
     // Exclude auto packages nothing included needs. Must follow every
-    // step that writes `repoless_annotation`, which the class reads. None
-    // does on this path: the scan command's dnf-cache pass writes it and this
-    // path runs no such pass, and refine's `demote_unserved_repo_enabling`
-    // runs only in a refine session.
+    // step that writes `repoless_annotation`, which the class reads.
     render::not_carried::apply_scan_package_defaults(&mut snapshot);
 
     // Render all artifacts
     let render_context = RenderContext { target: None };
     render::render_all(&snapshot, &render_context, output_dir)?;
+
+    // Stage the cached RPMs the Containerfile's repo-less block copies,
+    // as the scan command does, so no `COPY` names a missing file.
+    if let Some(rpm) = snapshot.rpm.as_ref() {
+        render::repoless::write_cached_rpms(rpm, output_dir)?;
+    }
 
     // Write schema placeholder
     let schema_dir = output_dir.join("schema");

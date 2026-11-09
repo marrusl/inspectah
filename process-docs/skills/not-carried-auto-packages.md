@@ -43,6 +43,9 @@ which the classifier reads; refine's `demote_unserved_repo_enabling` also
 writes it, but runs later, in a session) and before the `--inspect-only` branch, so the JSON
 snapshot and the tarball carry the same dispositions. Nothing after that
 point may write the annotation.
+`orchestrate::run_pipeline` follows the same order: the dnf-cache pass,
+then the defaults, and it stages the cached RPMs after rendering as the
+scan does.
 
 ## The fallback
 

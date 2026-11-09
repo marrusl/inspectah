@@ -344,3 +344,117 @@ fn test_exported_snapshot_carries_trust_state() {
         "exported snapshot must have Full completeness"
     );
 }
+
+// ---------------------------------------------------------------------------
+// run_pipeline: repo-less routing is known before the package defaults
+// ---------------------------------------------------------------------------
+
+/// `run_pipeline` runs the dnf-cache pass before the scan's package
+/// defaults, as the scan command does. Without it, an auto `@commandline`
+/// package nothing needs carried no `repoless_annotation`, routed by name,
+/// and was excluded and listed as not carried instead of keeping its
+/// repo-less handling. `rhc` is the control: an ordinary auto package
+/// nothing needs, so the class is computed and the check is not vacuous.
+#[test]
+fn run_pipeline_keeps_an_unneeded_repoless_auto_package_out_of_the_class() {
+    use inspectah_pipeline::render::not_carried::not_carried_packages;
+
+    fn ok(stdout: &str) -> ExecResult {
+        ExecResult {
+            stdout: stdout.into(),
+            exit_code: 0,
+            ..Default::default()
+        }
+    }
+    const HOST: &[(&str, &str)] = &[
+        ("httpd", "appstream"),
+        ("httpd-core", "appstream"),
+        ("rhc", "baseos"),
+        ("vendor-agent", "@commandline"),
+    ];
+    let rpm_qa: String = HOST
+        .iter()
+        .map(|(name, _)| format!("0:{name}-1.0-1.el9.x86_64\n"))
+        .collect();
+    let from_repo: String = HOST
+        .iter()
+        .map(|(name, repo)| format!("{name} {repo}\n"))
+        .collect();
+    let exec = MockExecutor::new()
+        .with_command(
+            "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+            ok(&rpm_qa),
+        )
+        .with_command_prefix(
+            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n",
+            ok(&from_repo),
+        )
+        .with_command(
+            "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
+            ok("@@httpd\n/usr/sbin/httpd\n"),
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ok("httpd.x86_64\n"),
+        )
+        .with_command_prefix(
+            "dnf repoquery --requires --resolve --recursive --installed",
+            ok(""),
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed \
+             --queryformat %{name}.%{arch}\n httpd.x86_64",
+            ok("httpd-core.x86_64\n"),
+        )
+        .with_command(
+            "dnf repolist --enabled -q",
+            ok("repo id    repo name\nbaseos     BaseOS\nappstream  AppStream\n"),
+        )
+        .with_command("find /var/cache/dnf -name *.rpm -type f", ok(""));
+
+    let output_dir = TempDir::new().unwrap();
+    let (snapshot, tarball_path) = run_pipeline(
+        &build_source(),
+        &exec,
+        &[Box::new(RpmInspector::new()) as Box<dyn Inspector>],
+        &output_dir.path().join("artifacts"),
+        "testhost",
+    )
+    .expect("pipeline should succeed");
+
+    let listed: Vec<String> = not_carried_packages(&snapshot)
+        .into_iter()
+        .map(|pkg| pkg.name)
+        .collect();
+    assert_eq!(listed, ["rhc"], "only the ordinary unneeded package");
+
+    let agent = snapshot
+        .rpm
+        .as_ref()
+        .expect("rpm section")
+        .packages_added
+        .iter()
+        .find(|pkg| pkg.name == "vendor-agent")
+        .expect("vendor-agent is collected");
+    assert!(
+        !agent.repoless_annotation.is_empty(),
+        "the dnf-cache pass ran"
+    );
+    assert!(
+        agent.disposition.is_included(),
+        "a repo-less package keeps its handling"
+    );
+
+    let containerfile = extract_text_files(&tarball_path)
+        .into_iter()
+        .find(|(path, _)| path.ends_with("Containerfile"))
+        .expect("Containerfile in tarball")
+        .1;
+    let block: Vec<&str> = containerfile
+        .lines()
+        .skip_while(|l| !l.starts_with("# Not carried:"))
+        .take_while(|l| !l.is_empty())
+        .collect();
+    assert_eq!(block.len(), 2, "{containerfile}");
+    assert_eq!(block[1], "#   rhc", "{containerfile}");
+}
