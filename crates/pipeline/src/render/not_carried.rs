@@ -11,8 +11,8 @@
 //! Some packages keep their existing handling and are never in the class:
 //! a locked package, one with `source_repo == "anaconda"` (refine's
 //! anaconda classifier decides those), one whose name is in
-//! `baseline_package_names`, and one that routes as
-//! [`PackageRoute::Upload`] or [`PackageRoute::Repoless`].
+//! `baseline_package_names`, one with `pkg.uploaded` set, and one that
+//! routes as [`PackageRoute::Repoless`].
 //!
 //! **Fallback.** [`classify_auto_carriage`] returns `None`, and so
 //! nothing is excluded and no list is emitted, when the snapshot cannot

@@ -779,8 +779,9 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     // Exclude auto packages nothing included needs. Ordering matters on
     // both sides: after the dnf-cache pass above, which writes
-    // `repoless_annotation` (a repo-less package is never in the class,
-    // and the class reads the annotation to tell), and before the
+    // `repoless_annotation` (a package routed `Repoless` is never in the
+    // class, and the class reads the annotation to tell; one routed
+    // `DisabledRepo` can be), and before the
     // --inspect-only branch, so its JSON and the tarball's snapshot carry
     // the same dispositions. Nothing after this point may write the
     // annotation.
