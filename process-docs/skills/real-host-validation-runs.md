@@ -605,6 +605,40 @@ applies to the reworked provides index, which now also prints
 query, so confirm on rpm 4.16 and 4.19 that it runs once and that no
 `dnf repoquery --requires` follows it.
 
+### Measured, 2026-11-09: the reworked tree, and the versioned provides index
+
+Rescanned at `e55a45f7` on the same two hosts, with the same drift and
+plants. **The four-field provides index works on rpm 4.16.1.3 and
+4.19.1.1.** On a clean guest it exits 0 and prints exactly as many
+lines as the old two-field query (35,877 on EL9, 38,080 on EL10), each
+with four fields, in 77 ms and 146 ms. Under `head` it reports 141. The
+flags print as decimal integers, and an unversioned provide prints an
+empty version. Expect bits other than the comparison ones:
+
+| flags | meaning | version |
+|---|---|---|
+| `8` | `EQUAL`, the package's own `name = evr` | set |
+| `32768` | `FIND_PROVIDES`, an auto-generated soname such as `libc.so.6()(64bit)` | empty |
+| `32776` | `FIND_PROVIDES` and `EQUAL`, a generated provide with a version | set |
+| `268435464` | `CONFIG` and `EQUAL`, the `config(<pkg>)` provides | set |
+| `0` | explicit unversioned provide, such as bash's `/bin/sh` | empty |
+
+No line on either host had a version without a comparison bit. The exec
+audit showed the index once per scan, with no `dnf repoquery --requires`
+after it.
+
+Both leaf trees came out identical to the `1be5bd44` run, closure for
+closure, and still matched the libsolv check on 28 of 28 leaves. The
+check now mirrors the rework: libsolv resolves each versioned atom, and
+the script subtracts an `if` condition's witnesses and builds
+Supplements trigger clauses as `DepExpr` does. On these hosts none of
+the new rules changed an edge. No Supplements became a joint rule,
+because `glibc` is in the base image and drops out of the langpack's
+`and`. No self-conditional dependency targeted an added package. Every
+versioned rich dependency picked the same added packages with and
+without its version. To exercise those rules, a host needs an added
+package in each role.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
