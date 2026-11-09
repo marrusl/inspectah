@@ -8,18 +8,31 @@
 //! The tree is built from an installed host, so a rich dependency is
 //! evaluated against what is installed there rather than solved: an `if`
 //! condition holds when some installed package provides it, and an `or`
-//! picks among the operands that are installed.
+//! picks among the operands that are installed. Evaluation works on sets
+//! of installed packages, not on capability names, because `with` and
+//! `without` are defined per package: `(a with b)` needs one package that
+//! provides both.
+
+use std::collections::HashSet;
 
 /// How deeply rich expressions may nest. Real ones nest two or three
 /// levels; rpm sets no limit, so a malformed or hostile line could nest
 /// deeply enough to exhaust the stack in a recursive parser.
 const MAX_RICH_DEP_DEPTH: usize = 16;
 
+/// What dependency expressions are evaluated against: which installed
+/// packages provide a capability.
+pub(super) trait Providers {
+    /// The installed packages, as canonical `name.arch` ids, that provide
+    /// `cap`. Empty when nothing installed provides it.
+    fn providers(&self, cap: &str) -> HashSet<&str>;
+}
+
 /// One parsed dependency expression.
 ///
 /// Its nesting depth is at most `MAX_RICH_DEP_DEPTH`. The parser is the
 /// only constructor and enforces that, so every recursive walk over the
-/// tree (`caps`, `satisfied`, `pulled_caps`) is bounded by the same limit.
+/// tree (`caps`, `satisfied`, `pulled`) is bounded by the same limit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DepExpr {
     root: Node,
@@ -28,17 +41,12 @@ pub(super) struct DepExpr {
 /// One node of a dependency expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Node {
-    /// A capability name, version constraint stripped.
-    Cap(String),
-    /// `(a and b ...)`: every operand.
+    /// Packages selected one at a time: a capability, `with` or `without`.
+    Match(Match),
+    /// `(a and b ...)`: every operand, each from any package.
     And(Vec<Node>),
     /// `(a or b ...)`: any operand.
     Or(Vec<Node>),
-    /// `(a with b ...)`: one package matching every operand. Treated as
-    /// `and`, which credits the same providers when one package matches.
-    With(Vec<Node>),
-    /// `(a without b)`: a package matching `a` and not `b`. Treated as `a`.
-    Without(Box<Node>),
     /// `(then if cond)` or `(then if cond else otherwise)`.
     If {
         then: Box<Node>,
@@ -51,6 +59,26 @@ enum Node {
         cond: Box<Node>,
         otherwise: Option<Box<Node>>,
     },
+}
+
+/// A selector of single packages, judged one package at a time.
+///
+/// rpm defines `with` and `without` as intersection and subtraction over
+/// the packages that match each operand, so their operands must select
+/// packages too: a capability, another `with` or `without`, or an `or` of
+/// those. `and`, `if` and `unless` say nothing about one package and are
+/// rejected there by the parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Match {
+    /// A capability name, version constraint stripped.
+    Cap(String),
+    /// `(a with b ...)`: packages that match every operand.
+    With(Vec<Match>),
+    /// `(a without b)`: packages that match `a` and not `b`.
+    Without(Box<Match>, Box<Match>),
+    /// `(a or b ...)` inside `with` or `without`: packages that match any
+    /// operand.
+    Any(Vec<Match>),
 }
 
 /// How an `or` picks among its satisfied operands.
@@ -68,8 +96,9 @@ impl DepExpr {
     /// Parse one dependency line as rpm prints it in `%{REQUIRENAME}` and
     /// the weak-dependency tags. Returns `None` for a rich expression this
     /// parser does not understand (unbalanced parentheses, operators mixed
-    /// in one group, nesting deeper than `MAX_RICH_DEP_DEPTH`), so the
-    /// caller drops it as it did before rich dependencies were read at all.
+    /// in one group, an `and`, `if` or `unless` under `with` or `without`,
+    /// nesting deeper than `MAX_RICH_DEP_DEPTH`), so the caller drops it as
+    /// it did before rich dependencies were read at all.
     pub(super) fn parse(line: &str) -> Option<Self> {
         let line = line.trim();
         let root = if line.starts_with('(') {
@@ -87,7 +116,7 @@ impl DepExpr {
             // `%{REQUIRENAME}` and the weak tags hold the name alone, with
             // the version in a separate tag, so the whole line is the
             // capability. Splitting it would truncate a path with a space.
-            Node::Cap(line.to_string())
+            Node::Match(Match::Cap(line.to_string()))
         };
         Some(Self { root })
     }
@@ -101,16 +130,16 @@ impl DepExpr {
     }
 
     /// Whether the installed host satisfies the expression.
-    pub(super) fn satisfied(&self, installed: &dyn Fn(&str) -> bool) -> bool {
-        self.root.satisfied(installed)
+    pub(super) fn satisfied(&self, index: &dyn Providers) -> bool {
+        self.root.satisfied(index)
     }
 
-    /// The capabilities whose providers this expression pulls in, given
-    /// what is installed. Conditions are evaluated, never credited: in
-    /// `(a if b)` only `a` is pulled in, and only when `b` is installed.
-    pub(super) fn pulled_caps(&self, installed: &dyn Fn(&str) -> bool, or: OrChoice) -> Vec<&str> {
-        let mut out = Vec::new();
-        self.root.collect_pulled(installed, or, &mut out);
+    /// The installed packages this expression pulls in. Conditions are
+    /// evaluated, never credited: in `(a if b)` only a provider of `a` is
+    /// pulled in, and only when `b` is installed.
+    pub(super) fn pulled<'p>(&self, index: &'p dyn Providers, or: OrChoice) -> HashSet<&'p str> {
+        let mut out = HashSet::new();
+        self.root.collect_pulled(index, or, &mut out);
         out
     }
 }
@@ -118,11 +147,10 @@ impl DepExpr {
 impl Node {
     fn collect_caps<'a>(&'a self, out: &mut Vec<&'a str>) {
         match self {
-            Self::Cap(c) => out.push(c),
-            Self::And(xs) | Self::Or(xs) | Self::With(xs) => {
+            Self::Match(m) => m.collect_caps(out),
+            Self::And(xs) | Self::Or(xs) => {
                 xs.iter().for_each(|x| x.collect_caps(out));
             }
-            Self::Without(x) => x.collect_caps(out),
             Self::If {
                 then,
                 cond,
@@ -142,21 +170,20 @@ impl Node {
         }
     }
 
-    fn satisfied(&self, installed: &dyn Fn(&str) -> bool) -> bool {
+    fn satisfied(&self, index: &dyn Providers) -> bool {
         match self {
-            Self::Cap(c) => installed(c),
-            Self::And(xs) | Self::With(xs) => xs.iter().all(|x| x.satisfied(installed)),
-            Self::Or(xs) => xs.iter().any(|x| x.satisfied(installed)),
-            Self::Without(x) => x.satisfied(installed),
+            Self::Match(m) => !m.matching(index).is_empty(),
+            Self::And(xs) => xs.iter().all(|x| x.satisfied(index)),
+            Self::Or(xs) => xs.iter().any(|x| x.satisfied(index)),
             Self::If {
                 then,
                 cond,
                 otherwise,
             } => {
-                if cond.satisfied(installed) {
-                    then.satisfied(installed)
+                if cond.satisfied(index) {
+                    then.satisfied(index)
                 } else {
-                    otherwise.as_ref().is_none_or(|o| o.satisfied(installed))
+                    otherwise.as_ref().is_none_or(|o| o.satisfied(index))
                 }
             }
             Self::Unless {
@@ -164,47 +191,46 @@ impl Node {
                 cond,
                 otherwise,
             } => {
-                if cond.satisfied(installed) {
-                    otherwise.as_ref().is_none_or(|o| o.satisfied(installed))
+                if cond.satisfied(index) {
+                    otherwise.as_ref().is_none_or(|o| o.satisfied(index))
                 } else {
-                    then.satisfied(installed)
+                    then.satisfied(index)
                 }
             }
         }
     }
 
-    fn collect_pulled<'a>(
-        &'a self,
-        installed: &dyn Fn(&str) -> bool,
+    fn collect_pulled<'p>(
+        &self,
+        index: &'p dyn Providers,
         or: OrChoice,
-        out: &mut Vec<&'a str>,
+        out: &mut HashSet<&'p str>,
     ) {
         match self {
-            Self::Cap(c) => out.push(c),
-            Self::And(xs) | Self::With(xs) => {
-                xs.iter().for_each(|x| x.collect_pulled(installed, or, out));
+            Self::Match(m) => out.extend(m.matching(index)),
+            Self::And(xs) => {
+                xs.iter().for_each(|x| x.collect_pulled(index, or, out));
             }
             Self::Or(xs) => {
-                let mut satisfied = xs.iter().filter(|x| x.satisfied(installed));
+                let mut satisfied = xs.iter().filter(|x| x.satisfied(index));
                 match or {
                     OrChoice::First => {
                         if let Some(x) = satisfied.next() {
-                            x.collect_pulled(installed, or, out);
+                            x.collect_pulled(index, or, out);
                         }
                     }
-                    OrChoice::All => satisfied.for_each(|x| x.collect_pulled(installed, or, out)),
+                    OrChoice::All => satisfied.for_each(|x| x.collect_pulled(index, or, out)),
                 }
             }
-            Self::Without(x) => x.collect_pulled(installed, or, out),
             Self::If {
                 then,
                 cond,
                 otherwise,
             } => {
-                if cond.satisfied(installed) {
-                    then.collect_pulled(installed, or, out);
+                if cond.satisfied(index) {
+                    then.collect_pulled(index, or, out);
                 } else if let Some(o) = otherwise {
-                    o.collect_pulled(installed, or, out);
+                    o.collect_pulled(index, or, out);
                 }
             }
             Self::Unless {
@@ -212,12 +238,53 @@ impl Node {
                 cond,
                 otherwise,
             } => {
-                if !cond.satisfied(installed) {
-                    then.collect_pulled(installed, or, out);
+                if !cond.satisfied(index) {
+                    then.collect_pulled(index, or, out);
                 } else if let Some(o) = otherwise {
-                    o.collect_pulled(installed, or, out);
+                    o.collect_pulled(index, or, out);
                 }
             }
+        }
+    }
+
+    /// The package selector this node stands for inside `with` or
+    /// `without`, or `None` when it does not select single packages.
+    fn into_match(self) -> Option<Match> {
+        match self {
+            Self::Match(m) => Some(m),
+            Self::Or(xs) => xs
+                .into_iter()
+                .map(Self::into_match)
+                .collect::<Option<Vec<_>>>()
+                .map(Match::Any),
+            Self::And(_) | Self::If { .. } | Self::Unless { .. } => None,
+        }
+    }
+}
+
+impl Match {
+    fn collect_caps<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            Self::Cap(c) => out.push(c),
+            Self::With(xs) | Self::Any(xs) => xs.iter().for_each(|x| x.collect_caps(out)),
+            Self::Without(a, b) => {
+                a.collect_caps(out);
+                b.collect_caps(out);
+            }
+        }
+    }
+
+    /// The installed packages this selector matches.
+    fn matching<'p>(&self, index: &'p dyn Providers) -> HashSet<&'p str> {
+        match self {
+            Self::Cap(c) => index.providers(c),
+            Self::With(xs) => {
+                let mut sets = xs.iter().map(|x| x.matching(index));
+                let first = sets.next().unwrap_or_default();
+                sets.fold(first, |acc, s| &acc & &s)
+            }
+            Self::Without(a, b) => &a.matching(index) - &b.matching(index),
+            Self::Any(xs) => xs.iter().flat_map(|x| x.matching(index)).collect(),
         }
     }
 }
@@ -285,7 +352,7 @@ impl Parser<'_> {
         } else {
             self.pos = save;
         }
-        Some(Node::Cap(name))
+        Some(Node::Match(Match::Cap(name)))
     }
 
     /// A parenthesised group: operands joined by one kind of operator,
@@ -340,13 +407,21 @@ fn build_group(mut operands: Vec<Node>, ops: &[String]) -> Option<Node> {
             })
         }
         ["without"] => {
-            operands.pop();
-            Some(Node::Without(Box::new(operands.pop()?)))
+            let exclude = operands.pop()?.into_match()?;
+            let include = operands.pop()?.into_match()?;
+            Some(Node::Match(Match::Without(
+                Box::new(include),
+                Box::new(exclude),
+            )))
         }
         [first, rest @ ..] if rest.iter().all(|op| op == first) => match *first {
             "and" => Some(Node::And(operands)),
             "or" => Some(Node::Or(operands)),
-            "with" => Some(Node::With(operands)),
+            "with" => operands
+                .into_iter()
+                .map(Node::into_match)
+                .collect::<Option<Vec<_>>>()
+                .map(|xs| Node::Match(Match::With(xs))),
             _ => None,
         },
         _ => None,
@@ -357,8 +432,29 @@ fn build_group(mut operands: Vec<Node>, ops: &[String]) -> Option<Node> {
 mod tests {
     use super::*;
 
+    fn mcap(s: &str) -> Match {
+        Match::Cap(s.to_string())
+    }
+
     fn cap(s: &str) -> Node {
-        Node::Cap(s.to_string())
+        Node::Match(mcap(s))
+    }
+
+    /// An installed host as (package id, capability it provides) pairs.
+    struct TestIndex(&'static [(&'static str, &'static str)]);
+
+    impl Providers for TestIndex {
+        fn providers(&self, cap: &str) -> HashSet<&str> {
+            self.0
+                .iter()
+                .filter(|(_, c)| *c == cap)
+                .map(|(id, _)| *id)
+                .collect()
+        }
+    }
+
+    fn set<'a>(ids: &[&'a str]) -> HashSet<&'a str> {
+        ids.iter().copied().collect()
     }
 
     #[test]
@@ -385,10 +481,10 @@ mod tests {
             ),
             (
                 "(python3.9dist(idna) < 3 with python3.9dist(idna) >= 2.5)",
-                Some(Node::With(vec![
-                    cap("python3.9dist(idna)"),
-                    cap("python3.9dist(idna)"),
-                ])),
+                Some(Node::Match(Match::With(vec![
+                    mcap("python3.9dist(idna)"),
+                    mcap("python3.9dist(idna)"),
+                ]))),
             ),
             (
                 "(a or (b and c))",
@@ -405,11 +501,28 @@ mod tests {
                     otherwise: Some(Box::new(cap("c"))),
                 }),
             ),
-            ("(a without b)", Some(Node::Without(Box::new(cap("a"))))),
+            (
+                "(a without b)",
+                Some(Node::Match(Match::Without(
+                    Box::new(mcap("a")),
+                    Box::new(mcap("b")),
+                ))),
+            ),
+            (
+                "(a with (b or c))",
+                Some(Node::Match(Match::With(vec![
+                    mcap("a"),
+                    Match::Any(vec![mcap("b"), mcap("c")]),
+                ]))),
+            ),
             // Mixed operators in one group are invalid in rpm too.
             ("(a and b or c)", None),
             ("(a and b", None),
             ("(a and b) trailing", None),
+            // `with` and `without` select single packages; `and` and `if`
+            // do not.
+            ("(a with (b and c))", None),
+            ("(a without (b if c))", None),
         ];
         for (input, expected) in cases {
             assert_eq!(
@@ -421,8 +534,15 @@ mod tests {
     }
 
     #[test]
-    fn pulled_caps_evaluates_conditions_against_installed() {
-        let installed = |c: &str| matches!(c, "NetworkManager" | "b" | "c");
+    fn pulled_evaluates_conditions_against_installed() {
+        let index = TestIndex(&[
+            ("NetworkManager", "NetworkManager"),
+            ("a", "a"),
+            ("b", "b"),
+            ("c", "c"),
+            ("grubby", "grubby"),
+            ("python3-dbus", "python3-dbus"),
+        ]);
         let cases: &[(&str, OrChoice, &[&str])] = &[
             (
                 "(python3-dbus if NetworkManager)",
@@ -433,16 +553,41 @@ mod tests {
             ("(a if kernel else c)", OrChoice::First, &["c"]),
             ("(a unless kernel)", OrChoice::First, &["a"]),
             ("(a unless b)", OrChoice::First, &[]),
-            ("(a or b or c)", OrChoice::First, &["b"]),
-            ("(a or b or c)", OrChoice::All, &["b", "c"]),
-            ("(a or z)", OrChoice::First, &[]),
+            ("(z or b or c)", OrChoice::First, &["b"]),
+            ("(z or b or c)", OrChoice::All, &["b", "c"]),
+            ("(z or y)", OrChoice::First, &[]),
             ("(b and c)", OrChoice::First, &["b", "c"]),
         ];
         for (input, or, expected) in cases {
             let expr = DepExpr::parse(input).expect("parses");
+            assert_eq!(expr.pulled(&index, *or), set(expected), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn with_and_without_select_single_packages() {
+        // P provides only `a`, Q only `b`, R both. rpm defines `with` as
+        // one package matching every operand and `without` as a package
+        // matching the left operand and not the right.
+        let index = TestIndex(&[("P", "a"), ("Q", "b"), ("R", "a"), ("R", "b"), ("S", "c")]);
+        let cases: &[(&str, &[&str])] = &[
+            ("(a with b)", &["R"]),
+            ("(a without b)", &["P"]),
+            ("(b without a)", &["Q"]),
+            ("(a with c)", &[]),
+            ("(a with (b or c))", &["R"]),
+            ("((a with b) or c)", &["R"]),
+        ];
+        for (input, expected) in cases {
+            let expr = DepExpr::parse(input).expect("parses");
             assert_eq!(
-                &expr.pulled_caps(&installed, *or),
-                expected,
+                expr.pulled(&index, OrChoice::First),
+                set(expected),
+                "input: {input}"
+            );
+            assert_eq!(
+                expr.satisfied(&index),
+                !expected.is_empty(),
                 "input: {input}"
             );
         }
@@ -462,5 +607,7 @@ mod tests {
     fn caps_lists_conditions_too() {
         let expr = DepExpr::parse("(a if b else (c or d))").expect("parses");
         assert_eq!(expr.caps(), vec!["a", "b", "c", "d"]);
+        let expr = DepExpr::parse("(a without b)").expect("parses");
+        assert_eq!(expr.caps(), vec!["a", "b"]);
     }
 }

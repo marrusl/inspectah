@@ -18,7 +18,7 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
-use rich_dep::{DepExpr, OrChoice};
+use rich_dep::{DepExpr, OrChoice, Providers};
 use std::collections::{HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
@@ -826,7 +826,6 @@ fn classify_deps_rpm(
         .flat_map(|(_, deps)| deps.iter().flat_map(|(_, dep)| dep.caps()))
         .collect();
     let index = ProviderIndex::build(exec, &wanted, file_ownership)?;
-    let installed = |cap: &str| index.is_installed(cap);
 
     for (pkg_name, deps) in &per_pkg_deps {
         let Some(ids) = name_to_ids.get(pkg_name.as_str()) else {
@@ -836,27 +835,25 @@ fn classify_deps_rpm(
             for (relation, dep) in deps {
                 match relation {
                     Relation::Requires | Relation::Recommends => {
-                        for cap in dep.pulled_caps(&installed, OrChoice::First) {
-                            for prov_id in index.added_providers(cap, added_ids) {
-                                if name_from_id(prov_id) != *pkg_name
-                                    && let Some(set) = depends_on.get_mut(package_id.as_str())
-                                {
-                                    set.insert(prov_id.to_string());
-                                }
+                        for prov_id in dep.pulled(&index, OrChoice::First) {
+                            if added_ids.contains(prov_id)
+                                && name_from_id(prov_id) != *pkg_name
+                                && let Some(set) = depends_on.get_mut(package_id.as_str())
+                            {
+                                set.insert(prov_id.to_string());
                             }
                         }
                     }
                     Relation::Supplements => {
-                        if !dep.satisfied(&installed) {
+                        if !dep.satisfied(&index) {
                             continue;
                         }
-                        for cap in dep.pulled_caps(&installed, OrChoice::All) {
-                            for prov_id in index.added_providers(cap, added_ids) {
-                                if name_from_id(prov_id) != *pkg_name
-                                    && let Some(set) = depends_on.get_mut(prov_id)
-                                {
-                                    set.insert((*package_id).clone());
-                                }
+                        for prov_id in dep.pulled(&index, OrChoice::All) {
+                            if added_ids.contains(prov_id)
+                                && name_from_id(prov_id) != *pkg_name
+                                && let Some(set) = depends_on.get_mut(prov_id)
+                            {
+                                set.insert((*package_id).clone());
                             }
                         }
                     }
@@ -950,8 +947,8 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
 /// may name `/usr/bin/...`, or the other way round.
 ///
 /// Providers are every installed package, base image included, so a rich
-/// dependency's condition can be checked against the whole host; edges
-/// are filtered to the added set by `added_providers`.
+/// dependency's condition can be checked against the whole host; the
+/// caller filters edges to the added set.
 struct ProviderIndex {
     providers: HashMap<String, HashSet<String>>,
 }
@@ -1029,24 +1026,16 @@ impl ProviderIndex {
 
         Some(Self { providers })
     }
+}
 
-    /// Whether any installed package provides `cap`.
-    fn is_installed(&self, cap: &str) -> bool {
-        self.providers.contains_key(cap)
-    }
-
-    /// The providers of `cap` that are in the added set.
-    fn added_providers<'a>(
-        &'a self,
-        cap: &str,
-        added_ids: &'a HashSet<String>,
-    ) -> impl Iterator<Item = &'a str> {
+impl Providers for ProviderIndex {
+    fn providers(&self, cap: &str) -> HashSet<&str> {
         self.providers
             .get(cap)
             .into_iter()
             .flatten()
-            .filter(move |id| added_ids.contains(*id))
             .map(String::as_str)
+            .collect()
     }
 }
 
