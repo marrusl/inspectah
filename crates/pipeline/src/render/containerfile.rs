@@ -334,9 +334,11 @@ fn crb_ids(rpm: &RpmSection) -> Vec<RepoId> {
 }
 
 /// The `--enablerepo` flags and one-time banner that CRB adds to the
-/// package, group, module-stream and repo-enabling transactions.
+/// package, group, module-stream, repo-enabling and disabled-repo
+/// transactions.
 ///
-/// Those four ask for it by name. § 3.1's `RUN dnf install -y
+/// Those five ask for it by name (the disabled-repo one through
+/// [`CrbFlags::with_repo`]). § 3.1's `RUN dnf install -y
 /// policycoreutils-python-utils` at the head of the SELinux block does
 /// not, and cannot: it is a `const` in `selinux.rs` that nothing here
 /// rewrites. Scoping by call site rather than by sweeping `dnf install`

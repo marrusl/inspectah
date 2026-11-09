@@ -694,7 +694,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
 
     // -- Subsections --
 
-    // Omitted services (package proven absent)
+    // Omitted services (owning package excluded, or proven absent)
     if !data.omitted.is_empty() {
         let omission_items: Vec<ContextItem> = data
             .omitted

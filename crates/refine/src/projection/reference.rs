@@ -213,7 +213,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         }
     }
 
-    // Omitted services (package proven absent)
+    // Omitted services (owning package excluded, or proven absent)
     let omitted: Vec<RefOmittedService> = render_plan
         .omissions
         .iter()
