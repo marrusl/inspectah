@@ -142,10 +142,13 @@ fn pinned_package_list(item: &NonRpmItem) -> String {
 }
 
 /// Characters that make a token unsafe to interpolate into a rendered
-/// `RUN` line. The single quote and newline break out of the single-quoted
-/// paths the renderers emit; the shell metacharacters matter at the
-/// unquoted interpolation sites, notably the npm global package list.
-const UNSAFE_SHELL_CHARS: &[char] = &['\'', '\n', ';', '$', '`', '|', '&'];
+/// `RUN` line. Every shell interpolation in this module is single-quoted
+/// (paths, the venv name, and each npm-global token), so only the
+/// characters that break out of a single-quoted literal are refused: the
+/// quote itself, and the newline, which also ends a Containerfile
+/// instruction or comment. Do not interpolate a checked value anywhere
+/// unquoted: this set is safe only because every site quotes.
+const UNSAFE_SHELL_CHARS: &[char] = &['\'', '\n'];
 
 /// Returns true if a string contains characters that are unsafe to render
 /// into a shell command.
@@ -242,8 +245,8 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         // from it. Every site below single-quotes it: unquoted, a plain
         // space in the name gives `COPY` three arguments, and any shell
         // metacharacter reaching the `RUN` lines would execute. Quoting it
-        // is also what makes narrowing the path predicate safe — do not
-        // narrow `UNSAFE_SHELL_CHARS` while these sites are bare.
+        // is also what makes the narrow path predicate safe: these sites
+        // must stay quoted while `UNSAFE_SHELL_CHARS` admits metacharacters.
         let venv_name = std::path::Path::new(&abs_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -464,13 +467,15 @@ fn render_npm_global_item(item: &NonRpmItem) -> Vec<String> {
         .packages
         .iter()
         .filter_map(|p| {
-            // Shell injection safety: reject packages with unsafe characters.
+            // Shell injection safety: each token is single-quoted on the
+            // `RUN` line, so only a token that could break out of the
+            // quotes is refused.
             if contains_unsafe_chars(&p.name) || contains_unsafe_chars(&p.version) {
                 None
             } else if p.pinned && !p.version.is_empty() {
-                Some(format!("{}@{}", p.name, p.version))
+                Some(format!("'{}@{}'", p.name, p.version))
             } else {
-                Some(p.name.clone())
+                Some(format!("'{}'", p.name))
             }
         })
         .collect();
@@ -1703,7 +1708,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g pm2 typescript"),
+            output.contains("RUN npm install -g 'pm2' 'typescript'"),
             "unpinned packages must not include version: {output}"
         );
         assert!(
@@ -1726,7 +1731,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g pm2@5.3.0 typescript@5.4.2"),
+            output.contains("RUN npm install -g 'pm2@5.3.0' 'typescript@5.4.2'"),
             "pinned packages must include version: {output}"
         );
     }
@@ -1753,7 +1758,7 @@ mod tests {
             "unpinned package must not include version: {output}"
         );
         assert!(
-            output.contains("RUN npm install -g pm2@5.3.0 typescript"),
+            output.contains("RUN npm install -g 'pm2@5.3.0' 'typescript'"),
             "mixed pin state must be respected: {output}"
         );
     }
@@ -1772,7 +1777,7 @@ mod tests {
         let output = lines.join("\n");
 
         assert!(
-            output.contains("RUN npm install -g @angular/cli"),
+            output.contains("RUN npm install -g '@angular/cli'"),
             "scoped packages must be rendered correctly: {output}"
         );
     }
@@ -1970,7 +1975,7 @@ mod tests {
             "must warn about rejected packages: {output}"
         );
         assert!(
-            output.contains("RUN npm install -g pm2"),
+            output.contains("RUN npm install -g 'pm2'"),
             "safe package must still render: {output}"
         );
         assert!(
@@ -1979,49 +1984,75 @@ mod tests {
         );
     }
 
-    /// Package names land in `RUN npm install -g <list>` unquoted, so a
-    /// metacharacter there is a command-injection vector, not a cosmetic
-    /// problem. Every character in `UNSAFE_SHELL_CHARS` must be rejected,
-    /// and ordinary package-name punctuation must survive.
+    /// The npm-global install line interpolates host-supplied package
+    /// names and versions into a `RUN`. A blacklist there is structurally
+    /// incomplete (`>`, `<`, `(`, `*`, `{` and a bare space all passed it),
+    /// so each token is single-quoted and this asserts on the rendered
+    /// output, not on what the guard returns: the only active line is the
+    /// install, carrying every token inside quotes. Inverting the old
+    /// guard test to match the narrowed predicate, rather than quoting
+    /// first, would ship a live command injection with a green suite.
     #[test]
-    fn npm_global_rejects_every_unsafe_shell_char_in_package_names() {
-        let rejected = [
-            ("single quote", "evil'name"),
-            ("newline", "evil\nname"),
-            ("semicolon", "evil;rm -rf /"),
-            ("dollar", "evil$(id)"),
-            ("backtick", "evil`id`"),
-            ("pipe", "evil|id"),
-            ("ampersand", "evil&id"),
+    fn npm_global_tokens_cannot_escape_their_install_command() {
+        let metachar_names = [
+            "pm2;id",
+            "pm2 rm -rf /",
+            "pm2>/etc/passwd",
+            "pm2<in",
+            "pm2$(id)",
+            "pm2`id`",
+            "pm2|id",
+            "pm2&id",
+            "pm2*",
+            "pm2(x)",
+            "pm2{a,b}",
+            "pm2#x",
+            "pm2\tx",
         ];
-        for (label, name) in rejected {
+        for evil in metachar_names {
             let snap = test_snap(
                 vec![npm_global_item(
                     "/usr/local/lib/node_modules",
                     HIGH_CONFIDENCE,
-                    vec![("pm2", "5.3.0", false), (name, "1.0.0", false)],
+                    vec![("pm2", "5.3.0", true), (evil, "1.0.0", true)],
                 )],
                 &["nodejs"],
             );
             let output = language_package_lines(&snap).join("\n");
-
-            assert!(
-                output.contains("WARNING: 1 package(s) skipped due to unsafe characters"),
-                "{label}: must warn about the rejected package: {output}"
-            );
-            assert!(
-                !output.contains("evil"),
-                "{label}: rejected package must not reach the RUN line: {output}"
-            );
-            assert!(
-                output.contains("RUN npm install -g pm2"),
-                "{label}: the safe package must still render: {output}"
+            let expected = format!("RUN npm install -g 'pm2@5.3.0' '{evil}@1.0.0'");
+            assert_eq!(
+                active_lines(&output),
+                vec![expected.as_str()],
+                "{evil:?}: the quoted install must be the only active line: {output}"
             );
         }
 
-        // Ordinary package-name punctuation must not trip the guard.
-        let accepted = ["@angular/cli", "node-sass", "socket.io", "left_pad"];
-        for name in accepted {
+        // The quote and the newline still break out of the literal, so a
+        // token carrying either is refused and never reaches the line.
+        for evil in ["evil'name", "evil\nname"] {
+            let snap = test_snap(
+                vec![npm_global_item(
+                    "/usr/local/lib/node_modules",
+                    HIGH_CONFIDENCE,
+                    vec![("pm2", "5.3.0", false), (evil, "1.0.0", false)],
+                )],
+                &["nodejs"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+            assert!(
+                output.contains("WARNING: 1 package(s) skipped due to unsafe characters"),
+                "{evil:?}: must warn about the rejected package: {output}"
+            );
+            assert_eq!(
+                active_lines(&output),
+                vec!["RUN npm install -g 'pm2'"],
+                "{evil:?}: {output}"
+            );
+            assert!(!output.contains("evil"), "{evil:?}: {output}");
+        }
+
+        // Ordinary package-name punctuation renders, quoted.
+        for name in ["@angular/cli", "node-sass", "socket.io", "left_pad"] {
             let snap = test_snap(
                 vec![npm_global_item(
                     "/usr/local/lib/node_modules",
@@ -2031,27 +2062,52 @@ mod tests {
                 &["nodejs"],
             );
             let output = language_package_lines(&snap).join("\n");
-            assert!(
-                output.contains(&format!("RUN npm install -g {name}")),
-                "{name}: safe package must render: {output}"
-            );
-            assert!(
-                !output.contains("skipped due to unsafe characters"),
-                "{name}: safe package must not be rejected: {output}"
-            );
+            let expected = format!("RUN npm install -g '{name}'");
+            assert_eq!(active_lines(&output), vec![expected.as_str()], "{output}");
         }
     }
 
+    /// Paths render inside single quotes, so shell metacharacters in them
+    /// are inert and must not cost the user the environment: real paths
+    /// such as `/opt/app$canary/venv` and `/srv/a&b/webapp` rendered in
+    /// beta.1 and were skipped once the predicate widened. The quote and
+    /// the newline break the literal and stay rejected.
     #[test]
-    fn pip_rejects_every_unsafe_shell_char_in_paths() {
+    fn quoted_paths_keep_shell_metacharacters_and_still_render() {
+        let rendered = [
+            ("semicolon", "/opt/ev;il/venv"),
+            ("dollar", "/opt/app$canary/venv"),
+            ("backtick", "/opt/ev`il`/venv"),
+            ("pipe", "/opt/ev|il/venv"),
+            ("ampersand", "/srv/a&b/venv"),
+            ("redirect", "/opt/ev>il/venv"),
+            ("space", "/opt/my app-1.0/venv"),
+        ];
+        for (label, path) in rendered {
+            let snap = test_snap(
+                vec![pip_venv_item(
+                    path,
+                    HIGH_CONFIDENCE,
+                    true,
+                    vec![("flask", "2.3.3")],
+                )],
+                &["python3"],
+            );
+            let output = language_package_lines(&snap).join("\n");
+
+            assert!(
+                output.contains(&format!("RUN python3 -m venv '{path}' \\")),
+                "{label}: metacharacters inside single quotes are inert: {output}"
+            );
+            assert!(
+                !output.contains("path contains unsafe characters"),
+                "{label}: path must not be rejected: {output}"
+            );
+        }
+
         let rejected = [
             ("single quote", "/opt/ev'il/venv"),
             ("newline", "/opt/ev\nil/venv"),
-            ("semicolon", "/opt/ev;il/venv"),
-            ("dollar", "/opt/ev$il/venv"),
-            ("backtick", "/opt/ev`il/venv"),
-            ("pipe", "/opt/ev|il/venv"),
-            ("ampersand", "/opt/ev&il/venv"),
         ];
         for (label, path) in rejected {
             let snap = test_snap(
@@ -2074,22 +2130,6 @@ mod tests {
                 "{label}: rejected path must not render a RUN line: {output}"
             );
         }
-
-        // Spaces and other benign path characters stay renderable.
-        let snap = test_snap(
-            vec![pip_venv_item(
-                "/opt/my app-1.0/venv",
-                HIGH_CONFIDENCE,
-                true,
-                vec![("flask", "2.3.3")],
-            )],
-            &["python3"],
-        );
-        let output = language_package_lines(&snap).join("\n");
-        assert!(
-            output.contains("RUN python3 -m venv '/opt/my app-1.0/venv'"),
-            "benign path must still render: {output}"
-        );
     }
 
     #[test]
@@ -2214,22 +2254,18 @@ mod tests {
     /// `pip_path_with_spaces_renders_with_quotes` misses this because its
     /// space is in a parent directory, so the name comes out clean.
     ///
-    /// The negative assertion is also the guard for the deferred narrowing
-    /// of `UNSAFE_SHELL_CHARS` to `'` and `\n`. Names carrying `$` or `;`
-    /// are rejected by today's path predicate, so nothing renders for them
-    /// and the assertion holds trivially; once the predicate narrows they
-    /// render, and the assertion starts proving that `$(id)` cannot reach
-    /// a `RUN` line unquoted. Quoting has to land before the narrowing,
-    /// never after.
+    /// `UNSAFE_SHELL_CHARS` refuses only `'` and `\n`, so names carrying
+    /// `$` or `;` render too, and this proves `$(id)` cannot reach a `RUN`
+    /// line unquoted. The quoting is what made that narrowing safe.
     #[test]
     fn venv_directory_name_is_quoted_at_its_own_interpolation_sites() {
-        for (name, renders_under_current_predicate) in [
-            ("my venv", true),
-            ("venv(x)", true),
-            ("venv>out", true),
-            ("venv*", true),
-            ("ve$(id)nv", false),
-            ("venv;id", false),
+        for name in [
+            "my venv",
+            "venv(x)",
+            "venv>out",
+            "venv*",
+            "ve$(id)nv",
+            "venv;id",
         ] {
             let path = format!("/opt/app/{name}");
             let snap = test_snap(
@@ -2248,17 +2284,15 @@ mod tests {
                 "{name}: the temp path must never be interpolated unquoted: {output}"
             );
 
-            if renders_under_current_predicate {
-                for site in [
-                    format!("requirements.txt '/tmp/{name}-requirements.txt'"),
-                    format!("pip install -r '/tmp/{name}-requirements.txt'"),
-                    format!("rm '/tmp/{name}-requirements.txt'"),
-                ] {
-                    assert!(
-                        output.contains(&site),
-                        "{name}: expected quoted interpolation {site:?}: {output}"
-                    );
-                }
+            for site in [
+                format!("requirements.txt '/tmp/{name}-requirements.txt'"),
+                format!("pip install -r '/tmp/{name}-requirements.txt'"),
+                format!("rm '/tmp/{name}-requirements.txt'"),
+            ] {
+                assert!(
+                    output.contains(&site),
+                    "{name}: expected quoted interpolation {site:?}: {output}"
+                );
             }
         }
     }

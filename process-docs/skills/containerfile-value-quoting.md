@@ -15,12 +15,12 @@ has produced both over-rejection of legal paths and live command injection.
 | Context | Example site | Treatment | Predicate that matters |
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and `\n` only — everything else is inert inside the quotes |
-| Bare token in a command | `RUN npm install -g {pkg_list}` | reject unsafe tokens, or quote them | the full metacharacter set, and a blacklist here is structurally incomplete |
+| Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g '{name}@{version}' ...` | quote it, never blacklist | a blacklist here is structurally incomplete, so this row should stay empty |
 | Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` | `\n` only — it closes the comment |
 
-`UNSAFE_SHELL_CHARS` is currently one widened set serving all three, which
-is why it over-rejects legal quoted paths: `/opt/app$canary/venv` is
-perfectly safe inside single quotes and is rejected anyway.
+`UNSAFE_SHELL_CHARS` is `'` and `\n`, one set serving every command site,
+which is correct only because every command site single-quotes. A new
+interpolation added bare inherits a predicate that admits `;`, `$` and `>`.
 
 ## Comment Sites Sanitize, They Never Reject
 
@@ -57,14 +57,18 @@ RUN python3 -m venv '/opt/app/ve$(id)nv' \
     && '/opt/app/ve$(id)nv'/bin/pip install -r /tmp/ve$(id)nv-requirements.txt
 ```
 
-The widened predicate is the only thing holding that back today. The
-`venv_name` sites were quoted first (2026-08-15) so the narrowing can
-follow safely.
+The `venv_name` sites and the npm global tokens were both quoted before
+the predicate narrowed, and the narrowing landed in the same commit as the
+npm quoting.
 
-The same rule covers the npm global package list, the one genuinely
-unquoted command site. Quote the tokens there before narrowing, or the
-blacklist stays load-bearing — and it already under-rejects `>`, `<`, `(`,
-`*`, `{`, and a bare space.
+**The trap when narrowing:** two tests go red together, a pip path test
+meant to be inverted and an npm test that looks like the same class. The
+npm one guarded the bare site, so inverting it to match the narrower
+predicate ships `RUN npm install -g pm2;id` with a green suite. Replace a
+predicate-behaviour test with an assertion on the rendered output
+(`active_lines()` holds only the quoted install), then prove it by
+mutation: revert the quoting with the narrow predicate in place and the
+test must fail.
 
 ## Host-Sourced Values Get a Type, Not a Site Check
 
