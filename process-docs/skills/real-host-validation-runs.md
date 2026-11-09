@@ -387,6 +387,9 @@ ssh -n host 'setsid nohup inspectah refine … > /tmp/refine.log 2>&1 < /dev/nul
 
 And check before you finish: `pgrep -af "inspectah.*refine"` on the
 guest, `ps -eo pid,etime,command | grep "[s]sh <host>"` on the Mac.
+A refine server run on the Mac cannot be checked with `pgrep -af`: on
+macOS, `pgrep -a` means "include ancestors", and it matched an unrelated
+process. Use `lsof -iTCP:<port> -sTCP:LISTEN` there.
 `--fresh` is a second reason to look — it prompts
 `Discard N saved operations? [y/N]` and quits on EOF, so a scripted run
 can die with `curl` exit 7 and an empty log.
@@ -471,9 +474,22 @@ not comparable.
 - Killing a local `ssh` does **not** kill the remote process. Output
   redirected to a file on the guest survives the disconnect; `pkill` on
   the guest is what stops it.
-- The drift tool's standard profile moves sshd to port **2222** and sets
-  `PermitRootLogin no`, effective on the next sshd restart. It issues no
-  restart, so a running session keeps port 22. Do not reboot mid-run.
+- The drift tool's standard profile sets `PermitRootLogin no`, effective
+  on the next sshd restart. It no longer moves sshd off port 22 (a
+  standard run on 2026-11-08 left it on 22), but drift still stacks
+  across runs, so revert the guest before each one.
+- A scan pulls the bootc base image (about 2 GB, here
+  `quay.io/fedora/fedora-bootc:44`) into root's podman storage. On a
+  guest you will not revert, remove it with `sudo podman rmi`.
 - Shut a guest down with `poweroff` inside it, not by killing the VM. A
   guest killed mid-write can leave the rpmdb or journal inconsistent,
   which later reads as an inspectah bug.
+
+## Stock Fedora Server has no `readelf`
+
+binutils is not installed on stock Fedora Server, so inspectah skips the
+non-RPM ELF walk and misses Go binaries such as the drift tool's
+`/usr/local/bin/driftify-probe`. Install binutils on the guest before
+scanning if you need those. The scan's warning says to install binutils
+"in the inspectah container image"; that wording is stale now that scans
+do not run in a container. Known wording issue, not yet fixed in code.
