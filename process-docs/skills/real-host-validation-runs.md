@@ -615,7 +615,9 @@ not comparable.
 
 binutils is not installed on stock Fedora Server, so inspectah skips the
 non-RPM ELF walk and misses Go binaries such as the drift tool's
-`/usr/local/bin/driftify-probe`. Install binutils on the guest before
-scanning if you need those. The scan's warning says to install binutils
-"in the inspectah container image"; that wording is stale now that scans
-do not run in a container. Known wording issue, not yet fixed in code.
+`/usr/local/bin/driftify-probe`. For a validation run on a test guest,
+install binutils before scanning if the run needs those findings. That is
+a note for test runs only. The scan's warning says the walk was skipped
+and that hand-installed compiled programs were not detected, and it
+deliberately gives no install advice while the walk's design is under
+review. Do not add advice to the warning to match this note.

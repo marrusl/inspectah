@@ -158,8 +158,9 @@ impl Inspector for NonRpmInspector {
         if !has_readelf {
             warnings.push(Warning {
                 inspector: "non_rpm_software".to_string(),
-                message: "readelf not available (rc=127) — ELF binary classification skipped. \
-                          Install binutils in the inspectah container image."
+                message: "readelf was not found, so the ELF binary scan was skipped. \
+                          Hand-installed (non-RPM) compiled programs under the scan roots \
+                          were not detected."
                     .to_string(),
                 ..Default::default()
             });

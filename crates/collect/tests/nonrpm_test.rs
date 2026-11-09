@@ -296,6 +296,15 @@ fn test_nonrpm_inspector_degraded_no_readelf() {
                     .any(|w| w.message.contains("readelf")),
                 "should warn about readelf being unavailable"
             );
+            // The walk is under redesign, so the warning states the gap
+            // and gives no install advice.
+            assert!(
+                output.warnings.iter().all(|w| {
+                    let m = w.message.to_lowercase();
+                    !m.contains("install binutils") && !m.contains("container image")
+                }),
+                "readelf warning must not give install advice"
+            );
             // Items may be empty (no ELF classification)
             let _ = section;
         }
