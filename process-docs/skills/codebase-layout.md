@@ -110,7 +110,7 @@ Artifact generators invoked after triage decisions finalized:
 - `service_intent.rs` — Quadlet/systemd service migration
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`
-- `repoless.rs` — package routing (`route_for`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
+- `repoless.rs`: package routing (`route_for`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
 - `safety.rs` — Safety checks and destructive-action warnings
 - `configtree.rs` — Config file tree visualization
 - `baseline_fmt.rs` — Baseline comparison formatting
