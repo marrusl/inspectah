@@ -10,6 +10,7 @@ use inspectah_core::types::selinux::FcontextSource;
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
+use super::not_carried::{NOT_CARRIED_REASON, NotCarriedPackage, not_carried_packages};
 use super::selinux;
 use crate::section_group::SectionGroup;
 
@@ -289,7 +290,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 if let Some(rpm) = &snap.rpm {
                     group_lines.push("### Packages".into());
                     group_lines.push(String::new());
-                    render_packages_section(rpm, &mut group_lines);
+                    render_packages_section(rpm, &not_carried_packages(snap), &mut group_lines);
                 }
             }
             SectionGroup::SystemConfig => {
@@ -368,7 +369,12 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 }
 
 /// Render the Packages section content (not including the section heading).
-fn render_packages_section(rpm: &inspectah_core::types::rpm::RpmSection, lines: &mut Vec<String>) {
+/// `not_carried` is the [`not_carried_packages`] list for the same snapshot.
+fn render_packages_section(
+    rpm: &inspectah_core::types::rpm::RpmSection,
+    not_carried: &[NotCarriedPackage],
+    lines: &mut Vec<String>,
+) {
     let included: usize = rpm
         .packages_added
         .iter()
@@ -386,6 +392,29 @@ fn render_packages_section(rpm: &inspectah_core::types::rpm::RpmSection, lines: 
             lines.push(format!(
                 "| {} | {} | {} | {} | {} |",
                 p.name, p.version, p.release, p.arch, p.source_repo
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    // Packages the image leaves out because nothing it installs needs them,
+    // in the list's order. Enabled Units is the bare unit list, or `-`.
+    if !not_carried.is_empty() {
+        lines.push(format!("### Not carried ({})", not_carried.len()));
+        lines.push(String::new());
+        lines.push("| Package | Source Repo | Enabled Units | Reason |".into());
+        lines.push("|---------|-------------|---------------|--------|".into());
+        for p in not_carried {
+            let units = if p.enabled_units.is_empty() {
+                "-".to_string()
+            } else {
+                p.enabled_units.join(", ")
+            };
+            lines.push(format!(
+                "| {} | {} | {} | {NOT_CARRIED_REASON} |",
+                p.display_name(),
+                p.source_repo,
+                units
             ));
         }
         lines.push(String::new());
@@ -1821,5 +1850,193 @@ mod tests {
         );
 
         insta::assert_snapshot!(md);
+    }
+
+    // --- Not carried table -------------------------------------------------
+
+    /// A host with one leaf and five auto packages nothing it needs:
+    /// `cronie` owns two enabled units, `firewalld` one, and both arches of
+    /// `glibc` are unneeded, so each prints as `name.arch`. Dispositions are
+    /// as collected; the not-carried list stays empty until they are set.
+    fn not_carried_host() -> InspectionSnapshot {
+        use inspectah_core::types::rpm::FileOwnershipEntry;
+        use inspectah_core::types::services::ServiceSection;
+        let auto = |name: &str, arch: &str, repo: &str| PackageEntry {
+            name: name.into(),
+            arch: arch.into(),
+            state: PackageState::Added,
+            source_repo: repo.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let owns = |package: &str, units: &[&str]| FileOwnershipEntry {
+            package_name: package.into(),
+            paths: units
+                .iter()
+                .map(|unit| format!("/usr/lib/systemd/system/{unit}"))
+                .collect(),
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                auto("httpd", "x86_64", "appstream"),
+                auto("apr", "x86_64", "appstream"),
+                auto("dracut-config-rescue", "x86_64", "baseos"),
+                auto("firewalld", "noarch", "baseos"),
+                auto("cronie", "x86_64", "baseos"),
+                auto("glibc", "x86_64", "baseos"),
+                auto("glibc", "i686", "baseos"),
+            ],
+            leaf_packages: Some(vec!["httpd.x86_64".into()]),
+            auto_packages: Some(
+                [
+                    "apr.x86_64",
+                    "dracut-config-rescue.x86_64",
+                    "firewalld.noarch",
+                    "cronie.x86_64",
+                    "glibc.x86_64",
+                    "glibc.i686",
+                ]
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect(),
+            ),
+            leaf_dep_tree: serde_json::json!({ "httpd.x86_64": ["apr.x86_64"] }),
+            file_ownership: vec![
+                owns("firewalld", &["firewalld.service"]),
+                owns("cronie", &["crond.service", "crond-backup.timer"]),
+            ],
+            ..Default::default()
+        });
+        snap.services = Some(ServiceSection {
+            enabled_units: vec![
+                "firewalld.service".into(),
+                "crond.service".into(),
+                "crond-backup.timer".into(),
+            ],
+            ..Default::default()
+        });
+        snap
+    }
+
+    fn scanned_not_carried_host() -> InspectionSnapshot {
+        let mut snap = not_carried_host();
+        super::super::not_carried::apply_scan_package_defaults(&mut snap);
+        snap
+    }
+
+    /// The `### Not carried` table: its heading through the line before the
+    /// next blank line after the table. Empty when the report has no heading.
+    fn not_carried_table(md: &str) -> Vec<&str> {
+        md.lines()
+            .skip_while(|l| !l.starts_with("### Not carried"))
+            .enumerate()
+            .take_while(|(i, l)| *i < 2 || !l.is_empty())
+            .map(|(_, l)| l)
+            .collect()
+    }
+
+    #[test]
+    fn not_carried_table_lists_each_package_in_display_order() {
+        use super::super::not_carried::NOT_CARRIED_REASON;
+        let md = render_audit(&scanned_not_carried_host());
+        let row = |name: &str, units: &str| {
+            format!("| {name} | baseos | {units} | {NOT_CARRIED_REASON} |")
+        };
+        assert_eq!(
+            not_carried_table(&md),
+            [
+                "### Not carried (5)".to_string(),
+                String::new(),
+                "| Package | Source Repo | Enabled Units | Reason |".into(),
+                "|---------|-------------|---------------|--------|".into(),
+                row("cronie", "crond-backup.timer, crond.service"),
+                row("firewalld", "firewalld.service"),
+                row("dracut-config-rescue", "-"),
+                row("glibc.i686", "-"),
+                row("glibc.x86_64", "-"),
+            ],
+            "unit owners first, the unit list bare or `-`, display names, the shared reason:\n{md}"
+        );
+
+        let packages = md.find("## Packages").expect("Packages group");
+        let table = md.find("### Not carried").expect("table is rendered");
+        let next_group = md[packages + 1..]
+            .find("\n## ")
+            .map_or(md.len(), |i| packages + 1 + i);
+        assert!(
+            packages < table && table < next_group,
+            "the table sits in the Packages group:\n{md}"
+        );
+    }
+
+    #[test]
+    fn not_carried_table_is_absent_without_a_list() {
+        let cases: Vec<(&str, InspectionSnapshot)> = vec![
+            (
+                "dispositions as collected leave the list empty",
+                not_carried_host(),
+            ),
+            ("no leaf data, so no classification", {
+                let mut snap = not_carried_host();
+                let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+                rpm.leaf_packages = None;
+                rpm.auto_packages = None;
+                super::super::not_carried::apply_scan_package_defaults(&mut snap);
+                snap
+            }),
+        ];
+        for (why, snap) in cases {
+            let md = render_audit(&snap);
+            assert!(!md.contains("Not carried"), "{why}:\n{md}");
+        }
+    }
+
+    #[test]
+    fn added_packages_no_longer_count_not_carried_packages_on_the_scan_path() {
+        let collected = render_audit(&not_carried_host());
+        assert!(
+            collected.contains("### Added Packages (7)"),
+            "as collected, every package counts:\n{collected}"
+        );
+
+        let md = render_audit(&scanned_not_carried_host());
+        assert!(md.contains("### Added Packages (2)"), "{md}");
+        let added: Vec<&str> = md
+            .lines()
+            .skip_while(|l| !l.starts_with("### Added Packages"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("###"))
+            .collect();
+        for name in ["cronie", "firewalld", "dracut-config-rescue", "glibc"] {
+            assert!(
+                !added.iter().any(|l| l.starts_with(&format!("| {name} |"))),
+                "{name} is not an added package:\n{md}"
+            );
+        }
+    }
+
+    /// Refine's leaf default keeps leaves as decided and excludes every
+    /// auto package. Set by hand here, it renders the same table as the
+    /// scan defaults; the check against refine's export lives in the CLI
+    /// crate.
+    #[test]
+    fn not_carried_table_matches_under_leaf_default_dispositions() {
+        let mut leaf_default = not_carried_host();
+        let rpm = leaf_default
+            .rpm
+            .as_mut()
+            .expect("fixture has an rpm section");
+        let leaves = rpm.leaf_packages.clone().expect("fixture has leaf data");
+        for pkg in &mut rpm.packages_added {
+            if !leaves.contains(&format!("{}.{}", pkg.name, pkg.arch)) {
+                pkg.disposition = FindingKind::excluded();
+            }
+        }
+
+        let scan = render_audit(&scanned_not_carried_host());
+        let refine_like = render_audit(&leaf_default);
+        assert!(!not_carried_table(&scan).is_empty(), "{scan}");
+        assert_eq!(not_carried_table(&refine_like), not_carried_table(&scan));
     }
 }
