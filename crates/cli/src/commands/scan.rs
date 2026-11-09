@@ -881,8 +881,11 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     // Bundle repo-less RPMs from dnf cache into render directory, on the
     // route the Containerfile's repo-less block copies them by.
     if let Some(ref rpm) = snapshot.rpm {
-        render::repoless::write_cached_rpms(rpm, render_dir.path())
+        let refused = render::repoless::write_cached_rpms(rpm, render_dir.path())
             .context("failed to bundle repo-less RPMs")?;
+        for line in refused {
+            eprintln!("Warning: {line}");
+        }
     }
 
     // Step 8: Create tarball

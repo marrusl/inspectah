@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **A line starting with `//` or `;` is no longer skipped by redaction in files where neither is comment syntax**: redaction leaves comment lines alone, and it treated a line as a comment if it began with `#`, `//` or `;`, in every file. In `fstab`, `sshd_config`, PAM files, audit rules, systemd units and most `.conf` files only `#` starts a comment, so a line such as `//srv/share/password=hunter2` kept its secret in the export and produced no finding in `secrets-review.md`. `#` still marks a comment everywhere. `;` now does so only in `.ini`, `.cnf` and `.repo` files and in `smb.conf`, and `//` only in `named.conf`, where those parsers read them as comments.
+- **The scan tarball's cached repo-less RPMs pass the RPM filename allowlist before they are written**: `inspectah scan` copied each cached repo-less RPM into `repoless-packages/` under a filename built from the package's name, version, release and arch as the host's rpmdb reported them, with no check. A package name such as `../evil` put the copy outside that directory, and the scan usually runs as root. The Containerfile already refused such a name and left a FIXME in place of its `COPY`; the writer now runs the same allowlist, does not stage the file, and prints `Warning: cached RPM for <name.arch> not bundled` so the missing RPM is not a silent drop. Upload the RPM in refine to install that package.
 
 ## [0.9.0-beta.5] - 2026-11-05
 

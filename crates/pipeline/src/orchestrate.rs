@@ -77,7 +77,9 @@ pub fn run_pipeline(
     // Stage the cached RPMs the Containerfile's repo-less block copies,
     // as the scan command does, so no `COPY` names a missing file.
     if let Some(rpm) = snapshot.rpm.as_ref() {
-        render::repoless::write_cached_rpms(rpm, output_dir)?;
+        for line in render::repoless::write_cached_rpms(rpm, output_dir)? {
+            eprintln!("Warning: {line}");
+        }
     }
 
     // Write schema placeholder

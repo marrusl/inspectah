@@ -77,8 +77,19 @@ pub fn route_for<'a>(
 /// that installs from its disabled repo has no `COPY` naming its cached
 /// RPM, and staging it anyway left an export carrying a file nothing
 /// installs. The file is named by the package's NEVRA, the name the
-/// repo-less block copies.
-pub fn write_cached_rpms(rpm: &RpmSection, render_dir: &std::path::Path) -> std::io::Result<()> {
+/// repo-less block copies, and only once [`StagedName::parse`] admits it:
+/// the four NEVRA fields come from the scanned host, and a name such as
+/// `../evil` would otherwise be copied outside `repoless-packages/`.
+///
+/// Returns one warning line per package whose NEVRA the allowlist
+/// refused. Such a package is not staged, and the Containerfile carries a
+/// FIXME for it in place of a `COPY`; the caller prints the lines so the
+/// operator knows the cached RPM did not make it into the tarball.
+pub fn write_cached_rpms(
+    rpm: &RpmSection,
+    render_dir: &std::path::Path,
+) -> std::io::Result<Vec<String>> {
+    let mut refused = Vec::new();
     let no_uploads = VerifiedUploads::new();
     let dest_dir = render_dir.join("repoless-packages");
     for pkg in &rpm.packages_added {
@@ -88,16 +99,26 @@ pub fn write_cached_rpms(rpm: &RpmSection, render_dir: &std::path::Path) -> std:
         if route_for(rpm, pkg, &no_uploads) != PackageRoute::Repoless {
             continue;
         }
-        std::fs::create_dir_all(&dest_dir)?;
-        let filename = format!(
+        let nevra_filename = format!(
             "{}-{}-{}.{}.rpm",
             pkg.name, pkg.version, pkg.release, pkg.arch
         );
-        std::fs::copy(cache_path, dest_dir.join(&filename)).map_err(|e| {
+        let Ok(filename) = StagedName::parse(&nevra_filename) else {
+            // Escaped for the terminal: these fields are host-supplied.
+            refused.push(format!(
+                "cached RPM for {} not bundled: its filename {} is not one \
+                 the build can name; upload the RPM in refine",
+                format!("{}.{}", pkg.name, pkg.arch).escape_debug(),
+                nevra_filename.escape_debug(),
+            ));
+            continue;
+        };
+        std::fs::create_dir_all(&dest_dir)?;
+        std::fs::copy(cache_path, dest_dir.join(filename.as_str())).map_err(|e| {
             std::io::Error::new(e.kind(), format!("copy cached RPM {cache_path}: {e}"))
         })?;
     }
-    Ok(())
+    Ok(refused)
 }
 
 /// The repo a repo-less package installs from with `--enablerepo`, when
@@ -499,26 +520,28 @@ mod tests {
         }
     }
 
+    /// NEVRAs whose concatenated filename the allowlist refuses. These
+    /// four fields come from a scanned host's rpmdb.
+    ///
+    /// Hand-transcribed, not pasted: each name is what the four fields
+    /// concatenate to, and each must be a name `validate_staged_name`
+    /// refuses for the stated reason.
+    const HOSTILE_NEVRAS: &[(&str, &str, &str, &str)] = &[
+        ("evil", "1$(id)", "1", "x86_64"),    // command substitution
+        ("evil", "1", "1\nRUN id", "x86_64"), // a second instruction
+        ("evil", "1", "1; id", "x86_64"),     // a second command
+        ("evil", "1", "1`id`", "x86_64"),     // backtick substitution
+        ("../evil", "1", "1", "x86_64"),      // traversal, leading dot
+        ("-rf", "1", "1", "x86_64"),          // leading dash: an option
+    ];
+
     #[test]
     fn dnf_cache_nevra_that_is_not_a_filename_renders_a_fixme_and_no_copy() {
-        // § 8.2's dnf-cache path case, and the defect it closes: these
-        // four fields come from a scanned host, and the previous form
-        // rendered them into `RUN dnf localinstall -y /tmp/<nevra>.rpm`
-        // with no check at all, so the first row below executed `id` as
-        // root at image build time.
-        //
-        // Hand-transcribed, not pasted: each name is what the four fields
-        // concatenate to, and each must be a name `validate_staged_name`
-        // refuses for the stated reason.
-        let hostile: &[(&str, &str, &str, &str)] = &[
-            ("evil", "1$(id)", "1", "x86_64"),    // command substitution
-            ("evil", "1", "1\nRUN id", "x86_64"), // a second instruction
-            ("evil", "1", "1; id", "x86_64"),     // a second command
-            ("evil", "1", "1`id`", "x86_64"),     // backtick substitution
-            ("../evil", "1", "1", "x86_64"),      // traversal, leading dot
-            ("-rf", "1", "1", "x86_64"),          // leading dash: an option
-        ];
-        for (name, version, release, arch) in hostile {
+        // § 8.2's dnf-cache path case, and the defect it closes: the
+        // previous form rendered these into `RUN dnf localinstall -y
+        // /tmp/<nevra>.rpm` with no check at all, so the first row of
+        // `HOSTILE_NEVRAS` executed `id` as root at image build time.
+        for (name, version, release, arch) in HOSTILE_NEVRAS {
             let snap = test_snapshot_with_repoless(vec![nevra_entry(name, version, release, arch)]);
             let lines = repoless_rpm_lines(&snap, None);
             let rendered = lines.join("\n");
@@ -536,6 +559,72 @@ mod tests {
                 "{rendered}"
             );
         }
+    }
+
+    /// Every file under `dir`, recursively.
+    fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                found.extend(files_under(&path));
+            } else {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn write_cached_rpms_refuses_a_nevra_that_is_not_a_filename_and_writes_nothing() {
+        // The scan tarball's writer builds the same filename the renderer
+        // refuses above, and joined it onto `repoless-packages/` as given:
+        // `../evil` copied the cached RPM out of that directory, and as root
+        // when the scan runs as root. A refused package is skipped and
+        // reported, never silently dropped. The assertion is about the
+        // filesystem, not the allowlist's verdict: the only file anywhere
+        // under the root afterwards is the cached RPM the scan started with.
+        for (name, version, release, arch) in HOSTILE_NEVRAS {
+            let root = tempfile::tempdir().expect("tempdir");
+            let cache = root.path().join("cached.rpm");
+            std::fs::write(&cache, b"rpm").expect("write cached RPM");
+            let render_dir = root.path().join("render");
+            std::fs::create_dir(&render_dir).expect("create render dir");
+
+            let mut pkg = nevra_entry(name, version, release, arch);
+            pkg.cache_path = Some(cache.to_string_lossy().into_owned());
+            let rpm = RpmSection {
+                packages_added: vec![pkg],
+                ..Default::default()
+            };
+            let warnings = write_cached_rpms(&rpm, &render_dir).expect("write_cached_rpms");
+
+            assert_eq!(
+                files_under(root.path()),
+                vec![cache.clone()],
+                "{name}-{version}-{release}.{arch}: nothing may be written"
+            );
+            assert_eq!(warnings.len(), 1, "{name}: {warnings:?}");
+            assert!(warnings[0].contains("not bundled"), "{name}: {warnings:?}");
+        }
+
+        // Control: an admitted NEVRA is still staged, with no warning.
+        let root = tempfile::tempdir().expect("tempdir");
+        let cache = root.path().join("cached.rpm");
+        std::fs::write(&cache, b"rpm").expect("write cached RPM");
+        let mut pkg = nevra_entry("evil", "1", "1", "x86_64");
+        pkg.cache_path = Some(cache.to_string_lossy().into_owned());
+        let rpm = RpmSection {
+            packages_added: vec![pkg],
+            ..Default::default()
+        };
+        let warnings = write_cached_rpms(&rpm, root.path()).expect("write_cached_rpms");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            root.path()
+                .join("repoless-packages/evil-1-1.x86_64.rpm")
+                .is_file()
+        );
     }
 
     #[test]
