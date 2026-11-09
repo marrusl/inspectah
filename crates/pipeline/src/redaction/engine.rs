@@ -166,17 +166,55 @@ fn is_false_positive_value(value: &str) -> bool {
     FALSE_POSITIVE_VALUES.contains(value.trim().to_lowercase().as_str())
 }
 
+/// Line-comment marker common to nearly every `/etc` file format.
+const HASH_COMMENT: &str = "#";
+/// Line-comment marker for INI-style files.
+const SEMICOLON_COMMENT: &str = ";";
+/// Line-comment marker for C-style configs such as BIND's `named.conf`.
+const DOUBLE_SLASH_COMMENT: &str = "//";
+
+/// INI-style extensions whose parsers treat a leading `;` as a comment
+/// (php.ini, MySQL/MariaDB `.cnf`, dnf/yum `.repo`).
+const SEMICOLON_COMMENT_EXTENSIONS: &[&str] = &[".ini", ".cnf", ".repo"];
+/// File names whose parsers treat a leading `;` as a comment.
+const SEMICOLON_COMMENT_FILE_NAMES: &[&str] = &["smb.conf"];
+/// File names whose parsers treat a leading `//` as a comment.
+const DOUBLE_SLASH_COMMENT_FILE_NAMES: &[&str] = &["named.conf"];
+
+/// Returns the line-comment markers that are real comment syntax for
+/// the file at `path`. `#` always applies; `;` and `//` apply only to
+/// file types that use them, because elsewhere a line starting with
+/// them (`//srv/share/...`) is data and must still be scanned.
+fn comment_markers(path: Option<&str>) -> Vec<&'static str> {
+    let mut markers = vec![HASH_COMMENT];
+    let Some(path) = path else {
+        return markers;
+    };
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    if SEMICOLON_COMMENT_FILE_NAMES.contains(&file_name)
+        || SEMICOLON_COMMENT_EXTENSIONS
+            .iter()
+            .any(|ext| file_name.ends_with(ext))
+    {
+        markers.push(SEMICOLON_COMMENT);
+    }
+    if DOUBLE_SLASH_COMMENT_FILE_NAMES.contains(&file_name) {
+        markers.push(DOUBLE_SLASH_COMMENT);
+    }
+    markers
+}
+
 /// Returns true if the match at `pos` falls on a comment line.
 /// A comment line is one whose trimmed content (before `pos`) starts
-/// with `#`, `//`, or `;`.
-fn is_comment_line(content: &str, pos: usize) -> bool {
+/// with one of `markers` (see [`comment_markers`]).
+fn is_comment_line(content: &str, pos: usize, markers: &[&str]) -> bool {
     let line_start = content[..pos].rfind('\n').map_or(0, |i| i + 1);
     let prefix = content[line_start..pos].trim_start();
-    prefix.starts_with('#') || prefix.starts_with("//") || prefix.starts_with(';')
+    markers.iter().any(|m| prefix.starts_with(m))
 }
 
 /// Collect regex matches from `content` for a single `pat`, filtering out:
-/// - Matches on comment lines (# // ;)
+/// - Matches on comment lines (`#`, plus `;` / `//` where `path` uses them)
 /// - (Gap 4, future) Password-pattern matches whose value is a known NSS/PAM token
 /// - (Gap 2, future) PasswordHash matches when `path` is a shadow file
 ///
@@ -190,6 +228,7 @@ fn collect_eligible_matches(
     content: &str,
     path: Option<&str>,
 ) -> Vec<EligibleMatch> {
+    let markers = comment_markers(path);
     // When the pattern has a replacement template, use captures_iter to
     // extract the capture groups alongside the match offsets.
     if pat.replacement_template.is_some() {
@@ -202,7 +241,7 @@ fn collect_eligible_matches(
                 let end = mat.end();
                 let text = mat.as_str();
 
-                if is_comment_line(content, start) {
+                if is_comment_line(content, start, &markers) {
                     return None;
                 }
 
@@ -233,7 +272,7 @@ fn collect_eligible_matches(
             let text = mat.as_str();
 
             // Filter 1: skip matches on comment lines
-            if is_comment_line(content, start) {
+            if is_comment_line(content, start, &markers) {
                 return None;
             }
 
@@ -2434,7 +2473,7 @@ mod tests {
     #[test]
     fn test_comment_semicolon_preserved() {
         let input = "; token=example\ntoken=secret";
-        let findings = scan_content(input, "/etc/app.conf");
+        let findings = scan_content(input, "/etc/php.ini");
         assert_eq!(
             findings.len(),
             1,
@@ -2446,13 +2485,40 @@ mod tests {
     #[test]
     fn test_comment_cstyle_preserved() {
         let input = "// api_key=docs_example\napi_key=live";
-        let findings = scan_content(input, "/etc/app.conf");
+        let findings = scan_content(input, "/etc/named.conf");
         assert_eq!(
             findings.len(),
             1,
             "C-style commented match must be filtered"
         );
         assert_eq!(findings[0].line, Some(2));
+    }
+
+    #[test]
+    fn test_non_hash_markers_exempt_only_where_they_are_comment_syntax() {
+        // (path, content, expected finding count). `//` and `;` are not
+        // comment syntax in a generic /etc file, so a line that merely
+        // begins with them must still be scanned.
+        let cases: &[(&str, &str, usize)] = &[
+            ("/etc/fstab", "//srv/share/password=hunter2", 1),
+            ("/etc/app.conf", "//srv/share/password=hunter2", 1),
+            ("/etc/app.conf", ";password=hunter2", 1),
+            ("/etc/ssh/sshd_config", "// api_key=live", 1),
+            ("/etc/named.conf", "// api_key=docs_example", 0),
+            ("/etc/php.ini", "; token=example", 0),
+            ("/etc/samba/smb.conf", "; password=example", 0),
+            ("/etc/yum.repos.d/x.repo", "; password=example", 0),
+        ];
+        for (path, input, want) in cases {
+            let findings = scan_content(input, path);
+            assert_eq!(
+                findings.len(),
+                *want,
+                "{path}: {input:?} produced {findings:?}"
+            );
+        }
+        // No path: only `#` is a comment.
+        assert!(redact_string("//srv/share/password=hunter2").contains("REDACTED_"));
     }
 
     #[test]
