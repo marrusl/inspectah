@@ -326,8 +326,45 @@ mod tests {
             }
         }
         let mut rest = after.clone();
-        rest.rpm = before.rpm.clone();
+        rest.rpm.as_mut().expect("rpm section").packages_added = before_pkgs.clone();
         assert_eq!(rest, before, "nothing outside packages_added changes");
+    }
+
+    /// The scan writes `repoless_annotation` late (the dnf-cache pass), and
+    /// the Repoless exception reads it, so the defaults must run after it.
+    /// The same unneeded auto package is excluded without the annotation
+    /// and kept with it.
+    #[test]
+    fn scan_defaults_read_the_repoless_annotation() {
+        const ID: &str = "firewalld.noarch";
+        let disposition_after_defaults = |annotation: &str| {
+            let mut snap = snapshot();
+            let rpm = snap.rpm.as_mut().expect("rpm section");
+            let pkg = rpm
+                .packages_added
+                .iter_mut()
+                .find(|p| format!("{}.{}", p.name, p.arch) == ID)
+                .expect("fixture lists the package");
+            pkg.repoless_annotation = annotation.into();
+            apply_scan_package_defaults(&mut snap);
+            snap.rpm
+                .expect("rpm section")
+                .packages_added
+                .into_iter()
+                .find(|p| format!("{}.{}", p.name, p.arch) == ID)
+                .expect("fixture lists the package")
+                .disposition
+        };
+        assert_eq!(
+            disposition_after_defaults(""),
+            FindingKind::excluded(),
+            "{ID} with no annotation is Unneeded"
+        );
+        assert_eq!(
+            disposition_after_defaults("No repo source \u{2014} manual resolution needed"),
+            FindingKind::included(),
+            "{ID} annotated repo-less keeps its disposition"
+        );
     }
 
     #[test]

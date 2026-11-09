@@ -731,11 +731,6 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
         redact(&mut snapshot, &RedactOptions::default());
     }
 
-    // Exclude auto packages nothing included needs. Before the
-    // --inspect-only branch, so its JSON and the tarball's snapshot carry
-    // the same dispositions.
-    apply_scan_package_defaults(&mut snapshot);
-
     // Scan for unmanaged files when --include-unmanaged is set.
     // Must run after collect() so language environment paths are available
     // for the exclusion layer, and before the size prompt which reads the result.
@@ -781,6 +776,15 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
     if let Some(ref mut rpm) = snapshot.rpm {
         scan_dnf_cache_for_repoless(&executor, rpm);
     }
+
+    // Exclude auto packages nothing included needs. Ordering matters on
+    // both sides: after the dnf-cache pass above, which writes
+    // `repoless_annotation` (a repo-less package is never in the class,
+    // and the class reads the annotation to tell), and before the
+    // --inspect-only branch, so its JSON and the tarball's snapshot carry
+    // the same dispositions. Nothing after this point may write the
+    // annotation.
+    apply_scan_package_defaults(&mut snapshot);
 
     // Prompt for unmanaged file bundling if --include-unmanaged was used.
     // Skip when --inspect-only: metadata is kept for the JSON snapshot,

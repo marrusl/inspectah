@@ -57,6 +57,9 @@ pub fn run_pipeline(
     // Redact
     let mut snapshot = validated.state.snapshot;
     redact(&mut snapshot, &RedactOptions::default());
+    // Exclude auto packages nothing included needs. Must follow every
+    // step that writes `repoless_annotation`, which the class reads; here
+    // that is collection only, since this path runs no dnf-cache pass.
     render::not_carried::apply_scan_package_defaults(&mut snapshot);
 
     // Render all artifacts
