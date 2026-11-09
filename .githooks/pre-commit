@@ -27,8 +27,12 @@ set -euo pipefail
 rust_relevant() {
     # Staged files that could affect compilation or test outcomes.
     # .rs sources, Cargo manifests, build scripts, lockfile.
-    git diff --cached --name-only --diff-filter=ACMR \
-        | grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$'
+    # A here-string, not a pipe: under pipefail, git dies on SIGPIPE when
+    # grep -q exits on an early match in a long list, and the pipeline's
+    # failure would read as "no Rust change" and skip every gate below.
+    local staged
+    staged=$(git diff --cached --name-only --diff-filter=ACMR)
+    grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$' <<<"$staged"
 }
 
 if ! rust_relevant; then

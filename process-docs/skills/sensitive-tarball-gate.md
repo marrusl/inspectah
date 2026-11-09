@@ -73,7 +73,8 @@ not a defence against someone concealing an archive on purpose.
   dies on SIGPIPE, the pipeline fails, and an `if` reads the match as no
   match. A tarball listing past the 64 KiB pipe buffer, with the
   entitlement member first, passed the gate this way. Match with `case`
-  or a here-string (`grep -q ... <<<"$var"`). A
+  or a here-string (`grep -q ... <<<"$var"`). The hook's Rust fast path had
+  the same bug, which skipped every cargo gate on a long staged list. A
   test for this must fix the member order; directory order differs between
   file systems and put the match last on some.
 

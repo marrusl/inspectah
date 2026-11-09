@@ -213,8 +213,8 @@ compilation or test outcomes. This is its test, quoted from
 `.githooks/pre-commit`:
 
 ```bash
-    git diff --cached --name-only --diff-filter=ACMR \
-        | grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$'
+    staged=$(git diff --cached --name-only --diff-filter=ACMR)
+    grep -qE '\.(rs)$|Cargo\.(toml|lock)$|build\.rs$' <<<"$staged"
 ```
 
 Three things follow from that expression.

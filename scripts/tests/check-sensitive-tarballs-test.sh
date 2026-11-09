@@ -259,6 +259,33 @@ for renamed in sensitive.fixture sensitive.tgz sensitive.tar; do
     esac
 done
 
+# The hook's fast path must not read an early match in a long staged list
+# as no match: under pipefail, a pipe into grep -q lets git die on SIGPIPE,
+# and the hook skipped every cargo gate. A stub cargo stands in for them.
+STUB_BIN="$WORK/stub-bin"
+mkdir -p "$STUB_BIN"
+printf '#!/bin/sh\necho "cargo stub ran: $*"\nexit 1\n' > "$STUB_BIN/cargo"
+chmod +x "$STUB_BIN/cargo"
+STAGED_BULK_FILES=3000
+mkdir -p "$REPO/bulk"
+: > "$REPO/a.rs"
+i=0
+while [ "$i" -lt "$STAGED_BULK_FILES" ]; do
+    : > "$REPO/bulk/staged-file-with-a-reasonably-long-name-$i"
+    i=$((i + 1))
+done
+git -C "$REPO" add a.rs bulk
+rc=0
+out=$(PATH="$STUB_BIN:$PATH" git -C "$REPO" commit -q -m "test: long staged list" 2>&1) || rc=$?
+case "$rc:$out" in
+    0:*) fail "hook: a Rust file early in a long staged list skipped the cargo gates" ;;
+    *"cargo stub ran"*) ok "hook: a Rust file early in a long staged list runs the cargo gates" ;;
+    *)
+        fail "hook: long staged list: refused, but not by the cargo gates. Output:"
+        printf '%s\n' "$out" >&2
+        ;;
+esac
+
 echo
 echo "$passes passed, $failures failed"
 [ "$failures" -eq 0 ]
