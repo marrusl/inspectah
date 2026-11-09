@@ -85,17 +85,24 @@ fails with `Unable to find a match`.
 
 **Install order in the package phase is a correctness rule, not
 layout.** Every step that installs an RPM runs before anything that can
-consume it: repo-enabling packages, then the disabled-repo transaction,
-then the repo-less block (cached and uploaded RPMs through `dnf
-localinstall`, with the MANUAL and FIXME notes kept beside them), then
-`dnf group install`, then the main `dnf install` list. Services, config
+consume it: repo-enabling packages, then **one combined install** (the
+`COPY` of every active local RPM, then a single `dnf install` naming the
+disabled-repo packages and the local RPM paths, with an `--enablerepo`
+for each disabled repo plus CRB), then the repo-less advice (MANUAL,
+FIXMEs, a pre-excluded cached RPM's commented block), then `dnf group
+install`, then the main `dnf install` list. Services, config
 and non-RPM content all come after `packages_section_lines`. The
 repo-less block used to sit with the non-RPM software, which put
 `systemctl enable` of a unit an uploaded RPM ships, and the plain install
 of a package that needs it, ahead of the install itself.
 
-All selected disabled-repo packages install in **one** transaction that
-enables every one of their repos. A transaction per repo, in `RepoId`
+All selected disabled-repo packages and every active local RPM (verified
+upload or included cached RPM) install in **one** transaction that
+enables every one of the disabled repos. An upload takes its package off
+the disabled-repo route, so a local RPM can be the dependency of a
+disabled-repo package or depend on one; installing the two sets in
+separate steps fails in one direction or the other, which is why they
+share the step. A transaction per repo, in `RepoId`
 order, broke whenever a package in one disabled repo depended on one in
 another that sorted later. Ordering by the dependency graph was the
 alternative; it cannot see dependencies `leaf_dep_tree` does not record

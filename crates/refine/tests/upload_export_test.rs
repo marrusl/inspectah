@@ -358,12 +358,13 @@ fn active_lines(containerfile: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The three lines an install of `basename` renders.
+/// The three lines an install of `basename` renders that name the file:
+/// its `COPY`, its operand in the combined `dnf install`, and its removal.
 fn install_lines(basename: &str) -> Vec<String> {
     vec![
         format!("COPY repoless-packages/{basename} /tmp/"),
-        format!("RUN dnf localinstall -y /tmp/{basename} \\"),
-        format!("    && rm /tmp/{basename}"),
+        format!("    /tmp/{basename} \\"),
+        format!("    && rm /tmp/{basename} \\"),
     ]
 }
 
@@ -1810,9 +1811,7 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
             .position(|l| l == needle)
             .unwrap_or_else(|| panic!("missing {needle:?}:\n{file}"))
     };
-    let install = at(&format!(
-        "RUN dnf localinstall -y /tmp/{OPENH264_UPLOAD} \\"
-    ));
+    let install = at(&format!("    /tmp/{OPENH264_UPLOAD} \\"));
     let enable = at(&format!("    {UNIT}"));
     let dependent = at("    vlc \\");
     assert!(

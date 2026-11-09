@@ -53,14 +53,14 @@ Repo-less packages fall into two groups:
 
 | Status | Meaning | Containerfile rendering |
 |--------|---------|------------------------|
-| **Cached** | A matching `.rpm` was found under `/var/cache/dnf/`, or you uploaded one in refine | A `COPY` of the RPM plus `dnf localinstall`, with the RPM bundled under `repoless-packages/` |
+| **Cached** | A matching `.rpm` was found under `/var/cache/dnf/`, or you uploaded one in refine | A `COPY` of the RPM, installed from that file in the package install step, with the RPM bundled under `repoless-packages/` |
 | **Missing** | No cached `.rpm` and no upload | A `MANUAL` comment block, all lines commented out |
 
 Whether the cached rendering is active or commented out depends on which
 path produced the Containerfile:
 
 - **The scan tarball** writes a cached RPM as an active `COPY` and
-  `dnf localinstall`, even though the package's own annotation says
+  install, even though the package's own annotation says
   "pre-excluded".
 - **`inspectah refine`** starts every repo-less package excluded, so the
   preview and an untouched export show the cached block commented out.
@@ -71,18 +71,28 @@ path produced the Containerfile:
 
 ### Cached RPM
 
-This is the block the scan tarball wrote for the cached `dos2unix`
-package. It is captured output from the scan on the RHEL 9.8 host.
+This is the block the scan tarball writes for the cached `dos2unix`
+package from the RHEL 9.8 host:
 
 ```dockerfile
-# === Repo-less RPM packages ===
+# === Repo-less RPM installs (1) ===
 # Repo-less package: dos2unix (cached RPM, no repository provenance)
 # WARNING: This package has no upstream repo and no GPG verification.
 # It was found in the local dnf cache. Updates must be managed manually.
 COPY repoless-packages/dos2unix-7.4.2-4.el9.aarch64.rpm /tmp/
-RUN dnf localinstall -y /tmp/dos2unix-7.4.2-4.el9.aarch64.rpm \
-    && rm /tmp/dos2unix-7.4.2-4.el9.aarch64.rpm
+RUN dnf install -y \
+    /tmp/dos2unix-7.4.2-4.el9.aarch64.rpm \
+    && rm /tmp/dos2unix-7.4.2-4.el9.aarch64.rpm \
+    && dnf clean all \
+    ...
 ```
+
+The RPM is installed from the copied file by `dnf install`, in the same
+step as any package from a repository the host keeps disabled (see
+[A package from a disabled repository](#a-package-from-a-disabled-repository)),
+so dnf resolves the two together whichever depends on the other. That
+step runs before the main `dnf install` list and before any
+`systemctl` line.
 
 Refine's first preview of the same package shows the lines commented
 out:
@@ -240,8 +250,8 @@ Matching is by filename. inspectah does not read the RPM header, so a
 file renamed to match another package is treated as that package's RPM.
 
 After a successful upload the package changes from "RPM needed" to
-"RPM provided", and the Containerfile preview shows the `COPY` and
-`dnf localinstall` lines. An uploaded RPM is rendered like this once the
+"RPM provided", and the Containerfile preview shows the `COPY` and the
+install from that file. An uploaded RPM is rendered like this once the
 package is included:
 
 ```dockerfile
@@ -249,8 +259,11 @@ package is included:
 # WARNING: This package has no upstream repo and no GPG verification.
 # It was uploaded in refine. Updates must be managed manually.
 COPY repoless-packages/units-2.21-4.el9.aarch64.rpm /tmp/
-RUN dnf localinstall -y /tmp/units-2.21-4.el9.aarch64.rpm \
-    && rm /tmp/units-2.21-4.el9.aarch64.rpm
+RUN dnf install -y \
+    /tmp/units-2.21-4.el9.aarch64.rpm \
+    && rm /tmp/units-2.21-4.el9.aarch64.rpm \
+    && dnf clean all \
+    ...
 ```
 
 Removing an uploaded RPM (the x on the "RPM provided" label) returns the
@@ -290,8 +303,8 @@ one in your Containerfile:
    uploaded one carries "RPM provided".
 4. Include it.
 
-The Containerfile preview updates to show active (not commented-out)
-`COPY` and `dnf localinstall` lines. The preview labels an excluded
+The Containerfile preview updates to show an active (not commented-out)
+`COPY` and install. The preview labels an excluded
 uploaded RPM "cached RPM", because the upload marks the package as
 cached; only an included upload gets the "uploaded RPM" wording.
 
@@ -306,8 +319,9 @@ that `.repo` file, the disabled section in it defines a `baseurl`,
 `gpgkey=file://` key the section names, the package installs from that
 repository in its own step, with the repository enabled for that step
 only. Packages from several disabled repositories share the step, which
-then enables each of those repositories, so a package in one can depend
-on a package in another:
+then enables each of those repositories, and so do the cached and
+uploaded RPMs installed from file, so a package in any of them can
+depend on a package in another:
 
 ```dockerfile
 # === Packages from repos disabled on the source host (1) ===

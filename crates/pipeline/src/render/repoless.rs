@@ -151,42 +151,24 @@ fn disabled_repo_install(rpm: &RpmSection, pkg: &PackageEntry) -> Option<RepoId>
         .map(|sec| sec.id)
 }
 
-/// Whether an install block is a build instruction or advice.
+/// The commented `COPY`/`RUN` pair a pre-excluded cached RPM offers.
 ///
-/// A commented block is inert text; an active one runs `dnf localinstall`
-/// as root at image build time. Both forms interpolate the same operand,
-/// so both take it from the same place.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Emission {
-    Active,
-    Commented,
-}
-
-/// The `COPY`/`RUN` pair that installs one RPM from `repoless-packages/`.
-///
-/// This is the only function in this module that writes an RPM filename
-/// into a `COPY` or a `RUN`, and it takes a [`StagedName`] rather than a
-/// `&str`. That is deliberate and it is the fix for a real defect: the
-/// previous form built `RUN dnf localinstall -y /tmp/{name}-{version}-\
-/// {release}.{arch}.rpm` straight from four snapshot fields, so a scanned
-/// host reporting a package named `x;c6_exec` got that string executed as
-/// root at image build time. A name cannot reach this function without
-/// having passed the allowlist, because `StagedName` has no other
+/// This and [`LocalRpm`] are the only places in this module an RPM
+/// filename reaches a `COPY` or a `RUN`, and both take a [`StagedName`]
+/// rather than a `&str`. That is deliberate and it is the fix for a real
+/// defect: an earlier form built `RUN dnf localinstall -y /tmp/{name}-\
+/// {version}-{release}.{arch}.rpm` straight from four snapshot fields, so a
+/// scanned host reporting a package named `x;c6_exec` got that string
+/// executed as root at image build time. A name cannot reach either
+/// without having passed the allowlist, because `StagedName` has no other
 /// constructor -- so the guarantee is the type's, not a check a new call
 /// site can forget.
-fn install_lines(name: &StagedName, emission: Emission) -> Vec<String> {
+fn commented_install_lines(name: &StagedName) -> Vec<String> {
     let rpm = name.as_str();
-    let prefix = match emission {
-        Emission::Active => "",
-        Emission::Commented => "# ",
-    };
     vec![
-        format!("{prefix}COPY repoless-packages/{rpm} /tmp/"),
-        format!("{prefix}RUN dnf localinstall -y /tmp/{rpm} \\"),
-        match emission {
-            Emission::Active => format!("    && rm /tmp/{rpm}"),
-            Emission::Commented => format!("#     && rm /tmp/{rpm}"),
-        },
+        format!("# COPY repoless-packages/{rpm} /tmp/"),
+        format!("# RUN dnf localinstall -y /tmp/{rpm} \\"),
+        format!("#     && rm /tmp/{rpm}"),
     ]
 }
 
@@ -206,30 +188,54 @@ fn comment_id(pkg: &PackageEntry) -> String {
     sanitize_for_comment(&format!("{}.{}", pkg.name, pkg.arch))
 }
 
-/// Render Containerfile lines for repo-less RPM packages.
+/// One RPM the export stages under `repoless-packages/` and installs from
+/// that file: a verified upload, or an included cached RPM.
+pub(crate) struct LocalRpm {
+    /// The staged basename, the only name its `COPY` and install carry.
+    pub name: StagedName,
+    /// The comments that say where the RPM came from.
+    pub notes: Vec<String>,
+}
+
+/// What the repo-less packages contribute to the Containerfile.
+///
+/// The RPMs to install from file go into the package phase's combined
+/// install, with the disabled-repo packages, so dnf resolves the two sets
+/// together whichever depends on which. Everything else is advice: the
+/// MANUAL block, the FIXMEs, and the commented block of a pre-excluded
+/// cached RPM.
+pub(crate) struct RepolessPlan {
+    pub local: Vec<LocalRpm>,
+    pub advice: Vec<String>,
+}
+
+/// Plan the repo-less packages.
 ///
 /// Four outcomes per package, in the order they are decided:
 ///
-/// 1. `render_ctx` holds a [`VerifiedUpload`] for it: an active install
-///    block naming the basename the export proved and will write.
+/// 1. `render_ctx` holds a [`VerifiedUpload`] for it: a [`LocalRpm`]
+///    naming the basename the export proved and will write.
 /// 2. It claims an upload (`uploaded`) and is included, but no verified
-///    upload reached here: the demotion block. No `COPY`, a FIXME, and the
-///    export response carries the matching warning. An entry the snapshot
+///    upload reached here: the demotion FIXME. No `COPY`, and the export
+///    response carries the matching warning. An entry the snapshot
 ///    arrived with is `uploaded: true` without anything having been staged,
 ///    so this is the ordinary path for an untrusted snapshot, not an
 ///    exception.
 /// 3. `repoless_cached`: the host's dnf cache bundled the RPM at scan time,
-///    so the filename is its NEVRA. Active when included, commented when
-///    pre-excluded, and a FIXME instead when that NEVRA is not a name the
-///    allowlist admits.
+///    so the filename is its NEVRA. A [`LocalRpm`] when included, a
+///    commented block when pre-excluded, and a FIXME instead when that
+///    NEVRA is not a name the allowlist admits.
 /// 4. Neither: the MANUAL comment block.
-pub fn repoless_rpm_lines(
+pub(crate) fn repoless_plan(
     snap: &InspectionSnapshot,
     render_ctx: Option<&RenderContext>,
-) -> Vec<String> {
-    let rpm_section = match &snap.rpm {
-        Some(r) => r,
-        None => return Vec::new(),
+) -> RepolessPlan {
+    let mut plan = RepolessPlan {
+        local: Vec::new(),
+        advice: Vec::new(),
+    };
+    let Some(rpm_section) = &snap.rpm else {
+        return plan;
     };
 
     let empty = VerifiedUploads::new();
@@ -237,78 +243,67 @@ pub fn repoless_rpm_lines(
 
     // A package that installs by name, or from its host-disabled repo,
     // renders in the packages section instead, so it is not offered here.
-    let repoless: Vec<_> = rpm_section
-        .packages_added
-        .iter()
-        .filter_map(|p| match route_for(rpm_section, p, verified) {
-            PackageRoute::Upload(upload) => Some((p, Some(upload))),
-            PackageRoute::Repoless => Some((p, None)),
-            PackageRoute::ByName | PackageRoute::DisabledRepo(_) => None,
-        })
-        .collect();
-
-    if repoless.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
-    lines.push(String::new());
-    lines.push("# === Repo-less RPM packages ===".into());
-
-    for (pkg, upload) in repoless {
-        if let Some(upload) = upload {
-            lines.extend(uploaded_lines(pkg, upload));
-        } else if pkg.uploaded && pkg.disposition.is_included() {
-            lines.push(format!(
-                "# FIXME: upload the RPM for {} again in refine; the staged file \
-                 could not be verified for export",
-                comment_id(pkg)
-            ));
-        } else if pkg.repoless_cached {
-            lines.extend(cached_lines(pkg));
-        } else {
-            // No cached RPM — manual resolution
-            lines.push(format!(
-                "# MANUAL: {} (no repo source, RPM not in cache)",
-                sanitize_for_comment(&pkg.name)
-            ));
-            lines.push(
-                "# Provide the RPM via the refine UI upload, add a repo, or uncomment:".into(),
-            );
-            // Sanitized for the same reason the line above is: a newline in
-            // a scanned package name would end the comment and turn the
-            // rest of the name into an active instruction.
-            lines.push(format!(
-                "# RUN dnf install {}",
-                sanitize_for_comment(&pkg.name)
-            ));
+    for pkg in &rpm_section.packages_added {
+        match route_for(rpm_section, pkg, verified) {
+            PackageRoute::Upload(upload) => plan.local.push(uploaded_rpm(pkg, upload)),
+            PackageRoute::Repoless => plan_repoless(pkg, &mut plan),
+            PackageRoute::ByName | PackageRoute::DisabledRepo(_) => {}
         }
     }
-
-    lines
+    plan
 }
 
-/// The block for a package whose staged upload the export proved.
-fn uploaded_lines(pkg: &PackageEntry, upload: &VerifiedUpload) -> Vec<String> {
-    let mut lines = provenance_lines(pkg, "uploaded RPM");
-    lines.push("# It was uploaded in refine. Updates must be managed manually.".into());
+/// Outcomes 2 to 4 of [`repoless_plan`] for one package.
+fn plan_repoless(pkg: &PackageEntry, plan: &mut RepolessPlan) {
+    if pkg.uploaded && pkg.disposition.is_included() {
+        plan.advice.push(format!(
+            "# FIXME: upload the RPM for {} again in refine; the staged file \
+             could not be verified for export",
+            comment_id(pkg)
+        ));
+    } else if pkg.repoless_cached {
+        plan_cached(pkg, plan);
+    } else {
+        // No cached RPM — manual resolution
+        plan.advice.push(format!(
+            "# MANUAL: {} (no repo source, RPM not in cache)",
+            sanitize_for_comment(&pkg.name)
+        ));
+        plan.advice
+            .push("# Provide the RPM via the refine UI upload, add a repo, or uncomment:".into());
+        // Sanitized for the same reason the line above is: a newline in
+        // a scanned package name would end the comment and turn the
+        // rest of the name into an active instruction.
+        plan.advice.push(format!(
+            "# RUN dnf install {}",
+            sanitize_for_comment(&pkg.name)
+        ));
+    }
+}
+
+/// The local RPM for a package whose staged upload the export proved.
+fn uploaded_rpm(pkg: &PackageEntry, upload: &VerifiedUpload) -> LocalRpm {
+    let mut notes = provenance_lines(pkg, "uploaded RPM");
+    notes.push("# It was uploaded in refine. Updates must be managed manually.".into());
     if let Some(uploaded_version) = &upload.uploaded_version {
         // `uploaded_version` is re-derived from the proved basename, so it
         // needs no sanitizing; the other three operands come from the
         // snapshot and do.
-        lines.push(format!(
+        notes.push(format!(
             "# uploaded {}-{uploaded_version}.{}; the host had {}",
             sanitize_for_comment(&pkg.name),
             sanitize_for_comment(&pkg.arch),
             sanitize_for_comment(&format!("{}-{}", pkg.version, pkg.release)),
         ));
     }
-    lines.extend(install_lines(&upload.basename, Emission::Active));
-    lines
+    LocalRpm {
+        name: upload.basename.clone(),
+        notes,
+    }
 }
 
-/// The block for a package the host's dnf cache supplied at scan time.
-fn cached_lines(pkg: &PackageEntry) -> Vec<String> {
+/// A package the host's dnf cache supplied at scan time.
+fn plan_cached(pkg: &PackageEntry, plan: &mut RepolessPlan) {
     let nevra_filename = format!(
         "{}-{}-{}.{}.rpm",
         pkg.name, pkg.version, pkg.release, pkg.arch
@@ -317,24 +312,26 @@ fn cached_lines(pkg: &PackageEntry) -> Vec<String> {
         // Rejection is rejection: there is no sanitized form of this
         // filename that would name the right file, so the block is advice
         // rather than a `COPY` of a name nothing proved.
-        return vec![format!(
+        plan.advice.push(format!(
             "# FIXME: upload the RPM for {} in refine; the cached RPM's filename \
              is not one this can name in a COPY",
             comment_id(pkg)
-        )];
+        ));
+        return;
     };
 
-    let mut lines = provenance_lines(pkg, "cached RPM");
+    let mut notes = provenance_lines(pkg, "cached RPM");
     if pkg.disposition.is_included() {
-        lines.push(
+        notes.push(
             "# It was found in the local dnf cache. Updates must be managed manually.".into(),
         );
-        lines.extend(install_lines(&name, Emission::Active));
+        plan.local.push(LocalRpm { name, notes });
     } else {
-        lines.push("# Pre-excluded — uncomment after verifying provenance:".into());
-        lines.extend(install_lines(&name, Emission::Commented));
+        plan.advice.extend(notes);
+        plan.advice
+            .push("# Pre-excluded — uncomment after verifying provenance:".into());
+        plan.advice.extend(commented_install_lines(&name));
     }
-    lines
 }
 
 #[cfg(test)]
@@ -342,6 +339,19 @@ mod tests {
     use super::*;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+    /// The rendered Containerfile, line by line: repo-less packages are
+    /// planned here and rendered in the package phase's combined install,
+    /// so the whole render is what a test reads.
+    fn repoless_rpm_lines(
+        snap: &InspectionSnapshot,
+        render_ctx: Option<&RenderContext>,
+    ) -> Vec<String> {
+        super::super::containerfile::render_containerfile(snap, None, render_ctx)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
 
     fn test_snapshot_with_repoless(packages: Vec<PackageEntry>) -> InspectionSnapshot {
         InspectionSnapshot {
@@ -398,7 +408,11 @@ mod tests {
                 .iter()
                 .any(|l| l.starts_with("COPY repoless-packages/"))
         );
-        assert!(lines.iter().any(|l| l.starts_with("RUN dnf localinstall")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "    /tmp/custom-tool-1.2.3-1.el9.x86_64.rpm \\")
+        );
     }
 
     #[test]
@@ -427,7 +441,12 @@ mod tests {
             ..Default::default()
         }]);
         let lines = repoless_rpm_lines(&snap, None);
-        assert!(lines.is_empty());
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("Repo-less") || l.contains("repoless-packages")),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -449,12 +468,14 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("Repo-less package")));
     }
 
-    /// The lines a build actually runs: everything that is not a comment.
+    /// The lines a build actually runs that concern a repo-less RPM file:
+    /// not comments, and naming `repoless-packages/` or `/tmp/`.
     fn active_lines(lines: &[String]) -> Vec<&str> {
         lines
             .iter()
             .map(|l| l.as_str())
             .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .filter(|l| l.contains("repoless-packages/") || l.contains("/tmp/"))
             .collect()
     }
 
@@ -523,8 +544,8 @@ mod tests {
             active_lines(&lines),
             vec![
                 "COPY repoless-packages/evil-1-1.x86_64.rpm /tmp/",
-                "RUN dnf localinstall -y /tmp/evil-1-1.x86_64.rpm \\",
-                "    && rm /tmp/evil-1-1.x86_64.rpm",
+                "    /tmp/evil-1-1.x86_64.rpm \\",
+                "    && rm /tmp/evil-1-1.x86_64.rpm \\",
             ]
         );
     }

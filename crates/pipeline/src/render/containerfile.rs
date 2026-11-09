@@ -389,9 +389,29 @@ impl CrbFlags {
 /// A `RUN dnf install -y` transaction over `names`, with the cleanup tail
 /// every install block in this file carries.
 fn dnf_install_lines(names: &[&str], crb: &CrbFlags) -> Vec<String> {
+    dnf_install_with_local_lines(names, &[], crb)
+}
+
+/// [`dnf_install_lines`] that also installs RPM files the build copied to
+/// `/tmp/`, in the same transaction, and removes them after.
+fn dnf_install_with_local_lines(
+    names: &[&str],
+    local: &[&inspectah_core::rpm_filename::StagedName],
+    crb: &CrbFlags,
+) -> Vec<String> {
     let mut body = vec![format!("RUN dnf install -y{} \\", crb.flags)];
     for name in names {
         body.push(format!("    {} \\", name));
+    }
+    for rpm in local {
+        body.push(format!("    /tmp/{} \\", rpm.as_str()));
+    }
+    if !local.is_empty() {
+        let paths: Vec<String> = local
+            .iter()
+            .map(|rpm| format!("/tmp/{}", rpm.as_str()))
+            .collect();
+        body.push(format!("    && rm {} \\", paths.join(" ")));
     }
     body.push("    && dnf clean all \\".into());
     body.push("    && rm -rf \\".into());
@@ -915,25 +935,28 @@ fn packages_section_lines(
         ));
     }
 
-    // Packages installed from repos the source host has disabled, in one
-    // transaction that enables every one of those repos. A package in one
-    // disabled repo can depend on a package in another, in either order
-    // and through any number of hops, and one transaction resolves them
-    // all together where a transaction per repo had to guess an order.
-    // Only these packages are named, and no other transaction carries the
-    // flags, so enabling the repos cannot change what a group or a
-    // plain-list package resolves to. It runs after the repo-enabling
-    // block, whose repos it may resolve against, and before the repo-less,
-    // group and plain installs, which can depend on it. Installing a
+    // Packages installed from repos the source host has disabled, and the
+    // RPMs the export installs from file (verified uploads and included
+    // cached RPMs), in one transaction. That transaction enables every
+    // one of the disabled repos and names both sets, so dnf resolves them
+    // together whichever depends on which, across several hops and
+    // through cycles; separate steps had to guess an order and could
+    // guess wrong in either direction. Only these packages are named, and
+    // no other transaction carries the disabled-repo flags, so enabling
+    // those repos cannot change what a group or a plain-list package
+    // resolves to. It runs after the repo-enabling block, whose repos it
+    // may resolve against, and before the group and plain installs and
+    // every service action, any of which can need it. Installing a
     // package early is harmless when nothing needs it.
-    if !disabled_repo_installs.is_empty() {
-        let mut names: Vec<&str> = disabled_repo_installs
-            .values()
-            .flatten()
-            .map(String::as_str)
-            .collect();
-        names.sort();
-        names.dedup();
+    let repoless = super::repoless::repoless_plan(snap, render_ctx);
+    let mut names: Vec<&str> = disabled_repo_installs
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    names.sort();
+    names.dedup();
+    if !names.is_empty() || !repoless.local.is_empty() {
         let mut body: Vec<String> = Vec::new();
         if let Some(banner) = crb.banner() {
             body.push(banner);
@@ -943,26 +966,39 @@ fn packages_section_lines(
                 "# '{id}' is disabled on the source host (enabled=0); enabled for this install only."
             ));
         }
-        body.extend(dnf_install_lines(
+        for rpm in &repoless.local {
+            body.extend(rpm.notes.iter().cloned());
+            body.push(format!(
+                "COPY repoless-packages/{} /tmp/",
+                rpm.name.as_str()
+            ));
+        }
+        let local: Vec<&inspectah_core::rpm_filename::StagedName> =
+            repoless.local.iter().map(|rpm| &rpm.name).collect();
+        body.extend(dnf_install_with_local_lines(
             &names,
+            &local,
             &crb.with_repos(disabled_repo_installs.keys()),
         ));
-        lines.extend(section(
-            &format!(
-                "Packages from repos disabled on the source host ({})",
-                names.len()
+        let header = match (names.len(), local.len()) {
+            (n, 0) => format!("Packages from repos disabled on the source host ({n})"),
+            (0, k) => format!("Repo-less RPM installs ({k})"),
+            (n, k) => format!(
+                "Repo-less RPMs and packages from repos disabled on the source host ({})",
+                n + k
             ),
-            body,
-        ));
+        };
+        lines.extend(section(&header, body));
     }
 
-    // Repo-less RPM packages: the verified uploads and cached RPMs this
-    // export installs from file, with the MANUAL and FIXME advice for the
-    // rest kept beside them in one block. They install here, after the
-    // repo-enabling and disabled-repo transactions they may resolve
-    // against and before the group and plain transactions and every
-    // service action, any of which can need them.
-    lines.extend(super::repoless::repoless_rpm_lines(snap, render_ctx));
+    // Advice for the repo-less packages the export cannot install: the
+    // MANUAL block, the FIXMEs, and a pre-excluded cached RPM's commented
+    // block, kept together beside the install above.
+    if !repoless.advice.is_empty() {
+        lines.push(String::new());
+        lines.push("# === Repo-less RPM packages ===".into());
+        lines.extend(repoless.advice);
+    }
 
     if !renderable_groups.is_empty() {
         let mut grp_body: Vec<String> = Vec::new();
@@ -2910,6 +2946,105 @@ mod tests {
         );
     }
 
+    /// Two disabled repos and one upload, in each dependency direction.
+    /// `vendor-app` comes from `a-app` and depends on `vendor-lib` from
+    /// `z-lib`; one of the two is uploaded. Whichever it is, the upload and
+    /// the disabled-repo package install in the same transaction, so dnf
+    /// resolves the dependency from the file or from the enabled repo.
+    #[test]
+    fn an_upload_and_a_disabled_repo_package_install_together_either_way() {
+        struct Case {
+            uploaded: &'static str,
+            from_repo: &'static str,
+            repo: &'static str,
+        }
+        let cases = [
+            Case {
+                uploaded: "vendor-lib",
+                from_repo: "vendor-app",
+                repo: "a-app",
+            },
+            Case {
+                uploaded: "vendor-app",
+                from_repo: "vendor-lib",
+                repo: "z-lib",
+            },
+        ];
+        for case in &cases {
+            let mut snap = snapshot_with_packages(&["vendor-app", "vendor-lib", "htop"]);
+            make_disabled_repo_package(&mut snap, "vendor-app", "a-app");
+            make_disabled_repo_package(&mut snap, "vendor-lib", "z-lib");
+            {
+                let rpm = snap.rpm.as_mut().expect("fixture has an rpm section");
+                rpm.repo_files.push(repo_file(
+                    "/etc/yum.repos.d/a-app.repo",
+                    "[a-app]\nbaseurl=https://example.invalid/app\nenabled=0\n",
+                    true,
+                ));
+                rpm.repo_files.push(repo_file(
+                    "/etc/yum.repos.d/z-lib.repo",
+                    "[z-lib]\nbaseurl=https://example.invalid/lib\nenabled=0\n",
+                    true,
+                ));
+                rpm.leaf_packages = Some(vec!["vendor-app.x86_64".into(), "htop.x86_64".into()]);
+                rpm.leaf_dep_tree =
+                    serde_json::json!({ "vendor-app.x86_64": ["vendor-lib.x86_64"] });
+            }
+            let upload = format!("{}-2-1.el9.x86_64.rpm", case.uploaded);
+            let mut ctx = RenderContext::default();
+            ctx.verified_uploads.insert(
+                format!("{}.x86_64", case.uploaded),
+                inspectah_core::types::verified_upload::VerifiedUpload {
+                    canonical: format!("{}.x86_64", case.uploaded),
+                    basename: inspectah_core::rpm_filename::StagedName::parse(&upload)
+                        .expect("a valid basename"),
+                    uploaded_version: None,
+                },
+            );
+
+            let output = render_containerfile(&snap, None, Some(&ctx));
+            let runs: Vec<&str> = output
+                .lines()
+                .filter(|l| {
+                    l.starts_with("RUN dnf install") || l.starts_with("RUN dnf localinstall")
+                })
+                .collect();
+            let expected_run = format!("RUN dnf install -y --enablerepo={} \\", case.repo);
+            assert_eq!(
+                runs,
+                vec![expected_run.as_str(), "RUN dnf install -y \\"],
+                "{}: one combined transaction, then the plain list:\n{output}",
+                case.uploaded
+            );
+            let start = output.find(&expected_run).expect("checked above");
+            let body = &output[start..];
+            let body = &body[..body.find("&& dnf clean all").expect("the tail")];
+            for operand in [
+                format!("    {} \\", case.from_repo),
+                format!("    /tmp/{upload} \\"),
+            ] {
+                assert!(
+                    body.lines().any(|l| l == operand),
+                    "{}: {operand:?} in the combined transaction:\n{output}",
+                    case.uploaded
+                );
+            }
+            assert_eq!(
+                output
+                    .matches(&format!("COPY repoless-packages/{upload} /tmp/"))
+                    .count(),
+                1,
+                "{}: one COPY:\n{output}",
+                case.uploaded
+            );
+            assert!(
+                output.find(&format!("COPY repoless-packages/{upload}")) < Some(start),
+                "{}: the COPY precedes the install:\n{output}",
+                case.uploaded
+            );
+        }
+    }
+
     /// A cached repo-less RPM installs in the package phase, before the
     /// `systemctl enable` of a unit it owns.
     #[test]
@@ -2949,11 +3084,13 @@ mod tests {
                 .position(|l| l == needle)
                 .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
         };
-        let install = at("RUN dnf localinstall -y /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
+        let install = at("    /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
         let enable = at("    custom-tool.service");
         assert!(install < enable, "{output}");
         assert_eq!(
-            output.matches("# === Repo-less RPM packages ===").count(),
+            output
+                .matches("COPY repoless-packages/custom-tool-1.0-1.el9.x86_64.rpm")
+                .count(),
             1
         );
     }
