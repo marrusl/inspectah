@@ -493,6 +493,61 @@ matches the process name, to check, and run the kill on its own.
 Timings for a full build of the drifted export, measured on the guest
 with `date +%s`: 337 s to 476 s per context, run one at a time.
 
+### Measured, 2026-11-08: the dependency tree after the provides-index fix
+
+Rescanned at `c397f274` on RHEL 9.8 aarch64 (rpm 4.16.1.3) after a
+standard drift run.
+
+**The provides-index query works on EL9.** On a clean guest,
+`rpm -qa --queryformat '[%{=NAME}.%{=ARCH}\t%{PROVIDENAME}\n]'` exits 0
+and prints 35,877 lines, two tab-separated fields each, in 69 ms. Every
+installed package appears in it. Piped into `head`, rpm reports 141
+(SIGPIPE), which is not a failure.
+
+**The dnf fallback is silent, so check it with exec auditing.**
+`classify_leaf_auto` falls back from rpm to dnf without a log line, and
+the scan log looks the same either way. Wrap the scan in an audit rule
+and read the execs afterwards:
+
+```
+sudo auditctl -a always,exit -F arch=b64 -S execve -F auid=1000 -k inspscan
+sudo ./inspectah scan -y --progress flat -o ~/scan.tar.gz
+sudo auditctl -D
+sudo sh -c 'cat /var/log/audit/audit.log.* /var/log/audit/audit.log'
+```
+
+The rpm path shows one `rpm -q --queryformat @@%{NAME}...` call with
+every added package as arguments, then one `rpm -qa` provides index. The
+fallback shows one `dnf repoquery --requires --resolve --recursive
+--installed` per added package. Three traps:
+
+- auditd hex-encodes any argument that contains a tab, a newline or a
+  brace, so `grep PROVIDENAME` finds nothing. Decode the `aN=` fields
+  before you search them.
+- A scan runs about 1,500 `readelf` and `file` execs, which rotated an
+  8 MB `audit.log` during the scan. Read the rotated files too.
+- `ausearch -k <key>` returned `<no matches>` here while the raw log
+  held the records. Read the raw log.
+
+**Planting a non-leaf package that owns an enabled unit:**
+`sudo dnf install -y pcp-zeroconf`. Its `%post` enables `pmcd`, `pmie`
+and `pmlogger`, which are owned by `pcp`, a hard requirement of the
+leaf. A refine export with `pcp-zeroconf` included keeps all three
+units. Excluding it as well omits them. Both exports build. `cockpit`
+does not work for this: its enable-able unit is `cockpit.socket`, and
+the services inspector collects only `--type=service`, so a socket
+never reaches the snapshot.
+
+**What the tree still leaves out.** It records hard requirements only.
+File requirements (`/usr/bin/perl`) and rich dependencies
+(`(cockpit-ws-selinux = ... if selinux-policy-base)`) are dropped when
+the requires are parsed, and weak dependencies were never in it. dnf
+installs all of these in the image anyway. On a cockpit host, the
+export printed `# Omitted: iscsi-starter.service` while the image held
+`iscsi-initiator-utils` through `cockpit-storaged`'s Recommends. Check
+the built image before reading an `# Omitted:` comment as proof that a
+package is absent.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
