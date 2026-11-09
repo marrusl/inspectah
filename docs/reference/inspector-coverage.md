@@ -46,7 +46,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | `rpm -qa --queryformat '@@%{NAME}\n[%{FILENAMES}\n]'` | Per-package file ownership, grouped by package name (sentinel format) |
 | `rpm -Va` | Package verification results (modified files) |
 | `dnf repoquery --userinstalled` | Leaf package classification |
-| `dnf repoquery --requires --resolve --recursive --installed` | Dependency graph for leaf/auto classification; falls back to batched `rpm -q` requires and an `rpm -qa` provides index |
+| Batched `rpm -q` requires, recommends and supplements, and an `rpm -qa` provides index | Dependency graph for leaf/auto classification. File requirements resolve through the file ownership query above. Falls back to `dnf repoquery --requires --resolve --recursive --installed` when either rpm query fails |
 | `dnf repoquery --installed` (`%{from_repo}`) | Source repository of each package; falls back to `rpm -qi` |
 | `dnf group list --installed`, `dnf group info` | Installed package groups |
 | `/etc/yum.repos.d/` | Repository configuration files |

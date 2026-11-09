@@ -25,7 +25,7 @@ pub(crate) const OWNED_PATHS_QUERY_FORMAT: &str = "[%{FILENAMES}\\n]";
 /// `/lib64/...`), while a walk over `/usr` sees the merged path. Without
 /// the `/usr` form in the owned set the walk reports the kernel module
 /// tree and libgcc as unmanaged content.
-const USRMERGE_LEGACY_PREFIXES: &[&str] = &["/lib/", "/lib64/", "/bin/", "/sbin/"];
+pub(crate) const USRMERGE_LEGACY_PREFIXES: &[&str] = &["/lib/", "/lib64/", "/bin/", "/sbin/"];
 
 /// Build the set of all file paths owned by any installed RPM package.
 ///

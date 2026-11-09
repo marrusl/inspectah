@@ -99,11 +99,68 @@ rejects scalar and array tags in one `[...]`. A failed index returns `None`
 so classification falls back to dnf, rather than reading as a graph with no
 edges.
 
-These limits carry over from the `--whatprovides` version, unchanged:
-capabilities are matched by name with version constraints stripped, and
-file-path requirements (`/bin/sh`) and rich (boolean) dependencies are not
-resolved at all. A capability with several providers credits all of them,
-which over-counts where only one of a set of alternatives is needed.
+Capabilities are matched by name with version constraints stripped, as
+`--whatprovides <name>` matches them. A capability with several providers
+credits all of them, which over-counts where only one of a set of
+alternatives is needed.
+
+## What the dependency tree counts as pulled in
+
+`leaf_dep_tree` feeds `pulled_in_by_included`, which decides which
+excluded packages are still in the image. It has to count everything dnf
+installs alongside a leaf, not only hard requirements, or packages dnf
+does install read as not carried. An edge `a -> b` in the graph means
+installing `a` with dnf defaults installs `b`. The requires query asks for
+three tags, each in its own `[...]` group with a one-letter tag first:
+
+```rust
+const RPM_DEPS_FORMAT: &str = "@@%{NAME}\\n\
+                               [R\\t%{REQUIRENAME}\\n]\
+                               [W\\t%{RECOMMENDNAME}\\n]\
+                               [S\\t%{SUPPLEMENTNAME}\\n]";
+```
+
+A package with no entries for a tag prints nothing for that group
+(measured on rpm 4.14.3 in UBI 8 and 4.16.1.3 in UBI 9), so no `(none)`
+marker is glued to the next `@@` header.
+
+**Weak dependencies are installed on rhel-bootc.** Measured 2026-11-08 on
+`registry.redhat.io/rhel9/rhel-bootc:9.8` and `rhel10/rhel-bootc:10.2`:
+both run dnf4 with `install_weak_deps` in effect (default, not set in
+`dnf.conf`), and `dnf install -y httpd` printed `Installing weak
+dependencies: mod_http2, mod_lua` on both. So:
+
+- **Requires** (`R`): an edge to each added provider.
+- **File requirements** (`/usr/bin/perl`, `/etc/mime.types`): no package
+  lists these in its provides; `--whatprovides` answers them from file
+  lists. The tree does the same from `rpm.file_ownership`, which the
+  inspector already queries (now before the tree, not after), plus
+  explicit file provides in the index (bash provides `/bin/sh`). Both
+  sides are compared in their `/usr` form. No extra process: a single
+  `rpm -qf a b c` would have the same attribution problem as batched
+  `--whatprovides`, and adding `%{FILENAMES}` to the provides index would
+  duplicate the ownership query. Ownership is keyed by name, so a
+  multilib pair that both list a path are both credited, as
+  `--whatprovides` would.
+- **Recommends** (`W`): treated as Requires.
+- **Supplements** (`S`): the reverse. `b` Supplements `x` means `b` is
+  installed when `x` is, so the edge runs from each added provider of `x`
+  to `b`, and only when the whole expression is satisfied on the host.
+- **Rich (boolean) dependencies** (`rich_dep.rs`): evaluated against the
+  installed host, not solved. `(a if c)` pulls `a` only when some
+  installed package (base image included) provides `c`, and never pulls
+  `c`; `unless` and `else` likewise. `(a or b)` pulls the first installed
+  operand for a requirement and every installed one for a Supplements.
+  `and` and `with` pull every operand; `without` pulls its left side.
+
+**Still excluded:** Suggests and Enhances (dnf does not install them by
+default). A rich expression that mixes operators in one group, which rpm
+rejects as well, is dropped. The tree is reachability only: it does not
+record which kind of edge put a package there.
+
+A test for each of these must fail on the previous graph: a fixture
+whose only route to a package is a requirement form the old parser
+dropped, not one also reachable through a plain capability.
 
 A test of provider resolution needs several capabilities with different
 providers in one batch. A fixture where every capability has the same
@@ -112,8 +169,9 @@ attribution, which is how this shipped.
 
 ## Where this applies
 
-- `crates/collect/src/inspectors/rpm/mod.rs`: `resolve_all_providers`,
-  the provides index behind `classify_deps_rpm`
+- `crates/collect/src/inspectors/rpm/mod.rs`: `ProviderIndex`, the
+  provides index behind `classify_deps_rpm`, and `parse_sentinel_deps`;
+  `rich_dep.rs` for rich dependencies
 - `crates/collect/src/rpm_ownership.rs` — `build_rpm_owned_set`, consumed
   by the `/usr` walk (`inspectors/nonrpm.rs`) and by `/var` directory
   backing analysis (`inspectors/storage.rs`)

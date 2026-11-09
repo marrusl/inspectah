@@ -4,6 +4,7 @@ pub mod modules;
 pub mod parser;
 pub mod repoless;
 pub mod repos;
+mod rich_dep;
 pub mod source_repos;
 
 use inspectah_core::traits::executor::Executor;
@@ -17,6 +18,7 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
+use rich_dep::{DepExpr, OrChoice};
 use std::collections::{HashMap, HashSet};
 
 /// RPM query format string for NEVRA parsing.
@@ -354,13 +356,28 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
+        // 3e. Query file ownership for Wave 2 inspectors (sentinel format).
+        //     Runs before the dependency tree, which resolves file-path
+        //     requirements (`/usr/bin/perl`) to their owners from it.
+        progress.emit(ProgressEvent::StepStarted {
+            inspector: inspector_id,
+            step: StepId::MappingFileOwnership,
+        });
+        let file_ownership = self.query_file_ownership(exec);
+        progress.emit(ProgressEvent::StepFinished {
+            inspector: inspector_id,
+            step: StepId::MappingFileOwnership,
+            outcome: StepOutcome::Complete,
+        });
+
         // 4. Classify leaf vs auto packages (delta only — subtract baseline
         //    so dep trees only count genuinely new packages).
         progress.emit(ProgressEvent::StepStarted {
             inspector: inspector_id,
             step: StepId::ResolvingDepTree,
         });
-        let leaf_classification = classify_leaf_auto(exec, &packages_added, &baseline_name_set);
+        let leaf_classification =
+            classify_leaf_auto(exec, &packages_added, &baseline_name_set, &file_ownership);
         let dep_tree_outcome = if leaf_classification.leaf_packages.is_none() {
             StepOutcome::Degraded {
                 reason: "dependency classification unavailable".into(),
@@ -383,18 +400,6 @@ impl Inspector for RpmInspector {
         progress.emit(ProgressEvent::StepFinished {
             inspector: inspector_id,
             step: StepId::VerifyingIntegrity,
-            outcome: StepOutcome::Complete,
-        });
-
-        // 6. Query file ownership for Wave 2 inspectors (sentinel format)
-        progress.emit(ProgressEvent::StepStarted {
-            inspector: inspector_id,
-            step: StepId::MappingFileOwnership,
-        });
-        let file_ownership = self.query_file_ownership(exec);
-        progress.emit(ProgressEvent::StepFinished {
-            inspector: inspector_id,
-            step: StepId::MappingFileOwnership,
             outcome: StepOutcome::Complete,
         });
 
@@ -684,22 +689,35 @@ struct DepGraphResult {
     transitive: bool,
 }
 
-/// RPM query format for batched requires — sentinel format.
+/// RPM query format for the dependencies of each added package — sentinel
+/// format, one tagged line per dependency.
 ///
 /// Uses the same `@@name` sentinel pattern as `RPM_FILE_OWNERSHIP_FORMAT`.
-/// `%{REQUIRENAME}` is an array tag, so it goes inside `[...]`. `%{NAME}`
-/// is scalar and goes outside as the header:
+/// Each dependency tag is an array, so it goes inside its own `[...]`;
+/// arrays of different lengths cannot share one. The leading tag says
+/// which relation the line records (`RelationTag`):
 ///
 /// ```text
-/// @@bash
-/// /bin/sh
-/// libc.so.6()(64bit)
-/// rpmlib(CompressedFileNames)
+/// @@dnf
+/// R<TAB>/bin/sh
+/// R<TAB>python3-dnf
+/// W<TAB>(python3-dbus if NetworkManager)
 /// @@httpd
-/// apr-util(x86-64)
-/// libc.so.6()(64bit)
+/// R<TAB>/etc/mime.types
+/// W<TAB>mod_http2
 /// ```
-const RPM_REQUIRES_FORMAT: &str = "@@%{NAME}\\n[%{REQUIRENAME}\\n]";
+///
+/// A package with no entries for a tag prints nothing for that group,
+/// measured on rpm 4.14.3 (UBI 8) and 4.16.1.3 (UBI 9), so a header is
+/// never glued to a `(none)` marker.
+///
+/// Suggests (`%{SUGGESTNAME}`) and its reverse, Enhances, are left out on
+/// purpose: dnf does not install them by default, so they do not explain
+/// why a package is on the host.
+const RPM_DEPS_FORMAT: &str = "@@%{NAME}\\n\
+                               [R\\t%{REQUIRENAME}\\n]\
+                               [W\\t%{RECOMMENDNAME}\\n]\
+                               [S\\t%{SUPPLEMENTNAME}\\n]";
 
 /// RPM query format for the installed provides index: one line per
 /// provided capability, `name.arch<TAB>capability`.
@@ -717,17 +735,56 @@ const RPM_REQUIRES_FORMAT: &str = "@@%{NAME}\\n[%{REQUIRENAME}\\n]";
 /// ```
 const RPM_PROVIDES_INDEX_FORMAT: &str = "[%{=NAME}.%{=ARCH}\\t%{PROVIDENAME}\\n]";
 
-/// Build a dependency graph from two `rpm` queries.
+/// How a dependency line relates its package to the capability it names.
 ///
-/// Queries all packages' requires in a single batched `rpm -q --queryformat`
-/// call using sentinel headers, then resolves capabilities to provider
-/// packages through one `rpm -qa` provides index (`resolve_all_providers`).
+/// All three pull a package in on a default dnf install: rhel-bootc 9 and
+/// 10 run dnf with `install_weak_deps` in effect, so Recommends and
+/// Supplements are installed alongside hard requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Relation {
+    /// `Requires`: the package needs a provider of the capability.
+    Requires,
+    /// `Recommends`: dnf installs a provider of the capability too.
+    Recommends,
+    /// `Supplements`: the reverse of Recommends. The package is installed
+    /// when the capability is, so the capability's providers pull it in.
+    Supplements,
+}
+
+impl Relation {
+    /// The relation a `RPM_DEPS_FORMAT` line tag stands for.
+    fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "R" => Some(Self::Requires),
+            "W" => Some(Self::Recommends),
+            "S" => Some(Self::Supplements),
+            _ => None,
+        }
+    }
+}
+
+/// One package's dependencies, parsed from `RPM_DEPS_FORMAT` output.
+type PackageDeps = (String, Vec<(Relation, DepExpr)>);
+
+/// Build a dependency graph from three `rpm` queries and the file
+/// ownership the inspector already collected.
+///
+/// Queries all packages' dependencies (requires, recommends, supplements)
+/// in a single batched `rpm -q --queryformat` call using sentinel headers,
+/// then resolves capabilities to provider packages through one `rpm -qa`
+/// provides index, and file-path capabilities through `file_ownership`
+/// (`ProviderIndex`).
+///
+/// An edge `a -> b` means installing `a` with dnf defaults installs `b`:
+/// `a` requires or recommends something `b` provides, or `b` supplements
+/// something `a` provides.
 ///
 /// Returns direct-only deps (caller must walk the graph for transitive closure).
 /// Returns `None` if either query fails.
 fn classify_deps_rpm(
     exec: &dyn Executor,
     added_ids: &HashSet<String>,
+    file_ownership: &[FileOwnershipEntry],
 ) -> Option<HashMap<String, HashSet<String>>> {
     if added_ids.is_empty() {
         return Some(HashMap::new());
@@ -752,7 +809,7 @@ fn classify_deps_rpm(
 
     // Batch all package names into one rpm query using sentinel format.
     let pkg_names: Vec<&str> = package_ids.iter().map(|id| name_from_id(id)).collect();
-    let mut args: Vec<&str> = vec!["-q", "--queryformat", RPM_REQUIRES_FORMAT];
+    let mut args: Vec<&str> = vec!["-q", "--queryformat", RPM_DEPS_FORMAT];
     args.extend(&pkg_names);
 
     let result = exec.run("rpm", &args);
@@ -760,35 +817,45 @@ fn classify_deps_rpm(
         return None;
     }
 
-    // Parse sentinel output: @@name header followed by requires lines.
-    let per_pkg_caps = parse_sentinel_requires(&result.stdout);
+    let per_pkg_deps = parse_sentinel_deps(&result.stdout);
 
-    // Collect ALL unique capabilities across all packages, resolve them
-    // against the provides index, then distribute per-package.
-    let all_caps: Vec<String> = {
-        let mut set: HashSet<String> = HashSet::new();
-        for (_, caps) in &per_pkg_caps {
-            set.extend(caps.iter().cloned());
-        }
-        let mut v: Vec<String> = set.into_iter().collect();
-        v.sort();
-        v
-    };
+    // Every capability named anywhere, conditions included, resolved in
+    // one pass over the index.
+    let wanted: HashSet<&str> = per_pkg_deps
+        .iter()
+        .flat_map(|(_, deps)| deps.iter().flat_map(|(_, dep)| dep.caps()))
+        .collect();
+    let index = ProviderIndex::build(exec, &wanted, file_ownership)?;
+    let installed = |cap: &str| index.is_installed(cap);
 
-    // Build cap→provider_ids map from the provides index.
-    let cap_providers = resolve_all_providers(exec, &all_caps, added_ids)?;
-
-    // Distribute resolved providers to each package by its own cap list.
-    for (pkg_name, caps) in &per_pkg_caps {
-        if let Some(ids) = name_to_ids.get(pkg_name.as_str()) {
-            for package_id in ids {
-                let pid_name = name_from_id(package_id);
-                if let Some(dep_set) = depends_on.get_mut(package_id.as_str()) {
-                    for cap in caps {
-                        if let Some(providers) = cap_providers.get(cap.as_str()) {
-                            for prov_id in providers {
-                                if name_from_id(prov_id) != pid_name {
-                                    dep_set.insert(prov_id.clone());
+    for (pkg_name, deps) in &per_pkg_deps {
+        let Some(ids) = name_to_ids.get(pkg_name.as_str()) else {
+            continue;
+        };
+        for package_id in ids {
+            for (relation, dep) in deps {
+                match relation {
+                    Relation::Requires | Relation::Recommends => {
+                        for cap in dep.pulled_caps(&installed, OrChoice::First) {
+                            for prov_id in index.added_providers(cap, added_ids) {
+                                if name_from_id(prov_id) != *pkg_name
+                                    && let Some(set) = depends_on.get_mut(package_id.as_str())
+                                {
+                                    set.insert(prov_id.to_string());
+                                }
+                            }
+                        }
+                    }
+                    Relation::Supplements => {
+                        if !dep.satisfied(&installed) {
+                            continue;
+                        }
+                        for cap in dep.pulled_caps(&installed, OrChoice::All) {
+                            for prov_id in index.added_providers(cap, added_ids) {
+                                if name_from_id(prov_id) != *pkg_name
+                                    && let Some(set) = depends_on.get_mut(prov_id)
+                                {
+                                    set.insert((*package_id).clone());
                                 }
                             }
                         }
@@ -801,42 +868,35 @@ fn classify_deps_rpm(
     Some(depends_on)
 }
 
-/// Parse batched `rpm -q --queryformat '@@%{NAME}\n[%{REQUIRENAME}\n]'` output
-/// into per-package capability lists, applying the same filtering as
-/// `filter_capabilities`.
-fn parse_sentinel_requires(stdout: &str) -> Vec<(String, Vec<String>)> {
-    let mut results: Vec<(String, Vec<String>)> = Vec::new();
-    let mut current_name: Option<String> = None;
-    let mut current_caps: Vec<String> = Vec::new();
+/// Parse batched `RPM_DEPS_FORMAT` output into per-package dependency
+/// lists. `rpmlib(...)` requirements name rpm features, not packages, and
+/// are skipped; so is a rich expression `DepExpr::parse` cannot read.
+fn parse_sentinel_deps(stdout: &str) -> Vec<PackageDeps> {
+    let mut results: Vec<PackageDeps> = Vec::new();
 
     for line in stdout.lines() {
-        let trimmed = line.trim();
-        if let Some(name) = trimmed.strip_prefix("@@") {
-            // Flush previous package.
-            if let Some(prev_name) = current_name.take() {
-                current_caps.sort();
-                current_caps.dedup();
-                results.push((prev_name, std::mem::take(&mut current_caps)));
-            }
-            current_name = Some(name.to_string());
+        if let Some(name) = line.trim().strip_prefix("@@") {
+            results.push((name.to_string(), Vec::new()));
             continue;
         }
-        if current_name.is_some() && !trimmed.is_empty() {
-            // Apply same filters as filter_capabilities.
-            if trimmed.starts_with("rpmlib(") || trimmed.starts_with('/') {
-                continue;
-            }
-            let cap = trimmed.split_whitespace().next().unwrap_or(trimmed);
-            if !cap.is_empty() {
-                current_caps.push(cap.to_string());
-            }
+        let Some((_, deps)) = results.last_mut() else {
+            continue;
+        };
+        let Some((tag, dep)) = line.split_once('\t') else {
+            continue;
+        };
+        let Some(relation) = Relation::from_tag(tag) else {
+            continue;
+        };
+        let dep = dep.trim();
+        if dep.is_empty() || dep.starts_with("rpmlib(") {
+            continue;
         }
-    }
-    // Flush last package.
-    if let Some(name) = current_name {
-        current_caps.sort();
-        current_caps.dedup();
-        results.push((name, current_caps));
+        if let Some(expr) = DepExpr::parse(dep)
+            && !deps.contains(&(relation, expr.clone()))
+        {
+            deps.push((relation, expr));
+        }
     }
 
     results
@@ -870,52 +930,137 @@ fn filter_capabilities(stdout: &str) -> Vec<String> {
     caps
 }
 
-/// Resolve every capability to the packages that provide it, from one
-/// `rpm -qa` provides index. Returns a map from capability name to the
-/// canonical `name.arch` IDs that provide it (filtered to `added_ids`), or
-/// `None` if the index query fails.
+/// The installed providers of the capabilities a dependency graph needs.
 ///
-/// Each capability maps to its own providers only. Resolving a batch of
-/// capabilities with `rpm -q --whatprovides cap1 cap2 ...` cannot do that:
-/// the output is a flat list of NEVRAs with nothing saying which capability
-/// a line answers, and crediting every provider in a batch to every
-/// capability in it made unrelated packages depend on each other.
+/// Built from one `rpm -qa` provides index plus the file ownership the
+/// inspector already collected, so resolving costs one process however
+/// many capabilities there are. Each capability maps to its own providers
+/// only. Resolving a batch of capabilities with
+/// `rpm -q --whatprovides cap1 cap2 ...` cannot do that: the output is a
+/// flat list of NEVRAs with nothing saying which capability a line
+/// answers, and crediting every provider in a batch to every capability in
+/// it made unrelated packages depend on each other.
 ///
 /// Capabilities are matched by name, as `--whatprovides <name>` matches
-/// them; version constraints were already stripped from the requires.
-fn resolve_all_providers(
-    exec: &dyn Executor,
-    all_caps: &[String],
-    added_ids: &HashSet<String>,
-) -> Option<HashMap<String, HashSet<String>>> {
-    let mut cap_providers: HashMap<String, HashSet<String>> = HashMap::new();
-
-    if all_caps.is_empty() {
-        return Some(cap_providers);
-    }
-
-    let result = exec.run("rpm", &["-qa", "--queryformat", RPM_PROVIDES_INDEX_FORMAT]);
-    if !result.success() {
-        return None;
-    }
-
-    let wanted: HashSet<&str> = all_caps.iter().map(String::as_str).collect();
-    for line in result.stdout.lines() {
-        let Some((provider_id, cap)) = line.split_once('\t') else {
-            continue;
-        };
-        let cap = cap.trim();
-        if wanted.contains(cap) && added_ids.contains(provider_id) {
-            cap_providers
-                .entry(cap.to_string())
-                .or_default()
-                .insert(provider_id.to_string());
-        }
-    }
-
-    Some(cap_providers)
+/// them; version constraints were already stripped. A file-path
+/// capability (`/usr/bin/perl`) is provided by a package that lists it in
+/// its provides (bash provides `/bin/sh`) or owns the file, the two places
+/// `--whatprovides` looks. Paths are compared in their `/usr` form, since
+/// a package built without usrmerge records `/bin/...` where a requirement
+/// may name `/usr/bin/...`, or the other way round.
+///
+/// Providers are every installed package, base image included, so a rich
+/// dependency's condition can be checked against the whole host; edges
+/// are filtered to the added set by `added_providers`.
+struct ProviderIndex {
+    providers: HashMap<String, HashSet<String>>,
 }
 
+impl ProviderIndex {
+    /// Look up every capability in `wanted`. Returns `None` if the provides
+    /// index query fails, so classification falls back to dnf rather than
+    /// reading as a graph with no edges.
+    fn build(
+        exec: &dyn Executor,
+        wanted: &HashSet<&str>,
+        file_ownership: &[FileOwnershipEntry],
+    ) -> Option<Self> {
+        let mut providers: HashMap<String, HashSet<String>> = HashMap::new();
+        if wanted.is_empty() {
+            return Some(Self { providers });
+        }
+
+        let result = exec.run("rpm", &["-qa", "--queryformat", RPM_PROVIDES_INDEX_FORMAT]);
+        if !result.success() {
+            return None;
+        }
+
+        // Wanted paths keyed by their `/usr` form, back to the spelling the
+        // dependency used.
+        let mut wanted_paths: HashMap<String, Vec<&str>> = HashMap::new();
+        for cap in wanted.iter().filter(|c| c.starts_with('/')) {
+            wanted_paths.entry(usr_form(cap)).or_default().push(cap);
+        }
+
+        // File ownership is keyed by package name, so map names back to
+        // canonical ids. Every package provides at least its own name, so
+        // the index lists every installed id.
+        let mut ids_by_name: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for line in result.stdout.lines() {
+            let Some((provider_id, cap)) = line.split_once('\t') else {
+                continue;
+            };
+            ids_by_name
+                .entry(name_from_id(provider_id))
+                .or_default()
+                .insert(provider_id);
+            let cap = cap.trim();
+            let mut credit = |cap: &str| {
+                providers
+                    .entry(cap.to_string())
+                    .or_default()
+                    .insert(provider_id.to_string());
+            };
+            if wanted.contains(cap) {
+                credit(cap);
+            }
+            if cap.starts_with('/') {
+                for spelling in wanted_paths.get(&usr_form(cap)).into_iter().flatten() {
+                    credit(spelling);
+                }
+            }
+        }
+
+        if !wanted_paths.is_empty() {
+            for entry in file_ownership {
+                let Some(ids) = ids_by_name.get(entry.package_name.as_str()) else {
+                    continue;
+                };
+                for path in &entry.paths {
+                    for spelling in wanted_paths.get(&usr_form(path)).into_iter().flatten() {
+                        providers
+                            .entry((*spelling).to_string())
+                            .or_default()
+                            .extend(ids.iter().map(|id| (*id).to_string()));
+                    }
+                }
+            }
+        }
+
+        Some(Self { providers })
+    }
+
+    /// Whether any installed package provides `cap`.
+    fn is_installed(&self, cap: &str) -> bool {
+        self.providers.contains_key(cap)
+    }
+
+    /// The providers of `cap` that are in the added set.
+    fn added_providers<'a>(
+        &'a self,
+        cap: &str,
+        added_ids: &'a HashSet<String>,
+    ) -> impl Iterator<Item = &'a str> {
+        self.providers
+            .get(cap)
+            .into_iter()
+            .flatten()
+            .filter(move |id| added_ids.contains(*id))
+            .map(String::as_str)
+    }
+}
+
+/// The `/usr` form of a path, so `/bin/sh` and `/usr/bin/sh` compare equal.
+fn usr_form(path: &str) -> String {
+    if crate::rpm_ownership::USRMERGE_LEGACY_PREFIXES
+        .iter()
+        .any(|p| path.starts_with(p))
+    {
+        format!("/usr{path}")
+    } else {
+        path.to_string()
+    }
+}
 /// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency)
 /// sets using canonical `name.arch` identities. If dependency classification is
 /// unavailable or incomplete, returns explicit degraded-mode metadata instead of
@@ -928,13 +1073,14 @@ fn classify_leaf_auto(
     exec: &dyn Executor,
     packages_added: &[PackageEntry],
     baseline_names: &HashSet<String>,
+    file_ownership: &[FileOwnershipEntry],
 ) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
     let user_installed = query_user_installed(exec);
 
     // Try rpm-based dep resolution first (fast), fall back to DNF (slow).
-    let graph = if let Some(rpm_deps) = classify_deps_rpm(exec, &added_ids) {
+    let graph = if let Some(rpm_deps) = classify_deps_rpm(exec, &added_ids, file_ownership) {
         DepGraphResult {
             depends_on: rpm_deps,
             transitive: false,
@@ -1775,7 +1921,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1828,7 +1974,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1984,7 +2130,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
 
         assert_eq!(
             classification.leaf_packages,
@@ -2101,7 +2247,7 @@ mod tests {
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
 
         // Both vim and kernel stay in leaf (empty baseline — no suppression)
         let mut expected_leaf = vec!["kernel.x86_64".to_string(), "vim.x86_64".to_string()];
@@ -2329,7 +2475,7 @@ mod tests {
         ];
 
         // No baseline provided — auto includes all non-leaf added packages
-        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
         assert_eq!(
             classification.leaf_packages,
             Some(vec!["vim.x86_64".to_string()])
@@ -2379,7 +2525,7 @@ mod tests {
         ];
 
         let baseline: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
-        let classification = classify_leaf_auto(&exec, &added, &baseline);
+        let classification = classify_leaf_auto(&exec, &added, &baseline, &[]);
 
         assert_eq!(
             classification.leaf_packages,
@@ -2592,9 +2738,9 @@ mod tests {
                 &StepId::QueryingPackages,
                 &StepId::ClassifyingPackages,
                 &StepId::ResolvingSourceRepos,
+                &StepId::MappingFileOwnership,
                 &StepId::ResolvingDepTree,
                 &StepId::VerifyingIntegrity,
-                &StepId::MappingFileOwnership,
             ]
         );
 
@@ -2695,18 +2841,18 @@ mod tests {
         // (sorted alphabetically by name).
         let sentinel_output = "\
 @@glibc
-rpmlib(CompressedFileNames) <= 3.0.4-1
-/sbin/ldconfig
-basesystem
+R\trpmlib(CompressedFileNames) <= 3.0.4-1
+R\t/sbin/ldconfig
+R\tbasesystem
 @@vim
-libc.so.6()(64bit)
-libncurses.so.6()(64bit)
-rpmlib(PayloadIsZstd) <= 5.4.18-1
-/usr/bin/sh
+R\tlibc.so.6()(64bit)
+R\tlibncurses.so.6()(64bit)
+R\trpmlib(PayloadIsZstd) <= 5.4.18-1
+R\t/usr/bin/sh
 ";
         let exec = MockExecutor::new()
             .with_command(
-                &format!("rpm -q --queryformat {} glibc vim", RPM_REQUIRES_FORMAT),
+                &format!("rpm -q --queryformat {} glibc vim", RPM_DEPS_FORMAT),
                 ExecResult {
                     exit_code: 0,
                     stdout: sentinel_output.into(),
@@ -2734,7 +2880,7 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("graph should be available");
         // vim depends on glibc (via libc.so.6()(64bit) → glibc.x86_64).
         assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
         assert!(!deps.get("vim.x86_64").unwrap().contains("glibc.i686"));
@@ -2760,20 +2906,20 @@ rpmlib(PayloadIsZstd) <= 5.4.18-1
             .with_command(
                 &format!(
                     "rpm -q --queryformat {} glibc nginx-core openssl-libs pcre2 tree wget",
-                    RPM_REQUIRES_FORMAT
+                    RPM_DEPS_FORMAT
                 ),
                 ExecResult {
                     exit_code: 0,
                     stdout: "\
 @@glibc
 @@nginx-core
-libpcre2-8.so.0()(64bit)
+R\tlibpcre2-8.so.0()(64bit)
 @@openssl-libs
 @@pcre2
 @@tree
-libc.so.6()(64bit)
+R\tlibc.so.6()(64bit)
 @@wget
-libssl.so.3()(64bit)
+R\tlibssl.so.3()(64bit)
 "
                     .into(),
                     stderr: String::new(),
@@ -2802,7 +2948,7 @@ libssl.so.3()(64bit)
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let deps = classify_deps_rpm(&exec, &added_ids).expect("graph should be available");
+        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("graph should be available");
 
         let only = |id: &str| -> HashSet<String> { [id.to_string()].into_iter().collect() };
         assert_eq!(deps["tree.aarch64"], only("glibc.aarch64"));
@@ -2826,17 +2972,17 @@ libssl.so.3()(64bit)
             .with_command(
                 &format!(
                     "rpm -q --queryformat {} libacl nginx-core pcre2 tree",
-                    RPM_REQUIRES_FORMAT
+                    RPM_DEPS_FORMAT
                 ),
                 ExecResult {
                     exit_code: 0,
                     stdout: "\
 @@libacl
 @@nginx-core
-libpcre2-8.so.0()(64bit)
+R\tlibpcre2-8.so.0()(64bit)
 @@pcre2
 @@tree
-libacl.so.1()(64bit)
+R\tlibacl.so.1()(64bit)
 "
                     .into(),
                     stderr: String::new(),
@@ -2859,7 +3005,7 @@ libacl.so.1()(64bit)
             make_test_entry("libacl", "aarch64"),
             make_test_entry("pcre2", "aarch64"),
         ];
-        let result = classify_leaf_auto(&exec, &added, &HashSet::new());
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &[]);
         let tree = result.leaf_dep_tree.as_object().expect("dep tree object");
         let closure = |leaf: &str| -> Vec<String> {
             serde_json::from_value(tree[leaf].clone()).expect("closure is a string list")
@@ -2868,16 +3014,290 @@ libacl.so.1()(64bit)
         assert_eq!(closure("nginx-core.aarch64"), vec!["pcre2.aarch64"]);
     }
 
+    /// Mock the two rpm queries behind the dependency graph, and a
+    /// `--userinstalled` answer naming the leaves.
+    fn dep_graph_executor(
+        names: &str,
+        deps_stdout: &str,
+        index_stdout: &str,
+        userinstalled: &str,
+    ) -> MockExecutor {
+        MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: userinstalled.into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -q --queryformat {} {}", RPM_DEPS_FORMAT, names),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: deps_stdout.into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_PROVIDES_INDEX_FORMAT),
+                ExecResult {
+                    exit_code: 0,
+                    stdout: index_stdout.into(),
+                    stderr: String::new(),
+                },
+            )
+    }
+
+    fn ownership(package_name: &str, paths: &[&str]) -> FileOwnershipEntry {
+        FileOwnershipEntry {
+            package_name: package_name.into(),
+            paths: paths.iter().map(|p| p.to_string()).collect(),
+        }
+    }
+
+    fn ids(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn closure(result: &LeafClassification, leaf: &str) -> Vec<String> {
+        let tree = result.leaf_dep_tree.as_object().expect("dep tree object");
+        serde_json::from_value(tree[leaf].clone()).expect("closure is a string list")
+    }
+
+    #[test]
+    fn classify_deps_rpm_resolves_file_requirements_to_their_owners() {
+        // Requirement forms measured on RHEL 9.8: git needs /usr/bin/perl,
+        // httpd needs /etc/mime.types. Neither path is in any package's
+        // provides; only file ownership answers them. bash provides
+        // /bin/sh explicitly. A legacy /sbin path matches the /usr form
+        // the owner records, and a path with a space stays whole.
+        let exec = dep_graph_executor(
+            "bash fonts git httpd liberation-sans-fonts mailcap perl-interpreter procps-ng",
+            "\
+@@bash
+@@fonts
+R\t/usr/share/fonts/Liberation Sans/LiberationSans.ttf
+@@git
+R\t/usr/bin/perl
+R\t/bin/sh
+@@httpd
+R\t/etc/mime.types
+R\t/sbin/sysctl
+@@mailcap
+@@perl-interpreter
+@@procps-ng
+",
+            "bash.aarch64\tbash\n\
+             bash.aarch64\t/bin/sh\n\
+             git.aarch64\tgit\n\
+             httpd.aarch64\thttpd\n\
+             mailcap.noarch\tmailcap\n\
+             perl-interpreter.aarch64\tperl-interpreter\n\
+             procps-ng.aarch64\tprocps-ng\n\
+             liberation-sans-fonts.noarch\tliberation-sans-fonts\n",
+            "",
+        );
+        let owners = [
+            ownership("perl-interpreter", &["/usr/bin/perl"]),
+            ownership("mailcap", &["/etc/mime.types"]),
+            ownership("bash", &["/usr/bin/bash", "/usr/bin/sh"]),
+            ownership("procps-ng", &["/usr/sbin/sysctl"]),
+            ownership(
+                "liberation-sans-fonts",
+                &["/usr/share/fonts/Liberation Sans/LiberationSans.ttf"],
+            ),
+        ];
+        let added = ids(&[
+            "bash.aarch64",
+            "fonts.aarch64",
+            "git.aarch64",
+            "httpd.aarch64",
+            "mailcap.noarch",
+            "perl-interpreter.aarch64",
+            "procps-ng.aarch64",
+            "liberation-sans-fonts.noarch",
+        ]);
+        let deps = classify_deps_rpm(&exec, &added, &owners).expect("graph should be available");
+        assert_eq!(
+            deps["git.aarch64"],
+            ids(&["perl-interpreter.aarch64", "bash.aarch64"])
+        );
+        assert_eq!(
+            deps["httpd.aarch64"],
+            ids(&["mailcap.noarch", "procps-ng.aarch64"])
+        );
+        assert_eq!(
+            deps["fonts.aarch64"],
+            ids(&["liberation-sans-fonts.noarch"])
+        );
+    }
+
+    #[test]
+    fn classify_leaf_auto_follows_recommends_and_file_requirements_per_leaf() {
+        // httpd Recommends mod_http2 (dnf installs it on rhel-bootc 9.8 and
+        // 10.2), mod_http2 needs libnghttp2, and httpd needs mailcap
+        // through /etc/mime.types. git needs perl-interpreter through
+        // /usr/bin/perl. The two leaves' closures stay disjoint.
+        let exec = dep_graph_executor(
+            "git httpd libnghttp2 mailcap mod_http2 perl-interpreter",
+            "\
+@@git
+R\t/usr/bin/perl
+@@httpd
+R\t/etc/mime.types
+W\tmod_http2
+@@libnghttp2
+@@mailcap
+@@mod_http2
+R\tlibnghttp2.so.14()(64bit)
+@@perl-interpreter
+",
+            "git.aarch64\tgit\n\
+             httpd.aarch64\thttpd\n\
+             libnghttp2.aarch64\tlibnghttp2.so.14()(64bit)\n\
+             mailcap.noarch\tmailcap\n\
+             mod_http2.aarch64\tmod_http2\n\
+             perl-interpreter.aarch64\tperl-interpreter\n",
+            "git.aarch64\nhttpd.aarch64\n",
+        );
+        let owners = [
+            ownership("perl-interpreter", &["/usr/bin/perl"]),
+            ownership("mailcap", &["/etc/mime.types"]),
+        ];
+        let added: Vec<PackageEntry> = [
+            ("git", "aarch64"),
+            ("httpd", "aarch64"),
+            ("libnghttp2", "aarch64"),
+            ("mailcap", "noarch"),
+            ("mod_http2", "aarch64"),
+            ("perl-interpreter", "aarch64"),
+        ]
+        .iter()
+        .map(|(n, a)| make_test_entry(n, a))
+        .collect();
+
+        let result = classify_leaf_auto(&exec, &added, &HashSet::new(), &owners);
+        assert_eq!(
+            closure(&result, "git.aarch64"),
+            vec!["perl-interpreter.aarch64"]
+        );
+        assert_eq!(
+            closure(&result, "httpd.aarch64"),
+            vec!["libnghttp2.aarch64", "mailcap.noarch", "mod_http2.aarch64"]
+        );
+    }
+
+    #[test]
+    fn classify_deps_rpm_follows_supplements_in_reverse() {
+        // glibc-langpack-en carries a rich Supplements of this form: it is
+        // pulled in when glibc (base image, not added) and one of the
+        // langpacks are installed. The edge runs from the langpack to it.
+        // tuned-profiles-foo supplements a capability nothing installed
+        // provides, so nothing pulls it in.
+        let exec = dep_graph_executor(
+            "glibc-langpack-en langpacks-en tuned-profiles-foo",
+            "\
+@@glibc-langpack-en
+S\t(glibc and (langpacks-en or langpacks-core-en))
+@@langpacks-en
+@@tuned-profiles-foo
+S\tfoo-hardware
+",
+            "glibc.aarch64\tglibc\n\
+             glibc-langpack-en.aarch64\tglibc-langpack-en\n\
+             langpacks-en.noarch\tlangpacks-en\n\
+             tuned-profiles-foo.noarch\ttuned-profiles-foo\n",
+            "",
+        );
+        let added = ids(&[
+            "glibc-langpack-en.aarch64",
+            "langpacks-en.noarch",
+            "tuned-profiles-foo.noarch",
+        ]);
+        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        assert_eq!(
+            deps["langpacks-en.noarch"],
+            ids(&["glibc-langpack-en.aarch64"])
+        );
+        assert!(deps["glibc-langpack-en.aarch64"].is_empty());
+        assert!(
+            deps.values()
+                .all(|d| !d.contains("tuned-profiles-foo.noarch"))
+        );
+    }
+
+    #[test]
+    fn classify_deps_rpm_evaluates_rich_dependencies_against_the_host() {
+        // Forms measured in RHEL 9.8 rpmdb output. The `if` condition is
+        // met by a base-image package (selinux-policy-targeted is not in
+        // the added set) or not met at all (no kernel installed). An `or`
+        // takes the first operand that is installed.
+        let exec = dep_graph_executor(
+            "cockpit-ws-selinux cockpit-ws grubby nano vim-minimal",
+            "\
+@@cockpit-ws
+W\t(cockpit-ws-selinux if selinux-policy-targeted)
+W\t(grubby if kernel)
+R\t(emacs or vim-minimal or nano)
+@@cockpit-ws-selinux
+@@grubby
+@@nano
+@@vim-minimal
+",
+            "cockpit-ws.aarch64\tcockpit-ws\n\
+             cockpit-ws-selinux.aarch64\tcockpit-ws-selinux\n\
+             grubby.aarch64\tgrubby\n\
+             nano.aarch64\tnano\n\
+             selinux-policy-targeted.noarch\tselinux-policy-targeted\n\
+             vim-minimal.aarch64\tvim-minimal\n",
+            "",
+        );
+        let added = ids(&[
+            "cockpit-ws.aarch64",
+            "cockpit-ws-selinux.aarch64",
+            "grubby.aarch64",
+            "nano.aarch64",
+            "vim-minimal.aarch64",
+        ]);
+        let deps = classify_deps_rpm(&exec, &added, &[]).expect("graph should be available");
+        assert_eq!(
+            deps["cockpit-ws.aarch64"],
+            ids(&["cockpit-ws-selinux.aarch64", "vim-minimal.aarch64"])
+        );
+    }
+
+    #[test]
+    fn parse_sentinel_deps_reads_tags_and_skips_rpmlib() {
+        let parsed = parse_sentinel_deps(
+            "\
+@@dnf
+R\t/bin/sh
+R\t/bin/sh
+R\trpmlib(RichDependencies)
+W\t(python3-dbus if NetworkManager)
+X\tunknown-tag
+untagged line
+@@gpg-pubkey
+",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0, "dnf");
+        let relations: Vec<Relation> = parsed[0].1.iter().map(|(r, _)| *r).collect();
+        assert_eq!(relations, vec![Relation::Requires, Relation::Recommends]);
+        assert_eq!(parsed[1], ("gpg-pubkey".to_string(), Vec::new()));
+    }
+
     #[test]
     fn classify_deps_rpm_returns_none_when_provides_index_fails() {
         // A failed index must not read as "no dependencies": returning None
         // sends classification to the dnf fallback instead.
         let exec = MockExecutor::new()
             .with_command(
-                &format!("rpm -q --queryformat {} tree", RPM_REQUIRES_FORMAT),
+                &format!("rpm -q --queryformat {} tree", RPM_DEPS_FORMAT),
                 ExecResult {
                     exit_code: 0,
-                    stdout: "@@tree\nlibc.so.6()(64bit)\n".into(),
+                    stdout: "@@tree\nR\tlibc.so.6()(64bit)\n".into(),
                     stderr: String::new(),
                 },
             )
@@ -2891,13 +3311,13 @@ libacl.so.1()(64bit)
             );
 
         let added_ids: HashSet<String> = ["tree.aarch64"].iter().map(|s| s.to_string()).collect();
-        assert!(classify_deps_rpm(&exec, &added_ids).is_none());
+        assert!(classify_deps_rpm(&exec, &added_ids, &[]).is_none());
     }
 
     #[test]
     fn classify_deps_rpm_returns_none_when_rpm_unavailable() {
         let exec = MockExecutor::new().with_command(
-            &format!("rpm -q --queryformat {} glibc", RPM_REQUIRES_FORMAT),
+            &format!("rpm -q --queryformat {} glibc", RPM_DEPS_FORMAT),
             ExecResult {
                 exit_code: 1,
                 stdout: String::new(),
@@ -2906,7 +3326,7 @@ libacl.so.1()(64bit)
         );
 
         let added_ids: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
-        let deps = classify_deps_rpm(&exec, &added_ids);
+        let deps = classify_deps_rpm(&exec, &added_ids, &[]);
         assert!(deps.is_none());
     }
 
@@ -2914,7 +3334,7 @@ libacl.so.1()(64bit)
     fn classify_deps_rpm_empty_set_returns_empty_graph() {
         let exec = MockExecutor::new();
         let added_ids: HashSet<String> = HashSet::new();
-        let deps = classify_deps_rpm(&exec, &added_ids).expect("empty set should return Some");
+        let deps = classify_deps_rpm(&exec, &added_ids, &[]).expect("empty set should return Some");
         assert!(deps.is_empty());
     }
 
@@ -2972,20 +3392,17 @@ libacl.so.1()(64bit)
             )
             // Batched rpm query for all packages (sorted: apr, glibc, httpd)
             .with_command(
-                &format!(
-                    "rpm -q --queryformat {} apr glibc httpd",
-                    RPM_REQUIRES_FORMAT
-                ),
+                &format!("rpm -q --queryformat {} apr glibc httpd", RPM_DEPS_FORMAT),
                 ExecResult {
                     exit_code: 0,
                     stdout: "\
 @@apr
-libc.so.6()(64bit)
+R\tlibc.so.6()(64bit)
 @@glibc
-rpmlib(CompressedFileNames) <= 3.0.4-1
+R\trpmlib(CompressedFileNames) <= 3.0.4-1
 @@httpd
-libapr-1.so.0()(64bit)
-libc.so.6()(64bit)
+R\tlibapr-1.so.0()(64bit)
+R\tlibc.so.6()(64bit)
 "
                     .into(),
                     stderr: String::new(),
@@ -3027,7 +3444,7 @@ libc.so.6()(64bit)
         ];
 
         let baseline = HashSet::new();
-        let result = classify_leaf_auto(&exec, &packages, &baseline);
+        let result = classify_leaf_auto(&exec, &packages, &baseline, &[]);
         // httpd is leaf (nothing depends on it).
         assert_eq!(result.leaf_packages, Some(vec!["httpd.x86_64".to_string()]));
         // apr and glibc are auto.
@@ -3090,11 +3507,11 @@ Group: Container Management
         // Mock file ownership (required by inspector)
         let file_ownership_output = "\
 @@bash
-/usr/bin/bash
+R\t/usr/bin/bash
 @@vim-enhanced
-/usr/bin/vim
+R\t/usr/bin/vim
 @@httpd
-/usr/sbin/httpd
+R\t/usr/sbin/httpd
 ";
         // Mock dnf group list output
         let group_list_output = "\
