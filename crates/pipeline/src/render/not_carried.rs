@@ -31,7 +31,7 @@
 //! includes on its own is not recorded, so it stays in the class although
 //! dnf would install it with that package.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
@@ -146,11 +146,142 @@ pub fn apply_scan_package_defaults(snap: &mut InspectionSnapshot) {
     }
 }
 
+/// An excluded [`AutoCarriage::Unneeded`] package, as every surface shows
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotCarriedPackage {
+    /// Package name.
+    pub name: String,
+    /// Package architecture.
+    pub arch: String,
+    /// Repository the package was installed from.
+    pub source_repo: String,
+    /// Units in `services.enabled_units` this package owns.
+    pub enabled_units: Vec<String>,
+    /// Another arch of this name is in the same list.
+    arch_qualified: bool,
+}
+
+impl NotCarriedPackage {
+    /// The name both surfaces print: `name`, or `name.arch` when the list
+    /// holds more than one arch of this name.
+    pub fn display_name(&self) -> String {
+        if self.arch_qualified {
+            format!("{}.{}", self.name, self.arch)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
+/// Directory holding the vendor unit files packages ship.
+const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
+
+/// Every surface: the excluded [`AutoCarriage::Unneeded`] packages, in
+/// display order.
+///
+/// Packages owning a unit in `services.enabled_units` come first, then
+/// the rest; each part is sorted by name, then arch. Empty under the
+/// [`classify_auto_carriage`] fallback.
+///
+/// A unit is a package's when it is enabled and either a `state_changes`
+/// entry names the package as `owning_package`, or the package owns the
+/// vendor unit file in `rpm.file_ownership`. Both record the owner by
+/// name, not `name.arch`, so every arch of a name is credited with the
+/// same units. The units are for display and ordering only: whether a
+/// unit is emitted is the presence rules' decision.
+pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage> {
+    let Some(classes) = classify_auto_carriage(snap) else {
+        return Vec::new();
+    };
+    let Some(rpm) = snap.rpm.as_ref() else {
+        return Vec::new();
+    };
+    let units_by_owner = enabled_units_by_owner(snap);
+
+    let mut list: Vec<NotCarriedPackage> = rpm
+        .packages_added
+        .iter()
+        .filter(|pkg| {
+            pkg.disposition == FindingKind::excluded()
+                && classes.get(&format!("{}.{}", pkg.name, pkg.arch))
+                    == Some(&AutoCarriage::Unneeded)
+        })
+        .map(|pkg| NotCarriedPackage {
+            name: pkg.name.clone(),
+            arch: pkg.arch.clone(),
+            source_repo: pkg.source_repo.clone(),
+            enabled_units: units_by_owner
+                .get(pkg.name.as_str())
+                .map(|units| units.iter().map(|u| (*u).to_string()).collect())
+                .unwrap_or_default(),
+            arch_qualified: false,
+        })
+        .collect();
+
+    let mut arches_per_name: HashMap<String, usize> = HashMap::new();
+    for pkg in &list {
+        *arches_per_name.entry(pkg.name.clone()).or_default() += 1;
+    }
+    for pkg in &mut list {
+        pkg.arch_qualified = arches_per_name[&pkg.name] > 1;
+    }
+
+    list.sort_by(|a, b| {
+        // `false < true`, so unit owners sort first.
+        a.enabled_units
+            .is_empty()
+            .cmp(&b.enabled_units.is_empty())
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.arch.cmp(&b.arch))
+    });
+    list
+}
+
+/// Map each owning package name to the enabled units it owns, sorted.
+fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&str>> {
+    let mut owners: HashMap<&str, BTreeSet<&str>> = HashMap::new();
+    let Some(services) = snap.services.as_ref() else {
+        return owners;
+    };
+    let enabled: HashSet<&str> = services.enabled_units.iter().map(String::as_str).collect();
+
+    for change in &services.state_changes {
+        if let Some(owner) = change.owning_package.as_deref()
+            && enabled.contains(change.unit.as_str())
+        {
+            owners
+                .entry(owner)
+                .or_default()
+                .insert(change.unit.as_str());
+        }
+    }
+
+    if let Some(rpm) = snap.rpm.as_ref() {
+        for entry in &rpm.file_ownership {
+            for path in &entry.paths {
+                if let Some(unit) = path
+                    .strip_prefix(VENDOR_UNIT_DIR)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    && enabled.contains(unit)
+                {
+                    owners
+                        .entry(entry.package_name.as_str())
+                        .or_default()
+                        .insert(unit);
+                }
+            }
+        }
+    }
+    owners
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use inspectah_core::types::aggregate::AggregateSnapshotMeta;
-    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+    use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, RpmSection};
+    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, ServiceUnitState};
 
     fn pkg(name: &str, arch: &str, include: bool) -> PackageEntry {
         PackageEntry {
@@ -390,5 +521,243 @@ mod tests {
             apply_scan_package_defaults(&mut snap);
             assert_eq!(snap, before, "{why}");
         }
+    }
+
+    fn vendor_unit(unit: &str) -> String {
+        format!("/usr/lib/systemd/system/{unit}")
+    }
+
+    fn enabled_change(unit: &str, owner: &str) -> ServiceStateChange {
+        ServiceStateChange {
+            unit: unit.into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: None,
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: Some(owner.into()),
+            aggregate: None,
+            attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
+        }
+    }
+
+    /// The classified host with its services: `firewalld.service` is
+    /// preset-matched and found only through file ownership,
+    /// `firewall-helper.service` through a state change, and every other
+    /// unit is one the not-carried packages must not be credited with.
+    fn host() -> InspectionSnapshot {
+        let mut snap = snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: vec![
+                enabled_change("firewall-helper.service", "python3-firewall"),
+                enabled_change("httpd.service", "httpd"),
+            ],
+            enabled_units: vec![
+                "cups.service".into(),
+                "firewall-helper.service".into(),
+                "firewalld.service".into(),
+                "httpd.service".into(),
+                "libs-local.service".into(),
+            ],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec!["firewalld.service".into()],
+        });
+        let rpm = snap.rpm.as_mut().expect("rpm section");
+        rpm.file_ownership = vec![
+            FileOwnershipEntry {
+                package_name: "firewalld".into(),
+                paths: vec![
+                    vendor_unit("firewalld.service"),
+                    "/usr/sbin/firewalld".into(),
+                ],
+            },
+            FileOwnershipEntry {
+                package_name: "cups".into(),
+                paths: vec![vendor_unit("cups.service")],
+            },
+            FileOwnershipEntry {
+                package_name: "cups-libs".into(),
+                // Not enabled, and enabled but not a vendor unit file.
+                paths: vec![
+                    vendor_unit("cups-lpd.socket"),
+                    "/etc/systemd/system/libs-local.service".into(),
+                ],
+            },
+        ];
+        snap
+    }
+
+    /// The host as the scan writes it.
+    fn scanned_host() -> InspectionSnapshot {
+        let mut snap = host();
+        apply_scan_package_defaults(&mut snap);
+        snap
+    }
+
+    fn ids(list: &[NotCarriedPackage]) -> Vec<String> {
+        list.iter()
+            .map(|p| format!("{}.{}", p.name, p.arch))
+            .collect()
+    }
+
+    fn set_disposition(snap: &mut InspectionSnapshot, id: &str, disposition: FindingKind) {
+        snap.rpm
+            .as_mut()
+            .expect("rpm section")
+            .packages_added
+            .iter_mut()
+            .find(|p| format!("{}.{}", p.name, p.arch) == id)
+            .expect("fixture lists the package")
+            .disposition = disposition;
+    }
+
+    #[test]
+    fn lists_exactly_the_excluded_unneeded_packages() {
+        let classes = classify_auto_carriage(&host()).expect("leaf data is available");
+        let mut unneeded: Vec<String> = classes
+            .iter()
+            .filter(|(_, class)| **class == AutoCarriage::Unneeded)
+            .map(|(id, _)| id.clone())
+            .collect();
+        unneeded.sort();
+
+        let mut listed = ids(&not_carried_packages(&scanned_host()));
+        listed.sort();
+        assert_eq!(listed, unneeded, "the scan excludes every Unneeded package");
+
+        assert!(
+            not_carried_packages(&host()).is_empty(),
+            "an Unneeded package that is still included is not listed"
+        );
+
+        let mut reincluded = scanned_host();
+        set_disposition(&mut reincluded, "glibc.i686", FindingKind::included());
+        assert!(
+            !ids(&not_carried_packages(&reincluded)).contains(&"glibc.i686".to_string()),
+            "an operator's include takes a package off the list"
+        );
+
+        assert!(
+            !listed.contains(&"cups.x86_64".to_string()),
+            "an excluded package that is not Unneeded is not listed"
+        );
+    }
+
+    #[test]
+    fn lists_nothing_under_each_fallback() {
+        for (why, degrade) in fallback_cases() {
+            let mut snap = scanned_host();
+            degrade(&mut snap);
+            assert!(not_carried_packages(&snap).is_empty(), "{why}");
+        }
+    }
+
+    #[test]
+    fn orders_unit_owners_first_then_by_name_and_arch() {
+        let list = not_carried_packages(&scanned_host());
+        assert_eq!(
+            ids(&list),
+            [
+                "firewalld.noarch",
+                "python3-firewall.noarch",
+                "cups-libs.x86_64",
+                "glibc.i686",
+            ],
+        );
+    }
+
+    #[test]
+    fn attributes_only_the_enabled_units_a_package_owns() {
+        let list = not_carried_packages(&scanned_host());
+        let units = |name: &str| {
+            list.iter()
+                .find(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} is listed"))
+                .enabled_units
+                .clone()
+        };
+        assert_eq!(
+            units("firewalld"),
+            ["firewalld.service"],
+            "a preset-matched unit is found through the vendor unit file"
+        );
+        assert_eq!(
+            units("python3-firewall"),
+            ["firewall-helper.service"],
+            "a state change's owning_package"
+        );
+        assert!(
+            units("cups-libs").is_empty(),
+            "a unit it owns that is not enabled, or outside the vendor directory, is not attributed"
+        );
+        let attributed: Vec<String> = list.iter().flat_map(|p| p.enabled_units.clone()).collect();
+        for other in ["cups.service", "httpd.service"] {
+            assert!(
+                !attributed.contains(&other.to_string()),
+                "{other} is owned by a package not on the list"
+            );
+        }
+    }
+
+    #[test]
+    fn display_name_adds_the_arch_only_when_the_name_is_listed_twice() {
+        let single = not_carried_packages(&scanned_host());
+        let names: Vec<String> = single.iter().map(NotCarriedPackage::display_name).collect();
+        assert_eq!(
+            names,
+            ["firewalld", "python3-firewall", "cups-libs", "glibc"],
+            "one arch of each name"
+        );
+
+        // With httpd no longer pulling glibc.x86_64 in, both arches are listed.
+        let mut both = host();
+        both.rpm.as_mut().expect("rpm section").leaf_dep_tree = serde_json::json!({
+            "httpd.x86_64": ["apr.x86_64"],
+            "cups.x86_64": ["cups-libs.x86_64"],
+        });
+        apply_scan_package_defaults(&mut both);
+        let names: Vec<String> = not_carried_packages(&both)
+            .iter()
+            .map(NotCarriedPackage::display_name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "firewalld",
+                "python3-firewall",
+                "cups-libs",
+                "glibc.i686",
+                "glibc.x86_64"
+            ],
+        );
+    }
+
+    /// The pipeline-side half of the parity check: dispositions as refine's
+    /// leaf default sets them for the same host (leaves kept as decided,
+    /// every auto package excluded) give the scan path's list. The
+    /// cross-crate test against refine itself lives in the CLI crate.
+    #[test]
+    fn leaf_default_dispositions_give_the_scan_list() {
+        let mut leaf_default = host();
+        let rpm = leaf_default.rpm.as_mut().expect("rpm section");
+        let leaves: HashSet<String> = rpm
+            .leaf_packages
+            .clone()
+            .expect("leaf data is available")
+            .into_iter()
+            .collect();
+        for pkg in &mut rpm.packages_added {
+            if !leaves.contains(&format!("{}.{}", pkg.name, pkg.arch)) {
+                pkg.disposition = FindingKind::excluded();
+            }
+        }
+        let scan = not_carried_packages(&scanned_host());
+        assert!(
+            !scan.is_empty(),
+            "the comparison is not between two empty lists"
+        );
+        assert_eq!(not_carried_packages(&leaf_default), scan);
     }
 }
