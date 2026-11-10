@@ -469,8 +469,12 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
 /// cached repo-less RPMs.
 fn scan_export(snapshot: &InspectionSnapshot, out: &Path) {
     render::render_all(snapshot, &RenderContext { target: None }, out).expect("render");
-    render::repoless::write_cached_rpms(snapshot.rpm.as_ref().expect("rpm section"), out)
-        .expect("the cached RPMs are staged");
+    let warnings =
+        render::repoless::write_cached_rpms(snapshot.rpm.as_ref().expect("rpm section"), out)
+            .expect("the cached RPMs are staged");
+    // A refused NEVRA is dropped with a warning, which would leave this
+    // test running on a different tree than the one it means to build.
+    assert!(warnings.is_empty(), "cached RPMs not staged: {warnings:?}");
 }
 
 /// Pack a staged scan export the way the scan command does, under one

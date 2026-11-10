@@ -9076,6 +9076,9 @@ mod tests {
             );
         }
 
+        /// Not a regression test for the fix: before it, `symlink()`
+        /// already failed with `EEXIST` on the file written first, so the
+        /// victim was never reached. It pins that the order stays refused.
         #[test]
         fn route_two_file_then_symlink_at_one_path_is_refused() {
             let s = Sandbox::new();

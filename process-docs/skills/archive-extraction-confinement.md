@@ -16,7 +16,7 @@ write another extractor's worth of checks inline.
 | Primitive | Closes |
 |---|---|
 | `confined_rel(&str) -> Result<ConfinedRel, ArchiveViolation>` | `..`, root, prefix and leading `.` components. A component test, not a substring test: `foo..bar` is a legal name. |
-| `SeenPaths::record(ConfinedRel, EntryKind)` | A second entry at a path already written (symlink then file, file then symlink). Repeated directory entries are allowed. Keys compare by component, so `a//b` equals `a/b`. |
+| `SeenPaths::record(ConfinedRel, EntryKind)` | Defence in depth, not the load-bearing check: it refuses a second entry at a path already written (symlink then file, file then symlink) with a clearer error, but the on-disk checks below close every such route on their own (shown by mutation). Repeated directory entries are allowed. Keys compare by component, so `a//b` equals `a/b`. |
 | `create_confined_dir(root, ConfinedRel) -> io::Result<PathBuf>` | A symlink or non-directory at any ancestor, checked on disk with `symlink_metadata`, creating missing components one at a time with `create_dir`. Also catches a link an earlier export step left under the root, which no in-memory record would see. |
 | `EntryKind::classify(tar::EntryType, &str)` | Hardlinks and special files (char, block, FIFO, unknown). |
 | `OpenOptions::new().write(true).create_new(true)` on the leaf, inline at the call site | Any existing leaf, including a symlink, dangling or not. `O_EXCL` never follows a final link. |

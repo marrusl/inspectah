@@ -186,7 +186,8 @@ const DOUBLE_SLASH_COMMENT_FILE_NAMES: &[&str] = &["named.conf"];
 /// `/etc/containers/systemd/` (quadlets) and the per-user trees.
 const SYSTEMD_DIR: &str = "systemd";
 /// Unit file suffixes read with systemd's unit-file parser: the unit
-/// types, networkd's `.network`/`.netdev`/`.link`, and the quadlet types.
+/// types, networkd's `.network`/`.netdev`/`.link`, `systemd-nspawn`'s
+/// `.nspawn`, and the quadlet types.
 const SYSTEMD_UNIT_SUFFIXES: &[&str] = &[
     ".service",
     ".socket",
@@ -202,6 +203,7 @@ const SYSTEMD_UNIT_SUFFIXES: &[&str] = &[
     ".network",
     ".netdev",
     ".link",
+    ".nspawn",
     ".container",
     ".volume",
     ".kube",
@@ -2600,6 +2602,11 @@ mod tests {
                 0,
             ),
             ("generated:cron-backup.service", "; password=example", 0),
+            (
+                "/etc/systemd/nspawn/example.nspawn",
+                "; password=example",
+                0,
+            ),
             // Not systemd syntax: a `.conf` outside a systemd tree, a
             // unit suffix outside one, and a non-`.conf` file in a
             // drop-in directory.
