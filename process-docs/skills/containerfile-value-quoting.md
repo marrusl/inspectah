@@ -16,7 +16,7 @@ has produced both over-rejection of legal paths and live command injection.
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and `\n` only — everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
-| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` per value, or `escape_line_terminators()` on a finished line with fixed quoted wording | `\n` closes the comment; `\r` is escaped as well so no line-ending byte reaches the file |
+| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` per value, or `escape_line_terminators()` on a finished line with fixed quoted wording | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does |
 
 `UNSAFE_SHELL_CHARS` is `'` and `\n`, one set serving every command site,
 which is correct only because every command site single-quotes. A new

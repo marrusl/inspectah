@@ -158,24 +158,44 @@ fn contains_unsafe_chars(s: &str) -> bool {
     s.contains(UNSAFE_SHELL_CHARS)
 }
 
-/// Sanitize a path for display in warning comments by replacing unsafe chars.
+/// Sanitize a value for display in Containerfile comments.
 ///
 /// Doubles single quotes, then applies [`escape_line_terminators`].
 pub(super) fn sanitize_for_comment(s: &str) -> String {
     escape_line_terminators(&s.replace('\'', "''"))
 }
 
+/// Characters that some reader of a Containerfile treats as ending a line:
+/// the Unicode mandatory line breaks (UAX #14 classes BK, CR, LF and NL).
+const LINE_TERMINATORS: &[char] = &[
+    '\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}',
+];
+
 /// Escape every line terminator in comment text, leaving all else as is.
 ///
 /// The newline ends a Containerfile comment, so the rest of the value
-/// would become an instruction. The carriage return is escaped too, so no
-/// line-ending byte from the snapshot reaches the file.
+/// would become an instruction. The other terminators in
+/// [`LINE_TERMINATORS`] are escaped whatever the build parser does with
+/// them, because a terminal or editor may break the line there and show a
+/// reviewer a line the file does not have: a carriage return returns to
+/// column 0 and overprints the comment, and editors display U+2028 and
+/// U+2029 as line breaks. A newline prints as the two characters `\n`, a
+/// carriage return as `\r`, and the rest in `\u{2028}` form.
 ///
 /// Use this on a whole comment line whose fixed wording contains quotes,
 /// such as `OmissionReason::describe` output, where
 /// [`sanitize_for_comment`]'s quote doubling would alter the wording.
 pub(super) fn escape_line_terminators(s: &str) -> String {
-    s.replace('\n', "\\n").replace('\r', "\\r")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if LINE_TERMINATORS.contains(&c) => out.extend(c.escape_unicode()),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Restore the leading `/` on a path the collector stored relative.
@@ -959,6 +979,35 @@ mod tests {
     use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmSoftwareSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
+
+    /// Every line terminator is escaped to visible text, so comment text
+    /// stays on one line in the file and in any viewer. Quotes are doubled
+    /// only by `sanitize_for_comment`; everything else passes through.
+    #[test]
+    fn comment_escapers_leave_no_line_terminator() {
+        let cases = [
+            ("plain", "plain", "plain"),
+            ("a\nb", "a\\nb", "a\\nb"),
+            ("a\rb", "a\\rb", "a\\rb"),
+            ("a\r\nb", "a\\r\\nb", "a\\r\\nb"),
+            ("a\u{0B}b", "a\\u{b}b", "a\\u{b}b"),
+            ("a\u{0C}b", "a\\u{c}b", "a\\u{c}b"),
+            ("a\u{85}b", "a\\u{85}b", "a\\u{85}b"),
+            ("a\u{2028}b", "a\\u{2028}b", "a\\u{2028}b"),
+            ("a\u{2029}b", "a\\u{2029}b", "a\\u{2029}b"),
+            ("it's", "it''s", "it's"),
+            ("tab\there", "tab\there", "tab\there"),
+            ("caf\u{e9}", "caf\u{e9}", "caf\u{e9}"),
+        ];
+        for (input, sanitized, escaped) in cases {
+            assert_eq!(sanitize_for_comment(input), sanitized, "{input:?}");
+            assert_eq!(escape_line_terminators(input), escaped, "{input:?}");
+            assert!(
+                !sanitized.contains(LINE_TERMINATORS),
+                "{input:?}: expected value holds a terminator"
+            );
+        }
+    }
 
     /// The renderer must produce exactly one leading slash for any stored
     /// form the collector's `trim_start_matches('/')` can emit, including
