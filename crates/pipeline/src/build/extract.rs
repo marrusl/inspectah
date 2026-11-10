@@ -14,7 +14,10 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The kinds of archive entry an extractor will write. Everything else a
 /// tar header can name is refused by [`EntryKind::classify`].
@@ -253,6 +256,82 @@ impl SeenPaths {
     }
 }
 
+/// A reader that yields at most a fixed number of bytes, for the
+/// decompressed stream between a gzip decoder and `tar::Archive`.
+///
+/// Works around upstream behaviour in the `tar` crate (0.4.45): it reads
+/// GNU long-name, GNU long-link and PAX extension records into memory
+/// itself, with an unbounded `read_to_end` (`Archive::next_entry_raw`
+/// calling `EntryFields::read_all`), before the caller sees the entry
+/// they belong to. No check on an entry can bound them, because the
+/// allocation has happened by the time there is an entry to check.
+/// Bounding the stream does: every byte the parser consumes counts,
+/// headers, padding and buffered records included. No upstream issue
+/// for this was found in <https://github.com/composefs/tar-rs/issues>
+/// as of 2026-11-09.
+///
+/// Running out fails the read instead of ending the stream, so a
+/// truncated archive is never taken for a complete one. That error
+/// reaches the caller wrapped in `tar`'s own, so ask the [`BudgetProbe`]
+/// whether a failure was this one.
+#[derive(Debug)]
+pub struct BudgetReader<R> {
+    inner: R,
+    remaining: u64,
+    exhausted: Arc<AtomicBool>,
+}
+
+/// Reports whether a [`BudgetReader`] ran out. Kept by the caller after
+/// the reader has moved into the archive.
+#[derive(Debug, Clone)]
+pub struct BudgetProbe(Arc<AtomicBool>);
+
+impl BudgetProbe {
+    /// True once a read was refused for exceeding the budget.
+    pub fn exhausted(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl<R: Read> BudgetReader<R> {
+    /// Wrap `inner`, allowing `budget` bytes in total.
+    pub fn new(inner: R, budget: u64) -> (Self, BudgetProbe) {
+        let exhausted = Arc::new(AtomicBool::new(false));
+        let probe = BudgetProbe(Arc::clone(&exhausted));
+        (
+            Self {
+                inner,
+                remaining: budget,
+                exhausted,
+            },
+            probe,
+        )
+    }
+}
+
+impl<R: Read> Read for BudgetReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        // Ask for one byte past the budget, so a stream that ends exactly
+        // at the budget is accepted and one that goes on is refused.
+        let want = usize::try_from(self.remaining.saturating_add(1))
+            .unwrap_or(usize::MAX)
+            .min(buf.len());
+        let n = self.inner.read(&mut buf[..want])?;
+        let n_u64 = n as u64;
+        if n_u64 > self.remaining {
+            self.exhausted.store(true, Ordering::Relaxed);
+            return Err(std::io::Error::other(
+                "archive stream exceeds its decompressed size budget",
+            ));
+        }
+        self.remaining -= n_u64;
+        Ok(n)
+    }
+}
+
 /// Validated, safe tarball extractor.
 ///
 /// Rejects ALL spec-forbidden conditions with hard errors.
@@ -441,6 +520,19 @@ impl TarballExtractor {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn budget_reader_allows_exactly_its_budget() {
+        const BUDGET: u64 = 1000;
+        for (len, fits) in [(999, true), (1000, true), (1001, false)] {
+            let data = vec![0u8; len];
+            let (mut reader, probe) = BudgetReader::new(&data[..], BUDGET);
+            let mut out = Vec::new();
+            let result = reader.read_to_end(&mut out);
+            assert_eq!(result.is_ok(), fits, "{len} bytes");
+            assert_eq!(probe.exhausted(), !fits, "{len} bytes");
+        }
+    }
 
     #[test]
     fn test_archive_violation_display() {

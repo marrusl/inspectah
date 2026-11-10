@@ -72,9 +72,37 @@ snapshot.
 present, so the ustar header can say 0 for an entry that unpacks to gigabytes.
 The loader then reads `inspection-snapshot.json`, which extraction may have
 left as a symlink to anything (`/dev/zero`, a FIFO): check it with
-`symlink_metadata` before opening, and bound the read. The `tar` crate still
-buffers PAX and GNU long-name records in memory with no bound of its own;
-closing that needs a cap on the decompressed stream.
+`symlink_metadata` before opening, and bound the read.
+
+### Bound the decompressed stream, not only the entries
+
+The `tar` crate (0.4.45) reads GNU long-name, GNU long-link and PAX records
+whole into memory with an unbounded `read_to_end` before it returns the entry
+they belong to. No check on an entry can bound them: the allocation is done by
+the time there is an entry. So any reader of an untrusted tarball wraps the gzip
+decoder in `BudgetReader` (`crates/pipeline/src/build/extract.rs`) before
+handing it to `tar::Archive`, and keeps the `BudgetProbe`:
+
+- **Every consumed byte counts**: headers, padding, extension records and
+  skipped entry data. The refine budget is `MAX_STREAM_SIZE`, the unpacked
+  limit plus `STREAM_OVERHEAD_PER_ENTRY` (8 KiB) per allowed entry.
+- **Exhaustion is an error, never an end of stream**, so a cut-off archive is
+  not mistaken for a complete one.
+- **Classify errors with the probe.** `tar` wraps the reader's error in its
+  own, so ask `probe.exhausted()` and map that to `ArchiveSafety`
+  (`tarball::stream_error`). That includes errors from copying entry data,
+  which are otherwise reported as write errors.
+- **Keep the per-entry checks.** The stream bound is a backstop on memory;
+  the entry-size and count limits still give the precise refusal.
+- **Test with a small injected budget** (`extract_safe_with_budget`,
+  `extract_payload_dirs_with_budget`), a record twice the budget, one case
+  each for PAX, long name and long link. Before the bound, the long-name and
+  long-link cases fail with an ordinary unpack error, not acceptance, so
+  assert the `ArchiveSafety` variant, not just an error.
+
+The bound caps memory at about the budget, not far below it: one record can
+still be most of 590 MiB. `inspectah build`'s `TarballExtractor` and
+`aggregate`'s snapshot reader do not use the wrapper yet.
 
 ## Trust assumption
 

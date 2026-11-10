@@ -8,7 +8,7 @@ use inspectah_core::types::aggregate::PrevalenceZone;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::build::extract::{
-    ArchiveViolation, EntryKind, SeenPaths, confined_rel, create_confined_dir,
+    ArchiveViolation, BudgetReader, EntryKind, SeenPaths, confined_rel, create_confined_dir,
     is_single_normal_component,
 };
 use inspectah_pipeline::render::containerfile::{
@@ -3715,10 +3715,33 @@ fn extract_payload_dirs_from_tarball(
     verified: &VerifiedUploads,
     out: &Path,
 ) -> Result<(), RefineError> {
+    extract_payload_dirs_with_budget(
+        source_tarball,
+        snap,
+        verified,
+        out,
+        crate::tarball::MAX_STREAM_SIZE,
+    )
+}
+
+/// [`extract_payload_dirs_from_tarball`] with the decompressed stream held
+/// to `stream_budget` bytes, so tests can exercise the bound without large
+/// archives.
+fn extract_payload_dirs_with_budget(
+    source_tarball: &Path,
+    snap: &InspectionSnapshot,
+    verified: &VerifiedUploads,
+    out: &Path,
+    stream_budget: u64,
+) -> Result<(), RefineError> {
     let file = std::fs::File::open(source_tarball)
         .map_err(|e| RefineError::TarballError(format!("open source tarball: {e}")))?;
     let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
+    let (bounded, probe) = BudgetReader::new(decoder, stream_budget);
+    let mut archive = tar::Archive::new(bounded);
+    let tar_error = |e: std::io::Error| {
+        crate::tarball::stream_error(&probe, e, |e| RefineError::TarballError(e.to_string()))
+    };
 
     // Build set of included unmanaged paths for filtering.
     // Tarball stores paths relative to the root (no leading slash).
@@ -3779,14 +3802,9 @@ fn extract_payload_dirs_from_tarball(
     // writes through a link; the packer preserves one rather than
     // following it.
     let mut seen = SeenPaths::new();
-    for entry in archive
-        .entries()
-        .map_err(|e| RefineError::TarballError(e.to_string()))?
-    {
-        let mut entry = entry.map_err(|e| RefineError::TarballError(e.to_string()))?;
-        let path = entry
-            .path()
-            .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    for entry in archive.entries().map_err(tar_error)? {
+        let mut entry = entry.map_err(tar_error)?;
+        let path = entry.path().map_err(tar_error)?;
         let path_str = path.to_string_lossy().into_owned();
         let entry_type = entry.header().entry_type();
 
@@ -3893,7 +3911,13 @@ fn extract_payload_dirs_from_tarball(
                     .create_new(true)
                     .open(&dest)
                     .map_err(confined_io)?;
-                std::io::copy(&mut entry, &mut outfile).map_err(confined_io)?;
+                std::io::copy(&mut entry, &mut outfile).map_err(|e| {
+                    if probe.exhausted() {
+                        tar_error(e)
+                    } else {
+                        confined_io(e)
+                    }
+                })?;
             }
         }
     }
@@ -9092,6 +9116,63 @@ mod tests {
                 ],
                 "route 2b",
             );
+        }
+
+        /// The source tarball is read through the same decompressed-stream
+        /// budget as the loader, so a PAX record the `tar` crate would
+        /// buffer whole is refused while it is read.
+        #[test]
+        fn a_pax_record_past_the_stream_budget_is_refused() {
+            const TEST_BUDGET: u64 = 64 * 1024;
+            let s = Sandbox::new();
+            let body = format!(" comment={}\n", "c".repeat(2 * TEST_BUDGET as usize));
+            let mut len = body.len() + 1;
+            while format!("{len}{body}").len() != len {
+                len += 1;
+            }
+            let record = format!("{len}{body}");
+            let source = s.root().join("source.tar.gz");
+            let encoder = flate2::write::GzEncoder::new(
+                std::fs::File::create(&source).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut builder = tar::Builder::new(encoder);
+            for (name, entry_type, data) in [
+                (
+                    "top/PaxHeaders/x",
+                    tar::EntryType::XHeader,
+                    record.as_bytes(),
+                ),
+                (
+                    "top/unmanaged/opt/x",
+                    tar::EntryType::Regular,
+                    PWNED.as_bytes(),
+                ),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_path(name).unwrap();
+                header.set_entry_type(entry_type);
+                header.set_mode(0o644);
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                builder.append(&header, data).unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap();
+
+            let result = extract_payload_dirs_with_budget(
+                &source,
+                &unmanaged_snapshot(&["/opt/x"]),
+                &VerifiedUploads::new(),
+                &s.out(),
+                TEST_BUDGET,
+            );
+            match result {
+                Err(RefineError::ArchiveSafety(msg)) => {
+                    assert!(msg.contains("decompressed"), "{msg}");
+                }
+                other => panic!("expected ArchiveSafety, got: {other:?}"),
+            }
+            assert!(!s.out().join("unmanaged/opt/x").exists());
         }
 
         #[test]

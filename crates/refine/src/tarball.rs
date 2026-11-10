@@ -3,12 +3,45 @@ use crate::session::RefineSession;
 use crate::types::RefineError;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::RedactionState;
+use inspectah_pipeline::build::extract::{BudgetProbe, BudgetReader};
 use std::io::Read;
 use std::path::Path;
 
 const MAX_UNPACKED_SIZE: u64 = 512 * 1024 * 1024; // 512 MiB
 const MAX_FILE_COUNT: usize = 10_000;
 const MAX_SINGLE_FILE: u64 = 256 * 1024 * 1024; // 256 MiB
+
+/// Decompressed bytes allowed per entry beyond its own data: a 512-byte
+/// header, up to 511 bytes of padding, and one long-name or PAX record
+/// for a path up to Linux's 4096-byte `PATH_MAX` with its own header and
+/// padding, rounded up to 8 KiB.
+const STREAM_OVERHEAD_PER_ENTRY: u64 = 8 * 1024;
+
+/// The most decompressed bytes a scan tarball may hold: the unpacked
+/// limit plus [`STREAM_OVERHEAD_PER_ENTRY`] for every entry allowed,
+/// about 590 MiB. The entry checks in [`extract_safe`] cannot bound the
+/// extension records the `tar` crate buffers before an entry exists;
+/// this bound does. See [`BudgetReader`].
+pub(crate) const MAX_STREAM_SIZE: u64 =
+    MAX_UNPACKED_SIZE + MAX_FILE_COUNT as u64 * STREAM_OVERHEAD_PER_ENTRY;
+
+/// Map a read error from a budgeted archive. Running out of budget is an
+/// archive-safety refusal; anything else is an ordinary tarball error,
+/// passed through `other`.
+pub(crate) fn stream_error(
+    probe: &BudgetProbe,
+    e: std::io::Error,
+    other: impl FnOnce(std::io::Error) -> RefineError,
+) -> RefineError {
+    if probe.exhausted() {
+        RefineError::ArchiveSafety(format!(
+            "archive exceeds the {} MiB decompressed stream limit",
+            MAX_STREAM_SIZE / (1024 * 1024)
+        ))
+    } else {
+        other(e)
+    }
+}
 
 pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
@@ -39,18 +72,28 @@ pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
 }
 
 fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
+    extract_safe_with_budget(tarball_path, dest, MAX_STREAM_SIZE)
+}
+
+/// [`extract_safe`] with the decompressed stream held to `stream_budget`
+/// bytes, so tests can exercise the bound without large archives.
+fn extract_safe_with_budget(
+    tarball_path: &Path,
+    dest: &Path,
+    stream_budget: u64,
+) -> Result<(), RefineError> {
     let file = std::fs::File::open(tarball_path)?;
     let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
+    let (bounded, probe) = BudgetReader::new(gz, stream_budget);
+    let mut archive = tar::Archive::new(bounded);
+    let tar_error =
+        |e: std::io::Error| stream_error(&probe, e, |e| RefineError::TarballError(e.to_string()));
 
     let mut total_size: u64 = 0;
     let mut file_count: usize = 0;
 
-    for entry_result in archive
-        .entries()
-        .map_err(|e| RefineError::TarballError(e.to_string()))?
-    {
-        let mut entry = entry_result.map_err(|e| RefineError::TarballError(e.to_string()))?;
+    for entry_result in archive.entries().map_err(tar_error)? {
+        let mut entry = entry_result.map_err(tar_error)?;
 
         file_count += 1;
         if file_count > MAX_FILE_COUNT {
@@ -59,10 +102,7 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
             )));
         }
 
-        let path = entry
-            .path()
-            .map_err(|e| RefineError::TarballError(e.to_string()))?
-            .to_path_buf();
+        let path = entry.path().map_err(tar_error)?.to_path_buf();
 
         // Path traversal check
         for component in path.components() {
@@ -113,9 +153,7 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
             )));
         }
 
-        entry
-            .unpack_in(dest)
-            .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        entry.unpack_in(dest).map_err(tar_error)?;
     }
 
     Ok(())
@@ -268,6 +306,120 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_provenance(&snap).is_ok());
+    }
+
+    /// A budget far below the real one, so the regressions need no large
+    /// allocation. Each hostile record is twice this.
+    const TEST_BUDGET: u64 = 64 * 1024;
+    const OVER_BUDGET: usize = 2 * TEST_BUDGET as usize;
+
+    /// A GNU-format header, which the reader needs to honour long-name
+    /// and long-link records.
+    fn header(entry_type: tar::EntryType, name: &str) -> tar::Header {
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(entry_type);
+        h.set_mode(0o644);
+        h.set_path(name).unwrap();
+        h
+    }
+
+    /// One archive member: its header and its data.
+    type Row = (tar::Header, Vec<u8>);
+
+    /// Write `rows` into a gzip tarball, setting each header's size from
+    /// its data.
+    fn raw_tarball(dir: &Path, rows: Vec<Row>) -> std::path::PathBuf {
+        let path = dir.join("in.tar.gz");
+        let gz = flate2::write::GzEncoder::new(
+            std::fs::File::create(&path).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut builder = tar::Builder::new(gz);
+        for (mut h, data) in rows {
+            h.set_size(data.len() as u64);
+            h.set_cksum();
+            builder.append(&h, &data[..]).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
+    fn pax_record(key: &str, value: &str) -> Vec<u8> {
+        let body = format!(" {key}={value}\n");
+        let mut len = body.len() + 1;
+        while format!("{len}{body}").len() != len {
+            len += 1;
+        }
+        format!("{len}{body}").into_bytes()
+    }
+
+    /// The `tar` crate buffers each of these records whole before it
+    /// returns the entry they belong to. Past the budget, each is
+    /// refused while it is being read, not after.
+    #[test]
+    fn extension_records_past_the_stream_budget_are_refused() {
+        let mut long_name = vec![b'a'; OVER_BUDGET];
+        long_name.push(0);
+        let mut long_link = vec![b'b'; OVER_BUDGET];
+        long_link.push(0);
+        let pax = pax_record("comment", &"c".repeat(OVER_BUDGET));
+        let cases: [(&str, Vec<Row>); 3] = [
+            (
+                "PAX",
+                vec![
+                    (header(tar::EntryType::XHeader, "PaxHeaders/x"), pax),
+                    (header(tar::EntryType::Regular, "x"), Vec::new()),
+                ],
+            ),
+            (
+                "GNU long name",
+                vec![
+                    (header(tar::EntryType::GNULongName, "LongLink"), long_name),
+                    (header(tar::EntryType::Regular, "x"), Vec::new()),
+                ],
+            ),
+            (
+                "GNU long link",
+                vec![
+                    (header(tar::EntryType::GNULongLink, "LongLink"), long_link),
+                    (header(tar::EntryType::Symlink, "y"), Vec::new()),
+                ],
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (what, rows) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let dest = tempfile::tempdir().unwrap();
+            let tarball = raw_tarball(dir.path(), rows);
+            match extract_safe_with_budget(&tarball, dest.path(), TEST_BUDGET) {
+                Err(RefineError::ArchiveSafety(msg)) if msg.contains("decompressed") => {}
+                other => {
+                    // The long-name case's error quotes the whole name.
+                    let mut seen = format!("{other:?}");
+                    seen.truncate(120);
+                    failures.push(format!("{what}: {seen}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "not refused: {failures:#?}");
+    }
+
+    #[test]
+    fn an_ordinary_archive_fits_the_stream_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let tarball = raw_tarball(
+            dir.path(),
+            vec![
+                (
+                    header(tar::EntryType::Regular, "inspection-snapshot.json"),
+                    b"{}".to_vec(),
+                ),
+                (header(tar::EntryType::Directory, "unmanaged/"), Vec::new()),
+            ],
+        );
+        extract_safe_with_budget(&tarball, dest.path(), TEST_BUDGET).expect("fits");
+        assert!(dest.path().join("inspection-snapshot.json").is_file());
     }
 
     #[test]
