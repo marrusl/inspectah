@@ -147,7 +147,7 @@ Run `inspectah scan --help` for the full list.
 
 ### Refine
 
-After scanning, copy the tarball to your workstation and launch the interactive editor:
+After scanning, copy the tarball to your workstation and launch the interactive editor. Refine runs locally from the copied tarball, not on the scanned host; see [Open the refine UI](docs/getting-started.md#open-the-refine-ui) for the full workflow:
 
 ```bash
 scp target-host:~/hostname-*.tar.gz .
