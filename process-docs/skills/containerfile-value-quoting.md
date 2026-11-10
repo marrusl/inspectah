@@ -94,6 +94,8 @@ way, and the next one should be.
 | Staged RPM basename | `StagedName` | `inspectah_core::rpm_filename` |
 | `/var` directory path | `ExportPath` | `inspectah_pipeline::render::safety` |
 | Mode, account name, group name | `ExportToken` | `inspectah_pipeline::render::safety` |
+| Account or group name on a `useradd`, `groupadd` or `chpasswd` line | `AccountName` (`ExportToken` plus no leading `-`, `.`, `..` or all-digit name) | `inspectah_pipeline::render::safety` |
+| Password hash in `chpasswd -e` input | `CryptHash` | `inspectah_pipeline::render::safety` |
 
 Each is an ASCII allowlist plus a newtype with no other constructor, and
 the emitting function takes the type rather than a `&str`. The guarantee
@@ -115,6 +117,15 @@ finding named, and left the other three carrying the same defect; a
 review caught it one commit later. Before calling an emission site
 closed, enumerate every interpolation on the line and name what proves
 each.
+
+The users renderer is the second worked example of that rule. Fixing
+the username left `-G`, `-s` and `-d` on the same `useradd` line, and the
+password hash in `chpasswd`, unproved: a home of
+`/home/alice; id > /tmp/x #` ran `id`. Every field there is now proved
+(`AccountName`, `ExportPath`, `CryptHash`) and the paths are quoted too.
+A refused name, group, home or shell costs the whole user a FIXME,
+because dropping one field creates a user unlike the host's; a refused
+hash costs only the password.
 
 **What a refusal costs decides the answer, and the caller decides it, not
 the type.** Three answers, all in use on that one line:

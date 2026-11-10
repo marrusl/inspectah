@@ -5,7 +5,8 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use std::io;
 use std::path::Path;
 
-use super::safety::sanitize_shell_value;
+use super::language_packages::sanitize_for_comment;
+use super::safety::{AccountName, CryptHash, ExportPath, sanitize_shell_value};
 use crate::build::extract::is_single_normal_component;
 
 // ---------------------------------------------------------------------------
@@ -72,6 +73,32 @@ fn included_users(snap: &InspectionSnapshot) -> Vec<&serde_json::Value> {
         .iter()
         .filter(|u| u.get("include").and_then(|v| v.as_bool()).unwrap_or(true))
         .collect()
+}
+
+/// Why `useradd` cannot be emitted for `u`, or `None` when every field
+/// on its line is proved: the name and each supplementary group are
+/// [`AccountName`]s, and a home or shell, when present, is an
+/// [`ExportPath`]. Dropping one field instead would create a user unlike
+/// the host's, so a refusal costs the whole user.
+fn useradd_refusal(u: &serde_json::Value) -> Option<&'static str> {
+    if AccountName::parse(str_field(u, "name")).is_err() {
+        return Some("the name is not a valid account name");
+    }
+    if supp_groups(u)
+        .iter()
+        .any(|g| AccountName::parse(g).is_err())
+    {
+        return Some("a supplementary group is not a valid group name");
+    }
+    let home = str_field(u, "home");
+    if !home.is_empty() && ExportPath::parse(home).is_err() {
+        return Some("the home directory is not a plain absolute path");
+    }
+    let shell = str_field(u, "shell");
+    if !shell.is_empty() && ExportPath::parse(shell).is_err() {
+        return Some("the login shell is not a plain absolute path");
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -294,12 +321,19 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
     for g in &all_custom_groups {
         let name = str_field(g, "name");
         let gid = uid_field(g, "gid");
-        if name.is_empty() || sanitize_shell_value(name).is_none() {
+        if name.is_empty() {
             continue;
         }
         let is_primary = gid > 0 && needed_gids.contains(&gid);
         let is_supplementary = needed_supp_names.contains(name);
         if !is_primary && !is_supplementary {
+            continue;
+        }
+        if AccountName::parse(name).is_err() {
+            body.push(format!(
+                "# FIXME: group {} not created: the name is not a valid group name",
+                sanitize_for_comment(name)
+            ));
             continue;
         }
         if gid > 0 {
@@ -309,10 +343,20 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
 
-    // useradd lines
+    // useradd lines. A refused user gets no `chpasswd` entry and no SSH
+    // key lines either: each would name an account that does not exist.
+    let mut refused_users: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for u in &useradd_users {
         let name = str_field(u, "name");
-        if name.is_empty() || sanitize_shell_value(name).is_none() {
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(reason) = useradd_refusal(u) {
+            body.push(format!(
+                "# FIXME: user {} not created: {reason}",
+                sanitize_for_comment(name)
+            ));
+            refused_users.insert(name);
             continue;
         }
         let uid = uid_field(u, "uid");
@@ -331,11 +375,12 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         if !groups_list.is_empty() {
             cmd.push_str(&format!(" -G {}", groups_list.join(",")));
         }
+        // Proved by `useradd_refusal`, and quoted as well.
         if !shell.is_empty() {
-            cmd.push_str(&format!(" -s {shell}"));
+            cmd.push_str(&format!(" -s '{shell}'"));
         }
         if !home.is_empty() {
-            cmd.push_str(&format!(" -d {home}"));
+            cmd.push_str(&format!(" -d '{home}'"));
         }
         cmd.push_str(&format!(" {name}"));
         body.push(cmd);
@@ -345,6 +390,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
     let pw_users: Vec<_> = useradd_users
         .iter()
         .filter(|u| !str_field(u, "password_hash").is_empty())
+        .filter(|u| !refused_users.contains(str_field(u, "name")))
         .collect();
     if !pw_users.is_empty() {
         body.push(
@@ -354,15 +400,22 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         let mut chpasswd_entries: Vec<String> = Vec::new();
         for u in &pw_users {
             let name = str_field(u, "name");
-            let pw = str_field(u, "password_hash");
-            if sanitize_shell_value(name).is_some() {
-                chpasswd_entries.push(format!("{name}:{pw}"));
+            match CryptHash::parse(str_field(u, "password_hash")) {
+                // Both halves are proved free of quotes, `:` and line
+                // ends, so each record is one single-quoted word.
+                Ok(hash) => chpasswd_entries.push(format!("'{name}:{}'", hash.as_str())),
+                Err(_) => body.push(format!(
+                    "# FIXME: password for user {} not set: the hash is not a crypt(3) string",
+                    sanitize_for_comment(name)
+                )),
             }
         }
+        // One record per `printf` argument: `echo` does not expand `\n`
+        // under bash, which would have joined every record into one.
         if !chpasswd_entries.is_empty() {
             body.push(format!(
-                "RUN echo '{}' | chpasswd -e",
-                chpasswd_entries.join("\\n")
+                "RUN printf '%s\\n' {} | chpasswd -e",
+                chpasswd_entries.join(" ")
             ));
         }
     }
@@ -377,8 +430,12 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         // `stage_ssh_keys` refuses this name, so there is no file to copy.
         if !is_single_normal_component(name) {
             body.push(format!(
-                "# FIXME: SSH keys for user {name} not staged: the name is not a single path component"
+                "# FIXME: SSH keys for user {} not staged: the name is not a single path component",
+                sanitize_for_comment(name)
             ));
+            continue;
+        }
+        if refused_users.contains(name) {
             continue;
         }
         let uid = uid_field(u, "uid");
@@ -397,13 +454,13 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         };
 
         body.push(format!(
-            "RUN install -d -m 700 -o {name} -g {gid} {home}/.ssh"
+            "RUN install -d -m 700 -o {name} -g {gid} '{home}/.ssh'"
         ));
         body.push(format!(
             "COPY users/home/{name}/.ssh/authorized_keys {home}/.ssh/authorized_keys"
         ));
         body.push(format!(
-            "RUN chown {ownership} {home}/.ssh/authorized_keys && chmod 600 {home}/.ssh/authorized_keys"
+            "RUN chown {ownership} '{home}/.ssh/authorized_keys' && chmod 600 '{home}/.ssh/authorized_keys'"
         ));
     }
 
@@ -789,6 +846,69 @@ mod tests {
                 cf.contains("COPY users/home/alice/.ssh/authorized_keys"),
                 "{cf}"
             );
+        }
+    }
+
+    /// The active (non-comment, non-blank) lines: what a build runs.
+    fn active_lines(output: &str) -> Vec<&str> {
+        output
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .collect()
+    }
+
+    /// Every field on the `groupadd`, `useradd` and `chpasswd` lines comes
+    /// from the snapshot. One hostile field per case: it may cost that
+    /// user, group or password a FIXME, but it never adds a command, and
+    /// the ordinary user beside it is still created.
+    #[test]
+    fn hostile_user_fields_add_no_command() {
+        use serde_json::json;
+        let cases = [
+            (
+                "home",
+                json!("/home/mallory; id > /tmp/inspectah-user-injection #"),
+            ),
+            ("shell", json!("/bin/sh; id #")),
+            ("shell", json!("/bin/sh\nRUN id")),
+            ("supplementary_groups", json!(["wheel;id"])),
+            ("supplementary_groups", json!(["-g0"])),
+            ("password_hash", json!("$6$salt$hash'; id; echo '")),
+            ("password_hash", json!("$6$salt$hash\nRUN id")),
+            ("password_hash", json!("$6$salt$ha:sh")),
+            ("name", json!("-omallory")),
+            ("name", json!("mall*ry")),
+        ];
+        for (field, value) in cases {
+            let mut user = test_user();
+            user["name"] = json!("mallory");
+            user["uid"] = json!(1002);
+            user[field] = value.clone();
+            let mut hostile_group = test_group();
+            hostile_group["name"] = json!("-g0");
+            // Needed only when a case names it as a supplementary group.
+            hostile_group["gid"] = json!(4242);
+            let snap = snap_with(vec![user, test_user()], vec![test_group(), hostile_group]);
+            let cf = render_containerfile_users(&snap).join("\n");
+            let active = active_lines(&cf);
+            let what = format!("{field} = {value}");
+
+            assert!(
+                !active.iter().any(|l| l.contains("id >")
+                    || l.contains("; id")
+                    || l.contains("RUN id")
+                    || l.contains("-g0")
+                    || l.contains("-omallory")
+                    || l.contains('*')),
+                "{what}: a hostile field reached a command: {active:#?}"
+            );
+            assert!(
+                active
+                    .iter()
+                    .any(|l| l.starts_with("RUN useradd -m -u 1001 -g 1001 -G wheel,docker")),
+                "{what}: the ordinary user was not created: {active:#?}"
+            );
+            assert!(cf.contains("# FIXME:"), "{what}: no FIXME: {cf}");
         }
     }
 

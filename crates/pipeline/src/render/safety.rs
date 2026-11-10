@@ -200,6 +200,127 @@ impl ExportToken {
     }
 }
 
+/// Why a name failed [`AccountName::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AccountNameError {
+    #[error(transparent)]
+    Token(#[from] TokenError),
+    #[error("account name starts with `-`")]
+    LeadingDash,
+    #[error("account name is `.` or `..`")]
+    Dots,
+    #[error("account name is all digits")]
+    Numeric,
+}
+
+/// A user or group name the export may write into a generated build
+/// instruction (`useradd`, `groupadd`, `chpasswd`, `install -o`).
+///
+/// [`ExportToken`]'s byte set, which is shadow-utils' portable name set,
+/// with the refusals shadow-utils makes on top of it: a leading `-`,
+/// which `useradd` and `groupadd` would read as an option; `.` and `..`;
+/// and an all-digit name, which `useradd -G` reads as a numeric id. A
+/// trailing `$` (Samba machine accounts) is refused too, because it is
+/// not in the token set: such a user gets a FIXME rather than a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountName(ExportToken);
+
+impl AccountName {
+    /// Validate `value` as an account or group name and keep it.
+    pub fn parse(value: &str) -> Result<Self, AccountNameError> {
+        let token = ExportToken::parse(value)?;
+        if value.starts_with('-') {
+            return Err(AccountNameError::LeadingDash);
+        }
+        if value == "." || value == ".." {
+            return Err(AccountNameError::Dots);
+        }
+        if value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(AccountNameError::Numeric);
+        }
+        Ok(Self(token))
+    }
+
+    /// The validated name.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+/// Shortest legacy (DES) crypt(3) hash; bigcrypt is longer.
+const MIN_LEGACY_CRYPT_LEN: usize = 13;
+
+/// A byte allowed in a crypt(3) hash: the crypt base-64 alphabet
+/// `[./0-9A-Za-z]`, the `$` that separates a modular hash's fields, and
+/// `=`, `,`, `+` and `-`, which parameter fields use (`rounds=5000`,
+/// `m=65536,t=2,p=1`).
+///
+/// It excludes whitespace and the newline, which end a `chpasswd` record;
+/// the `:` that separates its fields; and every quote and shell
+/// metacharacter, so a hash that passes is safe inside single quotes.
+fn is_allowed_crypt_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'/' | b'$' | b'=' | b',' | b'+' | b'-')
+}
+
+/// Why a hash failed [`CryptHash::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CryptHashError {
+    #[error("password hash is empty")]
+    Empty,
+    #[error("password hash exceeds the maximum exported field length")]
+    TooLong,
+    #[error("password hash has a disallowed byte at position {at}")]
+    BadByte { at: usize },
+    #[error("password hash is not a modular `$id$...` or legacy crypt string")]
+    Format,
+}
+
+/// A password hash as `/etc/shadow` stores it, which the export may
+/// write into `chpasswd -e` input.
+///
+/// Accepts a modular hash, `$id$` followed by at least one more field
+/// (`$6$salt$hash`, `$y$j9T$salt$hash`, `$2b$10$...`), or a legacy DES or
+/// bigcrypt string of [`MIN_LEGACY_CRYPT_LEN`] or more crypt base-64
+/// characters. Every byte passes [`is_allowed_crypt_byte`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CryptHash(String);
+
+impl CryptHash {
+    /// Validate `value` as a crypt(3) hash and keep it.
+    pub fn parse(value: &str) -> Result<Self, CryptHashError> {
+        if value.is_empty() {
+            return Err(CryptHashError::Empty);
+        }
+        if value.len() > MAX_EXPORT_TOKEN_LEN {
+            return Err(CryptHashError::TooLong);
+        }
+        if let Some(at) = value.bytes().position(|b| !is_allowed_crypt_byte(b)) {
+            return Err(CryptHashError::BadByte { at });
+        }
+        let well_formed = match value.strip_prefix('$') {
+            Some(rest) => {
+                let mut fields = rest.split('$');
+                fields.next().is_some_and(|id| !id.is_empty()) && fields.next().is_some()
+            }
+            None => {
+                value.len() >= MIN_LEGACY_CRYPT_LEN
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'/')
+            }
+        };
+        if !well_formed {
+            return Err(CryptHashError::Format);
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    /// The validated hash.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Escape HTML special characters to prevent XSS in report output.
 pub fn html_escape(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
@@ -380,6 +501,61 @@ mod tests {
         }
         let too_long = "a".repeat(MAX_EXPORT_TOKEN_LEN + 1);
         assert_eq!(ExportToken::parse(&too_long), Err(TokenError::TooLong));
+    }
+
+    #[test]
+    fn account_name_table() {
+        for ok in ["alice", "john.doe", "svc_app-1", "_apt", "Admin"] {
+            assert!(AccountName::parse(ok).is_ok(), "{ok}");
+        }
+        let refused: &[(&str, AccountNameError)] = &[
+            ("-oalice", AccountNameError::LeadingDash),
+            (".", AccountNameError::Dots),
+            ("..", AccountNameError::Dots),
+            ("1000", AccountNameError::Numeric),
+            (
+                "mall*ry",
+                AccountNameError::Token(TokenError::BadByte { at: 4 }),
+            ),
+            (
+                "host$",
+                AccountNameError::Token(TokenError::BadByte { at: 4 }),
+            ),
+            ("", AccountNameError::Token(TokenError::Empty)),
+        ];
+        for (value, want) in refused {
+            assert_eq!(AccountName::parse(value), Err(*want), "{value}");
+        }
+    }
+
+    #[test]
+    fn crypt_hash_table() {
+        for ok in [
+            "$6$rounds=65536$salt$hash",
+            "$y$j9T$abcdefghijklmnop$ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./abcd",
+            "$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234",
+            "$argon2id$v=19$m=65536,t=2,p=1$c2FsdA$aGFzaA",
+            "abJnggxhB/yWI",
+        ] {
+            assert!(CryptHash::parse(ok).is_ok(), "{ok}");
+        }
+        let refused: &[(&str, CryptHashError)] = &[
+            ("", CryptHashError::Empty),
+            (
+                "$6$salt$hash'; id; echo '",
+                CryptHashError::BadByte { at: 12 },
+            ),
+            ("$6$salt$hash\nRUN id", CryptHashError::BadByte { at: 12 }),
+            ("$6$salt$ha:sh", CryptHashError::BadByte { at: 10 }),
+            ("$6$ salt", CryptHashError::BadByte { at: 3 }),
+            ("$6", CryptHashError::Format),
+            ("$$salt", CryptHashError::Format),
+            ("short", CryptHashError::Format),
+            ("legacy-but-not=crypt", CryptHashError::Format),
+        ];
+        for (value, want) in refused {
+            assert_eq!(CryptHash::parse(value), Err(*want), "{value}");
+        }
     }
 
     #[test]
