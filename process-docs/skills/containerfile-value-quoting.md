@@ -16,7 +16,7 @@ has produced both over-rejection of legal paths and live command injection.
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and `\n` only — everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
-| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` | `\n` only — it closes the comment |
+| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` | `\n` closes the comment; `\r` is escaped as well so no line-ending byte reaches the file |
 
 `UNSAFE_SHELL_CHARS` is `'` and `\n`, one set serving every command site,
 which is correct only because every command site single-quotes. A new
@@ -36,6 +36,18 @@ Both the npm global `prefix` and `pinned_package_list()`'s output shipped
 this way before 2026-08-15. Route comment interpolations through
 `sanitize_for_comment()`. Rejection is the wrong tool there: it costs
 legitimate values a rendered section for no safety gain.
+
+A FIXME is a comment site too, and the one most often missed: it is
+written *because* the value failed a check, so it is the line most likely
+to carry the newline. The Scheduled Tasks section shipped its inventory
+comments and its unsafe-name FIXME raw until 2026-11-09.
+
+**A renderer that references a staged file asks the stager's question.**
+When the export refuses to write a file named by a snapshot value, every
+Containerfile line naming that file must make the same decision from the
+same function, or it enables or copies something nobody wrote. Timer
+units use `configtree::staged_unit_file` on both sides; SSH keys use
+`is_single_normal_component` on both sides.
 
 Commented-out `RUN` lines are comment sites, but the line exists to be
 uncommented, so the value still has to be plausible as a command argument

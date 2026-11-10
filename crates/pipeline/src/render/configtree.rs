@@ -183,6 +183,30 @@ fn write_named_file(dir: &Path, name: &str, content: &str) {
     let _ = std::fs::write(dir.join(name), content);
 }
 
+/// The file name a scheduled-task unit is staged under in
+/// `config/etc/systemd/system/`, or `None` when the name is refused: an
+/// absolute name or one with `..` would leave that directory.
+///
+/// The stager and the Containerfile renderer both ask this, so the
+/// renderer never enables a unit that was not written.
+pub(crate) fn staged_unit_file(name: &str, suffix: &str) -> Option<String> {
+    let file = format!("{name}.{suffix}");
+    is_single_normal_component(&file).then_some(file)
+}
+
+/// Write `content` as the unit `name.suffix` in `dir`, if
+/// [`staged_unit_file`] accepts the name. A refused name is skipped with
+/// a warning.
+fn write_unit_file(dir: &Path, name: &str, suffix: &str, content: &str) {
+    match staged_unit_file(name, suffix) {
+        Some(file) => write_named_file(dir, &file, content),
+        None => eprintln!(
+            "inspectah: warning: skipping {}.{suffix} -- not a plain file name",
+            name.escape_debug()
+        ),
+    }
+}
+
 /// Write all config files from snapshot to output_dir/config/ preserving
 /// paths. Writes all artifact categories listed in the module doc.
 ///
@@ -339,27 +363,19 @@ pub fn write_config_tree(
             // @reboot entries have empty timer_content — only write a
             // .timer file when there is actual timer content to emit.
             if !u.timer_content.is_empty() {
-                write_named_file(&systemd_dir, &format!("{}.timer", u.name), &u.timer_content);
+                write_unit_file(&systemd_dir, &u.name, "timer", &u.timer_content);
             }
             if !u.service_content.is_empty() {
-                write_named_file(
-                    &systemd_dir,
-                    &format!("{}.service", u.name),
-                    &u.service_content,
-                );
+                write_unit_file(&systemd_dir, &u.name, "service", &u.service_content);
             }
         }
         for t in &st.systemd_timers {
             if t.source == "local" {
                 if !t.name.is_empty() && !t.timer_content.is_empty() {
-                    write_named_file(&systemd_dir, &format!("{}.timer", t.name), &t.timer_content);
+                    write_unit_file(&systemd_dir, &t.name, "timer", &t.timer_content);
                 }
                 if !t.name.is_empty() && !t.service_content.is_empty() {
-                    write_named_file(
-                        &systemd_dir,
-                        &format!("{}.service", t.name),
-                        &t.service_content,
-                    );
+                    write_unit_file(&systemd_dir, &t.name, "service", &t.service_content);
                 }
             }
         }

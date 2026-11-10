@@ -159,8 +159,14 @@ fn contains_unsafe_chars(s: &str) -> bool {
 }
 
 /// Sanitize a path for display in warning comments by replacing unsafe chars.
+///
+/// The newline ends a Containerfile comment, so the rest of the value
+/// would become an instruction. The carriage return is escaped too, so no
+/// line-ending byte from the snapshot reaches the file.
 pub(super) fn sanitize_for_comment(s: &str) -> String {
-    s.replace('\'', "''").replace('\n', "\\n")
+    s.replace('\'', "''")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// Restore the leading `/` on a path the collector stored relative.

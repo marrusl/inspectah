@@ -27,6 +27,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
+use super::configtree::staged_unit_file;
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
@@ -1261,10 +1262,12 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
+    // Timer names are snapshot strings: every one that reaches a comment
+    // is escaped, or a newline in it would end the comment.
     if !local_timers.is_empty() {
         let names: Vec<String> = local_timers
             .iter()
-            .map(|t| format!("{}.timer", t.name))
+            .map(|t| language_packages::sanitize_for_comment(&format!("{}.timer", t.name)))
             .collect();
         body.push(format!(
             "# Existing local timers ({}): {}",
@@ -1277,7 +1280,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         let names: Vec<String> = included_timers
             .iter()
             .filter(|u| !u.name.is_empty())
-            .map(|u| u.name.clone())
+            .map(|u| language_packages::sanitize_for_comment(&u.name))
             .collect();
         body.push(format!(
             "# Converted from cron: {} timer(s): {}",
@@ -1286,17 +1289,13 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Consolidate timer enables — sanitize names before shell interpolation
+    // Consolidate timer enables. A unit is enabled only if the config
+    // tree staged it under the same name and the name is safe in a shell
+    // word; otherwise the Containerfile says so in a FIXME.
     let mut timer_names = Vec::new();
     for t in &local_timers {
-        let unit = format!("{}.timer", t.name);
-        if sanitize_shell_value(&unit).is_some() {
+        if let Some(unit) = enableable_unit(&t.name, "timer", &mut body) {
             timer_names.push(unit);
-        } else {
-            body.push(format!(
-                "# FIXME: Timer unit name contains unsafe characters: {}",
-                t.name
-            ));
         }
     }
     let mut reboot_service_names = Vec::new();
@@ -1304,20 +1303,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         if !u.name.is_empty() {
             // @reboot entries have no timer — enable the service instead
             if u.cron_expr == "@reboot" {
-                let unit = format!("{}.service", u.name);
-                if sanitize_shell_value(&unit).is_some() {
+                if let Some(unit) = enableable_unit(&u.name, "service", &mut body) {
                     reboot_service_names.push(unit);
                 }
-            } else {
-                let unit = format!("{}.timer", u.name);
-                if sanitize_shell_value(&unit).is_some() {
-                    timer_names.push(unit);
-                } else {
-                    body.push(format!(
-                        "# FIXME: Timer unit name contains unsafe characters: {}",
-                        u.name
-                    ));
-                }
+            } else if let Some(unit) = enableable_unit(&u.name, "timer", &mut body) {
+                timer_names.push(unit);
             }
         }
     }
@@ -1338,11 +1328,35 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             st.at_jobs.len()
         ));
         for a in &st.at_jobs {
-            body.push(format!("#   at job: {}", a.command));
+            body.push(format!(
+                "#   at job: {}",
+                language_packages::sanitize_for_comment(&a.command)
+            ));
         }
     }
 
     section("Scheduled Tasks", body)
+}
+
+/// The unit file `name.suffix` if it may be enabled: the config tree
+/// staged it ([`staged_unit_file`]) and it is safe as a shell word.
+/// Otherwise push a FIXME, with the name escaped as comment text, and
+/// return `None`.
+fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<String> {
+    let shown = language_packages::sanitize_for_comment(name);
+    let Some(unit) = staged_unit_file(name, suffix) else {
+        body.push(format!(
+            "# FIXME: timer {shown} not staged: the name is not a single path component"
+        ));
+        return None;
+    };
+    if sanitize_shell_value(&unit).is_none() {
+        body.push(format!(
+            "# FIXME: Timer unit name contains unsafe characters: {shown}"
+        ));
+        return None;
+    }
+    Some(unit)
 }
 
 // --- Config section ---
@@ -6691,6 +6705,83 @@ RUN dnf install -y \
             .lines()
             .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
             .collect()
+    }
+
+    /// Timer names reach the Containerfile in inventory comments, FIXMEs
+    /// and `systemctl enable`. A newline in one closes its comment, and a
+    /// name the config-tree writer refuses names a unit that was never
+    /// staged. Neither may add an active line; the ordinary timers beside
+    /// them are still enabled.
+    #[test]
+    fn refused_timer_names_add_no_active_instruction() {
+        use inspectah_core::types::scheduled::{
+            AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+        };
+        let local = |name: &str| SystemdTimer {
+            name: name.into(),
+            source: "local".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let generated = |name: &str, cron_expr: &str| GeneratedTimerUnit {
+            name: name.into(),
+            cron_expr: cron_expr.into(),
+            timer_content: "[Timer]".into(),
+            service_content: "[Service]".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            systemd_timers: vec![
+                local("ok\nRUN touch /pwned-local\n#"),
+                local("cr\rRUN touch /pwned-cr"),
+                local("/etc/abs"),
+                local("good"),
+            ],
+            generated_timer_units: vec![
+                generated(
+                    "../../victim/planted\nRUN touch /pwned-cron\n#",
+                    "0 2 * * *",
+                ),
+                generated("../../../../../victim/planted", "0 2 * * *"),
+                generated("../../victim/boot", "@reboot"),
+                generated("backup", "0 3 * * *"),
+            ],
+            at_jobs: vec![AtJob {
+                command: "echo hi\nRUN touch /pwned-at".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None, None);
+        let active = active_lines(&output);
+        for bad in ["pwned", "victim", "/etc/abs"] {
+            assert!(
+                !active.iter().any(|l| l.contains(bad)),
+                "{bad} reached an active line: {active:#?}"
+            );
+        }
+        assert!(
+            !output
+                .lines()
+                .any(|l| l.starts_with('\r') || l.contains("\rRUN")),
+            "a carriage return reached the output: {output}"
+        );
+        assert!(
+            active.contains(&"RUN systemctl enable good.timer backup.timer"),
+            "the ordinary timers are not enabled: {active:#?}"
+        );
+        for refused in [
+            "/etc/abs",
+            "../../../../../victim/planted",
+            "../../victim/boot",
+        ] {
+            assert!(
+                output.contains(&format!("# FIXME: timer {refused} not staged")),
+                "no FIXME for {refused}: {output}"
+            );
+        }
     }
 
     /// `d {path} {mode} {owner} {group} -` has four host-sourced fields
