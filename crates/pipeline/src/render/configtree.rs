@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::safety::operator_kargs;
+use crate::build::extract::is_single_normal_component;
 
 /// Path prefix for quadlet unit files — excluded from config tree copy.
 const QUADLET_PREFIX: &str = "etc/containers/systemd/";
@@ -165,6 +166,21 @@ fn safe_write_file(dest: &Path, content: &str) {
     }
 
     let _ = std::fs::write(dest, content);
+}
+
+/// Write `content` to `dir/name`, where `name` comes from the snapshot.
+/// `name` must be one ordinary component: an absolute name would replace
+/// `dir` in the join and `..` would leave it. A refused name is skipped
+/// with a warning.
+fn write_named_file(dir: &Path, name: &str, content: &str) {
+    if !is_single_normal_component(name) {
+        eprintln!(
+            "inspectah: warning: skipping {} -- not a plain file name",
+            name.escape_debug()
+        );
+        return;
+    }
+    let _ = std::fs::write(dir.join(name), content);
 }
 
 /// Write all config files from snapshot to output_dir/config/ preserving
@@ -323,14 +339,12 @@ pub fn write_config_tree(
             // @reboot entries have empty timer_content — only write a
             // .timer file when there is actual timer content to emit.
             if !u.timer_content.is_empty() {
-                let _ = std::fs::write(
-                    systemd_dir.join(format!("{}.timer", u.name)),
-                    &u.timer_content,
-                );
+                write_named_file(&systemd_dir, &format!("{}.timer", u.name), &u.timer_content);
             }
             if !u.service_content.is_empty() {
-                let _ = std::fs::write(
-                    systemd_dir.join(format!("{}.service", u.name)),
+                write_named_file(
+                    &systemd_dir,
+                    &format!("{}.service", u.name),
                     &u.service_content,
                 );
             }
@@ -338,14 +352,12 @@ pub fn write_config_tree(
         for t in &st.systemd_timers {
             if t.source == "local" {
                 if !t.name.is_empty() && !t.timer_content.is_empty() {
-                    let _ = std::fs::write(
-                        systemd_dir.join(format!("{}.timer", t.name)),
-                        &t.timer_content,
-                    );
+                    write_named_file(&systemd_dir, &format!("{}.timer", t.name), &t.timer_content);
                 }
                 if !t.name.is_empty() && !t.service_content.is_empty() {
-                    let _ = std::fs::write(
-                        systemd_dir.join(format!("{}.service", t.name)),
+                    write_named_file(
+                        &systemd_dir,
+                        &format!("{}.service", t.name),
                         &t.service_content,
                     );
                 }
@@ -360,7 +372,7 @@ pub fn write_config_tree(
             }
             let quadlet_dir = output_dir.join("quadlet");
             let _ = std::fs::create_dir_all(&quadlet_dir);
-            let _ = std::fs::write(quadlet_dir.join(&u.name), &u.content);
+            write_named_file(&quadlet_dir, &u.name, &u.content);
         }
 
         let included_flatpaks: Vec<_> = containers
@@ -812,6 +824,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(content, "[Service]\nLimitNOFILE=65535");
+    }
+
+    /// Timer and quadlet unit names are joined onto a fixed directory: an
+    /// absolute name replaces it and `..` leaves it. Each must be one
+    /// ordinary component, and a unit beside a refused one still writes.
+    #[test]
+    fn unit_names_cannot_write_outside_the_export() {
+        use crate::render::victim_sandbox::VictimSandbox;
+
+        let s = VictimSandbox::new();
+        let victim = s.victim().to_string_lossy().into_owned();
+        // `config/etc/systemd/system/` is four levels below the export
+        // root, so five `..` reach the sandbox.
+        let up_from_systemd = "../../../../../victim/planted";
+        let mut snap = InspectionSnapshot::new();
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            generated_timer_units: vec![
+                GeneratedTimerUnit {
+                    name: up_from_systemd.into(),
+                    timer_content: "PWNED".into(),
+                    service_content: "PWNED".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                GeneratedTimerUnit {
+                    name: "backup".into(),
+                    timer_content: "[Timer]".into(),
+                    service_content: "[Service]".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+            systemd_timers: vec![SystemdTimer {
+                name: "../../../../../victim/local".into(),
+                source: "local".into(),
+                timer_content: "PWNED".into(),
+                service_content: "PWNED".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.containers = Some(ContainerSection {
+            quadlet_units: vec![
+                QuadletUnit {
+                    name: victim.clone(),
+                    content: "PWNED".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                QuadletUnit {
+                    name: "../../victim/planted.container".into(),
+                    content: "PWNED".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                QuadletUnit {
+                    name: "app.container".into(),
+                    content: "[Container]".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let before = s.outside();
+        let result = write_config_tree(&snap, &s.out());
+        s.assert_contained(&before, "unit names");
+        result.expect("a refused name is skipped, not an error");
+        for kept in [
+            "config/etc/systemd/system/backup.timer",
+            "config/etc/systemd/system/backup.service",
+            "quadlet/app.container",
+        ] {
+            assert!(s.out().join(kept).exists(), "{kept} was not written");
+        }
     }
 
     #[test]

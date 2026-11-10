@@ -16,6 +16,8 @@ use inspectah_core::util::{
     METHOD_NPM_MANIFEST, METHOD_PIP_DIST_INFO, METHOD_PYTHON_VENV, env_hash,
 };
 
+use crate::build::extract::is_single_normal_component;
+
 const HIGH_CONFIDENCE: &str = "high";
 const MEDIUM_CONFIDENCE: &str = "medium";
 
@@ -651,6 +653,19 @@ pub fn write_language_package_manifests(
             .map_err(|e| RenderError::Failed(format!("mkdir {}: {e}", dir.display())))?;
 
         for (filename, content) in &item.manifest_files {
+            // The name is a snapshot key joined onto `dir`: an absolute
+            // key would replace `dir` and `..` would leave it. Every name
+            // the Containerfile copies is a plain file name, so a refused
+            // one is never referenced and only this warning records it.
+            if !is_single_normal_component(filename) {
+                eprintln!(
+                    "inspectah: warning: skipping language-package manifest for {}: \
+                     {} is not a plain file name",
+                    item.path.escape_debug(),
+                    filename.escape_debug()
+                );
+                continue;
+            }
             let output = if redact {
                 scrub_manifest_auth(filename, content).into_content()
             } else {
@@ -2068,6 +2083,69 @@ mod tests {
             let expected = format!("RUN npm install -g -- '{name}'");
             assert_eq!(active_lines(&output), vec![expected.as_str()], "{output}");
         }
+    }
+
+    /// A manifest file name is a snapshot key joined onto the environment's
+    /// directory: an absolute key replaces that directory and `..` leaves
+    /// it. Only a single ordinary component is written; the legitimate
+    /// manifest beside a refused one still is.
+    #[test]
+    fn manifest_names_cannot_write_outside_the_export() {
+        use crate::render::victim_sandbox::VictimSandbox;
+        use inspectah_core::util::METHOD_PYTHON_VENV;
+
+        let s = VictimSandbox::new();
+        let victim = s.victim().to_string_lossy().into_owned();
+        let mut manifest_files = HashMap::new();
+        for hostile in [
+            victim.as_str(),
+            "../../../../victim/authorized_keys",
+            "../../../../victim/planted",
+            ".",
+            "..",
+            "sub/requirements.txt",
+        ] {
+            manifest_files.insert(hostile.to_string(), "PWNED".to_string());
+        }
+        manifest_files.insert("requirements.txt".to_string(), "flask==3.0\n".to_string());
+        let snap = InspectionSnapshot {
+            non_rpm_software: Some(NonRpmSoftwareSection {
+                items: vec![NonRpmItem {
+                    path: "/opt/app/venv".into(),
+                    name: "venv".into(),
+                    method: METHOD_PYTHON_VENV.into(),
+                    confidence: HIGH_CONFIDENCE.into(),
+                    disposition: FindingKind::included(),
+                    manifest_files,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let before = s.outside();
+        let result = write_language_package_manifests(&snap, &s.out());
+        s.assert_contained(&before, "manifest names");
+        result.expect("a refused name is skipped, not an error");
+
+        let dir = s
+            .out()
+            .join("language-packages/pip")
+            .join(env_hash("/opt/app/venv"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("requirements.txt")).expect("kept manifest"),
+            "flask==3.0\n"
+        );
+        let written: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read env dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            written,
+            vec!["requirements.txt"],
+            "only the plain name is written"
+        );
     }
 
     /// Quoting stops the shell, not npm: a token such as `--prefix=/x`

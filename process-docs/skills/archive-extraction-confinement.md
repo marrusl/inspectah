@@ -25,6 +25,18 @@ write another extractor's worth of checks inline.
 handed an unchecked path. `ConfinedRel::parent()` of a one-component path is
 empty, and `create_confined_dir` treats that as the root itself.
 
+### Snapshot fields that name one file
+
+A snapshot string that names a single file or directory under a fixed export
+directory is the same class with a smaller input: a manifest file name in
+`language_packages.rs`, a user name in `users/home/{name}/.ssh`, a timer or
+quadlet unit name in `configtree.rs`. `Path::join` with an absolute name
+replaces the base, and `..` leaves it. Check such a value with
+`is_single_normal_component` before the join, and skip a refused one with a
+warning (or a Containerfile FIXME where the Containerfile would otherwise
+`COPY` the missing file). A multi-component snapshot path, such as a config
+file's, goes through `validate_path` or `confined_rel` instead.
+
 ## Why each part is needed
 
 - **Component check alone** misses a symlink entry followed by a regular file at

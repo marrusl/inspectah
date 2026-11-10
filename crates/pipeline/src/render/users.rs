@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 
 use super::safety::sanitize_shell_value;
+use crate::build::extract::is_single_normal_component;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -373,6 +374,13 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         if keys.is_empty() || sanitize_shell_value(name).is_none() {
             continue;
         }
+        // `stage_ssh_keys` refuses this name, so there is no file to copy.
+        if !is_single_normal_component(name) {
+            body.push(format!(
+                "# FIXME: SSH keys for user {name} not staged: the name is not a single path component"
+            ));
+            continue;
+        }
         let uid = uid_field(u, "uid");
         let gid = uid_field(u, "gid");
         let home = str_field(u, "home");
@@ -416,6 +424,16 @@ pub fn stage_ssh_keys(snap: &InspectionSnapshot, output_dir: &Path) -> io::Resul
         let name = str_field(u, "name");
         let keys = ssh_keys(u);
         if name.is_empty() || keys.is_empty() {
+            continue;
+        }
+        // The name comes from the snapshot and is joined into the path:
+        // `..` in it would stage the keys outside the export.
+        if !is_single_normal_component(name) {
+            eprintln!(
+                "inspectah: warning: SSH keys for user {} not staged: \
+                 the name is not a single path component",
+                name.escape_debug()
+            );
             continue;
         }
 
@@ -727,6 +745,51 @@ mod tests {
         let content = std::fs::read_to_string(&key_file).unwrap();
         assert!(content.contains("ssh-rsa AAAA"), "key content missing");
         assert!(content.ends_with('\n'), "should end with newline");
+    }
+
+    /// The user name is joined into `users/home/{name}/.ssh`, so a name
+    /// carrying `..` reaches outside the export. Real user names are one
+    /// component; any other is refused by the stager and by the
+    /// Containerfile, which says so in a FIXME instead of a `COPY` of a
+    /// file nobody wrote.
+    #[test]
+    fn ssh_staging_names_cannot_write_outside_the_export() {
+        use crate::render::victim_sandbox::VictimSandbox;
+
+        // `users/home/` is two levels below the export root, so three
+        // `..` reach the sandbox and the victim's directory.
+        for hostile in ["../../../victim", "..", "a/../../../../victim"] {
+            let s = VictimSandbox::new();
+            let mut user = test_user();
+            user["name"] = serde_json::json!(hostile);
+            user["home"] = serde_json::json!("/home/x");
+            let snap = snap_with(vec![user, test_user()], vec![]);
+
+            let before = s.outside();
+            let result = stage_ssh_keys(&snap, &s.out());
+            s.assert_contained(&before, hostile);
+            result.expect("a refused name is skipped, not an error");
+            assert!(
+                s.out()
+                    .join("users/home/alice/.ssh/authorized_keys")
+                    .exists(),
+                "{hostile}: the ordinary user beside it is still staged"
+            );
+
+            let cf = render_containerfile_users(&snap).join("\n");
+            assert!(
+                !cf.contains(&format!("COPY users/home/{hostile}/")),
+                "{hostile}: COPY of an unstaged file: {cf}"
+            );
+            assert!(
+                cf.contains(&format!("# FIXME: SSH keys for user {hostile} not staged")),
+                "{hostile}: no FIXME for the refused user: {cf}"
+            );
+            assert!(
+                cf.contains("COPY users/home/alice/.ssh/authorized_keys"),
+                "{cf}"
+            );
+        }
     }
 
     #[test]

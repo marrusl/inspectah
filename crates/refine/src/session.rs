@@ -9,6 +9,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::repo::RepoId;
 use inspectah_pipeline::build::extract::{
     ArchiveViolation, EntryKind, SeenPaths, confined_rel, create_confined_dir,
+    is_single_normal_component,
 };
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
@@ -3703,15 +3704,6 @@ const UNMANAGED_DIR: &str = "unmanaged";
 
 /// The source tarball prefix that routes an entry into [`UNMANAGED_DIR`].
 const UNMANAGED_PREFIX: &str = "unmanaged/";
-
-/// True when `rel` is exactly one ordinary path component: no `..`, no
-/// root, no nesting, nothing that changes meaning when joined onto a
-/// directory.
-fn is_single_normal_component(rel: &str) -> bool {
-    let mut components = Path::new(rel).components();
-    matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-}
 
 /// Extract `unmanaged/` and `repoless-packages/` from the source scan
 /// tarball into the export directory, filtering by include flags from the

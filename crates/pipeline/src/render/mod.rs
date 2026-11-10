@@ -144,6 +144,71 @@ pub fn render_all(
     Ok(())
 }
 
+/// A sandbox for tests of export writers that take names from the
+/// snapshot: `export/` is the root a writer is given, and
+/// `victim/authorized_keys` is what an escape would hit.
+#[cfg(test)]
+pub(crate) mod victim_sandbox {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    /// The victim's bytes before any writer runs.
+    pub(crate) const ORIGINAL: &[u8] = b"ORIGINAL";
+
+    pub(crate) struct VictimSandbox {
+        dir: tempfile::TempDir,
+    }
+
+    impl VictimSandbox {
+        pub(crate) fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir(dir.path().join("export")).expect("export dir");
+            std::fs::create_dir(dir.path().join("victim")).expect("victim dir");
+            std::fs::write(dir.path().join("victim/authorized_keys"), ORIGINAL)
+                .expect("victim file");
+            Self { dir }
+        }
+
+        pub(crate) fn root(&self) -> &Path {
+            self.dir.path()
+        }
+
+        pub(crate) fn out(&self) -> PathBuf {
+            self.root().join("export")
+        }
+
+        pub(crate) fn victim(&self) -> PathBuf {
+            self.root().join("victim/authorized_keys")
+        }
+
+        /// Every path under the sandbox outside `export/`, without
+        /// following links.
+        pub(crate) fn outside(&self) -> BTreeSet<PathBuf> {
+            walkdir::WalkDir::new(self.root())
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| e.path() != self.out())
+                .map(|e| e.expect("walk").path().to_path_buf())
+                .collect()
+        }
+
+        /// The victim still holds its original bytes and nothing appeared
+        /// outside the export root since `before`.
+        pub(crate) fn assert_contained(&self, before: &BTreeSet<PathBuf>, what: &str) {
+            assert_eq!(
+                std::fs::read(self.victim()).expect("read victim"),
+                ORIGINAL,
+                "{what}: the victim was written"
+            );
+            assert_eq!(
+                &self.outside(),
+                before,
+                "{what}: something appeared outside the export root"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

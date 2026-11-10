@@ -168,6 +168,19 @@ pub fn confined_rel(rel: &str) -> Result<ConfinedRel<'_>, ArchiveViolation> {
     Ok(ConfinedRel(path))
 }
 
+/// True when `name` is exactly one ordinary path component: no `..`, no
+/// root, no nesting, nothing that changes meaning when joined onto a
+/// directory.
+///
+/// A snapshot field that names one file or directory beneath a fixed
+/// export directory (a manifest file name, a user name, a unit name) must
+/// pass this before it is joined: `Path::join` with an absolute name
+/// replaces the base, and `..` leaves it.
+pub fn is_single_normal_component(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 /// Create `root/rel` as a directory chain one component at a time and
 /// return it.
 ///
