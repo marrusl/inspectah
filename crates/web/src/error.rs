@@ -5,6 +5,14 @@ use serde_json::json;
 
 pub struct AppError(pub RefineError);
 
+/// The server-log line for an error. Its text can carry snapshot paths
+/// and the upload directory, which derives from the tarball's filename,
+/// so control characters are escaped: a newline would forge a log line
+/// and an ESC would reach the operator's terminal.
+fn log_line(err: &RefineError) -> String {
+    format!("refine: {}", err.to_string().escape_debug())
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match &self.0 {
@@ -49,7 +57,7 @@ impl IntoResponse for AppError {
             // message names at most the basename the operator chose; the
             // detail, which names the upload directory, goes to the log.
             RefineError::StagedFileRefused(refusal) => {
-                eprintln!("refine: {}", self.0);
+                eprintln!("{}", log_line(&self.0));
                 (StatusCode::CONFLICT, refusal.public_message())
             }
             // Internal errors — do not leak details
@@ -120,6 +128,27 @@ mod tests {
             assert_eq!(body, expected);
             assert!(!body.contains('/'), "no path separator: {body}");
         }
+    }
+
+    /// The log detail names paths from the snapshot and the upload
+    /// directory, which derives from the tarball's filename. A newline
+    /// there would forge a second log line, and an ESC would drive the
+    /// operator's terminal.
+    #[test]
+    fn the_refusal_log_line_escapes_control_characters() {
+        let err = RefineError::StagedFileRefused(StagedFileRefusal::new(
+            StagedFileRefusalReason::OutsideUploadDir,
+            None,
+            "/tmp/scan\nrefine: forged\u{1b}[2J.rpm".into(),
+        ));
+        let line = log_line(&err);
+        assert!(!line.chars().any(char::is_control), "raw control: {line:?}");
+        assert!(line.contains(r"scan\nrefine: forged"), "{line}");
+        assert!(line.contains(r"\u{1b}[2J"), "{line}");
+        assert!(
+            line.starts_with("refine: refusing to remove a staged file: "),
+            "{line}"
+        );
     }
 
     #[test]
