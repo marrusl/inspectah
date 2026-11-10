@@ -13,7 +13,13 @@ covers a different caller.
 1. **`host_guard`: the request must be addressed to a loopback name.**
    The `Host` header, and an absolute-form request target's authority when
    there is one, must name `127.0.0.1`, `localhost` or `[::1]`, with any
-   port or none. A missing `Host` is refused. This is the DNS-rebinding
+   port or none. More than one `Host` field is refused, even when every
+   value is loopback. An HTTP/1.x request must carry exactly one `Host`,
+   absolute-form target or not (RFC 9112 §3.2). An HTTP/2 request may
+   carry its authority in `:authority` alone, which hyper maps into the
+   request URI, and that authority is checked the same way (RFC 9113
+   §8.3.1); when it also sends `Host`, both must pass. A request naming
+   no authority at all is refused. This is the DNS-rebinding
    defense: once an attacker's domain resolves to 127.0.0.1, its page is
    same-origin with refine and the browser lets it read every GET; `Host`
    is the one thing that still carries the attacker's name. Any port is
@@ -59,8 +65,12 @@ carries no `Host`, so the raw router answers it with 403. The `app()`
 helper in each `crates/web/tests/*.rs` file layers `with_loopback_host` on
 top, which inserts `Host: localhost:8642` only when the test set none.
 Use the helper for handler tests; use `inspectah_web::router(...)`
-directly when the test is about a missing `Host`. Clients over a real
-socket (`reqwest`, `curl`, browsers) always send `Host`.
+directly when the test controls the `Host` fields itself (none, two) or
+the HTTP version. `Request::builder()` defaults to HTTP/1.1; an HTTP/2
+request with only `:authority` is built with `.version(Version::HTTP_2)`
+and an absolute URI, which is how hyper hands one to the router.
+HTTP/1.1 clients over a real socket (`reqwest`, `curl`, browsers) always
+send `Host`.
 
 ## The Vite dev proxy
 

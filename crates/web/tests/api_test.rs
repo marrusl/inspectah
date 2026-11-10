@@ -158,6 +158,79 @@ async fn a_request_without_host_is_refused() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// Sends `req` to the raw router, without the helper that supplies a Host,
+/// so the test controls every Host field and the HTTP version.
+async fn raw_status(req: Request<Body>) -> StatusCode {
+    inspectah_web::router(test_state(), "http://localhost:8642")
+        .oneshot(req)
+        .await
+        .unwrap()
+        .status()
+}
+
+async fn status_with_two_hosts(first: &str, second: &str) -> StatusCode {
+    raw_status(
+        Request::builder()
+            .uri("/api/health")
+            .header("host", first)
+            .header("host", second)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+}
+
+/// HTTP/1.1 requires exactly one Host field (RFC 9112 §3.2). A foreign
+/// second value must not hide behind a loopback first one.
+#[tokio::test]
+async fn a_foreign_second_host_field_is_refused() {
+    let status = status_with_two_hosts("127.0.0.1:8642", "attacker.example:8642").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Two Host fields are refused even when both name the loopback, rather
+/// than picking one.
+#[tokio::test]
+async fn two_loopback_host_fields_are_refused() {
+    let status = status_with_two_hosts("127.0.0.1:8642", "localhost:8642").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// An HTTP/1.1 absolute-form target still needs its Host field; the
+/// target's own authority does not stand in for it.
+#[tokio::test]
+async fn an_http1_absolute_form_target_without_host_is_refused() {
+    let status = raw_status(
+        Request::builder()
+            .uri("http://127.0.0.1:8642/api/health")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// HTTP/2 carries the authority in `:authority`, which hyper maps into the
+/// request URI, and a client need not send Host as well (RFC 9113 §8.3.1).
+/// That authority is still checked.
+#[tokio::test]
+async fn an_http2_request_with_only_an_authority_is_checked_on_it() {
+    for (authority, expected) in [
+        ("127.0.0.1:8642", StatusCode::OK),
+        ("attacker.example:8642", StatusCode::FORBIDDEN),
+    ] {
+        let status = raw_status(
+            Request::builder()
+                .version(axum::http::Version::HTTP_2)
+                .uri(format!("http://{authority}/api/health"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, expected, ":authority {authority}");
+    }
+}
+
 /// An absolute-form request target names its own authority, which takes
 /// precedence over `Host`; a loopback `Host` must not launder it.
 #[tokio::test]

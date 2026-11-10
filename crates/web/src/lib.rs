@@ -96,20 +96,32 @@ fn is_loopback_authority(authority: &str) -> bool {
 ///
 /// Closes DNS rebinding: once an attacker's name resolves to 127.0.0.1,
 /// its page is same-origin with this server and the browser lets it read
-/// every GET. The `Host` header still carries the attacker's name. A
-/// request with no `Host` is refused too, and an absolute-form target's
-/// authority, which takes precedence over `Host`, must pass as well.
+/// every GET. The `Host` header still carries the attacker's name.
+///
+/// More than one `Host` field is refused. HTTP/1.x must carry exactly one
+/// (RFC 9112 §3.2), absolute-form target or not. HTTP/2 and later may
+/// carry the authority in `:authority` alone, which hyper maps into the
+/// request URI (RFC 9113 §8.3.1). Every authority named, `Host` and the
+/// URI's alike, must be a loopback one, and a request naming none is
+/// refused.
 async fn host_guard(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let header_host = req
+    let host_fields: Vec<&str> = req
         .headers()
-        .get(axum::http::header::HOST)
-        .map(|h| h.to_str().unwrap_or(""));
+        .get_all(axum::http::header::HOST)
+        .iter()
+        .map(|h| h.to_str().unwrap_or(""))
+        .collect();
+    let host_count_ok = if req.version() >= axum::http::Version::HTTP_2 {
+        host_fields.len() <= 1
+    } else {
+        host_fields.len() == 1
+    };
     let uri_authority = req.uri().authority().map(|a| a.as_str());
-    let named: Vec<&str> = header_host.into_iter().chain(uri_authority).collect();
-    if named.is_empty() || !named.iter().all(|a| is_loopback_authority(a)) {
+    let named: Vec<&str> = host_fields.into_iter().chain(uri_authority).collect();
+    if !host_count_ok || named.is_empty() || !named.iter().all(|a| is_loopback_authority(a)) {
         return (
             StatusCode::FORBIDDEN,
             axum::response::Json(serde_json::json!({"error": "host not allowed"})),
