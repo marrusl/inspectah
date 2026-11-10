@@ -3363,6 +3363,66 @@ async fn deleting_a_dnf_cached_package_is_refused_not_reported_missing() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn deleting_an_upload_recorded_outside_the_upload_directory_names_only_the_basename() {
+    // A scanned host can set `uploaded: true` with a `cache_path` outside
+    // the upload directory. The removal refuses it, and the operator is
+    // told which file was refused -- the basename, which is the name they
+    // chose -- and nothing about where the upload directory lives.
+    let tmp = tempfile::tempdir().unwrap();
+    let elsewhere = tmp.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    let outside = elsewhere.join("epel-release-9-12.el9.noarch.rpm");
+    std::fs::write(&outside, SNAPSHOT_SUPPLIED_SECRET).unwrap();
+    let state = upload_state_from_scan(
+        &tmp,
+        serde_json::json!({
+            "name": "epel-release",
+            "version": "9",
+            "release": "11.el9",
+            "arch": "noarch",
+            "repoless_annotation": "No repo source",
+            "repoless_cached": true,
+            "uploaded": true,
+            "cache_path": outside.to_string_lossy(),
+        }),
+    );
+    state.session.lock().unwrap().ensure_upload_dir().unwrap();
+    let app = app(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/upload-rpm/epel-release.noarch")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let raw = String::from_utf8(bytes.to_vec()).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["error"],
+        "refusing to remove epel-release-9-12.el9.noarch.rpm: \
+         the snapshot records it outside this session's upload directory"
+    );
+    let tmp_path = tmp.path().to_string_lossy();
+    assert!(
+        !raw.contains(tmp_path.as_ref()),
+        "the response names no host directory: {raw}"
+    );
+    assert!(
+        !raw.contains('/'),
+        "the response carries no path separator at all: {raw}"
+    );
+    assert!(outside.exists(), "and nothing is deleted");
+}
+
 /// Stage one part file through the real `stage`, without committing it.
 async fn stage_part(
     dir: &std::path::Path,

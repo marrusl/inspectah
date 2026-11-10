@@ -213,10 +213,11 @@ impl Harness {
 }
 
 /// The text of a `TarballError`, which is a refusal's whole message.
-fn tarball_message(err: RefineError) -> String {
+/// The log-facing text of a staged-file removal refusal.
+fn refusal_message(err: RefineError) -> String {
     match err {
-        RefineError::TarballError(message) => message,
-        other => panic!("expected TarballError, got {other:?}"),
+        RefineError::StagedFileRefused(_) => err.to_string(),
+        other => panic!("expected StagedFileRefused, got {other:?}"),
     }
 }
 
@@ -1184,7 +1185,7 @@ fn removal_is_confined_to_the_staging_directory() {
         .expect_err("a cache_path outside the upload directory is refused");
 
     assert_eq!(
-        tarball_message(err),
+        refusal_message(err),
         format!(
             "refusing to remove a staged file: id_ed25519.rpm is not in {}",
             h.upload_dir.display()
@@ -1210,7 +1211,7 @@ fn removal_is_confined_to_the_staging_directory() {
         .expect_err("a symlink in the upload directory is refused");
 
     assert_eq!(
-        tarball_message(err),
+        refusal_message(err),
         format!("refusing to remove a staged file: {EXACT_RPM} is not a regular file")
     );
     assert!(sentinel.exists(), "the symlink's target is not followed");
@@ -1234,7 +1235,7 @@ fn removal_is_confined_to_the_staging_directory() {
         .expect_err("a basename outside the rule is refused");
 
     assert_eq!(
-        tarball_message(err),
+        refusal_message(err),
         "refusing to remove a staged file: \
          staged filename has a disallowed byte at position 3"
     );

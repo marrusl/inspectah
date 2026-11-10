@@ -1210,33 +1210,58 @@ impl RefineSession {
     /// error. `Err` means a confinement check failed, which the caller
     /// must not treat as nothing to do.
     pub fn resolve_staged_file(&self, cache_path: &Path) -> Result<Option<PathBuf>, RefineError> {
-        let refuse = |why: &str| {
-            Err(RefineError::TarballError(format!(
-                "refusing to remove a staged file: {why}"
+        use crate::types::{StagedFileRefusal, StagedFileRefusalReason as Reason};
+        use inspectah_core::rpm_filename::StagedName;
+
+        let refuse = |reason, basename: Option<&StagedName>, detail: String| {
+            Err(RefineError::StagedFileRefused(StagedFileRefusal::new(
+                reason,
+                basename.cloned(),
+                detail,
             )))
         };
+        let raw_name = cache_path.file_name().and_then(|n| n.to_str());
+        let named = raw_name.and_then(|n| StagedName::parse(n).ok());
         let Some(canon) = self.upload_dir_canon.as_deref() else {
-            return refuse("no upload directory has been prepared");
+            return refuse(
+                Reason::NoUploadDir,
+                named.as_ref(),
+                "no upload directory has been prepared".into(),
+            );
         };
-        let Some(basename) = cache_path.file_name().and_then(|n| n.to_str()) else {
-            return refuse("its path names no file");
+        let Some(raw_name) = raw_name else {
+            return refuse(Reason::NoFileName, None, "its path names no file".into());
         };
-        if let Err(e) = inspectah_core::rpm_filename::validate_staged_name(basename) {
-            return refuse(&format!("{e}"));
-        }
+        let basename = match StagedName::parse(raw_name) {
+            Ok(name) => name,
+            Err(e) => return refuse(Reason::InvalidName, None, format!("{e}")),
+        };
         let resolved_parent = cache_path
             .parent()
             .and_then(|parent| parent.canonicalize().ok());
         if resolved_parent.as_deref() != Some(canon) {
-            return refuse(&format!("{basename} is not in {}", canon.display()));
+            return refuse(
+                Reason::OutsideUploadDir,
+                Some(&basename),
+                format!("{} is not in {}", basename.as_str(), canon.display()),
+            );
         }
 
-        let target = canon.join(basename);
+        let target = canon.join(basename.as_str());
         match std::fs::symlink_metadata(&target) {
             Ok(md) if md.file_type().is_file() => Ok(Some(target)),
-            Ok(_) => refuse(&format!("{basename} is not a regular file")),
+            Ok(_) => refuse(
+                Reason::NotRegularFile,
+                Some(&basename),
+                format!("{} is not a regular file", basename.as_str()),
+            ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => refuse(&format!("{basename}: {e}")),
+            // The check could not complete, which is a server fault rather
+            // than a verdict on the snapshot: it stays a flat 500.
+            Err(e) => Err(RefineError::TarballError(format!(
+                "refusing to remove a staged file: {}: {e}",
+                basename.as_str()
+            ))),
         }
     }
 
@@ -8434,15 +8459,25 @@ mod tests {
             .unmark_uploaded_rpm("epel-release", "noarch")
             .expect_err("a cache_path outside the upload directory is refused");
 
-        let RefineError::TarballError(message) = err else {
-            panic!("expected TarballError, got {err:?}");
+        let RefineError::StagedFileRefused(refusal) = &err else {
+            panic!("expected StagedFileRefused, got {err:?}");
         };
+        // The log keeps the directory; the public message never has it.
         assert_eq!(
-            message,
+            err.to_string(),
             format!(
                 "refusing to remove a staged file: id_ed25519.rpm is not in {}",
                 dir.canonicalize().unwrap().display()
             )
+        );
+        assert_eq!(
+            refusal.reason(),
+            crate::types::StagedFileRefusalReason::OutsideUploadDir
+        );
+        assert_eq!(
+            refusal.public_message(),
+            "refusing to remove id_ed25519.rpm: \
+             the snapshot records it outside this session's upload directory"
         );
         assert!(outside.exists(), "and nothing is deleted");
         assert!(

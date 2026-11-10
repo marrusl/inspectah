@@ -756,8 +756,105 @@ pub enum RefineError {
     AdvisoryNotToggleable(String),
     #[error("nothing to change: {0}")]
     NoopTarget(String),
+    /// Removing an upload was refused because the snapshot's record of
+    /// the staged file failed a confinement check. Display is the
+    /// log-facing text; the HTTP boundary uses
+    /// [`StagedFileRefusal::public_message`].
+    #[error("refusing to remove a staged file: {}", .0.log_detail())]
+    StagedFileRefused(StagedFileRefusal),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Which confinement check refused a staged-file removal.
+///
+/// Each reason has a fixed public wording that names no path, so what an
+/// HTTP response says about a refusal is chosen here and not assembled
+/// from whatever the snapshot recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagedFileRefusalReason {
+    /// The session has no prepared upload directory to confine to.
+    NoUploadDir,
+    /// The recorded path has no final component.
+    NoFileName,
+    /// The recorded basename fails the staged-name allowlist.
+    InvalidName,
+    /// The recorded path's parent is not the upload directory.
+    OutsideUploadDir,
+    /// The name exists in the upload directory but is not a regular file.
+    NotRegularFile,
+}
+
+impl StagedFileRefusalReason {
+    fn public_text(self) -> &'static str {
+        match self {
+            Self::NoUploadDir => "no upload directory has been prepared",
+            Self::NoFileName => "the snapshot records a path that names no file",
+            Self::InvalidName => "the snapshot records a name that is not a valid staged filename",
+            Self::OutsideUploadDir => {
+                "the snapshot records it outside this session's upload directory"
+            }
+            Self::NotRegularFile => "it is not a regular file",
+        }
+    }
+}
+
+/// A refused staged-file removal, with what an HTTP response may say kept
+/// apart from what only the server log may say.
+///
+/// The public half is the reason and, when the recorded name passed the
+/// allowlist, the basename: the operator chose that name, and
+/// [`StagedName`](inspectah_core::rpm_filename::StagedName) cannot hold a
+/// path separator or a control byte. The log half may carry the upload
+/// directory and any other host path, and never reaches a response.
+#[derive(Debug)]
+pub struct StagedFileRefusal {
+    reason: StagedFileRefusalReason,
+    basename: Option<inspectah_core::rpm_filename::StagedName>,
+    log_detail: String,
+}
+
+impl StagedFileRefusal {
+    /// Build a refusal. `log_detail` is for the server log only.
+    pub fn new(
+        reason: StagedFileRefusalReason,
+        basename: Option<inspectah_core::rpm_filename::StagedName>,
+        log_detail: String,
+    ) -> Self {
+        if let Some(name) = &basename {
+            // Guaranteed by `StagedName`'s allowlist; asserted because the
+            // public message relies on it.
+            debug_assert!(
+                !name.as_str().contains('/') && !name.as_str().chars().any(char::is_control),
+                "a StagedName is a single printable path component"
+            );
+        }
+        Self {
+            reason,
+            basename,
+            log_detail,
+        }
+    }
+
+    /// Which check refused the removal.
+    pub fn reason(&self) -> StagedFileRefusalReason {
+        self.reason
+    }
+
+    /// The text an HTTP response may carry: the reason and, when it passed
+    /// the allowlist, the basename. Never a directory.
+    pub fn public_message(&self) -> String {
+        let why = self.reason.public_text();
+        match &self.basename {
+            Some(name) => format!("refusing to remove {}: {why}", name.as_str()),
+            None => format!("refusing to remove a staged file: {why}"),
+        }
+    }
+
+    /// The full detail for the server log, which may name host paths.
+    pub fn log_detail(&self) -> &str {
+        &self.log_detail
+    }
 }
 
 #[cfg(test)]
