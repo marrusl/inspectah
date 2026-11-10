@@ -166,10 +166,6 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
             let origin = format!("http://{actual_addr}");
 
             eprintln!("Starting refine server on {origin}");
-            eprintln!(
-                "If accessing remotely: ssh -L {0}:localhost:{0} <host>",
-                actual_addr.port()
-            );
             eprintln!("Press Ctrl-C to stop.");
 
             if args.open {

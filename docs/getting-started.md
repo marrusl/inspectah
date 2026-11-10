@@ -49,6 +49,16 @@ brew install inspectah
 
 Apple Silicon only. For Intel Macs, build from source below.
 
+### Windows (WSL2)
+
+inspectah ships no Windows binary, only Linux and macOS (Apple Silicon)
+builds. To run `inspectah refine` on a Windows workstation, install the
+Linux binary inside WSL2 and run refine there. WSL2 forwards localhost
+ports to Windows by default, so the printed URL should open in your
+Windows browser. This should work but has not been tested yet. If the
+browser does not open automatically, paste the URL that refine prints
+into your Windows browser.
+
 ### From source
 
 ```bash
@@ -225,18 +235,22 @@ resolution workflow.
 ## Open the refine UI
 
 The refine command starts a local web server so you can review and
-curate the scan findings in your browser:
+curate the scan findings in your browser. Run it on your workstation, not
+on the scanned host. Refine needs nothing from the scanned host: it works
+from the tarball, plus any RPMs you upload in the browser. Copy the
+tarball over first. This command is illustrative: replace `user@host`
+with your own login and host, and the file name with your tarball's.
 
 ```bash
+scp user@host:rhel9-20261104-222606.tar.gz .
 inspectah refine rhel9-*.tar.gz
 ```
 
-You will see these four lines, which inspectah prints to stderr:
+You will see these three lines, which inspectah prints to stderr:
 
 ```
 Loading snapshot...
 Starting refine server on http://127.0.0.1:8642
-If accessing remotely: ssh -L 8642:localhost:8642 <host>
 Press Ctrl-C to stop.
 ```
 
@@ -250,15 +264,14 @@ include/exclude toggle; Advisory and Inventory items do not. Your changes
 are autosaved: close the browser and stop the server with Ctrl-C when
 you are done.
 
-If you are accessing a remote host over SSH, forward the port. This
-command is illustrative: replace `user@remote-host` with your own login and
-host.
-
-```bash
-ssh -L 8642:localhost:8642 user@remote-host
-```
-
-Then open `http://127.0.0.1:8642` in your local browser.
+**Running refine on the scanned host.** This is possible but not
+recommended. Forward the port from your workstation with
+`ssh -L 8642:127.0.0.1:8642 user@host`, then open `http://127.0.0.1:8642`.
+Use `127.0.0.1` in the forward, not `localhost`: `localhost` can resolve
+to `::1`, which refine does not listen on. Refine has no per-session
+authentication yet, so while it runs, other local users on that host can
+reach its port and read and change your session. Use this only on a host
+where you are the only user.
 
 {% raw %}
 <div class="diagram-embed" style="margin: 2em 0;">

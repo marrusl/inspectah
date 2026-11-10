@@ -36,6 +36,11 @@ client. Any process on the host can `curl` the API with a loopback `Host`
 and no `Origin`, reads and writes alike. That matters wherever refine runs
 on a multi-user host.
 
+The documented workflow is workstation-first (scan on the host, copy the
+tarball, run `inspectah refine` locally), so the SSH tunnel is now a
+caveated side note. The tunnel, with refine running on a shared host, is
+the case the deferred per-session token would protect.
+
 ## The fallback-layer trap (axum 0.8)
 
 `Router::layer` wraps only the routes and the fallback that exist when it
@@ -70,6 +75,6 @@ Vite's own `allowedHosts` check stops rebinding against the dev server.
 
 ## Related
 
-- `docs/getting-started.md`, refine section: the documented SSH workflow.
+- `docs/getting-started.md`, refine section: the documented workstation-first workflow and the caveated SSH note.
 - [real-host-validation-runs](real-host-validation-runs.md): driving refine
   over HTTP with `curl` (no `Origin`, loopback `Host`).

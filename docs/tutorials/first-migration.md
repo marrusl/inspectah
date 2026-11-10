@@ -204,33 +204,38 @@ decide *what to do about it*.
 
 ## Step 4: Open the refine UI
 
-Start the refine server, pointing it at your scan tarball:
+Run refine on your workstation, not on the scanned host. Refine needs
+nothing from the scanned host: it works from the tarball, plus any RPMs
+you upload in the browser. Copy the scan tarball to your workstation,
+then start the refine server. The `scp` line is illustrative: replace
+`user@host` with your own login and host.
 
 ```bash
+scp user@host:rhel9-20261104-222606.tar.gz .
 inspectah refine rhel9-20261104-222606.tar.gz
 ```
 
-You will see these four lines, all printed to standard error:
+You will see these three lines, all printed to standard error:
 
 ```
 Loading snapshot...
 Starting refine server on http://127.0.0.1:8642
-If accessing remotely: ssh -L 8642:localhost:8642 <host>
 Press Ctrl-C to stop.
 ```
 
 Your browser opens automatically. If it does not, navigate to
 `http://127.0.0.1:8642`.
 
-If you are working on a remote host over SSH, forward the port from your
-workstation first. This line is a schematic example: replace `user@host`
-with your own login and host.
+Running refine on the scanned host and forwarding the port is possible
+but not recommended: `ssh -L 8642:127.0.0.1:8642 user@host`. Use
+`127.0.0.1` in the forward, not `localhost`, which can resolve to `::1`
+where refine does not listen. Refine has no per-session authentication
+yet, so on a shared host other local users can reach its port while it
+runs. Use the forward only on a host where you are the only user.
 
-```bash
-ssh -L 8642:localhost:8642 user@host
-```
-
-Then open `http://127.0.0.1:8642` in your local browser.
+On Windows, run the Linux binary inside WSL2 and open the printed URL in
+your Windows browser. This should work but has not been tested yet; if
+the browser does not open automatically, paste the URL refine prints.
 
 The refine UI groups findings into eight sections: Packages, System
 Configuration, Services & Scheduling, Users & Identity, Network, Storage,
@@ -317,9 +322,8 @@ in this export.
 
 The browser saves the export as `inspectah-refine-output.tar.gz` in its
 download directory (often `~/Downloads`) on the machine that runs the
-browser. Through the port forward above, that is your workstation, not
-the host. Copy the file to the host where you will build, for example
-with `scp`.
+browser, which is your workstation. Copy the file to the host where you
+will build, for example with `scp`.
 
 The export is a different tree from the scan tarball. It has no
 `README.md`, `audit-report.html`, `secrets-review.md`, or

@@ -145,7 +145,6 @@ It prints its origin:
 Loading snapshot...
 warning: snapshot has no redaction metadata. It may contain unredacted sensitive data.
 Starting refine server on http://127.0.0.1:58727
-If accessing remotely: ssh -L 58727:localhost:58727 <host>
 Press Ctrl-C to stop.
 ```
 
