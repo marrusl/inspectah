@@ -64,6 +64,18 @@ packer (`render/tarball.rs`) stores a link with `read_link` rather than followin
 it. Unmanaged symlinks are kept, not skipped: the export tree must agree with its
 snapshot.
 
+## The session loader's limits
+
+`crates/refine/src/tarball.rs` `extract_safe` unpacks a supplied tarball with
+`unpack_in` under entry-count and size limits. Count `entry.size()`, never
+`entry.header().size()`: the `tar` crate extracts the PAX `size` when one is
+present, so the ustar header can say 0 for an entry that unpacks to gigabytes.
+The loader then reads `inspection-snapshot.json`, which extraction may have
+left as a symlink to anything (`/dev/zero`, a FIFO): check it with
+`symlink_metadata` before opening, and bound the read. The `tar` crate still
+buffers PAX and GNU long-name records in memory with no bound of its own;
+closing that needs a cap on the decompressed stream.
+
 ## Trust assumption
 
 The ancestor walk and the leaf open are not atomic. That is safe only because

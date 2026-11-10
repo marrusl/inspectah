@@ -3,6 +3,7 @@ use crate::session::RefineSession;
 use crate::types::RefineError;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::RedactionState;
+use std::io::Read;
 use std::path::Path;
 
 const MAX_UNPACKED_SIZE: u64 = 512 * 1024 * 1024; // 512 MiB
@@ -20,13 +21,7 @@ pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
 
     // Load snapshot
     let snap_path = root.join("inspection-snapshot.json");
-    if !snap_path.exists() {
-        return Err(RefineError::SnapshotLoad(
-            "missing inspection-snapshot.json".into(),
-        ));
-    }
-
-    let snap_json = std::fs::read_to_string(&snap_path)?;
+    let snap_json = read_snapshot(&snap_path)?;
 
     // load_for_refine handles the full pipeline:
     // raw-JSON include patching → deserialize → schema version check
@@ -98,11 +93,10 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
             )));
         }
 
-        // Single file size check
-        let size = entry
-            .header()
-            .size()
-            .map_err(|e| RefineError::TarballError(e.to_string()))?;
+        // Single file size check. `entry.size()` is the size the reader
+        // extracts, which a PAX `size` record overrides; the ustar header
+        // can say 0 for an entry that unpacks to gigabytes.
+        let size = entry.size();
         if size > MAX_SINGLE_FILE {
             return Err(RefineError::ArchiveSafety(format!(
                 "single file exceeds {} MiB",
@@ -125,6 +119,45 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
     }
 
     Ok(())
+}
+
+/// Read the extracted snapshot, which must be a regular file inside the
+/// extraction root, within [`MAX_SINGLE_FILE`].
+///
+/// The archive may carry a symlink at the snapshot's name, and extraction
+/// keeps symlinks with their targets unrestricted. Following one would
+/// read whatever it names: `/dev/zero` never ends, and a FIFO or a
+/// blocking device would hang the load. `symlink_metadata` refuses the
+/// link before anything is opened. The root is a fresh private tempdir,
+/// so nothing can replace the file between the check and the open.
+fn read_snapshot(snap_path: &Path) -> Result<String, RefineError> {
+    let meta = match std::fs::symlink_metadata(snap_path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(RefineError::SnapshotLoad(
+                "missing inspection-snapshot.json".into(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if !meta.file_type().is_file() {
+        return Err(RefineError::ArchiveSafety(
+            "inspection-snapshot.json is not a regular file".into(),
+        ));
+    }
+    // Extraction already bounds the entry; the read is bounded as well so
+    // the limit does not rest on that check alone.
+    let mut snap_json = String::new();
+    std::fs::File::open(snap_path)?
+        .take(MAX_SINGLE_FILE + 1)
+        .read_to_string(&mut snap_json)?;
+    if snap_json.len() as u64 > MAX_SINGLE_FILE {
+        return Err(RefineError::ArchiveSafety(format!(
+            "inspection-snapshot.json exceeds {} MiB",
+            MAX_SINGLE_FILE / (1024 * 1024)
+        )));
+    }
+    Ok(snap_json)
 }
 
 fn flatten_if_needed(dir: &Path) -> Result<std::path::PathBuf, RefineError> {

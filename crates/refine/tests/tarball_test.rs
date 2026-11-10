@@ -231,3 +231,124 @@ fn reject_missing_snapshot_json() {
     let result = inspectah_refine::tarball::from_tarball(&tarball_path);
     assert!(matches!(result, Err(RefineError::SnapshotLoad(_))));
 }
+
+/// Write `entries` into a gzip tarball, one header per row, appending
+/// each row's bytes as given. Nothing here checks that a header's size
+/// matches its data: that mismatch is what a hostile archive is made of.
+fn write_raw_tarball(
+    dir: &std::path::Path,
+    entries: &[(&str, tar::EntryType, &[u8], &str)],
+) -> std::path::PathBuf {
+    let tarball_path = dir.join("raw.tar.gz");
+    let f = std::fs::File::create(&tarball_path).unwrap();
+    let gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+    let mut tar = tar::Builder::new(gz);
+    for (name, entry_type, data, link) in entries {
+        let mut header = tar::Header::new_ustar();
+        header.set_path(name).unwrap();
+        header.set_entry_type(*entry_type);
+        header.set_mode(0o644);
+        header.set_size(data.len() as u64);
+        if !link.is_empty() {
+            header.set_link_name(link).unwrap();
+        }
+        header.set_cksum();
+        tar.append(&header, *data).unwrap();
+    }
+    tar.finish().unwrap();
+    tarball_path
+}
+
+/// One PAX extended-header record, `"<len> <key>=<value>\n"`, where
+/// `<len>` counts the whole record including its own digits.
+fn pax_record(key: &str, value: &str) -> Vec<u8> {
+    let body = format!(" {key}={value}\n");
+    let mut len = body.len() + 1;
+    while format!("{len}{body}").len() != len {
+        len += 1;
+    }
+    format!("{len}{body}").into_bytes()
+}
+
+#[test]
+fn pax_size_override_past_the_limit_is_refused() {
+    // The ustar header says 0 bytes; the PAX record says 1 GiB, and the
+    // tar reader extracts the PAX size. The limits must count that one.
+    const PAX_SIZE: &str = "1073741824";
+    let dir = tempdir().unwrap();
+    let record = pax_record("size", PAX_SIZE);
+    let tarball = write_raw_tarball(
+        dir.path(),
+        &[
+            ("PaxHeaders/big", tar::EntryType::XHeader, &record, ""),
+            ("big", tar::EntryType::Regular, b"", ""),
+        ],
+    );
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::ArchiveSafety(msg)) => {
+            assert!(msg.contains("exceeds"), "unexpected message: {msg}");
+        }
+        Err(other) => panic!("expected ArchiveSafety, got: {other:?}"),
+        Ok(_) => panic!("a 1 GiB PAX entry was accepted"),
+    }
+}
+
+#[test]
+fn a_symlinked_snapshot_is_refused_without_reading_it() {
+    let dir = tempdir().unwrap();
+    // A valid snapshot outside the archive: following the link would load
+    // it, so loading it at all is the failure.
+    let outside = dir.path().join("outside.json");
+    std::fs::write(
+        &outside,
+        make_test_snapshot(Some(RedactionState::FullyRedacted {
+            redacted_by: "inspectah 0.8.0".into(),
+            config_hash: "abc123".into(),
+        })),
+    )
+    .unwrap();
+    // `/dev/zero` never ends: reading it would allocate without bound.
+    for target in [outside.to_str().unwrap(), "/dev/zero"] {
+        for name in [
+            "inspection-snapshot.json",
+            "host-20260515-1430/inspection-snapshot.json",
+        ] {
+            let tarball =
+                write_raw_tarball(dir.path(), &[(name, tar::EntryType::Symlink, b"", target)]);
+            match inspectah_refine::tarball::from_tarball(&tarball) {
+                Err(RefineError::ArchiveSafety(msg)) => {
+                    assert!(msg.contains("regular file"), "{name} -> {target}: {msg}");
+                }
+                Err(other) => panic!("{name} -> {target}: expected ArchiveSafety, got: {other:?}"),
+                Ok(_) => panic!("{name} -> {target}: a symlinked snapshot was loaded"),
+            }
+        }
+    }
+}
+
+#[test]
+fn an_unmanaged_symlink_elsewhere_in_the_archive_still_loads() {
+    let dir = tempdir().unwrap();
+    let snap = make_test_snapshot(Some(RedactionState::FullyRedacted {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc123".into(),
+    }));
+    let tarball = write_raw_tarball(
+        dir.path(),
+        &[
+            (
+                "inspection-snapshot.json",
+                tar::EntryType::Regular,
+                snap.as_bytes(),
+                "",
+            ),
+            (
+                "unmanaged/etc/alt",
+                tar::EntryType::Symlink,
+                b"",
+                "/etc/alternatives/x",
+            ),
+        ],
+    );
+    inspectah_refine::tarball::from_tarball(&tarball).expect("load");
+}
