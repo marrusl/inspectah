@@ -60,6 +60,65 @@ async fn origin_guard(
     next.run(req).await
 }
 
+/// Hostnames a request may name. The server binds 127.0.0.1 only, so a
+/// legitimate request names the loopback by literal or by `localhost`. A
+/// DNS-rebinding page names its own domain, which it cannot make one of
+/// these.
+const ALLOWED_HOSTNAMES: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
+
+/// Whether an authority (`host[:port]`) names the loopback. Any port is
+/// accepted so an SSH forward to a different local port can still load
+/// the UI; writes stay pinned to the served port by `origin_guard`.
+fn is_loopback_authority(authority: &str) -> bool {
+    // `port` keeps its leading ':' so "host:" (empty port) is refused.
+    let (host, port) = if authority.starts_with('[') {
+        match authority.find(']') {
+            Some(end) => authority.split_at(end + 1),
+            None => return false,
+        }
+    } else {
+        match authority.find(':') {
+            Some(colon) => authority.split_at(colon),
+            None => (authority, ""),
+        }
+    };
+    let port_ok = port.is_empty()
+        || port
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    port_ok
+        && ALLOWED_HOSTNAMES
+            .iter()
+            .any(|allowed| host.eq_ignore_ascii_case(allowed))
+}
+
+/// Middleware that refuses any request not addressed to a loopback name.
+///
+/// Closes DNS rebinding: once an attacker's name resolves to 127.0.0.1,
+/// its page is same-origin with this server and the browser lets it read
+/// every GET. The `Host` header still carries the attacker's name. A
+/// request with no `Host` is refused too, and an absolute-form target's
+/// authority, which takes precedence over `Host`, must pass as well.
+async fn host_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let header_host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .map(|h| h.to_str().unwrap_or(""));
+    let uri_authority = req.uri().authority().map(|a| a.as_str());
+    let named: Vec<&str> = header_host.into_iter().chain(uri_authority).collect();
+    if named.is_empty() || !named.iter().all(|a| is_loopback_authority(a)) {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::response::Json(serde_json::json!({"error": "host not allowed"})),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
 pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
     let localhost_origin = served_origin.replace("://127.0.0.1", "://localhost");
     let cors = CorsLayer::new()
@@ -134,4 +193,9 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(DEFAULT_LIMIT_BYTES))
         .with_state(state)
         .fallback(assets::serve_fallback)
+        // Outermost, and after `.fallback()` on purpose: in axum 0.8 a
+        // fallback set after `.layer()` is not wrapped by that layer, so
+        // the layers above do not reach the static-asset fallback. This
+        // one must, or a rebinding page could still load through it.
+        .layer(axum::middleware::from_fn(host_guard))
 }

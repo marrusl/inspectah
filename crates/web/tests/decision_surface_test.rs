@@ -126,6 +126,18 @@ fn state(snap: InspectionSnapshot) -> Arc<AppState> {
 
 fn app(state: Arc<AppState>) -> axum::Router {
     inspectah_web::router(state, "http://localhost:8642")
+        .layer(axum::middleware::map_request(with_loopback_host))
+}
+
+/// A `oneshot` request carries no `Host`, which the router refuses; a
+/// real client always sends one.
+async fn with_loopback_host(
+    mut req: axum::http::Request<axum::body::Body>,
+) -> axum::http::Request<axum::body::Body> {
+    req.headers_mut()
+        .entry(axum::http::header::HOST)
+        .or_insert(axum::http::HeaderValue::from_static("localhost:8642"));
+    req
 }
 
 async fn get_json(app: &axum::Router, path: &str) -> Value {

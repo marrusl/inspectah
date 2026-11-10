@@ -61,6 +61,115 @@ fn test_state() -> Arc<AppState> {
 
 fn app(state: Arc<AppState>) -> axum::Router {
     inspectah_web::router(state, "http://localhost:8642")
+        .layer(axum::middleware::map_request(with_loopback_host))
+}
+
+/// A `oneshot` request carries no `Host` unless the test sets one, and the
+/// router refuses a request without a loopback `Host`. A real client
+/// always sends one, so the helper supplies it unless the test chose its
+/// own.
+async fn with_loopback_host(mut req: Request<Body>) -> Request<Body> {
+    req.headers_mut()
+        .entry(axum::http::header::HOST)
+        .or_insert(axum::http::HeaderValue::from_static("localhost:8642"));
+    req
+}
+
+async fn status_with_host(app: axum::Router, method: &str, path: &str, host: &str) -> StatusCode {
+    app.oneshot(
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", host)
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await
+    .unwrap()
+    .status()
+}
+
+/// DNS rebinding: a page on `attacker.example:8642` whose name now
+/// resolves to 127.0.0.1 is same-origin with the server as far as the
+/// browser is concerned, and its `Host` header is the only thing that
+/// still names the attacker. The static-asset fallback is covered too:
+/// it is installed after the API layers, so a guard placed with them
+/// would not reach it.
+#[tokio::test]
+async fn a_foreign_host_is_refused_on_api_routes_and_the_fallback() {
+    for path in ["/api/view", "/api/health", "/", "/assets/x.js", "/api/nope"] {
+        let status =
+            status_with_host(app(test_state()), "GET", path, "attacker.example:8642").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET {path}");
+    }
+    let status = status_with_host(app(test_state()), "POST", "/api/undo", "attacker.example").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "POST /api/undo");
+}
+
+#[tokio::test]
+async fn loopback_hosts_pass_on_any_port() {
+    for host in [
+        "127.0.0.1:8642",
+        "localhost:8642",
+        "127.0.0.1:9000",
+        "[::1]:8642",
+        "LocalHost:8642",
+        "localhost",
+        "127.0.0.1",
+        "[::1]",
+    ] {
+        let status = status_with_host(app(test_state()), "GET", "/api/health", host).await;
+        assert_eq!(status, StatusCode::OK, "Host: {host}");
+    }
+}
+
+#[tokio::test]
+async fn loopback_lookalike_hosts_are_refused() {
+    for host in [
+        "localhost.attacker.example",
+        "localhost.attacker.example:8642",
+        "127.0.0.1.nip.io:8642",
+        "attacker.example:8642@127.0.0.1",
+        "[::1].attacker.example",
+        "[::1]x:8642",
+        "127.0.0.1:86x2",
+        "127.0.0.1:",
+        "localhost.",
+        "",
+    ] {
+        let status = status_with_host(app(test_state()), "GET", "/api/health", host).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "Host: {host:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_request_without_host_is_refused() {
+    // The raw router, without the helper that supplies a Host.
+    let response = inspectah_web::router(test_state(), "http://localhost:8642")
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// An absolute-form request target names its own authority, which takes
+/// precedence over `Host`; a loopback `Host` must not launder it.
+#[tokio::test]
+async fn an_absolute_form_target_with_a_foreign_authority_is_refused() {
+    let status = status_with_host(
+        app(test_state()),
+        "GET",
+        "http://attacker.example:8642/api/health",
+        "127.0.0.1:8642",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 /// A host where `apr` is a non-leaf package the operator starts with
