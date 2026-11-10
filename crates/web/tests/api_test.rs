@@ -706,6 +706,28 @@ async fn evil_origin_post_rejected() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// Browsers send `Origin: null` from a sandboxed iframe, a `data:` URL or
+/// after a cross-origin redirect. It is a present, foreign origin, not an
+/// absent one, so it must not take the no-Origin path that `curl` uses.
+#[tokio::test]
+async fn null_origin_post_rejected() {
+    let app = app(test_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/undo")
+                .header("origin", "null")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn matching_origin_post_allowed() {
     let app = app(test_state());
