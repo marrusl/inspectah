@@ -16,7 +16,7 @@ has produced both over-rejection of legal paths and live command injection.
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and `\n` only — everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
-| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` | `\n` closes the comment; `\r` is escaped as well so no line-ending byte reaches the file |
+| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` per value, or `escape_line_terminators()` on a finished line with fixed quoted wording | `\n` closes the comment; `\r` is escaped as well so no line-ending byte reaches the file |
 
 `UNSAFE_SHELL_CHARS` is `'` and `\n`, one set serving every command site,
 which is correct only because every command site single-quotes. A new
@@ -41,6 +41,17 @@ A FIXME is a comment site too, and the one most often missed: it is
 written *because* the value failed a check, so it is the line most likely
 to carry the newline. The Scheduled Tasks section shipped its inventory
 comments and its unsafe-name FIXME raw until 2026-11-09.
+
+**Escape shared wording at the emit site, not where it is worded.** A
+comment built from a describe-style function that other surfaces also
+call, such as `OmissionReason::describe` (the `# Omitted:` line and
+refine's Omitted Services subtitle), is escaped on the finished
+Containerfile line, never inside the function: refine shows the raw
+value on its own surface, and a Containerfile escape baked into the
+shared text would show there as a literal `\n`. Use `escape_line_terminators()` on
+the whole line, not `sanitize_for_comment()`, whose quote doubling would
+turn the fixed `package 'nginx'` wording into `package ''nginx''`. The
+owner in that line shipped raw until 2026-11-10.
 
 **A renderer that references a staged file asks the stager's question.**
 When the export refuses to write a file named by a snapshot value, every

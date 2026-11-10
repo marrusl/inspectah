@@ -5,6 +5,7 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
+use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::service_intent::{
@@ -1386,4 +1387,114 @@ fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
     assert_eq!(plan.omissions.len(), 1, "{:?}", plan.lines);
     assert_eq!(plan.omissions[0].reason, OmissionReason::NotCarried);
     assert!(!acted_on(&plan.lines, "dnf-plugins-core.timer"));
+}
+
+// ---------------------------------------------------------------------------
+// A hostile owning package stays inside the `# Omitted:` comment
+// ---------------------------------------------------------------------------
+
+/// The owning package comes from the snapshot unchecked, and an imported
+/// one can hold any bytes. For every omission reason, a line terminator in
+/// the owner must not end the `# Omitted:` comment: the comment stays one
+/// line, no carriage return reaches the Containerfile, and every line that
+/// carries the payload is a comment. The plan's structured omission keeps
+/// the raw name, since refine escapes it for its own surface.
+#[test]
+fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
+    const RUN: &str = "RUN touch /tmp/injected";
+
+    for (terminator, sep) in [
+        ("newline", "\n"),
+        ("carriage return", "\r"),
+        ("CRLF", "\r\n"),
+    ] {
+        let owner = format!("x{sep}{RUN}{sep}#");
+        let change = || {
+            state_change(
+                "unit.service",
+                ServiceUnitState::Enabled,
+                Some(PresetDefault::Disable),
+                Some(owner.as_str()),
+            )
+        };
+        let services = || ServiceSection {
+            state_changes: vec![change()],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        };
+
+        let mut excluded = InspectionSnapshot::new();
+        excluded.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec![]),
+            packages_added: vec![added(&owner, "x86_64", FindingKind::excluded())],
+            ..Default::default()
+        });
+        excluded.services = Some(services());
+
+        let mut not_in_target = InspectionSnapshot::new();
+        not_in_target.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec![]),
+            ..Default::default()
+        });
+        not_in_target.services = Some(services());
+
+        let mut not_carried = leaf_snapshot(
+            vec![
+                added("vim", "x86_64", FindingKind::included()),
+                added(&owner, "x86_64", FindingKind::included()),
+            ],
+            &["vim.x86_64"],
+            &[&format!("{owner}.x86_64")],
+            serde_json::json!({ "vim.x86_64": [] }),
+            vec![change()],
+        );
+        apply_scan_package_defaults(&mut not_carried);
+
+        for (reason, snap) in [
+            (OmissionReason::PackageExcluded, excluded),
+            (OmissionReason::NotInTargetImage, not_in_target),
+            (OmissionReason::NotCarried, not_carried),
+        ] {
+            let label = format!("{reason:?}, {terminator}");
+            let plan = render_service_intent(&snap);
+            assert_eq!(plan.omissions.len(), 1, "{label}: {:?}", plan.lines);
+            assert_eq!(plan.omissions[0].reason, reason, "{label}");
+            assert_eq!(
+                plan.omissions[0].owning_package, owner,
+                "{label}: the structured omission keeps the raw name"
+            );
+
+            let comments: Vec<&String> = plan
+                .lines
+                .iter()
+                .filter(|l| l.starts_with("# Omitted:"))
+                .collect();
+            assert_eq!(comments.len(), 1, "{label}: {:?}", plan.lines);
+            assert!(
+                !comments[0].contains(['\n', '\r']),
+                "{label}: the comment holds a line terminator: {:?}",
+                comments[0]
+            );
+            assert!(
+                comments[0].contains(RUN),
+                "{label}: the payload is listed, escaped: {:?}",
+                comments[0]
+            );
+
+            let output = render_containerfile(&snap, None, None);
+            assert!(
+                !output.contains('\r'),
+                "{label}: a carriage return reached the Containerfile:\n{output}"
+            );
+            assert!(
+                output
+                    .split('\n')
+                    .filter(|l| l.contains("injected"))
+                    .all(|l| l.trim_start().starts_with('#')),
+                "{label}: the payload left the comment:\n{output}"
+            );
+        }
+    }
 }
