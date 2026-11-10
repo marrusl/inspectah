@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { proxiedOrigin, REFINE_ORIGIN } from "./src/dev/proxyOrigin";
 
 export default defineConfig({
   plugins: [react()],
@@ -9,8 +10,18 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8642",
+        target: REFINE_ORIGIN,
+        // Rewrites Host only. Origin is rewritten below, for the dev page alone.
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq, req) => {
+            const origin = req.headers.origin;
+            const rewritten = proxiedOrigin(origin, req.headers.host);
+            if (rewritten !== undefined && rewritten !== origin) {
+              proxyReq.setHeader("origin", rewritten);
+            }
+          });
+        },
       },
     },
   },
