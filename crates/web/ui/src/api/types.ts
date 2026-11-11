@@ -8,7 +8,8 @@
 export type AdvisoryType =
   | "unbacked_var_dir"
   | "cross_tree_symlink"
-  | "modernization";
+  | "modernization"
+  | "content_not_captured";
 
 /**
  * Rust: FindingKind — #[serde(tag = "kind", rename_all = "snake_case")]

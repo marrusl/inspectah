@@ -24,8 +24,9 @@ use walk::{
 
 use super::modernization;
 
-/// Maximum file size to read (256 KiB). Files larger than this are skipped
-/// with a warning to prevent memory bloat.
+/// Maximum file size to read (256 KiB). A larger file is collected as a
+/// `ContentNotCaptured` advisory and marks the section degraded, to prevent
+/// memory bloat.
 const MAX_CONFIG_FILE_SIZE: usize = 256 * 1024;
 
 /// Config inspector: RPM-owned modified, unowned /etc files, orphaned configs.
@@ -141,7 +142,7 @@ impl Inspector for ConfigInspector {
                 continue;
             }
 
-            let content = read_config_content(exec, path, &mut degraded_reasons);
+            let (content, disposition) = capture_config(exec, path, &mut degraded_reasons);
 
             let kind = classify_rpm_va_kind(flags);
 
@@ -159,6 +160,7 @@ impl Inspector for ConfigInspector {
                 rpm_va_flags: Some(flags.to_string()),
                 package: package.map(|p| p.to_string()),
                 diff_against_rpm: None, // Phase 3
+                disposition,
                 ..Default::default()
             });
         }
@@ -249,7 +251,8 @@ impl Inspector for ConfigInspector {
                         }
                     }
 
-                    let content = read_config_content(exec, &abs_path, &mut degraded_reasons);
+                    let (content, disposition) =
+                        capture_config(exec, &abs_path, &mut degraded_reasons);
 
                     section.files.push(ConfigFileEntry {
                         path: abs_path,
@@ -257,6 +260,7 @@ impl Inspector for ConfigInspector {
                         category: classify_config_path(&format!("/etc/{rel_path}")),
                         content,
                         diff_against_rpm: None,
+                        disposition,
                         ..Default::default()
                     });
                 }
@@ -446,26 +450,77 @@ fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool 
     }
 }
 
-/// Reads file content with size guard. Returns empty string on failure.
+/// Why the collector could not capture a config file's content.
+#[derive(Debug)]
+enum CaptureFailure {
+    /// Over [`MAX_CONFIG_FILE_SIZE`].
+    TooLarge {
+        bytes: usize,
+    },
+    PermissionDenied,
+    /// Any other read error, including content that is not UTF-8 text.
+    Unreadable(std::io::Error),
+}
+
+impl CaptureFailure {
+    /// The rationale the `ContentNotCaptured` advisory carries to the
+    /// audit report, the HTML report and refine.
+    fn rationale(&self) -> String {
+        let cause = match self {
+            Self::TooLarge { bytes } => {
+                format!("file too large ({bytes} bytes, limit {MAX_CONFIG_FILE_SIZE})")
+            }
+            Self::PermissionDenied => "permission denied reading the file".to_string(),
+            Self::Unreadable(e) => format!("file could not be read as text ({e})"),
+        };
+        format!("Content not captured: {cause}. Add the file to the image by hand if it is needed.")
+    }
+}
+
+/// Reads file content with size guard.
+///
+/// Oversized and permission-denied files are also recorded in
+/// `degraded_reasons`; other read errors are not, matching what the
+/// inspector reported before failures became advisories.
 fn read_config_content(
     exec: &dyn Executor,
     path: &str,
     degraded_reasons: &mut Vec<String>,
-) -> String {
+) -> Result<String, CaptureFailure> {
     match exec.read_file(Path::new(path)) {
-        Ok(content) => {
-            if content.len() > MAX_CONFIG_FILE_SIZE {
-                degraded_reasons.push(format!("file too large ({} bytes): {path}", content.len()));
-                String::new()
-            } else {
-                content
-            }
+        Ok(content) if content.len() > MAX_CONFIG_FILE_SIZE => {
+            degraded_reasons.push(format!("file too large ({} bytes): {path}", content.len()));
+            Err(CaptureFailure::TooLarge {
+                bytes: content.len(),
+            })
         }
+        Ok(content) => Ok(content),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             degraded_reasons.push(format!("permission denied reading {path}"));
-            String::new()
+            Err(CaptureFailure::PermissionDenied)
         }
-        Err(_) => String::new(),
+        Err(e) => Err(CaptureFailure::Unreadable(e)),
+    }
+}
+
+/// The content and starting disposition of a collected config file.
+///
+/// Captured content, empty or not, keeps the default disposition. A failed
+/// capture becomes a `ContentNotCaptured` advisory with no content: the
+/// config tree stages only included entries, and refine and the fleet merge
+/// leave advisories alone, so no export path can copy an empty file over
+/// the one on the host.
+fn capture_config(
+    exec: &dyn Executor,
+    path: &str,
+    degraded_reasons: &mut Vec<String>,
+) -> (String, FindingKind) {
+    match read_config_content(exec, path, degraded_reasons) {
+        Ok(content) => (content, FindingKind::default()),
+        Err(failure) => (
+            String::new(),
+            FindingKind::advisory(AdvisoryType::ContentNotCaptured, failure.rationale()),
+        ),
     }
 }
 
@@ -583,7 +638,7 @@ fn detect_orphaned_configs(
                 continue;
             }
 
-            let content = read_config_content(exec, &abs_path, degraded_reasons);
+            let (content, disposition) = capture_config(exec, &abs_path, degraded_reasons);
 
             section.files.push(ConfigFileEntry {
                 path: abs_path,
@@ -592,6 +647,7 @@ fn detect_orphaned_configs(
                 content,
                 package: Some(pkg_name.clone()),
                 diff_against_rpm: None,
+                disposition,
                 ..Default::default()
             });
         }

@@ -80,6 +80,11 @@ pub enum AdvisoryType {
     UnbackedVarDir,
     CrossTreeSymlink,
     Modernization,
+    /// The collector found the file but could not capture its content:
+    /// it was over the size cap, unreadable, or not text. The entry keeps
+    /// no content, so it must never be materialized; an empty copy would
+    /// replace the file on the image with nothing.
+    ContentNotCaptured,
 }
 
 /// Spec field name: `shadow_type` (not `override_type`)

@@ -10,7 +10,7 @@ use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorE
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileKind, ConfigSection};
-use inspectah_core::types::finding::FindingKind;
+use inspectah_core::types::finding::{AdvisoryType, FindingKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::RpmVaEntry;
 use inspectah_core::types::system::SourceSystem;
@@ -371,6 +371,118 @@ fn a_content_changed_rpm_config_is_included_at_collect() {
             entry.disposition,
             FindingKind::included(),
             "{path}: a user-modified RPM config is included by default"
+        );
+    }
+}
+
+/// One byte over the inspector's 256 KiB content cap.
+const OVERSIZED_LEN: usize = 256 * 1024 + 1;
+
+/// A config whose content the collector could not capture is an advisory,
+/// never an included entry with empty content: the export would copy that
+/// empty string over the package's file. A file that really is empty is
+/// captured content and stays included.
+///
+/// Covers both config kinds that read content: RPM-owned files from raw
+/// `rpm -Va` text through the production parser, and unowned files from
+/// the `/etc` walk.
+#[test]
+fn a_config_whose_content_was_not_captured_is_an_advisory() {
+    const RPM_VA: &str = "S.5....T.  c /etc/httpd/conf.d/ssl.conf\n\
+                          S.5....T.  c /etc/httpd/conf.d/welcome.conf\n\
+                          S.5....T.  c /etc/httpd/conf.d/autoindex.conf\n";
+    let oversized = "#".repeat(OVERSIZED_LEN);
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["vendor"])
+        .with_dir("/etc/vendor", vec!["big.conf", "agent.db", "empty.conf"])
+        // RPM-owned, content-modified
+        .with_file("/etc/httpd/conf.d/ssl.conf", &oversized)
+        .with_file("/etc/httpd/conf.d/welcome.conf", "unreadable\n")
+        .with_file_error(
+            "/etc/httpd/conf.d/welcome.conf",
+            std::io::ErrorKind::PermissionDenied,
+        )
+        .with_file("/etc/httpd/conf.d/autoindex.conf", "")
+        // Unowned
+        .with_file("/etc/vendor/big.conf", &oversized)
+        .with_file("/etc/vendor/agent.db", "")
+        .with_file_error("/etc/vendor/agent.db", std::io::ErrorKind::InvalidData)
+        .with_file("/etc/vendor/empty.conf", "");
+    let rpm_state = RpmState {
+        verification_results: parse_rpm_va(RPM_VA),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let section = match ConfigInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { partial, reason }) => {
+            for path in ["/etc/httpd/conf.d/ssl.conf", "/etc/vendor/big.conf"] {
+                assert!(reason.contains(path), "{path} is named in: {reason}");
+            }
+            match partial.section {
+                SectionData::Config(s) => s,
+                other => panic!("expected SectionData::Config, got {other:?}"),
+            }
+        }
+        other => panic!("an oversized config degrades the inspector, got {other:?}"),
+    };
+    let entry = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is collected: {:?}", section.files))
+    };
+
+    for (path, kind, cause) in [
+        (
+            "/etc/httpd/conf.d/ssl.conf",
+            ConfigFileKind::RpmOwnedModified,
+            "too large",
+        ),
+        (
+            "/etc/httpd/conf.d/welcome.conf",
+            ConfigFileKind::RpmOwnedModified,
+            "permission denied",
+        ),
+        ("/etc/vendor/big.conf", ConfigFileKind::Unowned, "too large"),
+        (
+            "/etc/vendor/agent.db",
+            ConfigFileKind::Unowned,
+            "could not be read",
+        ),
+    ] {
+        let e = entry(path);
+        assert_eq!(e.kind, kind, "{path}");
+        match &e.disposition {
+            FindingKind::Advisory {
+                advisory_type: AdvisoryType::ContentNotCaptured,
+                rationale,
+            } => assert!(
+                rationale.contains(cause),
+                "{path}: the rationale says why: {rationale}"
+            ),
+            other => panic!("{path}: an uncaptured config is an advisory, got {other:?}"),
+        }
+        assert!(
+            !e.disposition.is_included(),
+            "{path} must never be materialized"
+        );
+    }
+
+    for path in ["/etc/httpd/conf.d/autoindex.conf", "/etc/vendor/empty.conf"] {
+        let e = entry(path);
+        assert_eq!(e.content, "", "{path}");
+        assert_eq!(
+            e.disposition,
+            FindingKind::included(),
+            "{path}: a file that is really empty was captured and stays included"
         );
     }
 }

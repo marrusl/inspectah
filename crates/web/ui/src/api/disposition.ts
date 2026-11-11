@@ -22,6 +22,7 @@ const ADVISORY_TYPE_LABELS: Record<AdvisoryType, string> = {
   unbacked_var_dir: "Unbacked /var directory",
   cross_tree_symlink: "Cross-tree symlink",
   modernization: "Modernization",
+  content_not_captured: "Content not captured",
 };
 
 /** Human-readable name for an advisory type. */

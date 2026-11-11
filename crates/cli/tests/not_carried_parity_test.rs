@@ -19,6 +19,10 @@
 //!   `# N config file(s) captured` line, for a host whose only config
 //!   finding is an RPM-owned file the operator changed.
 //!
+//! A last test reuses the fixture for a safety check rather than a parity
+//! claim: a config whose content the collector could not capture is
+//! staged by neither path.
+//!
 //! **Scope.** Parity is claimed only for a classified, baseline-backed
 //! snapshot: one with leaf data from the collector and a base image, so
 //! refine sorts ordinary added packages into the Site tier. Every other
@@ -731,4 +735,120 @@ fn out_of_class_packages_are_in_neither_not_carried_list() {
             );
         }
     }
+}
+
+// ── A config the collector could not capture ─────────────────────────
+
+/// RPM-owned configs added to [`RPM_VA`] for the uncaptured-content case:
+/// one over the content cap, one whose read fails, and one the operator
+/// emptied on purpose.
+const OVERSIZED_RPM_CONFIG: &str = "/etc/httpd/conf.d/ssl.conf";
+const UNREADABLE_RPM_CONFIG: &str = "/etc/httpd/conf.d/welcome.conf";
+const EMPTIED_RPM_CONFIG: &str = "/etc/httpd/conf.d/autoindex.conf";
+/// Unowned files from the `/etc` walk: one over the cap, one that does not
+/// read as text.
+const OVERSIZED_UNOWNED: &str = "/etc/vendor/big.conf";
+const UNREADABLE_UNOWNED: &str = "/etc/vendor/agent.db";
+
+/// The host from [`host_mock`], plus configs whose content the collector
+/// cannot capture and one that is empty on the host.
+fn uncaptured_config_mock() -> MockExecutor {
+    let rpm_va = format!(
+        "{RPM_VA}S.5....T.  c {OVERSIZED_RPM_CONFIG}\n\
+         S.5....T.  c {UNREADABLE_RPM_CONFIG}\n\
+         S.5....T.  c {EMPTIED_RPM_CONFIG}\n"
+    );
+    let ownership = FILE_OWNERSHIP.replace(
+        "@@httpd\n/etc/httpd/conf/httpd.conf\n",
+        &format!(
+            "@@httpd\n/etc/httpd/conf/httpd.conf\n{OVERSIZED_RPM_CONFIG}\n\
+             {UNREADABLE_RPM_CONFIG}\n{EMPTIED_RPM_CONFIG}\n"
+        ),
+    );
+    // One byte over the config inspector's 256 KiB content cap.
+    let oversized = "#".repeat(256 * 1024 + 1);
+    host_mock()
+        .with_command("rpm -Va", ok(&rpm_va))
+        .with_command(
+            "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
+            ok(&ownership),
+        )
+        .with_dir("/etc", vec!["httpd", "vendor"])
+        .with_dir("/etc/httpd", vec!["conf", "conf.d"])
+        .with_dir(
+            "/etc/httpd/conf.d",
+            vec!["ssl.conf", "welcome.conf", "autoindex.conf"],
+        )
+        .with_dir("/etc/vendor", vec!["big.conf", "agent.db"])
+        .with_file(OVERSIZED_RPM_CONFIG, &oversized)
+        .with_file(UNREADABLE_RPM_CONFIG, "")
+        .with_file_error(UNREADABLE_RPM_CONFIG, std::io::ErrorKind::PermissionDenied)
+        .with_file(EMPTIED_RPM_CONFIG, "")
+        .with_file(OVERSIZED_UNOWNED, &oversized)
+        .with_file(UNREADABLE_UNOWNED, "")
+        .with_file_error(UNREADABLE_UNOWNED, std::io::ErrorKind::InvalidData)
+}
+
+/// A config whose content the collector could not capture is never staged:
+/// an empty file in its place would replace the package's config, or the
+/// operator's, with nothing. A config that is really empty is captured and
+/// staged as an empty file. Both hold on the scan and on an untouched
+/// refine export, and the audit report names each uncaptured file.
+#[test]
+fn an_uncaptured_config_is_never_staged_on_either_path() {
+    let collected = collected(&uncaptured_config_mock());
+
+    let scan_dir = tempfile::tempdir().expect("tempdir");
+    let scan_snapshot = scan_export(collected.clone(), scan_dir.path());
+    let mut roots = vec![("scan", scan_dir.path().to_path_buf())];
+    let mut dirs = vec![scan_dir];
+    for (label, snapshot) in [
+        ("refine on the collected snapshot", collected),
+        ("refine on the scan tarball's snapshot", scan_snapshot),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        roots.push((label, refine_export(snapshot, dir.path())));
+        dirs.push(dir);
+    }
+
+    let uncaptured = [
+        OVERSIZED_RPM_CONFIG,
+        UNREADABLE_RPM_CONFIG,
+        OVERSIZED_UNOWNED,
+        UNREADABLE_UNOWNED,
+    ];
+    for (label, root) in &roots {
+        let surfaces = Surfaces::read(root);
+        for path in uncaptured {
+            let staged = path.trim_start_matches('/');
+            assert!(
+                !surfaces.etc_files.iter().any(|f| f == staged),
+                "{label}: {path} was not captured but is staged: {:?}",
+                surfaces.etc_files
+            );
+        }
+        let emptied = root
+            .join("config")
+            .join(EMPTIED_RPM_CONFIG.trim_start_matches('/'));
+        let len = std::fs::metadata(&emptied)
+            .unwrap_or_else(|e| panic!("{label}: {EMPTIED_RPM_CONFIG} is staged: {e}"))
+            .len();
+        assert_eq!(len, 0, "{label}: the emptied config is staged as it is");
+        assert!(
+            surfaces
+                .etc_files
+                .iter()
+                .any(|f| f == MODIFIED_CONFIG.trim_start_matches('/')),
+            "{label}: the readable modified config is still staged"
+        );
+    }
+
+    let audit = Surfaces::read(&roots[0].1).audit;
+    for path in uncaptured {
+        assert!(
+            audit.lines().any(|l| l.contains(path)),
+            "the scan's audit report names {path}:\n{audit}"
+        );
+    }
+    drop(dirs);
 }
