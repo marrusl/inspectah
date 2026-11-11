@@ -66,15 +66,19 @@ libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 - **`releasever_major` / `releasever_minor`.** Setting `releasever` sets
   both by splitting at the first `.` (`10.2` gives `10` and `2`). A
   `system-release(releasever_major)` or `(releasever_minor)` provide on the
-  release package overrides the split. A vars file naming either one wins
-  in dnf5. In dnf4 a detected provide beats a vars file for these two; the
-  collector follows dnf5, since EL10 is the host where the variable is used.
-  Current dnf5 (`main` after commit `f9bc2076a3`) sets `releasever_major`
-  to an empty string when the release package lacks the
+  release package overrides the split. A vars file naming either one
+  beats the split in both dnfs. Against the provide, the collector follows
+  the host's dnf (`DnfFlavor::release_part`): dnf4, so RHEL 9 and 10, sets
+  the detected provide after reading the vars files (`_read_conf_file`),
+  so the provide wins; dnf5, so Fedora, gives a vars file a higher
+  priority than detection (libdnf5 `Vars`), so the file wins. Current
+  dnf5 (`main` after commit `f9bc2076a3`) sets `releasever_major` to an
+  empty string when the release package lacks the
   `system-release(releasever_major)` provide, overwriting the split; the
   collector splits instead, because the empty value names
-  `RPM-GPG-KEY-EPEL-`, a key no image has, and the split is what dnf4,
-  older dnf5 and the measured RHEL 10.2 host give.
+  `RPM-GPG-KEY-EPEL-`, a key no image has, and the split is what dnf4 and
+  older dnf5 give. RHEL 9.8 and 10.2 both carry the provide, so the split
+  is not used there.
 - **`arch` / `basearch`.** The machine type and dnf's base architecture
   for it (`_BASEARCH_MAP` in `dnf/rpm/__init__.py`). The collector reads
   `uname -m` and maps the architectures EL and Fedora build for; an
