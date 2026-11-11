@@ -3,6 +3,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+use super::comment::LINE_TERMINATORS;
+
 /// Regex matching characters that would change shell semantics if injected
 /// into a RUN command. The data comes from RPM databases / systemd on an
 /// operator-controlled host, so this is a safety net against corrupted
@@ -23,6 +25,79 @@ pub fn sanitize_shell_value(val: &str) -> Option<&str> {
         None
     } else {
         Some(val)
+    }
+}
+
+/// Whether `s` holds a character that ends a line for some reader (every
+/// character in [`LINE_TERMINATORS`]) or any other control character,
+/// tab included.
+///
+/// No value the export writes into an instruction, directive or config
+/// key line may hold one: a terminator would start a new line, and the
+/// line it starts is an instruction the snapshot chose.
+pub fn has_line_break_or_control(s: &str) -> bool {
+    s.chars()
+        .any(|c| c.is_control() || LINE_TERMINATORS.contains(&c))
+}
+
+/// Why a path failed [`CopyToken::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum CopyTokenError {
+    #[error("it is empty")]
+    Empty,
+    #[error("it holds a line break or control character")]
+    LineBreakOrControl,
+    #[error("it holds whitespace, which would split the COPY arguments")]
+    Whitespace,
+    #[error(
+        "it holds `\\` or `$`, which the Containerfile parser treats as escape or variable syntax"
+    )]
+    ParserSyntax,
+}
+
+/// A path the export may write as a bare argument of a Containerfile
+/// `COPY` line.
+///
+/// `COPY` arguments are not shell words and have no quoting short of the
+/// JSON form, so the value is proved instead: no line break or control
+/// character, which would end the instruction and start one the snapshot
+/// chose; no whitespace, which separates arguments, so `/opt/x /etc/`
+/// would copy into `/etc`; and no `\` or `$`, which the Containerfile
+/// parser reads as an escape (a trailing `\` continues the line) and as
+/// variable expansion.
+///
+/// [`CopyToken::parse`] is the only constructor, so a renderer that takes
+/// a `&CopyToken` cannot be handed an unproved path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyToken(String);
+
+impl CopyToken {
+    /// Validate `value` and keep it.
+    pub fn parse(value: &str) -> Result<Self, CopyTokenError> {
+        if value.is_empty() {
+            return Err(CopyTokenError::Empty);
+        }
+        if has_line_break_or_control(value) {
+            return Err(CopyTokenError::LineBreakOrControl);
+        }
+        if value.contains(char::is_whitespace) {
+            return Err(CopyTokenError::Whitespace);
+        }
+        if value.contains(['\\', '$']) {
+            return Err(CopyTokenError::ParserSyntax);
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    /// The validated path.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for CopyToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

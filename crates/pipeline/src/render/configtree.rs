@@ -20,17 +20,25 @@ use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::safety::operator_kargs;
+use super::safety::{has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
 /// Path prefix for quadlet unit files — excluded from config tree copy.
 const QUADLET_PREFIX: &str = "etc/containers/systemd/";
 
 /// Validate that a filesystem path is safe: no traversal, no NUL bytes,
-/// no absolute paths.
+/// no line breaks or other control characters, no absolute paths.
+///
+/// The Containerfile names what this accepts (the top-level directory of
+/// every staged config file reaches a `COPY` line), so a path holding a
+/// line terminator is refused here, not only at the line: a file the
+/// stager refuses is never referenced.
 pub fn validate_path(path: &str) -> Result<(), PathError> {
     if path.contains('\0') {
         return Err(PathError::NulByte);
+    }
+    if has_line_break_or_control(path) {
+        return Err(PathError::LineBreakOrControl);
     }
     if path.starts_with('/') {
         return Err(PathError::AbsolutePath);
@@ -85,6 +93,8 @@ pub fn validate_symlink_target(target: &str, _root: &str) -> Result<(), PathErro
 pub enum PathError {
     #[error("path contains NUL byte")]
     NulByte,
+    #[error("path contains a line break or control character")]
+    LineBreakOrControl,
     #[error("absolute path not allowed")]
     AbsolutePath,
     #[error("path traversal detected")]

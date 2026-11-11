@@ -27,12 +27,13 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
-use super::configtree::staged_unit_file;
+use super::configtree::{staged_unit_file, validate_path};
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
-    ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
+    CopyToken, ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs,
+    sanitize_shell_value,
 };
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
@@ -1407,8 +1408,28 @@ fn config_section_lines(
             cfg_body.push(String::new());
         }
 
+        // A file the config tree stager refuses is never written, so
+        // say so here, from the stager's own check.
+        if let Some(config) = &snap.config {
+            for f in config.files.iter().filter(|f| f.disposition.is_included()) {
+                if let Err(e) = validate_path(f.path.trim_start_matches('/')) {
+                    cfg_body.push(format!(
+                        "# FIXME: config file {} not copied: {e}",
+                        language_packages::sanitize_for_comment(&f.path)
+                    ));
+                }
+            }
+        }
+
+        // A root is a bare COPY argument, so it is a proved `CopyToken`.
         for root in &config_roots {
-            cfg_body.push(format!("COPY config/{root}/ /{root}/"));
+            match CopyToken::parse(root) {
+                Ok(root) => cfg_body.push(format!("COPY config/{root}/ /{root}/")),
+                Err(e) => cfg_body.push(format!(
+                    "# FIXME: config directory /{} not copied: {e}",
+                    language_packages::sanitize_for_comment(root)
+                )),
+            }
         }
         lines.extend(section("Configuration Files", cfg_body));
     }
@@ -1450,7 +1471,8 @@ fn config_copy_roots_from_snapshot(snap: &InspectionSnapshot) -> Vec<String> {
             continue;
         }
         let rel = f.path.trim_start_matches('/');
-        if rel.is_empty() {
+        // The stager writes nothing for a refused path, so it adds no root.
+        if rel.is_empty() || validate_path(rel).is_err() {
             continue;
         }
         if let Some(top) = rel.split('/').next() {

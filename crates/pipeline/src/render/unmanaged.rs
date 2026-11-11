@@ -2,9 +2,35 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
 use std::collections::BTreeMap;
 
+use super::configtree::validate_path;
+use super::language_packages::sanitize_for_comment;
+use super::safety::{CopyToken, has_line_break_or_control};
+
 /// Single-quote a path for safe shell interpolation in RUN directives.
 fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// `path` proved for a bare `COPY` argument. `validate_path` is asked
+/// first, as the config tree stager asks it, so the two refuse alike.
+fn copy_path(path: &str) -> Result<CopyToken, String> {
+    validate_path(path.trim_start_matches('/')).map_err(|e| e.to_string())?;
+    CopyToken::parse(path).map_err(|e| e.to_string())
+}
+
+/// Why `ln -sf` cannot be emitted for a symlink, if it cannot. Both
+/// operands are single-quoted, which keeps every byte but a line break
+/// inert to the shell, and a line break inside the quotes still ends the
+/// Containerfile instruction. The link path must also pass
+/// `validate_path`; the target may be relative and may climb with `..`.
+fn symlink_refusal(file: &UnmanagedFile) -> Option<String> {
+    if let Err(e) = validate_path(file.path.trim_start_matches('/')) {
+        return Some(format!("the link path is refused: {e}"));
+    }
+    if has_line_break_or_control(&file.link_target) {
+        return Some("the target holds a line break or control character".into());
+    }
+    None
 }
 
 /// The scan root that the bootc target family links into `/var`.
@@ -107,7 +133,6 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     for (dir, files) in &groups {
-        let rel_dir = dir.trim_start_matches('/');
         // Separate symlinks from regular files for distinct rendering.
         let symlinks: Vec<&&UnmanagedFile> = files
             .iter()
@@ -118,13 +143,33 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
             .filter(|f| f.file_type != FileType::Symlink)
             .collect();
 
+        // Every path on a COPY line is a proved `CopyToken`: COPY has no
+        // quoting, and a line terminator in a path would end the
+        // instruction and start one the snapshot chose.
         if regular.len() > 1 {
             // Directory-level COPY for regular files
-            lines.push(format!("COPY unmanaged/{rel_dir}/ /{rel_dir}/"));
+            match copy_path(dir) {
+                Ok(path) => {
+                    let rel = path.as_str().trim_start_matches('/');
+                    lines.push(format!("COPY unmanaged/{rel}/ /{rel}/"));
+                }
+                Err(why) => lines.push(format!(
+                    "# FIXME: unmanaged files under {} not copied: the directory path {why}",
+                    sanitize_for_comment(dir)
+                )),
+            }
         } else {
             for file in &regular {
-                let rel_path = file.path.trim_start_matches('/');
-                lines.push(format!("COPY unmanaged/{rel_path} {}", file.path));
+                match copy_path(&file.path) {
+                    Ok(path) => {
+                        let rel = path.as_str().trim_start_matches('/');
+                        lines.push(format!("COPY unmanaged/{rel} {path}"));
+                    }
+                    Err(why) => lines.push(format!(
+                        "# FIXME: unmanaged file {} not copied: the path {why}",
+                        sanitize_for_comment(&file.path)
+                    )),
+                }
             }
         }
 
@@ -135,6 +180,12 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 lines.push(format!(
                     "# SYMLINK: {} -> unknown (recreate manually)",
                     file.path
+                ));
+            } else if let Some(why) = symlink_refusal(file) {
+                lines.push(format!(
+                    "# FIXME: unmanaged symlink {} -> {} not recreated: {why}",
+                    sanitize_for_comment(&file.path),
+                    sanitize_for_comment(&file.link_target)
                 ));
             } else {
                 lines.push(format!(
