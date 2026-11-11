@@ -5,6 +5,7 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
+use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
@@ -1394,20 +1395,21 @@ fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
 // ---------------------------------------------------------------------------
 
 /// The owning package comes from the snapshot unchecked, and an imported
-/// one can hold any bytes. For every omission reason, a line terminator in
-/// the owner must not end the `# Omitted:` comment: the comment stays one
-/// line, no carriage return reaches the Containerfile, and every line that
-/// carries the payload is a comment. The plan's structured omission keeps
+/// one can hold any bytes. For every omission reason and every terminator
+/// in `LINE_TERMINATORS`, and CRLF, the owner must not end the `# Omitted:`
+/// comment: the comment stays one line, no terminator but the newline the
+/// file is joined with reaches the Containerfile, and every line that
+/// carries the payload, split on every terminator, is a comment. The plan's structured omission keeps
 /// the raw name, since refine escapes it for its own surface.
 #[test]
 fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
     const RUN: &str = "RUN touch /tmp/injected";
 
-    for (terminator, sep) in [
-        ("newline", "\n"),
-        ("carriage return", "\r"),
-        ("CRLF", "\r\n"),
-    ] {
+    let separators = LINE_TERMINATORS
+        .iter()
+        .map(char::to_string)
+        .chain(std::iter::once("\r\n".to_string()));
+    for sep in separators {
         let owner = format!("x{sep}{RUN}{sep}#");
         let change = || {
             state_change(
@@ -1457,7 +1459,7 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             (OmissionReason::NotInTargetImage, not_in_target),
             (OmissionReason::NotCarried, not_carried),
         ] {
-            let label = format!("{reason:?}, {terminator}");
+            let label = format!("{reason:?}, {sep:?}");
             let plan = render_service_intent(&snap);
             assert_eq!(plan.omissions.len(), 1, "{label}: {:?}", plan.lines);
             assert_eq!(plan.omissions[0].reason, reason, "{label}");
@@ -1473,7 +1475,7 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
                 .collect();
             assert_eq!(comments.len(), 1, "{label}: {:?}", plan.lines);
             assert!(
-                !comments[0].contains(['\n', '\r']),
+                !comments[0].contains(LINE_TERMINATORS),
                 "{label}: the comment holds a line terminator: {:?}",
                 comments[0]
             );
@@ -1484,13 +1486,14 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             );
 
             let output = render_containerfile(&snap, None, None);
+            let terminators: Vec<char> = sep.chars().filter(|c| *c != '\n').collect();
             assert!(
-                !output.contains('\r'),
-                "{label}: a carriage return reached the Containerfile:\n{output}"
+                !output.contains(terminators.as_slice()),
+                "{label}: the terminator reached the Containerfile:\n{output}"
             );
             assert!(
                 output
-                    .split('\n')
+                    .split(LINE_TERMINATORS)
                     .filter(|l| l.contains("injected"))
                     .all(|l| l.trim_start().starts_with('#')),
                 "{label}: the payload left the comment:\n{output}"
