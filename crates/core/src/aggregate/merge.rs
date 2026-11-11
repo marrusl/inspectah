@@ -1,6 +1,6 @@
 use crate::types::FindingKind;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::types::aggregate::{AggregatePrevalence, RepoSourceEntry, VariantSelection};
 
@@ -907,6 +907,31 @@ where
     items
 }
 
+/// Give every captured GPG key all the `gpgkey=` references any host
+/// recorded for its path, before [`merge_items`] keeps one host's entry.
+///
+/// The references describe how the hosts' repo files name the key, not
+/// the key: one host may name `RPM-GPG-KEY-EPEL-10` literally and another
+/// as `RPM-GPG-KEY-EPEL-$releasever_major`. Unioned first, they neither
+/// split the key's prevalence nor drop a spelling a merged repo file still
+/// uses. Keys at different paths stay apart, so an EL9 and an EL10 key
+/// named by one literal both keep it.
+fn union_gpgkey_references(mut items: Vec<(usize, RepoFile)>) -> Vec<(usize, RepoFile)> {
+    let mut by_path: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (_, key) in &items {
+        by_path
+            .entry(key.path.clone())
+            .or_default()
+            .extend(key.gpgkey_references.iter().cloned());
+    }
+    for (_, key) in &mut items {
+        if let Some(references) = by_path.get(&key.path) {
+            key.gpgkey_references.clone_from(references);
+        }
+    }
+    items
+}
+
 /// Collect string lists from optional sections.
 fn collect_string_lists<S, F>(sections: &[Option<S>], extractor: F) -> Vec<Vec<String>>
 where
@@ -1067,7 +1092,7 @@ pub fn merge_rpm_sections(
         hostnames,
     );
     let gpg_keys = merge_items(
-        collect_items(&sections, |s| &s.gpg_keys),
+        union_gpgkey_references(collect_items(&sections, |s| &s.gpg_keys)),
         total_hosts,
         hostnames,
     );

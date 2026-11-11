@@ -2,6 +2,7 @@ use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
 use super::repo::{RepoAttribution, RepoId};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,6 +180,8 @@ pub struct OstreePackageOverride {
     pub to_nevra: String,
 }
 
+/// A captured `.repo` file (in `RpmSection::repo_files`) or GPG key file
+/// (in `RpmSection::gpg_keys`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RepoFile {
     #[serde(default)]
@@ -192,6 +195,30 @@ pub struct RepoFile {
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
     pub aggregate: Option<AggregatePrevalence>,
+    /// For a GPG key: the `gpgkey=` paths that named it, as the repo file
+    /// writes them (dnf variables unexpanded, `file://` removed), where
+    /// they differ from `path`. EL10's `epel.repo` names
+    /// `RPM-GPG-KEY-EPEL-$releasever_major`; the key is recorded at
+    /// `RPM-GPG-KEY-EPEL-10` with that literal here. Empty for a repo file,
+    /// for a key named literally, and in snapshots collected before the
+    /// field existed. Match a section's key paths with
+    /// [`RepoFile::is_key_named_by`], never by `path` alone.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub gpgkey_references: BTreeSet<String>,
+}
+
+impl RepoFile {
+    /// Whether this captured GPG key is the file a `gpgkey=` path names,
+    /// written the way `RepoSectionDef::gpg_key_paths` holds it: its
+    /// expanded path, or a literal path recorded in `gpgkey_references`.
+    ///
+    /// The one place a section's key reference is matched to a captured
+    /// key. In an aggregate one literal can name several keys (an EL9 and
+    /// an EL10 host expand `$releasever_major` differently), and each of
+    /// them matches.
+    pub fn is_key_named_by(&self, gpgkey_path: &str) -> bool {
+        self.path == gpgkey_path || self.gpgkey_references.contains(gpgkey_path)
+    }
 }
 
 /// A single package's file ownership entry: package name and owned paths.
@@ -280,6 +307,42 @@ pub struct RpmSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key answers its own path and each recorded literal path; a
+    /// snapshot without the field still loads, and an empty set is not
+    /// written, so a key named literally serializes as it always did.
+    #[test]
+    fn a_key_is_named_by_its_path_or_a_recorded_reference() {
+        const REFERENCE: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major";
+        let key = RepoFile {
+            path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10".into(),
+            gpgkey_references: [REFERENCE.to_string()].into(),
+            ..Default::default()
+        };
+        for (gpgkey_path, expected) in [
+            ("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10", true),
+            (REFERENCE, true),
+            ("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9", false),
+        ] {
+            assert_eq!(key.is_key_named_by(gpgkey_path), expected, "{gpgkey_path}");
+        }
+
+        let json = serde_json::to_value(&key).unwrap();
+        assert_eq!(json["gpgkey_references"], serde_json::json!([REFERENCE]));
+        assert_eq!(serde_json::from_value::<RepoFile>(json).unwrap(), key);
+
+        let literal = RepoFile {
+            path: "/etc/pki/rpm-gpg/KEY".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&literal).unwrap();
+        assert!(json.get("gpgkey_references").is_none(), "{json}");
+        let old: RepoFile = serde_json::from_str(
+            r#"{"path": "/etc/pki/rpm-gpg/KEY", "content": "", "is_default_repo": false}"#,
+        )
+        .unwrap();
+        assert!(old.gpgkey_references.is_empty());
+    }
 
     #[test]
     fn test_package_entry_roundtrip() {

@@ -555,6 +555,7 @@ Repository  : baseos
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }
     }
 

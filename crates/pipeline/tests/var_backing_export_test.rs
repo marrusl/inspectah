@@ -944,6 +944,7 @@ fn a_disabled_repo_package_is_installed_only_while_its_repo_ships() {
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }],
         baseline_package_names: Some(vec!["filesystem".into()]),
         ..Default::default()

@@ -332,6 +332,7 @@ mod tests {
             disposition: _,
             locked: _,
             aggregate: _,
+            gpgkey_references: _, // identifier: the literal spelling of `path`
         } = RepoFile::default();
 
         // `services.drop_ins[]`.

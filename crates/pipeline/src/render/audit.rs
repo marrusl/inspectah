@@ -1278,6 +1278,7 @@ mod tests {
             disposition: FindingKind::from_bool(included),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         };
         let snapshot_with = |included: bool| {
             let mut snap = InspectionSnapshot::new();

@@ -77,6 +77,7 @@ fn snapshot(source_repo: &str, repo_file: Option<(&str, bool)>) -> InspectionSna
                     disposition: FindingKind::from_bool(included),
                     locked: false,
                     aggregate: None,
+                    gpgkey_references: Default::default(),
                 }]
             })
             .unwrap_or_default(),

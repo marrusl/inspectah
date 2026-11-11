@@ -339,6 +339,7 @@ fn repo_file(path: &str, content: &str) -> RepoFile {
         disposition: FindingKind::included(),
         locked: false,
         aggregate: None,
+        gpgkey_references: Default::default(),
     }
 }
 

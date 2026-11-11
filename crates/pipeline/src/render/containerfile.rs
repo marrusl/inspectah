@@ -2608,6 +2608,7 @@ mod tests {
             disposition: FindingKind::from_bool(included),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }
     }
 

@@ -125,16 +125,19 @@ fn section_survives(rpm: &RpmSection, id: &RepoId) -> bool {
 }
 
 /// Whether every `gpgkey=file://` path a section names is an included
-/// `gpg_keys` entry.
+/// `gpg_keys` entry. A path written with dnf variables names the key the
+/// scan recorded at the expanded path ([`RepoFile::is_key_named_by`]).
 ///
 /// Shared with `repoless::disabled_repo_install`: a section dnf cannot
 /// verify packages from is no more installable from a disabled repo than
 /// from a repo-enabling one.
+///
+/// [`RepoFile::is_key_named_by`]: inspectah_core::types::rpm::RepoFile::is_key_named_by
 pub(crate) fn keys_included(rpm: &RpmSection, paths: &[String]) -> bool {
     paths.iter().all(|path| {
         rpm.gpg_keys
             .iter()
-            .any(|k| k.disposition.is_included() && k.path == *path)
+            .any(|k| k.disposition.is_included() && k.is_key_named_by(path))
     })
 }
 

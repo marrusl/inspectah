@@ -2,6 +2,7 @@ use super::dnf_vars::{DnfVars, ExpandError};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::RepoFile;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -76,6 +77,7 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
             disposition: FindingKind::from_bool(!is_default),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         });
     }
 
@@ -173,7 +175,8 @@ pub struct GpgKeyScan {
 /// Local references (`gpgkey=file:///...` or a bare path) have their dnf
 /// variables expanded with the host's values, then are read and validated;
 /// the key is recorded at its expanded path, which is the path dnf in the
-/// image reads. Content that does not start with a PGP public key header is
+/// image reads, with the literal path in `gpgkey_references` when the two
+/// differ. Content that does not start with a PGP public key header is
 /// replaced with a placeholder to prevent arbitrary host file ingestion.
 /// Remote references (`https://...`) are left for dnf to fetch. A local
 /// reference that yields no key is returned in `unread`.
@@ -204,6 +207,14 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
             if key_path.is_empty() {
                 continue;
             }
+            // The spelling `parse_repo_sections` reads back from the repo
+            // file, kept so consumers can match the section to this key.
+            let literal = reference.strip_prefix("file://").unwrap_or(reference);
+            let gpgkey_references = if literal == key_path {
+                BTreeSet::new()
+            } else {
+                BTreeSet::from([literal.to_string()])
+            };
 
             let content = match exec.read_file(Path::new(key_path)) {
                 Ok(content) => content,
@@ -224,6 +235,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     disposition: FindingKind::included(),
                     locked: false,
                     aggregate: None,
+                    gpgkey_references,
                 });
             } else {
                 // Non-PGP content: include with placeholder to avoid
@@ -242,6 +254,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     disposition: FindingKind::excluded(),
                     locked: false,
                     aggregate: None,
+                    gpgkey_references,
                 });
             }
         }

@@ -125,6 +125,58 @@ fn test_repo_index_multi_section_repo_file() {
     assert!(appstream_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
 }
 
+/// One section names the key literally, another with a dnf variable the
+/// scan expanded to it. Both resolve to the captured key, so the key is
+/// shared between them and both are Verified.
+#[test]
+fn a_key_named_literally_and_with_a_variable_is_one_shared_key() {
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10";
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/epel.repo".into(),
+            content: "[epel]\nbaseurl=http://example.invalid/epel\n\
+                      gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major\n\
+                      [mirror]\nbaseurl=http://example.invalid/mirror\n\
+                      gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10\n\
+                      [other]\nbaseurl=http://example.invalid/other\n\
+                      gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar\n"
+                .into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        gpg_keys: vec![RepoFile {
+            path: KEY.into(),
+            content: "key-data".into(),
+            disposition: FindingKind::included(),
+            gpgkey_references: ["/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major".into()]
+                .into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let index = RepoIndex::build(&snap);
+
+    let sections = index.sections_by_gpg_key().get(KEY).expect("the key");
+    assert_eq!(
+        sections.iter().map(RepoId::as_str).collect::<Vec<_>>(),
+        ["epel", "mirror"]
+    );
+    assert_eq!(
+        index.gpg_keys_by_section().get(&RepoId::new("epel")),
+        Some(&vec![KEY.to_string()])
+    );
+    assert_eq!(
+        index.provenance(&RepoId::new("epel")),
+        RepoProvenance::Verified
+    );
+    assert_eq!(
+        index.provenance(&RepoId::new("other")),
+        RepoProvenance::Incomplete,
+        "a reference no captured key answers is still missing"
+    );
+}
+
 #[test]
 fn test_repo_index_gpg_shared_key() {
     let snap = make_snap_with_repos();

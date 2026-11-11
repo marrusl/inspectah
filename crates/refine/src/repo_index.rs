@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::repo::{self, RepoId, RepoSectionDef};
+use inspectah_core::types::rpm::RepoFile;
 
 use crate::types::{RepoProvenance, RepoTier};
 
@@ -21,12 +22,33 @@ pub struct RepoIndex {
     packages_by_repo: BTreeMap<RepoId, Vec<String>>,
     /// Repo file paths that define each section ID.
     repo_file_by_section: BTreeMap<RepoId, Vec<String>>,
-    /// GPG key paths referenced by each section ID.
+    /// GPG key paths referenced by each section ID: the `path` of each
+    /// captured key the section names, or the path as written when no
+    /// captured key answers it.
     gpg_keys_by_section: BTreeMap<RepoId, Vec<String>>,
-    /// Reverse map: GPG key path -> set of section IDs that reference it.
+    /// Reverse map: GPG key path (as in `gpg_keys_by_section`) -> set of
+    /// section IDs that reference it.
     sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
     /// Computed provenance per section ID.
     provenance_map: BTreeMap<RepoId, RepoProvenance>,
+}
+
+/// The paths of the captured keys a section's `gpgkey=` path names
+/// ([`RepoFile::is_key_named_by`]), sorted and without repeats; the path
+/// as written when none does. A path written with dnf variables names the
+/// key the scan recorded at its expanded path, and in an aggregate it can
+/// name one key per major.
+fn captured_key_paths(keys: &[RepoFile], reference: &str) -> Vec<String> {
+    let paths: BTreeSet<String> = keys
+        .iter()
+        .filter(|k| k.is_key_named_by(reference))
+        .map(|k| k.path.clone())
+        .collect();
+    if paths.is_empty() {
+        vec![reference.to_string()]
+    } else {
+        paths.into_iter().collect()
+    }
 }
 
 impl RepoIndex {
@@ -62,14 +84,18 @@ impl RepoIndex {
                     .or_default()
                     .push(repo_file.path.clone());
 
-                for key_path in &section.gpg_key_paths {
+                for key_path in section
+                    .gpg_key_paths
+                    .iter()
+                    .flat_map(|reference| captured_key_paths(&rpm.gpg_keys, reference))
+                {
                     gpg_keys_by_section
                         .entry(section.id.clone())
                         .or_default()
                         .push(key_path.clone());
 
                     sections_by_gpg_key
-                        .entry(key_path.clone())
+                        .entry(key_path)
                         .or_default()
                         .insert(section.id.clone());
                 }
@@ -93,9 +119,6 @@ impl RepoIndex {
         }
 
         // 3. Compute provenance for every section ID we know about.
-        let captured_gpg_keys: BTreeSet<&str> =
-            rpm.gpg_keys.iter().map(|k| k.path.as_str()).collect();
-
         let mut provenance_map: BTreeMap<RepoId, RepoProvenance> = BTreeMap::new();
         for (id, section) in &section_defs {
             let prov = if !section.enabled {
@@ -104,7 +127,7 @@ impl RepoIndex {
                 && section
                     .gpg_key_paths
                     .iter()
-                    .all(|p| captured_gpg_keys.contains(p.as_str()))
+                    .all(|p| rpm.gpg_keys.iter().any(|k| k.is_key_named_by(p)))
             {
                 RepoProvenance::Verified
             } else {

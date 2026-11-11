@@ -2777,13 +2777,16 @@ impl RefineSession {
                                                     let all_excluded = referencing_sections
                                                         .iter()
                                                         .all(|sid| excluded_sections.contains(sid));
-                                                    if all_excluded
-                                                        && let Some(k) = rpm
+                                                    // Every entry: each section
+                                                    // naming a key records it once.
+                                                    if all_excluded {
+                                                        for k in rpm
                                                             .gpg_keys
                                                             .iter_mut()
-                                                            .find(|g| g.path == *key_path)
-                                                    {
-                                                        k.disposition = FindingKind::excluded();
+                                                            .filter(|g| g.path == *key_path)
+                                                        {
+                                                            k.disposition = FindingKind::excluded();
+                                                        }
                                                     }
                                                 }
                                             }
@@ -2816,10 +2819,10 @@ impl RefineSession {
                                             self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
-                                                if let Some(k) = rpm
+                                                for k in rpm
                                                     .gpg_keys
                                                     .iter_mut()
-                                                    .find(|g| g.path == *key_path)
+                                                    .filter(|g| g.path == *key_path)
                                                 {
                                                     k.disposition = FindingKind::included();
                                                 }

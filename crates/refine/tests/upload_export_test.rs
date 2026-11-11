@@ -1575,6 +1575,7 @@ fn disabled_repo_snapshot(cache_path: &Path) -> InspectionSnapshot {
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }],
         ..Default::default()
     });
@@ -1682,6 +1683,7 @@ fn repo_enabling_snapshot() -> InspectionSnapshot {
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }],
         ..Default::default()
     });

@@ -4309,4 +4309,60 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
             }
         }
     }
+
+    /// The key records the `gpgkey=` path that named it when that differs
+    /// from where it was read, so a consumer reading the repo file back can
+    /// match its section to the key.
+    #[test]
+    fn a_key_named_with_a_variable_records_the_literal_path() {
+        let case = GpgCase {
+            name: "EL10 epel.repo",
+            repo: "[epel]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major\n\
+                   [lit]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-lit\n",
+            host: |m| {
+                m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10", PGP_KEY)
+                    .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-lit", PGP_KEY)
+            },
+            keys: &[],
+            warning: None,
+        };
+        let exec = (case.host)(with_el10_release(
+            build_rpm_mock_executor().with_file("/etc/yum.repos.d/epel.repo", case.repo),
+        ));
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+        let recorded: Vec<(&str, Vec<&str>)> = rpm
+            .gpg_keys
+            .iter()
+            .map(|k| {
+                (
+                    k.path.as_str(),
+                    k.gpgkey_references.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [
+                (
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10",
+                    vec!["/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major"]
+                ),
+                ("/etc/pki/rpm-gpg/RPM-GPG-KEY-lit", vec![]),
+            ],
+            "{}",
+            case.name
+        );
+    }
 }

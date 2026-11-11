@@ -1009,6 +1009,52 @@ fn test_merge_rpm_sections_packages_merged() {
     assert_eq!(nginx.aggregate.as_ref().unwrap().count, 1);
 }
 
+/// A key named with a dnf variable keeps that reference through the
+/// merge: an EL9 and an EL10 host expand one literal to two keys, and both
+/// answer it; a third host naming the EL10 key literally does not drop it.
+#[test]
+fn test_merge_rpm_sections_keeps_gpgkey_references() {
+    const REFERENCE: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major";
+    let key = |path: &str, references: &[&str]| RepoFile {
+        path: path.into(),
+        content: format!("-----BEGIN PGP PUBLIC KEY BLOCK-----\n{path}\n"),
+        gpgkey_references: references.iter().map(|r| (*r).to_string()).collect(),
+        ..Default::default()
+    };
+    let host = |k: RepoFile| RpmSection {
+        gpg_keys: vec![k],
+        ..Default::default()
+    };
+    let el9 = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9";
+    let el10 = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10";
+    let hostnames: Vec<String> = vec!["el10-literal".into(), "el10".into(), "el9".into()];
+    let (result, _) = merge_rpm_sections(
+        vec![
+            Some(host(key(el10, &[]))),
+            Some(host(key(el10, &[REFERENCE]))),
+            Some(host(key(el9, &[REFERENCE]))),
+        ],
+        3,
+        &hostnames,
+        None,
+    )
+    .unwrap();
+
+    let named: Vec<&str> = result
+        .gpg_keys
+        .iter()
+        .filter(|k| k.is_key_named_by(REFERENCE))
+        .map(|k| k.path.as_str())
+        .collect();
+    assert_eq!(named, [el10, el9]);
+    let el10_key = result.gpg_keys.iter().find(|k| k.path == el10).unwrap();
+    assert_eq!(
+        el10_key.aggregate.as_ref().map(|a| a.count),
+        Some(2),
+        "the reference does not split the key's prevalence"
+    );
+}
+
 #[test]
 fn test_merge_rpm_sections_dedup_strings() {
     let s1 = RpmSection {

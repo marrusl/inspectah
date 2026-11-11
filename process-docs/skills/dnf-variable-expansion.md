@@ -16,6 +16,29 @@ showed only on EL10.
 scanned host's values, and `repos::extract_gpg_keys` records the key at the
 expanded path.
 
+## Matching a section to its key
+
+The key's `path` is the expanded path, but every consumer that reads the
+repo file back (`parse_repo_sections`, so `RepoSectionDef.gpg_key_paths`)
+sees the literal `RPM-GPG-KEY-EPEL-$releasever_major`. So the collector
+also records that literal in the key's `gpgkey_references` (only when it
+differs from `path`), and **every match of a section's key path to a
+captured key goes through `RepoFile::is_key_named_by`**, never `k.path ==`.
+Comparing paths alone makes a carried key read as missing: the Containerfile
+demotes `epel-release` behind a false "not carried" FIXME, the audit says
+"no", and refine marks the section Incomplete.
+
+Routed through it today: `render/repo_enabling.rs` `keys_included` (which
+`section_survives`, `repo_enabling_export`, the audit Carried column,
+`service_intent` and `repoless::disabled_repo_install` all use), and
+refine's `RepoIndex::build`, which resolves each section's key path to the
+captured key paths so `gpg_keys_by_section`, `sections_by_gpg_key` and the
+session's exclude/include cascade work on real key paths. The aggregate
+merge unions `gpgkey_references` per key path before it keeps one host's
+entry. The values themselves are not stored: they differ between an EL9
+and an EL10 host in one aggregate, and storing them would move the
+expander into every consumer.
+
 ## How dnf derives the values
 
 Sources: dnf4 `dnf/cli/cli.py` (`_read_conf_file`), `dnf/rpm/__init__.py`

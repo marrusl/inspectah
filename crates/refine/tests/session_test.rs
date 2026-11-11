@@ -1933,6 +1933,7 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
+            gpgkey_references: Default::default(),
         }],
         ..Default::default()
     });
