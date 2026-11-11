@@ -458,3 +458,66 @@ fn run_pipeline_keeps_an_unneeded_repoless_auto_package_out_of_the_class() {
     assert_eq!(block.len(), 2, "{containerfile}");
     assert_eq!(block[1], "#   rhc", "{containerfile}");
 }
+
+// ---------------------------------------------------------------------------
+// A gpgkey= path written with dnf variables reaches the image
+// ---------------------------------------------------------------------------
+
+/// EL10's `epel.repo` names its key as `RPM-GPG-KEY-EPEL-$releasever_major`.
+/// The export must stage the key at the expanded path and copy it in, or
+/// the build fails at `dnf install` on `Curl error (37)`.
+#[test]
+fn el10_epel_key_named_with_a_dnf_variable_is_staged_and_copied() {
+    const KEY_PATH: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10";
+    let mock = build_full_rpm_mock_executor()
+        .with_dir("/etc/yum.repos.d", vec!["epel.repo"])
+        .with_file(
+            "/etc/yum.repos.d/epel.repo",
+            "[epel]\nname=EPEL $releasever_major\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=epel-$releasever_major&arch=$basearch\nenabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major\n",
+        )
+        .with_file(KEY_PATH, "-----BEGIN PGP PUBLIC KEY BLOCK-----\nepel10\n")
+        .with_command(
+            "rpm -q --whatprovides system-release(releasever) --queryformat \
+             @@%{NAME}\t%{VERSION}\n[%{PROVIDENAME}\t%{PROVIDEFLAGS}\t%{PROVIDEVERSION}\n]",
+            ExecResult {
+                stdout: "@@redhat-release\t10.2\nsystem-release(releasever)\t8\t10.2\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "uname -m",
+            ExecResult {
+                stdout: "x86_64\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+
+    let (snapshot, tarball_path, _dir) = run_full_pipeline_from_mock(mock, None);
+
+    let rpm = snapshot.rpm.as_ref().expect("rpm section");
+    assert!(
+        rpm.gpg_keys.iter().any(|k| k.path == KEY_PATH),
+        "the key must be recorded at its expanded path: {:?}",
+        rpm.gpg_keys.iter().map(|k| &k.path).collect::<Vec<_>>()
+    );
+
+    let entries = list_tarball_entries(&tarball_path);
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.ends_with("config/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10")),
+        "the export must stage the key: {entries:?}"
+    );
+    let files = extract_text_files(&tarball_path);
+    let containerfile = files
+        .iter()
+        .find(|(p, _)| p.ends_with("Containerfile"))
+        .map(|(_, c)| c.as_str())
+        .expect("Containerfile in tarball");
+    assert!(
+        containerfile.contains("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/"),
+        "the Containerfile must copy the key directory:\n{containerfile}"
+    );
+}

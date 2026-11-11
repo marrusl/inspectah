@@ -84,6 +84,7 @@ only when the subscription is preserved), and the pipeline runs it through
 `collect()` in `crates/pipeline/src/collect.rs`:
 - `rpm/` — RPM package inventory, modules, repos, classifier
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
+  - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
 - `config/` — Modified config files via `rpm -Va`
 - `services.rs`, `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
 - `modernization.rs`: not an `Inspector`, detection rules for modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.

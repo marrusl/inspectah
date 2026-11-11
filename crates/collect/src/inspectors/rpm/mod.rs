@@ -1,5 +1,6 @@
 use inspectah_core::types::FindingKind;
 pub mod classifier;
+pub mod dnf_vars;
 pub mod modules;
 pub mod parser;
 pub mod repoless;
@@ -50,6 +51,8 @@ struct SupplementaryData {
     module_streams: Vec<inspectah_core::types::rpm::EnabledModuleStream>,
     version_locks: Vec<inspectah_core::types::rpm::VersionLockEntry>,
     rpm_va: Vec<inspectah_core::types::rpm::RpmVaEntry>,
+    /// One per key a repo file names that could not be collected.
+    gpg_key_warnings: Vec<Warning>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,10 +193,30 @@ impl RpmInspector {
     ) -> SupplementaryData {
         let repo_files = repos::collect_repo_files(exec);
 
+        let vars = dnf_vars::DnfVars::from_host(exec);
         let mut gpg_keys = Vec::new();
+        // Keyed by repo file, so the three sections of one `epel.repo`
+        // naming the same key give one warning.
+        let mut unread = std::collections::BTreeSet::new();
         for repo in &repo_files {
-            gpg_keys.extend(repos::extract_gpg_keys(&repo.content, exec));
+            let scan = repos::extract_gpg_keys(&repo.content, exec, &vars);
+            gpg_keys.extend(scan.keys);
+            unread.extend(scan.unread.into_iter().map(|u| (repo.path.clone(), u)));
         }
+        let gpg_key_warnings = unread
+            .into_iter()
+            .map(|(repo_path, u)| Warning {
+                inspector: "rpm".into(),
+                message: format!(
+                    "GPG key {} named in {repo_path} was not collected: {}. \
+                     The image build cannot verify packages from that repo \
+                     until the key is added by hand.",
+                    u.reference.escape_debug(),
+                    u.reason
+                ),
+                ..Default::default()
+            })
+            .collect();
 
         let module_streams = modules::parse_module_streams(exec);
         let version_locks = modules::parse_version_locks(exec);
@@ -215,6 +238,7 @@ impl RpmInspector {
             module_streams,
             version_locks,
             rpm_va,
+            gpg_key_warnings,
         }
     }
 }
@@ -451,6 +475,8 @@ impl Inspector for RpmInspector {
                 ..Default::default()
             });
         }
+
+        warnings.extend(supp.gpg_key_warnings);
 
         // 9a. Normalize source_repo short names to full repo IDs so
         //     package tables and config trees use the same identifier.
@@ -4077,6 +4103,210 @@ Group: Development Tools
             assert_eq!(groups[0].members, vec!["bash", "httpd", "vim-enhanced"]);
         } else {
             panic!("expected SectionData::Rpm");
+        }
+    }
+
+    // --- gpgkey= references: dnf variables, warnings, repo-file syntax ---
+
+    const PGP_KEY: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nkey\n";
+
+    /// `rpm -q --whatprovides` for the first release capability dnf probes,
+    /// answered the way RHEL 10.2's `redhat-release` answers it.
+    fn with_el10_release(mock: MockExecutor) -> MockExecutor {
+        mock.with_command(
+            "rpm -q --whatprovides system-release(releasever) --queryformat \
+             @@%{NAME}\t%{VERSION}\n[%{PROVIDENAME}\t%{PROVIDEFLAGS}\t%{PROVIDEVERSION}\n]",
+            ExecResult {
+                stdout: "@@redhat-release\t10.2\n\
+                         redhat-release\t8\t10.2-0.13.el10\n\
+                         system-release(releasever)\t8\t10.2\n\
+                         system-release(releasever_major)\t8\t10\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "uname -m",
+            ExecResult {
+                stdout: "aarch64\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// EPEL 10's `epel.repo`, three sections naming one key.
+    const EL10_EPEL_REPO: &str = "\
+[epel]
+name=Extra Packages for Enterprise Linux $releasever_major${releasever_minor:+.$releasever_minor} - $basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-$releasever_major${releasever_minor:+.$releasever_minor}&arch=$basearch
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
+
+[epel-debuginfo]
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
+
+[epel-source]
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
+";
+
+    struct GpgCase {
+        name: &'static str,
+        repo: &'static str,
+        host: fn(MockExecutor) -> MockExecutor,
+        keys: &'static [&'static str],
+        /// Text every unread-key warning must contain; `None` asserts that
+        /// no GPG key warning is emitted.
+        warning: Option<&'static str>,
+    }
+
+    fn inspect_with_epel_repo(case: &GpgCase) -> (Vec<String>, Vec<String>) {
+        let exec = (case.host)(with_el10_release(
+            build_rpm_mock_executor().with_file("/etc/yum.repos.d/epel.repo", case.repo),
+        ));
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+        let mut keys: Vec<String> = rpm.gpg_keys.iter().map(|k| k.path.clone()).collect();
+        keys.sort();
+        keys.dedup();
+        let warnings = output
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("GPG key"))
+            .map(|w| w.message.clone())
+            .collect();
+        (keys, warnings)
+    }
+
+    #[test]
+    fn gpgkey_references_are_expanded_with_the_hosts_dnf_variables() {
+        let cases = [
+            GpgCase {
+                name: "EL10 epel.repo, $releasever_major",
+                repo: EL10_EPEL_REPO,
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10", PGP_KEY),
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10"],
+                warning: None,
+            },
+            GpgCase {
+                name: "$releasever",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-r-$releasever\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-r-10.2", PGP_KEY),
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-r-10.2"],
+                warning: None,
+            },
+            GpgCase {
+                name: "$basearch",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-r-$basearch\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-r-aarch64", PGP_KEY),
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-r-aarch64"],
+                warning: None,
+            },
+            GpgCase {
+                name: "custom variable from /etc/dnf/vars",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$keyname\n",
+                host: |m| {
+                    m.with_dir("/etc/dnf/vars", vec!["keyname"])
+                        .with_file("/etc/dnf/vars/keyname", "corp\n")
+                        .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-corp", PGP_KEY)
+                },
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-corp"],
+                warning: None,
+            },
+            GpgCase {
+                name: "${var} brace form",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever_major}\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10", PGP_KEY),
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10"],
+                warning: None,
+            },
+            GpgCase {
+                name: "unknown variable",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar\n",
+                host: |m| m,
+                keys: &[],
+                warning: Some("$nosuchvar is not defined"),
+            },
+            GpgCase {
+                name: "variable whose value holds a path",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/$keyname\n",
+                host: |m| {
+                    m.with_dir("/etc/dnf/vars", vec!["keyname"])
+                        .with_file("/etc/dnf/vars/keyname", "../../shadow\n")
+                        .with_file("/etc/shadow", PGP_KEY)
+                },
+                keys: &[],
+                warning: Some("not a plain path segment"),
+            },
+            GpgCase {
+                name: "literal path that does not exist",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-missing\n",
+                host: |m| m,
+                keys: &[],
+                warning: Some("/etc/pki/rpm-gpg/RPM-GPG-KEY-missing could not be read"),
+            },
+            GpgCase {
+                name: "spaces around =",
+                repo: "[r]\ngpgkey = file:///etc/pki/rpm-gpg/RPM-GPG-KEY-spaced\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-spaced", PGP_KEY),
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-spaced"],
+                warning: None,
+            },
+            GpgCase {
+                name: "value continued on indented lines",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-one\n  \
+                       file:///etc/pki/rpm-gpg/RPM-GPG-KEY-two\n\
+                       \tfile:///etc/pki/rpm-gpg/RPM-GPG-KEY-three\nenabled=1\n",
+                host: |m| {
+                    m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-one", PGP_KEY)
+                        .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-two", PGP_KEY)
+                        .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-three", PGP_KEY)
+                },
+                keys: &[
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-one",
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-three",
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-two",
+                ],
+                warning: None,
+            },
+            GpgCase {
+                name: "https key is fetched by dnf, not collected or warned about",
+                repo: "[r]\ngpgkey=https://example.com/$nosuchvar.asc\n",
+                host: |m| m,
+                keys: &[],
+                warning: None,
+            },
+        ];
+
+        for case in &cases {
+            let (keys, warnings) = inspect_with_epel_repo(case);
+            assert_eq!(keys, case.keys, "{}: collected keys", case.name);
+            match case.warning {
+                None => assert!(warnings.is_empty(), "{}: {warnings:?}", case.name),
+                Some(text) => {
+                    assert_eq!(warnings.len(), 1, "{}: {warnings:?}", case.name);
+                    assert!(
+                        warnings[0].contains(text) && warnings[0].contains("epel.repo"),
+                        "{}: {warnings:?}",
+                        case.name
+                    );
+                }
+            }
         }
     }
 }

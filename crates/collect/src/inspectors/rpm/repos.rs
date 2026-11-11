@@ -1,6 +1,8 @@
+use super::dnf_vars::{DnfVars, ExpandError};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::RepoFile;
+use std::fmt;
 use std::path::Path;
 
 /// Returns true if a repo file or its content identifies an inspectah COPR repo.
@@ -89,45 +91,133 @@ fn validate_gpg_content(content: &str) -> bool {
     content.trim_start().starts_with(PGP_HEADER)
 }
 
-/// Extract GPG key files referenced in repo content.
-///
-/// Files referenced via `gpgkey=file:///...` are read and validated.
-/// Content that does not start with a PGP public key header is replaced
-/// with a placeholder to prevent arbitrary host file ingestion.
-pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile> {
-    let mut keys = Vec::new();
+/// The `gpgkey=` values of a repo file, read the way dnf's ini parser
+/// reads them: the key starts in column 0 and may have spaces around `=`,
+/// and an indented line continues the previous value. A comment or an
+/// empty line ends it.
+fn gpgkey_values(repo_content: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    // The value being read, when the current key is `gpgkey`.
+    let mut gpgkey: Option<String> = None;
+    // Whether the previous line belonged to a key=value item, so an
+    // indented line continues it.
+    let mut in_item = false;
 
     for line in repo_content.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("gpgkey=") {
-            continue;
-        }
-
-        // Parse gpgkey=file:///path/to/key or gpgkey=/path/to/key
-        let key_value = trimmed.strip_prefix("gpgkey=").unwrap_or("");
-
-        // Handle multiple keys separated by space or comma
-        for key_part in key_value.split(&[' ', ','][..]) {
-            let key_path = key_part
-                .trim()
-                .strip_prefix("file://")
-                .unwrap_or(key_part.trim());
-
-            if key_path.is_empty()
-                || key_path.starts_with("http://")
-                || key_path.starts_with("https://")
+        let trimmed = line.trim_matches([' ', '\t', '\r']);
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            values.extend(gpgkey.take());
+            in_item = false;
+        } else if trimmed.is_empty() {
+            // A blank but not empty line stays inside the value.
+        } else if line.starts_with([' ', '\t', '\r']) && !trimmed.starts_with('[') {
+            if let Some(value) = gpgkey.as_mut()
+                && in_item
             {
+                value.push('\n');
+                value.push_str(trimmed);
+            }
+        } else {
+            values.extend(gpgkey.take());
+            in_item = false;
+            if trimmed.starts_with('[') {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                in_item = true;
+                if key.trim_end_matches([' ', '\t']) == "gpgkey" {
+                    gpgkey = Some(value.trim_matches([' ', '\t', '\r']).to_string());
+                }
+            }
+        }
+    }
+    values.extend(gpgkey);
+    values
+}
+
+/// Why a key that a repo file names was not collected.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UnreadReason {
+    /// Its dnf variables could not be expanded safely.
+    Expand(ExpandError),
+    /// The expanded path could not be read on the host.
+    Unreadable(String),
+}
+
+impl fmt::Display for UnreadReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Expand(e) => e.fmt(f),
+            Self::Unreadable(path) => write!(f, "{path} could not be read"),
+        }
+    }
+}
+
+/// A local key reference that produced no key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnreadGpgKey {
+    /// The reference as the repo file writes it.
+    pub reference: String,
+    pub reason: UnreadReason,
+}
+
+/// What [`extract_gpg_keys`] found in one repo file.
+#[derive(Debug, Default)]
+pub struct GpgKeyScan {
+    pub keys: Vec<RepoFile>,
+    pub unread: Vec<UnreadGpgKey>,
+}
+
+/// Extract GPG key files referenced in repo content.
+///
+/// Local references (`gpgkey=file:///...` or a bare path) have their dnf
+/// variables expanded with the host's values, then are read and validated;
+/// the key is recorded at its expanded path, which is the path dnf in the
+/// image reads. Content that does not start with a PGP public key header is
+/// replaced with a placeholder to prevent arbitrary host file ingestion.
+/// Remote references (`https://...`) are left for dnf to fetch. A local
+/// reference that yields no key is returned in `unread`.
+pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars) -> GpgKeyScan {
+    let mut scan = GpgKeyScan::default();
+
+    for value in gpgkey_values(repo_content) {
+        // dnf separates multiple keys with whitespace or commas.
+        for reference in value
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|r| !r.is_empty())
+        {
+            if reference.contains("://") && !reference.starts_with("file://") {
                 continue;
             }
 
-            let path = Path::new(key_path);
-            let content = match exec.read_file(path) {
+            let expanded = match vars.expand(reference) {
+                Ok(expanded) => expanded,
+                Err(e) => {
+                    scan.unread.push(UnreadGpgKey {
+                        reference: reference.to_string(),
+                        reason: UnreadReason::Expand(e),
+                    });
+                    continue;
+                }
+            };
+            let key_path = expanded.strip_prefix("file://").unwrap_or(&expanded);
+            if key_path.is_empty() {
+                continue;
+            }
+
+            let content = match exec.read_file(Path::new(key_path)) {
                 Ok(content) => content,
-                Err(_) => continue,
+                Err(_) => {
+                    scan.unread.push(UnreadGpgKey {
+                        reference: reference.to_string(),
+                        reason: UnreadReason::Unreadable(key_path.to_string()),
+                    });
+                    continue;
+                }
             };
 
             if validate_gpg_content(&content) {
-                keys.push(RepoFile {
+                scan.keys.push(RepoFile {
                     path: key_path.to_string(),
                     content,
                     is_default_repo: false,
@@ -142,7 +232,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                     "WARNING: gpgkey file {} does not contain a PGP public key block, content redacted",
                     key_path
                 );
-                keys.push(RepoFile {
+                scan.keys.push(RepoFile {
                     path: key_path.to_string(),
                     content: format!(
                         "# REDACTED: file did not contain a PGP public key block (source: {})",
@@ -157,7 +247,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
         }
     }
 
-    keys
+    scan
 }
 
 fn is_default_repo(path: &str) -> bool {
@@ -224,7 +314,7 @@ mod tests {
             "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...",
         );
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].path, "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9");
         assert!(keys[0].content.starts_with("-----BEGIN PGP"));
@@ -237,7 +327,7 @@ mod tests {
             .with_file("/key1.asc", "KEY1")
             .with_file("/key2.asc", "KEY2");
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 2);
     }
 
@@ -246,7 +336,7 @@ mod tests {
         let repo_content = "gpgkey=https://example.com/key.asc\n";
         let mock = MockExecutor::new();
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 0);
     }
 
@@ -257,7 +347,7 @@ mod tests {
         let mock =
             MockExecutor::new().with_file("/etc/shadow", "root:$6$salt$hash:19000:0:99999:7:::\n");
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 1);
         // Content must NOT contain the shadow hash
         assert!(
@@ -282,7 +372,7 @@ mod tests {
         let repo_content = "[repo]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-test\n";
         let mock = MockExecutor::new().with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-test", pgp_content);
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 1);
         assert!(keys[0].content.starts_with("-----BEGIN PGP"));
         assert!(
@@ -298,7 +388,7 @@ mod tests {
             .with_file("/good-key", "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata\n")
             .with_file("/bad-file", "this is not a GPG key at all");
 
-        let keys = extract_gpg_keys(repo_content, &mock);
+        let keys = extract_gpg_keys(repo_content, &mock, &DnfVars::from_host(&mock)).keys;
         assert_eq!(keys.len(), 2);
         // First key is valid
         assert!(keys[0].disposition.is_included());
