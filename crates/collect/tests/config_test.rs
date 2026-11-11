@@ -5,10 +5,12 @@
 
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
+use inspectah_collect::inspectors::rpm::modules::parse_rpm_va;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileKind, ConfigSection};
+use inspectah_core::types::finding::FindingKind;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::RpmVaEntry;
 use inspectah_core::types::system::SourceSystem;
@@ -320,6 +322,57 @@ fn test_config_inspector_excludes_selinux_fcontext_store_file() {
         section.files.iter().any(|f| f.path.contains("sshd_config")),
         "an ordinary RPM-modified config must still be collected"
     );
+}
+
+/// A config file of an installed RPM whose content the operator changed is
+/// included at collect, the same as the package that owns it. The scan
+/// renders straight from collect dispositions, so this is what puts the
+/// file in the scan's `config/` tree.
+///
+/// The verification results come from raw `rpm -Va` text through the
+/// production parser, not from hand-built entries. Package attribution is
+/// left out: the pipeline adds it later from file ownership, and the
+/// disposition does not depend on it.
+#[test]
+fn a_content_changed_rpm_config_is_included_at_collect() {
+    const RPM_VA: &str = "S.5....T.  c /etc/ssh/sshd_config\n\
+                          ..5....T.  c /etc/httpd/conf/httpd.conf\n";
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec![])
+        .with_file("/etc/ssh/sshd_config", "Port 2222\n")
+        .with_file("/etc/httpd/conf/httpd.conf", HTTPD_CONF);
+    let rpm_state = RpmState {
+        verification_results: parse_rpm_va(RPM_VA),
+        ..Default::default()
+    };
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let SectionData::Config(section) = &output.section else {
+        panic!("expected SectionData::Config, got {:?}", output.section);
+    };
+
+    for path in ["/etc/httpd/conf/httpd.conf", "/etc/ssh/sshd_config"] {
+        let entry = section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is collected: {:?}", section.files));
+        assert_eq!(entry.kind, ConfigFileKind::RpmOwnedModified, "{path}");
+        assert_eq!(
+            entry.disposition,
+            FindingKind::included(),
+            "{path}: a user-modified RPM config is included by default"
+        );
+    }
 }
 
 /// No /etc directory -- produces empty section.

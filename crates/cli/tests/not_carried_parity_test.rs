@@ -14,7 +14,10 @@
 //! - the `systemctl` lines and the `# Omitted:` lines;
 //! - `inspectah-var.conf`;
 //! - the `# Not carried:` Containerfile block and the `### Not carried`
-//!   audit table, compared whole.
+//!   audit table, compared whole;
+//! - the files staged under `config/etc/` and the Containerfile's
+//!   `# N config file(s) captured` line, for a host whose only config
+//!   finding is an RPM-owned file the operator changed.
 //!
 //! **Scope.** Parity is claimed only for a classified, baseline-backed
 //! snapshot: one with leaf data from the collector and a base image, so
@@ -25,7 +28,8 @@
 //! decide those, by design), snapshots with no baseline (refine
 //! classifies their added packages Investigate), aggregate snapshots,
 //! uploads, the refine export's allowlist and payload re-extraction, and
-//! everything outside the package, service and `/var` surfaces above.
+//! every other config kind, and everything outside the package, service,
+//! `/var` and config surfaces above.
 //! Widening the claim to cover those is a separate piece of work.
 //!
 //! The fixture is collector output, built through the calls `scan.rs`
@@ -38,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use inspectah_collect::executor::mock::MockExecutor;
+use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::services::ServicesInspector;
@@ -48,6 +53,7 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
@@ -114,6 +120,7 @@ const RECURSIVE_REQUIRES: &[(&str, &str)] = &[
 
 /// `rpm -qa` file lists, in the sentinel format the RPM inspector reads.
 const FILE_OWNERSHIP: &str = "@@bash\n/usr/bin/bash\n\
+    @@httpd\n/etc/httpd/conf/httpd.conf\n\
     @@httpd-core\n/usr/lib/systemd/system/httpd.service\n\
     @@httpd-filesystem\n/var/lib/httpd\n\
     @@firewalld\n/usr/lib/systemd/system/firewalld.service\n/var/lib/firewalld\n\
@@ -132,6 +139,13 @@ const SYSTEMCTL: &str = "UNIT FILE                 STATE     PRESET\n\
                          \n\
                          3 unit files listed.\n";
 const PRESET: &str = "enable firewalld.service\ndisable *\n";
+
+/// The leaf package's config file, which the operator edited. It is the
+/// only file under `/etc` the config walk sees.
+const MODIFIED_CONFIG: &str = "/etc/httpd/conf/httpd.conf";
+
+/// `rpm -Va` reporting a content change to [`MODIFIED_CONFIG`].
+const RPM_VA: &str = "S.5....T.  c /etc/httpd/conf/httpd.conf\n";
 
 fn pkg_source() -> SourceSystem {
     SourceSystem::PackageBased {
@@ -178,7 +192,7 @@ fn baseline() -> BaselineData {
 }
 
 /// The host: RPM, services and storage, the three inspectors the class
-/// reads from.
+/// reads from, and the one modified config file.
 fn host_mock() -> MockExecutor {
     let rpm_qa: String = HOST_PACKAGES
         .iter()
@@ -230,7 +244,12 @@ fn host_mock() -> MockExecutor {
             ok(&format!("{ANACONDA_PACKAGE} appstream\n")),
         )
         .with_command("find /var/cache/dnf -name *.rpm -type f", ok(""))
-        .with_command("rpm -Va", ok(""))
+        .with_command("rpm -Va", ok(RPM_VA))
+        // -- config ----------------------------------------------------
+        .with_dir("/etc", vec!["httpd"])
+        .with_dir("/etc/httpd", vec!["conf"])
+        .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
+        .with_file(MODIFIED_CONFIG, "Listen 8080\n")
         // -- services --------------------------------------------------
         .with_command(
             "systemctl list-unit-files --type=service --no-pager",
@@ -282,6 +301,7 @@ fn collected(exec: &MockExecutor) -> InspectionSnapshot {
         Box::new(RpmInspector::new()),
         Box::new(ServicesInspector::new()),
         Box::new(StorageInspector::new()),
+        Box::new(ConfigInspector::new()),
     ];
     let base = baseline();
     let collected = collect(
@@ -350,6 +370,8 @@ struct Surfaces {
     containerfile: String,
     audit: String,
     var_conf: Option<String>,
+    /// Every file staged under `config/etc/`, relative to `config/`, sorted.
+    etc_files: Vec<String>,
 }
 
 impl Surfaces {
@@ -365,7 +387,16 @@ impl Surfaces {
                 root.join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
             )
             .ok(),
+            etc_files: etc_files(&root.join("config")),
         }
+    }
+
+    /// The Containerfile's count of captured config files.
+    fn config_count_lines(&self) -> Vec<&str> {
+        self.containerfile
+            .lines()
+            .filter(|l| l.ends_with("config file(s) captured"))
+            .collect()
     }
 
     /// Every name on every `RUN dnf install` line, in order, without the
@@ -433,6 +464,28 @@ impl Surfaces {
             .map(|(_, l)| l)
             .collect()
     }
+}
+
+/// Every file below `config_root/etc`, as a path relative to `config_root`.
+fn etc_files(config_root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut dirs = vec![config_root.join("etc")];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let rel = path.strip_prefix(config_root).expect("below the root");
+                files.push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    files.sort();
+    files
 }
 
 /// Both halves for one host. The refine half runs twice: on the snapshot
@@ -567,6 +620,22 @@ fn the_fixture_is_baseline_backed_and_has_a_not_carried_list() {
         EXPECTED_NOT_CARRIED.len() + 4
     );
     assert!(scan.not_carried_block()[0].contains(NOT_CARRIED_REASON));
+
+    let config = scan_snapshot.config.as_ref().expect("the config section");
+    let modified = config
+        .files
+        .iter()
+        .find(|f| f.path == MODIFIED_CONFIG)
+        .expect("the collector found the modified config");
+    assert_eq!(modified.kind, ConfigFileKind::RpmOwnedModified);
+    assert_eq!(modified.package.as_deref(), Some(LEAF));
+    let staged = MODIFIED_CONFIG.trim_start_matches('/');
+    assert_eq!(
+        scan.etc_files,
+        vec![staged.to_string()],
+        "the scan stages the modified config"
+    );
+    assert_eq!(scan.config_count_lines().len(), 1, "{}", scan.containerfile);
 }
 
 // ── Parity ───────────────────────────────────────────────────────────
@@ -624,6 +693,22 @@ fn the_not_carried_block_and_table_are_byte_identical() {
             refine.not_carried_table(),
             run.scan.not_carried_table(),
             "{label}: the audit report's Not carried table differs"
+        );
+    }
+}
+
+#[test]
+fn the_config_tree_and_count_match() {
+    let run = run();
+    for (label, refine) in &run.refine {
+        assert_eq!(
+            refine.etc_files, run.scan.etc_files,
+            "{label}: files staged under config/etc differ"
+        );
+        assert_eq!(
+            refine.config_count_lines(),
+            run.scan.config_count_lines(),
+            "{label}: the captured config count differs"
         );
     }
 }

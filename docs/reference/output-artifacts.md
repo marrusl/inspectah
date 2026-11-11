@@ -190,17 +190,23 @@ Same conditions as scan, except for `compose/`, which only the export writes:
 
 ### RPM-modified config files
 
-The two paths render different sets of RPM-modified config files from the
-same snapshot. The scan tarball leaves RPM-modified configs out of
-`config/`: the snapshot records them, but they are not copied into the
-image. The refine export includes them by default, because refine treats site-specific
-configs as included until you exclude them. On the sample host the scan
-tarball's Containerfile header reads `47 config file(s) captured`. An
-export with no decisions reads `55`: the scan's 47 plus the eight
-RPM-modified configs, among them `ssh/sshd_config`. Such an export also
+An RPM-owned config file that `rpm -Va` reports as changed in content is
+included by default on both paths. The change is treated as yours, so the
+file is copied into `config/` and the image, the same as the package that
+owns it. A config file you did not change is left to the base image and
+dnf. The scan tarball's audit report lists the copied files under
+"Modified RPM-Owned Files", and an export with no decisions copies the
+same files as the scan, among them `ssh/sshd_config` on the sample host.
+
+`rpm -Va` reports that a file changed, not who changed it. Tools such as
+subscription-manager, authselect, or a realm join also rewrite RPM-owned
+configs. A file copied into the image also hides later package updates to
+it. Review the Configuration Files section in refine and exclude any you
+do not want in the image.
+
+An export with no decisions still differs from the scan in other ways: it
 drops `epel-release`, which refine excludes by default, and enables
-`sshd.service`. Review the Configuration Files
-section in refine before you build an image from the export.
+`sshd.service`.
 
 ### Excluded from refine export
 

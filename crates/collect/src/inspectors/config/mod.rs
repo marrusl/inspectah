@@ -159,7 +159,6 @@ impl Inspector for ConfigInspector {
                 rpm_va_flags: Some(flags.to_string()),
                 package: package.map(|p| p.to_string()),
                 diff_against_rpm: None, // Phase 3
-                disposition: FindingKind::excluded(),
                 ..Default::default()
             });
         }

@@ -177,9 +177,10 @@ others).
 
 **Configs:** 47 unowned config files are listed, meaning no RPM ships
 them: NetworkManager and firewalld settings, audit rules, `/etc/myapp/`,
-sudoers drop-ins, systemd units and timers, and the like. The scan
-reported 62 modified configs in total; Step 4 shows how refine sorts all
-62.
+sudoers drop-ins, systemd units and timers, and the like. Eight more are
+listed under "Modified RPM-Owned Files": files an installed package ships
+that you changed. The scan reported 62 modified configs in total; Step 4
+shows how refine sorts all 62.
 
 **Kernel and SELinux:** two sysctl overrides, SELinux in enforcing mode,
 and one custom file context rule that labels `/srv/www` as
@@ -294,13 +295,16 @@ the image, which is how `htop` installs.
 ### Configs: drop what is stale
 
 - **Exclude:** `/etc/nsswitch.conf.bak`, a stale backup file.
-- **Check the RPM-modified configs.** refine includes RPM-owned files you
-  modified by default, because they are Site items. The scan tarball's
-  Containerfile does not carry them. On this host that is eight files:
+- **Check the RPM-modified configs.** RPM-owned files you modified are
+  included by default, in the scan tarball and in refine, where they are
+  Site items. On this host that is eight files:
   `chrony.conf`, `crontab`, `httpd/conf/httpd.conf`, `krb5.conf`,
   `nginx/nginx.conf`, `rhsm/rhsm.conf`, `security/faillock.conf`, and
-  `ssh/sshd_config`, which carries the changed `Port 2222`. This
-  tutorial keeps them. Exclude any you do not want in the image.
+  `ssh/sshd_config`, which carries the changed `Port 2222`. `rpm -Va`
+  reports that a file changed, not who changed it: `rhsm/rhsm.conf` and
+  `security/faillock.conf` are often rewritten by subscription-manager
+  and authselect rather than by hand. This tutorial keeps all eight.
+  Exclude any you do not want in the image.
 - **Nothing to decide:** `/etc/init.d/legacy-app` (Advisory) and
   `/etc/sysctl.d/thp.conf` (Inventory) have no toggle. The advisory is
   work you do outside refine: write a systemd unit for the init script.
@@ -458,9 +462,8 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
 - Packages: the scan tarball's Containerfile installs 24 packages. The
   export installs 18: the 24, less the six that dropped (`strace`,
   `tcpdump`, `tmux`, `bat`, `fd-find`, and `the_silver_searcher`).
-- Configs: the scan tarball's Containerfile captures 47 config files. The
-  export captures 54: the 47, less `/etc/nsswitch.conf.bak`, plus the
-  eight RPM-modified files described in Step 5.
+- Configs: the scan tarball's Containerfile captures 55 config files. The
+  export captures 54: the 55, less `/etc/nsswitch.conf.bak`.
 - Repositories: the scan tarball's Containerfile installs `epel-release`
   as a repo-enabling package. refine excludes it by default, so the export
   does not install it, and the EPEL repo files still ship.
