@@ -116,6 +116,44 @@ impl std::fmt::Display for CopyToken {
     }
 }
 
+/// Why `value` cannot stand as an operand of a generated command, if it
+/// cannot: a package, module, group, unit or SELinux name that a `RUN`
+/// line passes to `dnf`, `systemctl`, `setsebool` or `semanage`.
+///
+/// This is separate from [`sanitize_shell_value`], which is a line and
+/// shell-word guard and says nothing about where a word sits. In an
+/// operand position a leading `-` makes the command read the word as one
+/// of its options (`--nogpgcheck`), and a leading `#` makes the shell read
+/// it, and everything after it on the line, as a comment, which cuts off
+/// the rest of a joined `RUN`. A value after `=` or inside another word
+/// can start with either legitimately, so the check belongs at the
+/// operand sites only.
+pub fn operand_refusal(value: &str) -> Option<&'static str> {
+    if value.starts_with('-') {
+        Some("starts with `-`, which the command would read as an option")
+    } else if value.starts_with('#') {
+        Some("starts with `#`, which the shell would read as a comment")
+    } else {
+        None
+    }
+}
+
+/// Why `value` cannot be written bare as an operand of a `RUN` command,
+/// if it cannot: [`sanitize_shell_value`] refuses it, or it is in an
+/// operand position and [`operand_refusal`] refuses it there.
+pub fn shell_operand_refusal(value: &str) -> Option<&'static str> {
+    if sanitize_shell_value(value).is_none() {
+        Some("holds a character that is unsafe in a shell word")
+    } else {
+        operand_refusal(value)
+    }
+}
+
+/// Whether [`shell_operand_refusal`] accepts `value`.
+pub fn is_shell_operand(value: &str) -> bool {
+    shell_operand_refusal(value).is_none()
+}
+
 /// `s` as one single-quoted POSIX shell word: every `'` becomes `'\''`.
 ///
 /// Inside single quotes the shell substitutes nothing and splits nothing,
@@ -627,6 +665,23 @@ mod tests {
         assert_eq!(sanitize_shell_value("pkg&bg"), None);
         assert_eq!(sanitize_shell_value("pkg>file"), None);
         assert_eq!(sanitize_shell_value("pkg<file"), None);
+    }
+
+    #[test]
+    fn operand_refusal_table() {
+        for ok in [
+            "httpd",
+            "vim-enhanced",
+            "nginx:1.24",
+            "a-b",
+            "a#b",
+            "x86_64",
+        ] {
+            assert_eq!(operand_refusal(ok), None, "{ok}");
+        }
+        for refused in ["--nogpgcheck", "-oalice", "-", "#foo", "#"] {
+            assert!(operand_refusal(refused).is_some(), "{refused}");
+        }
     }
 
     #[test]

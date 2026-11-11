@@ -8,7 +8,7 @@ use super::comment::escape_comment_text;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
-use super::safety::sanitize_shell_value;
+use super::safety::shell_operand_refusal;
 
 // ---------------------------------------------------------------------------
 // Package installability helpers (unchanged from prior tasks)
@@ -281,6 +281,14 @@ enum PresenceDecision {
 
 /// Format a `RUN systemctl enable/disable/mask` block using multi-line
 /// backslash continuation for consistency with the `RUN dnf install` style.
+/// The FIXME for a unit whose name cannot be a `systemctl` operand. The
+/// name is a snapshot string, so the line is escaped as comment text.
+fn refused_unit_fixme(unit: &str, why: &str) -> String {
+    escape_comment_text(&format!(
+        "# FIXME: unit {unit} left as the base image has it: the name {why}"
+    ))
+}
+
 fn systemctl_lines(verb: &str, units: &[String]) -> Vec<String> {
     let mut lines = vec![format!("RUN systemctl {} \\", verb)];
     for (i, u) in units.iter().enumerate() {
@@ -548,10 +556,12 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let mut safe_disabled = Vec::new();
     let mut safe_masked = Vec::new();
     let mut deferred = Vec::new();
+    let mut refused = Vec::new();
 
     for sc in &included_changes {
         let u = &sc.unit;
-        if sanitize_shell_value(u).is_none() {
+        if let Some(why) = shell_operand_refusal(u) {
+            refused.push(refused_unit_fixme(u, why));
             continue;
         }
 
@@ -619,7 +629,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         }
     }
 
-    let mut lines = Vec::new();
+    let mut lines = refused;
     lines.extend(omission_comments);
     if !safe_enabled.is_empty() {
         lines.extend(systemctl_lines("enable", &safe_enabled));
@@ -670,10 +680,12 @@ fn render_without_rpm(
     let mut safe_disabled = Vec::new();
     let mut safe_masked = Vec::new();
     let mut deferred = Vec::new();
+    let mut refused = Vec::new();
 
     for sc in &included_changes {
         let u = &sc.unit;
-        if sanitize_shell_value(u).is_none() {
+        if let Some(why) = shell_operand_refusal(u) {
+            refused.push(refused_unit_fixme(u, why));
             continue;
         }
         match sc.implied_action() {
@@ -693,7 +705,7 @@ fn render_without_rpm(
         }
     }
 
-    let mut lines = Vec::new();
+    let mut lines = refused;
     if !safe_enabled.is_empty() {
         lines.extend(systemctl_lines("enable", &safe_enabled));
     }

@@ -32,8 +32,9 @@ use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
-    BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal,
-    is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
+    BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
+    is_valid_tuned_profile, operand_refusal, operator_kargs, sanitize_shell_value,
+    shell_operand_refusal,
 };
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
@@ -684,10 +685,10 @@ fn packages_section_lines(
     if !enabled_modules.is_empty() {
         let mut mod_body: Vec<String> = Vec::new();
         for ms in &enabled_modules {
-            // Sanitize all host-derived values before shell interpolation
-            if sanitize_shell_value(&ms.module_name).is_none()
-                || sanitize_shell_value(&ms.stream).is_none()
-            {
+            // Sanitize all host-derived values before shell interpolation.
+            // `name:stream/profiles` is one operand of `dnf module enable`,
+            // so none of its parts may start like an option or a comment.
+            if !is_shell_operand(&ms.module_name) || !is_shell_operand(&ms.stream) {
                 mod_body.push(format!(
                     "# FIXME: module stream contains unsafe characters, skipped: {:?}:{:?}",
                     ms.module_name, ms.stream
@@ -701,7 +702,8 @@ fn packages_section_lines(
                 let safe_profiles: Vec<&str> = ms
                     .profiles
                     .iter()
-                    .filter_map(|p| sanitize_shell_value(p))
+                    .filter(|p| is_shell_operand(p))
+                    .map(String::as_str)
                     .collect();
                 if safe_profiles.len() != ms.profiles.len() {
                     mod_body.push(format!(
@@ -747,7 +749,10 @@ fn packages_section_lines(
                 .iter()
                 .filter(|g| ctx.is_renderable(&g.name))
                 .filter(|g| {
-                    let refusal = double_quoted_word_refusal(&g.name);
+                    // The quotes keep the name one word, but `dnf` still
+                    // reads a word that starts with `-` as an option.
+                    let refusal =
+                        double_quoted_word_refusal(&g.name).or_else(|| operand_refusal(&g.name));
                     if let Some(why) = refusal {
                         refused_groups.push(format!(
                             "# FIXME: package group {} not installed as a group: the name {why}",
@@ -807,6 +812,7 @@ fn packages_section_lines(
     // Packages
     let mut install_names = Vec::new();
     let mut todo_lines = Vec::new();
+    let mut refused_packages: Vec<String> = Vec::new();
 
     for pkg in &rpm.packages_added {
         if let Some(line) = manual_follow_up_line(pkg) {
@@ -914,7 +920,11 @@ fn packages_section_lines(
             continue;
         }
         let install_name = install_name_for_package(pkg, &duplicate_name_counts);
-        if sanitize_shell_value(&install_name).is_none() {
+        if let Some(why) = shell_operand_refusal(&install_name) {
+            refused_packages.push(format!(
+                "# FIXME: package {} not installed: the name {why}",
+                language_packages::sanitize_for_comment(&install_name)
+            ));
             continue;
         }
         // The repo-enabling match comes first: a package that lost its
@@ -1042,6 +1052,11 @@ fn packages_section_lines(
         lines.extend(refused_groups);
     }
 
+    if !refused_packages.is_empty() {
+        lines.push(String::new());
+        lines.extend(refused_packages);
+    }
+
     if !renderable_groups.is_empty() {
         let mut grp_body: Vec<String> = Vec::new();
         if let Some(banner) = crb.banner() {
@@ -1100,7 +1115,7 @@ fn packages_section_lines(
         let mut safe_locks = Vec::new();
         let mut unsafe_locks = Vec::new();
         for vl in &included_locks {
-            if sanitize_shell_value(&vl.raw_pattern).is_some() {
+            if is_shell_operand(&vl.raw_pattern) {
                 safe_locks.push(vl);
             } else {
                 unsafe_locks.push(vl);
@@ -1388,7 +1403,7 @@ fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<S
         ));
         return None;
     };
-    if sanitize_shell_value(&unit).is_none() {
+    if !is_shell_operand(&unit) {
         body.push(format!(
             "# FIXME: Timer unit name contains unsafe characters: {shown}"
         ));
@@ -1862,9 +1877,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 /// FIXME. The install precondition and the port loop read the same answer, so
 /// the block never installs `semanage` for a command it will not emit.
 fn port_label_renders(pl: &inspectah_core::types::selinux::SelinuxPortLabel) -> bool {
-    sanitize_shell_value(&pl.protocol).is_some()
-        && sanitize_shell_value(&pl.port).is_some()
-        && sanitize_shell_value(&pl.label_type).is_some()
+    is_shell_operand(&pl.protocol) && is_shell_operand(&pl.port) && is_shell_operand(&pl.label_type)
 }
 
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
@@ -1915,7 +1928,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             if bname.is_empty() {
                 continue;
             }
-            if sanitize_shell_value(bname).is_some() && sanitize_shell_value(bval).is_some() {
+            if is_shell_operand(bname) && is_shell_operand(bval) {
                 body.push(format!("RUN setsebool -P {} {}", bname, bval));
             } else {
                 body.push(format!(
@@ -4131,8 +4144,17 @@ RUN dnf install -y \
         let snap = snapshot_with_packages(&["safe-pkg", "bad;pkg"]);
         let output = render_containerfile(&snap, None, None);
         assert!(output.contains("safe-pkg"));
-        // The unsafe package should not appear anywhere in the install block
-        assert!(!output.contains("bad;pkg"));
+        // The unsafe package reaches no instruction, and a FIXME names it.
+        assert!(
+            output
+                .lines()
+                .all(|l| l.starts_with('#') || !l.contains("bad;pkg")),
+            "{output}"
+        );
+        assert!(
+            output.contains("# FIXME: package bad;pkg not installed"),
+            "{output}"
+        );
     }
 
     #[test]

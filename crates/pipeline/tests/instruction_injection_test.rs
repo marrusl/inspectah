@@ -26,9 +26,14 @@ use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_core::types::rpm::{
-    InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
+    EnabledModuleStream, InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
+    VersionLockEntry,
 };
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::services::{
+    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
@@ -624,6 +629,324 @@ fn from_and_group_lines_render_benign_values() {
     // A refused group's member is installed on its own instead.
     let out = group_containerfile("x\nRUN y");
     assert!(out.lines().any(|l| l.trim() == "vim \\"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// Operands of RUN commands (dnf, systemctl, setsebool, semanage)
+// ---------------------------------------------------------------------------
+
+/// Words a command would read as an option, or the shell as the start of
+/// a comment, when they stand as an operand.
+const OPERAND_VALUES: &[&str] = &["--nogpgcheck", "-oalice", "#foo"];
+
+/// A row for one operand site: the FIXME prefix the refusal writes.
+struct OperandRow {
+    field: &'static str,
+    render: fn(&str) -> String,
+    fixme: &'static str,
+}
+
+/// Why `output` fails the row for `value`, or `None`. A comment here is a
+/// line that starts with `#` at the margin: an indented `#foo \` inside a
+/// joined `RUN` is exactly what the row is looking for, so it counts.
+fn operand_failure(row: &OperandRow, value: &str, output: &str) -> Option<String> {
+    for line in output.split(LINE_TERMINATORS) {
+        if line.starts_with('#') {
+            continue;
+        }
+        if line.split_whitespace().any(|w| w.contains(value)) {
+            return Some(format!("the value reached a command line: {line:?}"));
+        }
+    }
+    let fixme = output
+        .split(LINE_TERMINATORS)
+        .any(|l| l.starts_with(row.fixme) && l.contains(value));
+    (!fixme).then(|| format!("no `{}` line names the value", row.fixme))
+}
+
+fn rpm_snap(rpm: RpmSection) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(rpm);
+    snap
+}
+
+fn package(name: &str) -> PackageEntry {
+    PackageEntry {
+        name: name.into(),
+        version: "1.0".into(),
+        release: "1.el9".into(),
+        arch: "x86_64".into(),
+        state: PackageState::Added,
+        disposition: FindingKind::included(),
+        source_repo: "appstream".into(),
+        ..Default::default()
+    }
+}
+
+fn module(name: &str, stream: &str, profile: &str) -> String {
+    render_containerfile(
+        &rpm_snap(RpmSection {
+            module_streams: vec![EnabledModuleStream {
+                module_name: name.into(),
+                stream: stream.into(),
+                profiles: vec![profile.into()],
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        None,
+        None,
+    )
+}
+
+fn selinux(boolean: (&str, &str), port: (&str, &str, &str)) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.selinux = Some(SelinuxSection {
+        boolean_overrides: vec![serde_json::json!({
+            "name": boolean.0,
+            "current_value": boolean.1,
+            "non_default": true,
+            "include": true,
+        })],
+        port_labels: vec![SelinuxPortLabel {
+            label_type: port.0.into(),
+            protocol: port.1.into(),
+            port: port.2.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    render_containerfile(&snap, None, None)
+}
+
+fn service(unit: &str, state: ServiceUnitState) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.services = Some(ServiceSection {
+        state_changes: vec![ServiceStateChange {
+            unit: unit.into(),
+            current_state: state,
+            default_state: None,
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: None,
+            aggregate: None,
+            attention_reason: None,
+            shadow_type: None,
+            shadow_rationale: None,
+        }],
+        ..Default::default()
+    });
+    render_containerfile(&snap, None, None)
+}
+
+fn scheduled(st: ScheduledTaskSection) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(st);
+    render_containerfile(&snap, None, None)
+}
+
+const OPERAND_ROWS: &[OperandRow] = &[
+    OperandRow {
+        field: "dnf install package name",
+        render: |v| {
+            render_containerfile(
+                &rpm_snap(RpmSection {
+                    packages_added: vec![package("vim"), package(v)],
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+        },
+        fixme: "# FIXME: package",
+    },
+    OperandRow {
+        field: "dnf module name",
+        render: |v| module(v, "1.0", "common"),
+        fixme: "# FIXME: module",
+    },
+    OperandRow {
+        field: "dnf module stream",
+        render: |v| module("nginx", v, "common"),
+        fixme: "# FIXME: module",
+    },
+    OperandRow {
+        field: "dnf module profile",
+        render: |v| module("nginx", "1.24", v),
+        fixme: "# FIXME: module",
+    },
+    OperandRow {
+        field: "dnf versionlock pattern",
+        render: |v| {
+            render_containerfile(
+                &rpm_snap(RpmSection {
+                    version_locks: vec![VersionLockEntry {
+                        raw_pattern: v.into(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+        },
+        fixme: "# FIXME: version lock",
+    },
+    OperandRow {
+        field: "dnf group install name",
+        render: group_containerfile,
+        fixme: "# FIXME: package group",
+    },
+    OperandRow {
+        field: "setsebool name",
+        render: |v| selinux((v, "on"), ("http_port_t", "tcp", "8080")),
+        fixme: "# FIXME: boolean",
+    },
+    OperandRow {
+        field: "setsebool value",
+        render: |v| {
+            selinux(
+                ("httpd_can_network_connect", v),
+                ("http_port_t", "tcp", "8080"),
+            )
+        },
+        fixme: "# FIXME: boolean",
+    },
+    OperandRow {
+        field: "semanage port type",
+        render: |v| selinux(("httpd_can_network_connect", "on"), (v, "tcp", "8080")),
+        fixme: "# FIXME: port label",
+    },
+    OperandRow {
+        field: "semanage port protocol",
+        render: |v| {
+            selinux(
+                ("httpd_can_network_connect", "on"),
+                ("http_port_t", v, "8080"),
+            )
+        },
+        fixme: "# FIXME: port label",
+    },
+    OperandRow {
+        field: "semanage port number",
+        render: |v| {
+            selinux(
+                ("httpd_can_network_connect", "on"),
+                ("http_port_t", "tcp", v),
+            )
+        },
+        fixme: "# FIXME: port label",
+    },
+    OperandRow {
+        field: "systemctl enable unit",
+        render: |v| service(&format!("{v}.service"), ServiceUnitState::Enabled),
+        fixme: "# FIXME: unit",
+    },
+    OperandRow {
+        field: "systemctl disable unit",
+        render: |v| service(&format!("{v}.service"), ServiceUnitState::Disabled),
+        fixme: "# FIXME: unit",
+    },
+    OperandRow {
+        field: "systemctl mask unit",
+        render: |v| service(&format!("{v}.service"), ServiceUnitState::Masked),
+        fixme: "# FIXME: unit",
+    },
+    OperandRow {
+        field: "local timer unit",
+        render: |v| {
+            scheduled(ScheduledTaskSection {
+                systemd_timers: vec![SystemdTimer {
+                    name: v.into(),
+                    source: "local".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        },
+        fixme: "# FIXME: Timer unit name",
+    },
+    OperandRow {
+        field: "cron-converted timer unit",
+        render: |v| {
+            scheduled(ScheduledTaskSection {
+                generated_timer_units: vec![GeneratedTimerUnit {
+                    name: v.into(),
+                    cron_expr: "0 * * * *".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        },
+        fixme: "# FIXME: Timer unit name",
+    },
+    OperandRow {
+        field: "@reboot service unit",
+        render: |v| {
+            scheduled(ScheduledTaskSection {
+                generated_timer_units: vec![GeneratedTimerUnit {
+                    name: v.into(),
+                    cron_expr: "@reboot".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        },
+        fixme: "# FIXME: Timer unit name",
+    },
+];
+
+#[test]
+fn operands_never_start_like_an_option_or_a_comment() {
+    let mut failures = Vec::new();
+    for row in OPERAND_ROWS {
+        for value in OPERAND_VALUES {
+            let output = (row.render)(value);
+            if let Some(why) = operand_failure(row, value, &output) {
+                failures.push(format!("{} ({value:?}): {why}\n{output}", row.field));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The benign value of each operand row still renders its command.
+#[test]
+fn operands_render_benign_values() {
+    let cases: &[(String, &str)] = &[
+        ((OPERAND_ROWS[0].render)("httpd"), "    httpd \\"),
+        (
+            module("nginx", "1.24", "common"),
+            "RUN dnf module enable -y nginx:1.24/common",
+        ),
+        (
+            selinux(
+                ("httpd_can_network_connect", "on"),
+                ("http_port_t", "tcp", "8080"),
+            ),
+            "RUN setsebool -P httpd_can_network_connect on",
+        ),
+        (
+            selinux(
+                ("httpd_can_network_connect", "on"),
+                ("http_port_t", "tcp", "8080"),
+            ),
+            "RUN semanage port -a -t http_port_t -p tcp 8080",
+        ),
+        (
+            service("httpd.service", ServiceUnitState::Enabled),
+            "    httpd.service",
+        ),
+    ];
+    for (out, line) in cases {
+        assert!(out.lines().any(|l| l == *line), "missing {line:?}\n{out}");
+    }
 }
 
 // ---------------------------------------------------------------------------
