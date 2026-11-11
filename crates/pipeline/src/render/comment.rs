@@ -2,19 +2,20 @@
 //!
 //! **Every renderer that builds its file as a vector of lines joins it with
 //! [`join_lines`].** Those files are the Containerfile, the `/var`
-//! tmpfiles.d fragment, the kickstart suggestion, and the users kickstart
-//! and blueprint fragments. The join escapes [`escape_comment_text`]'s
+//! tmpfiles.d fragment, the kickstart suggestion, the users kickstart
+//! and blueprint fragments, and the synthesized sysctl drop-in. The join escapes [`escape_comment_text`]'s
 //! characters in every comment line, so a snapshot value interpolated into
 //! a comment cannot end it early, wherever the line was built and whether
 //! or not its site remembered to escape. A site that escapes its own value
 //! first loses nothing: the escaped text holds none of these characters,
 //! so the join leaves it as it is.
 //!
-//! Three `#`-comment files in `configtree.rs` are built with `push_str`
+//! Two `#`-comment files in `configtree.rs` are built with `push_str`
 //! instead and do not pass through the join. The flatpak provisioning unit
-//! escapes its one value-carrying comment at the site. The sysctl fragment
-//! and the kernel arguments TOML write fixed comment text only, so nothing
-//! from the snapshot reaches a comment there.
+//! escapes its value-carrying comments (the unknown-URL remote and the
+//! refusal FIXMEs) at the site. The kernel arguments TOML writes fixed
+//! comment text only, so nothing from the snapshot reaches a comment
+//! there.
 //!
 //! The guard sits at the join rather than at each `format!("# ...")`
 //! because the renderers emit a few hundred comment lines from plain

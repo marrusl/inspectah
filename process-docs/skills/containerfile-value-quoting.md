@@ -48,8 +48,8 @@ join it with `render::comment::join_lines()`.** The join runs
 spaces and tabs is `#`, so a snapshot value in a comment line cannot end
 it, whichever site built the line and whether or not that site escaped.
 The Containerfile, the `/var` tmpfiles.d fragment, the kickstart
-suggestion and the users kickstart and blueprint fragments all join
-there. The `#`-comment files built with `push_str` in `configtree.rs`
+suggestion, the users kickstart and blueprint fragments and the sysctl
+drop-in all join there. The `#`-comment files built with `push_str` in `configtree.rs`
 do not; see the last item below.
 
 Per-site escaping was the rule until 2026-11-10 and it kept failing: a
@@ -64,8 +64,9 @@ through can guard a site that does not exist yet.
 What the join does not do:
 
 - **It never touches an instruction line.** A value reaching a command
-  is refused or proved before it gets there (the sections below):
-  escaping it would silently change the command.
+  is refused or proved before it gets there (the sections below, and
+  [instruction-line-values](instruction-line-values.md) for every
+  other generated file): escaping it would silently change the command.
 - **It sees one element as one line.** An element that starts with a
   terminator is not a comment and is left as it is, so never push a
   comment as part of a multi-line element. Debug builds assert this: a
@@ -74,12 +75,16 @@ What the join does not do:
   the join by splitting elements on terminators first: a comment
   carrying `\nRUN x` would split into an uncommented `RUN x` line and
   escape nothing.
-- **It does not cover a file built another way.** Three `#`-comment
+- **It does not cover a file built another way.** Two `#`-comment
   files in `configtree.rs` are assembled with `push_str`. The flatpak
-  provisioning unit escapes its one value-carrying comment at the site.
-  The sysctl fragment and the kernel arguments TOML write fixed comment
-  text only. A new file builds a line vector and joins it here, or it
-  has no guard.
+  provisioning unit escapes its value-carrying comments (the unknown-URL
+  remote and the refusal FIXMEs) at the site. The kernel arguments TOML
+  writes fixed comment text only. The sysctl drop-in is a line vector
+  joined here since its refusal FIXMEs carry the key. A new file builds a
+  line vector and joins it here, or it has no guard.
+- **It does nothing for an instruction line.** A value on a command,
+  directive or key line is proved before it is interpolated; see
+  [instruction-line-values](instruction-line-values.md).
 
 Escaping a value at its site as well is harmless: the escaped text holds
 no character the join changes. `sanitize_for_comment()` still has a
