@@ -107,13 +107,16 @@ fn useradd_refusal(u: &serde_json::Value) -> Option<&'static str> {
 /// `s` as a TOML basic string, quotes included.
 ///
 /// Every value in the blueprint fragment goes through this, so none can
-/// close its string and start a key. TOML has a real escaping rule and
-/// legitimate values need it (a GECOS-style home with a quote is still a
-/// home), so the value is escaped, not refused: `"` and `\` get a
-/// backslash, and every control character and line terminator is written
-/// as a `\uXXXX` escape. U+0085, U+2028 and U+2029 are legal raw in a TOML
-/// string, but an editor may break the line there, so they are escaped
-/// too.
+/// close its string and start a key. Escaping keeps the TOML whole; it
+/// says nothing about what the blueprint's consumer does with the value.
+/// So the account names, home, shell and hash are proved first, as the
+/// kickstart and Containerfile prove them, and only the SSH key relies on
+/// this escaping alone: a key holds spaces and is carried as it is.
+///
+/// `"` and `\` get a backslash, and every control character and line
+/// terminator is written as a `\uXXXX` escape. U+0085, U+2028 and
+/// U+2029 are legal raw in a TOML string, but an editor may break the
+/// line there, so they are escaped too.
 fn toml_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -253,6 +256,8 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
 /// Render a blueprint TOML fragment for user/group provisioning.
 ///
 /// Emits `[[customizations.group]]` blocks, then `[[customizations.user]]` blocks.
+/// A group, user or password the kickstart refuses gets the same `# FIXME`
+/// here and is left out, so the two fragments carry the same accounts.
 /// Single `key` field for the first SSH key; emits a comment when > 1 key.
 pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -271,6 +276,16 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
         if name.is_empty() {
             continue;
         }
+        // TOML escaping keeps the name in its string, but the blueprint's
+        // consumer still creates the account, so the name gets the proof
+        // the kickstart and the Containerfile give it.
+        if AccountName::parse(name).is_err() {
+            lines.push(format!(
+                "# FIXME: group {} not created: the name is not a valid group name",
+                sanitize_for_comment(name)
+            ));
+            continue;
+        }
         lines.push("[[customizations.group]]".into());
         lines.push(format!("name = {}", toml_string(name)));
         if gid > 0 {
@@ -283,6 +298,14 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
     for u in &users {
         let name = str_field(u, "name");
         if name.is_empty() {
+            continue;
+        }
+        // The same users as the kickstart: a refusal costs the whole user.
+        if let Some(reason) = useradd_refusal(u) {
+            lines.push(format!(
+                "# FIXME: user {} not created: {reason}",
+                sanitize_for_comment(name)
+            ));
             continue;
         }
         let uid = uid_field(u, "uid");
@@ -316,10 +339,16 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
             ));
         }
 
-        // Password
+        // Password. A refused hash costs only the password, as in the
+        // kickstart.
         let pw = str_field(u, "password_hash");
         if !pw.is_empty() {
-            lines.push(format!("password = {}", toml_string(pw)));
+            match CryptHash::parse(pw) {
+                Ok(hash) => lines.push(format!("password = {}", toml_string(hash.as_str()))),
+                Err(_) => lines.push(format!(
+                    "# FIXME: password for user {name} not set: the hash is not a crypt(3) string"
+                )),
+            }
         }
 
         // SSH key — blueprint supports a single `key` field

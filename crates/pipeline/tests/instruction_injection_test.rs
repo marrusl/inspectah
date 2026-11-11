@@ -825,96 +825,185 @@ fn users_kickstart_renders_benign_values() {
     }
 }
 
+/// The user names `out` carries: each `user --name=` line of a kickstart,
+/// or each `[[customizations.user]]` name of a blueprint.
+fn carried_users(kickstart: &str, blueprint: &str) -> (Vec<String>, Vec<String>) {
+    let ks = kickstart
+        .lines()
+        .filter_map(|l| l.strip_prefix("user --name="))
+        .map(|rest| rest.split(' ').next().unwrap_or("").to_string())
+        .collect();
+    let doc: toml::Table = blueprint.parse().expect("blueprint is TOML");
+    let bp = doc
+        .get("customizations")
+        .and_then(|c| c.get("user"))
+        .and_then(|u| u.as_array())
+        .map(|users| {
+            users
+                .iter()
+                .filter_map(|u| u["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (ks, bp)
+}
+
+/// Every key, at every depth, of a parsed TOML value.
+fn all_keys(value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::Table(t) => {
+            for (k, v) in t {
+                out.push(k.clone());
+                all_keys(v, out);
+            }
+        }
+        toml::Value::Array(a) => a.iter().for_each(|v| all_keys(v, out)),
+        _ => {}
+    }
+}
+
 /// Builds the JSON value a user field holds from a hostile string.
 type FieldValue = fn(&str) -> serde_json::Value;
 
-/// Every string field of the blueprint, poisoned one at a time with every
-/// terminator, CRLF, a quote and a backslash. The fragment must parse,
-/// hold exactly the tables and keys a benign user and group produce, and
-/// carry the hostile value back unchanged in its own field.
+/// The blueprint proves what the kickstart proves. A user whose name,
+/// supplementary group, home or shell the kickstart refuses, a group whose
+/// name it refuses, and a hash it refuses, get the same FIXME here and are
+/// left out; the fragment still parses and adds no key. Both fragments
+/// carry the same users.
 #[test]
-fn users_blueprint_values_never_add_a_key() {
-    let mut seps = terminators();
-    seps.extend(
-        ["\"", "\\", "'", "\"\"\"", "=", "[x]"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    let user_fields: &[(&str, FieldValue)] = &[
-        ("name", |v| v.into()),
-        ("home", |v| v.into()),
-        ("shell", |v| v.into()),
-        ("password_hash", |v| v.into()),
-        ("ssh_keys", |v| serde_json::json!([v])),
-        ("supplementary_groups", |v| serde_json::json!([v])),
-    ];
-    let user_keys = [
-        "gid", "groups", "home", "key", "name", "password", "shell", "uid",
+fn users_blueprint_refuses_what_the_kickstart_refuses() {
+    let mut values: Vec<String> = word_breakers()
+        .iter()
+        .chain(["=", "[x]", "\"\"\""].map(String::from).iter())
+        .map(|sep| format!("x{sep}injected = true"))
+        .collect();
+    // Values an account name may not hold but a path segment may, so they
+    // drive the name fields only.
+    let names_only = ["-oalice", "1000", "..", "host$"];
+    values.extend(names_only.map(String::from));
+    let user_fields: &[(&str, FieldValue, &str)] = &[
+        ("name", |v| v.into(), "# FIXME: user"),
+        (
+            "supplementary_groups",
+            |v| serde_json::json!([v]),
+            "# FIXME: user",
+        ),
+        ("home", |v| format!("/home/{v}").into(), "# FIXME: user"),
+        ("shell", |v| format!("/bin/{v}").into(), "# FIXME: user"),
+        (
+            "password_hash",
+            |v| format!("$6$s${v}").into(),
+            "# FIXME: password",
+        ),
     ];
     let mut failures = Vec::new();
-    for sep in &seps {
-        let value = format!("x{sep}injected = true");
-        let mut cases: Vec<(String, InspectionSnapshot)> = user_fields
+    for value in &values {
+        let name_value = names_only.contains(&value.as_str());
+        let mut cases: Vec<(String, InspectionSnapshot, &str)> = user_fields
             .iter()
-            .map(|(f, make)| {
+            .filter(|(f, _, _)| !name_value || !matches!(*f, "home" | "shell" | "password_hash"))
+            .map(|(f, make, fixme)| {
                 (
                     f.to_string(),
-                    users_snap(user_with(f, make(&value)), base_group()),
+                    users_snap(user_with(f, make(value)), base_group()),
+                    *fixme,
                 )
             })
             .collect();
         let mut g = base_group();
         g["name"] = value.clone().into();
-        cases.push(("group name".into(), users_snap(base_user(), g)));
+        cases.push((
+            "group name".into(),
+            users_snap(base_user(), g),
+            "# FIXME: group",
+        ));
 
-        for (field, snap) in cases {
+        for (field, snap, fixme) in cases {
             let out = users::render_blueprint_toml(&snap);
-            let doc: toml::Table = match out.parse() {
-                Ok(d) => d,
+            let doc: toml::Value = match out.parse::<toml::Table>() {
+                Ok(d) => toml::Value::Table(d),
                 Err(e) => {
-                    failures.push(format!("{field} ({sep:?}): not TOML: {e}\n{out}"));
+                    failures.push(format!("{field} ({value:?}): not TOML: {e}\n{out}"));
                     continue;
                 }
             };
-            let custom = doc["customizations"].as_table().expect("customizations");
-            let keys: Vec<String> = doc.keys().cloned().collect();
-            let user = custom["user"].as_array().expect("user")[0]
-                .as_table()
-                .expect("t");
-            let group = custom["group"].as_array().expect("group")[0]
-                .as_table()
-                .expect("t");
-            let mut ukeys: Vec<&str> = user.keys().map(String::as_str).collect();
-            ukeys.sort();
-            let mut gkeys: Vec<&str> = group.keys().map(String::as_str).collect();
-            gkeys.sort();
-            let mut ckeys: Vec<&str> = custom.keys().map(String::as_str).collect();
-            ckeys.sort();
-            if keys != ["customizations"]
-                || ckeys != ["group", "user"]
-                || ukeys != user_keys
-                || gkeys != ["gid", "name"]
-            {
-                failures.push(format!("{field} ({sep:?}): keys changed\n{out}"));
-                continue;
+            let mut keys = Vec::new();
+            all_keys(&doc, &mut keys);
+            if keys.iter().any(|k| k == "injected") {
+                failures.push(format!("{field} ({value:?}): added a key\n{out}"));
             }
-            let carried = match field.as_str() {
-                "name" => user["name"].as_str(),
-                "home" => user["home"].as_str(),
-                "shell" => user["shell"].as_str(),
-                "password_hash" => user["password"].as_str(),
-                "ssh_keys" => user["key"].as_str(),
-                "supplementary_groups" => user["groups"][0].as_str(),
-                _ => group["name"].as_str(),
-            };
-            if carried != Some(value.as_str()) {
+            if !out.lines().any(|l| l.starts_with(fixme)) {
+                failures.push(format!("{field} ({value:?}): no `{fixme}` line\n{out}"));
+            }
+            let ks = users::render_kickstart(&snap);
+            let (ks_users, bp_users) = carried_users(&ks, &out);
+            if ks_users != bp_users {
                 failures.push(format!(
-                    "{field} ({sep:?}): value not carried: {carried:?}\n{out}"
+                    "{field} ({value:?}): kickstart carries {ks_users:?}, blueprint {bp_users:?}"
                 ));
             }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// The SSH key is the one blueprint value carried on escaping alone: it
+/// holds spaces legitimately. Poisoned with every terminator, CRLF, a
+/// quote, a backslash and DEL, the fragment must parse, hold exactly the
+/// keys a benign user produces, and carry the key back unchanged.
+#[test]
+fn users_blueprint_key_is_escaped_not_refused() {
+    let mut seps = terminators();
+    seps.extend(
+        ["\"", "\\", "'", "\"\"\"", "=", "[x]", "\u{7f}"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    let user_keys = [
+        "gid", "groups", "home", "key", "name", "password", "shell", "uid",
+    ];
+    let mut failures = Vec::new();
+    for sep in &seps {
+        let value = format!("ssh-ed25519 AAAA x{sep}injected = true");
+        let snap = users_snap(
+            user_with("ssh_keys", serde_json::json!([value])),
+            base_group(),
+        );
+        let out = users::render_blueprint_toml(&snap);
+        let doc: toml::Table = match out.parse() {
+            Ok(d) => d,
+            Err(e) => {
+                failures.push(format!("{sep:?}: not TOML: {e}\n{out}"));
+                continue;
+            }
+        };
+        let user = doc["customizations"]["user"][0]
+            .as_table()
+            .expect("user table");
+        let mut ukeys: Vec<&str> = user.keys().map(String::as_str).collect();
+        ukeys.sort();
+        if ukeys != user_keys {
+            failures.push(format!("{sep:?}: keys changed\n{out}"));
+        } else if user["key"].as_str() != Some(value.as_str()) {
+            failures.push(format!("{sep:?}: key not carried\n{out}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+#[test]
+fn users_blueprint_renders_benign_values() {
+    let out = users::render_blueprint_toml(&users_snap(base_user(), base_group()));
+    for line in [
+        "name = \"devs\"",
+        "name = \"alice\"",
+        "home = \"/home/alice\"",
+        "shell = \"/bin/bash\"",
+        "groups = [\"wheel\"]",
+        "password = \"$6$salt$hash\"",
+    ] {
+        assert!(out.lines().any(|l| l == line), "missing {line:?}\n{out}");
+    }
 }
 
 // ---------------------------------------------------------------------------
