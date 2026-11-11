@@ -12,11 +12,16 @@
 //! that poisons two fields only reaches the first one the renderer
 //! refuses.
 
+use std::collections::HashMap;
+
+use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
+use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
 use inspectah_pipeline::render::containerfile::render_containerfile;
@@ -43,6 +48,15 @@ fn word_breakers() -> Vec<String> {
                 .iter()
                 .map(|s| s.to_string()),
         )
+        .collect()
+}
+
+/// The terminators plus what ends or substitutes inside a double-quoted
+/// shell word. A space is left out: it is legal inside the quotes.
+fn double_quote_breakers() -> Vec<String> {
+    terminators()
+        .into_iter()
+        .chain(["\"", "$(", "`", "\\"].iter().map(|s| s.to_string()))
         .collect()
 }
 
@@ -341,4 +355,86 @@ fn flatpak_unit_renders_benign_values() {
         unit.contains("ExecStart=/usr/bin/flatpak install -y --noninteractive flathub org.example.App//stable\n"),
         "{unit}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Containerfile FROM and `dnf group install`
+// ---------------------------------------------------------------------------
+
+fn with_target_image(image_ref: &str) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.target_image = Some(TargetImageIdentity {
+        image_ref: image_ref.into(),
+        strategy: ResolutionStrategy::CliOverride,
+    });
+    snap
+}
+
+/// A renderable package group named `name`, rendered through the real
+/// Containerfile path with a render context that marks it renderable.
+fn group_containerfile(name: &str) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "vim".into(),
+            version: "1.0".into(),
+            release: "1.el9".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            disposition: FindingKind::included(),
+            source_repo: "appstream".into(),
+            ..Default::default()
+        }],
+        installed_groups: Some(vec![InstalledGroup {
+            name: name.into(),
+            members: vec!["vim".into()],
+            optional_installed: Vec::new(),
+        }]),
+        ..Default::default()
+    });
+    let ctx = RenderContext {
+        group_states: HashMap::from([(name.to_string(), GroupRenderState::Renderable)]),
+        ..Default::default()
+    };
+    render_containerfile(&snap, None, Some(&ctx))
+}
+
+const FROM_ROWS: &[Row] = &[Row {
+    field: "target image reference",
+    render: |v| render_containerfile(&with_target_image(&format!("quay.io/{v}")), None, None),
+    reached: Reached::Fixme("# FIXME: target image"),
+}];
+
+const GROUP_ROWS: &[Row] = &[Row {
+    field: "package group name",
+    render: group_containerfile,
+    reached: Reached::Fixme("# FIXME: package group"),
+}];
+
+#[test]
+fn from_line_refuses_every_hostile_image_reference() {
+    check_rows(FROM_ROWS, &word_breakers());
+}
+
+#[test]
+fn group_install_refuses_every_hostile_group_name() {
+    check_rows(GROUP_ROWS, &double_quote_breakers());
+}
+
+#[test]
+fn from_and_group_lines_render_benign_values() {
+    let out = render_containerfile(
+        &with_target_image("quay.io/centos-bootc/centos-bootc:stream10"),
+        None,
+        None,
+    );
+    assert!(
+        out.contains("FROM quay.io/centos-bootc/centos-bootc:stream10"),
+        "{out}"
+    );
+    let out = group_containerfile("Development Tools");
+    assert!(out.contains("    \"Development Tools\" \\"), "{out}");
+    // A refused group's member is installed on its own instead.
+    let out = group_containerfile("x\nRUN y");
+    assert!(out.lines().any(|l| l.trim() == "vim \\"), "{out}");
 }

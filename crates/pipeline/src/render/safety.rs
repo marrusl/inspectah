@@ -284,6 +284,8 @@ pub enum BareWordError {
     LeadingDash,
     #[error("does not start with a URL scheme letter")]
     NoScheme,
+    #[error("does not start with a letter or digit")]
+    BadStart,
 }
 
 /// A byte allowed in a [`BareWord`] URL: `[A-Za-z0-9._~:/?&=+,@-]`.
@@ -338,6 +340,52 @@ impl BareWord {
             return Err(BareWordError::NoScheme);
         }
         Ok(Self(value.to_string()))
+    }
+}
+
+/// A byte allowed in a [`BareWord`] image reference:
+/// `[A-Za-z0-9._:/@-]`, which covers registry, port, repository path, tag
+/// and digest, and nothing a Containerfile parser treats as syntax.
+fn is_allowed_image_ref_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+}
+
+impl BareWord {
+    /// Validate a container image reference for a `FROM` line: no
+    /// whitespace (which would add `AS <name>` or another argument), no
+    /// line break (which would add an instruction), no `$` (which the
+    /// parser expands), and it starts with a letter or digit.
+    pub fn parse_image_ref(value: &str) -> Result<Self, BareWordError> {
+        if value.is_empty() {
+            return Err(TokenError::Empty.into());
+        }
+        if value.len() > MAX_EXPORT_PATH_LEN {
+            return Err(TokenError::TooLong.into());
+        }
+        if let Some(at) = value.bytes().position(|b| !is_allowed_image_ref_byte(b)) {
+            return Err(TokenError::BadByte { at }.into());
+        }
+        if !value.as_bytes()[0].is_ascii_alphanumeric() {
+            return Err(BareWordError::BadStart);
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+
+/// Why a package group name cannot sit inside the double quotes of a
+/// `dnf group install` line, if it cannot. Group names hold spaces
+/// legitimately, so the name is quoted, and only what ends or acts inside
+/// double quotes is refused: `"`, `\`, `$` and the backquote, every line
+/// terminator, which would end the instruction, and every other control.
+pub fn double_quoted_word_refusal(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        Some("it is empty")
+    } else if has_line_break_or_control(value) {
+        Some("it holds a line break or control character")
+    } else if value.contains(['"', '\\', '$', '`']) {
+        Some("it holds a quote, backslash, `$` or backquote")
+    } else {
+        None
     }
 }
 
@@ -531,6 +579,17 @@ mod tests {
         assert_eq!(sanitize_shell_value("normal-pkg"), Some("normal-pkg"));
         assert_eq!(sanitize_shell_value("httpd"), Some("httpd"));
         assert_eq!(sanitize_shell_value("vim-enhanced"), Some("vim-enhanced"));
+    }
+
+    /// Every Containerfile site guarded by `sanitize_shell_value` relies on
+    /// it refusing each line terminator (its `\s` is Unicode-aware), so a
+    /// guarded value cannot end the instruction.
+    #[test]
+    fn sanitize_shell_value_refuses_every_line_terminator() {
+        for t in LINE_TERMINATORS {
+            let value = format!("a{t}RUN id");
+            assert_eq!(sanitize_shell_value(&value), None, "{t:?}");
+        }
     }
 
     #[test]

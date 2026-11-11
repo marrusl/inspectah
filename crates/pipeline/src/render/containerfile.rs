@@ -32,8 +32,8 @@ use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
-    CopyToken, ExportPath, ExportToken, is_valid_tuned_profile, operator_kargs,
-    sanitize_shell_value,
+    BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal,
+    is_valid_tuned_profile, operator_kargs, sanitize_shell_value,
 };
 use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
@@ -531,7 +531,16 @@ fn packages_section_lines(
     let mut lines = Vec::new();
 
     match base {
-        Some(b) => lines.push(format!("FROM {b}")),
+        // The reference is a bare `FROM` argument, so it is proved.
+        Some(b) => match BareWord::parse_image_ref(b) {
+            Ok(image) => lines.push(format!("FROM {image}")),
+            Err(e) => {
+                lines.push(format!(
+                    "# FIXME: target image {} refused ({e}); FROM line omitted. Use --base-image to specify.",
+                    language_packages::sanitize_for_comment(b)
+                ));
+            }
+        },
         None => lines.push("# FROM line omitted \u{2014} target image could not be determined. Use --base-image to specify.".to_string()),
     }
     lines.push(String::new());
@@ -710,6 +719,7 @@ fn packages_section_lines(
     // `dnf group install` itself is emitted further down, after the
     // repo-enabling block and the combined local and disabled-repo
     // install.
+    let mut refused_groups: Vec<String> = Vec::new();
     let (renderable_groups, group_member_suppressed): (
         Vec<&inspectah_core::types::rpm::InstalledGroup>,
         std::collections::HashSet<String>,
@@ -721,9 +731,22 @@ fn packages_section_lines(
             && let Some(groups) = &rpm.installed_groups
         {
             // Collect renderable groups sorted alphabetically by name
+            // A group whose name cannot sit inside the double quotes of
+            // `dnf group install` is not rendered as a group: it gets a
+            // FIXME below, and its members install on their own.
             renderable = groups
                 .iter()
                 .filter(|g| ctx.is_renderable(&g.name))
+                .filter(|g| {
+                    let refusal = double_quoted_word_refusal(&g.name);
+                    if let Some(why) = refusal {
+                        refused_groups.push(format!(
+                            "# FIXME: package group {} not installed as a group: the name {why}",
+                            language_packages::sanitize_for_comment(&g.name)
+                        ));
+                    }
+                    refusal.is_none()
+                })
                 .collect();
             renderable.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -1003,6 +1026,11 @@ fn packages_section_lines(
         lines.push(String::new());
         lines.push("# === Repo-less RPM packages ===".into());
         lines.extend(repoless.advice);
+    }
+
+    if !refused_groups.is_empty() {
+        lines.push(String::new());
+        lines.extend(refused_groups);
     }
 
     if !renderable_groups.is_empty() {
