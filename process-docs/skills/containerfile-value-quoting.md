@@ -1,6 +1,6 @@
 ---
 name: containerfile-value-quoting
-description: Three interpolation contexts in the Containerfile renderer need three different treatments — quote, sanitize, or reject — the quoting has to land before any predicate is narrowed, and a host-sourced value that reaches a command is proved by a newtype rather than by a check at the site.
+description: Three interpolation contexts in the Containerfile renderer need three different treatments (quote, escape, or reject); comment lines are escaped where the file is joined, the quoting has to land before any predicate is narrowed, and a host-sourced value that reaches a command is proved by a newtype rather than by a check at the site.
 ---
 
 # Containerfile Value Quoting
@@ -16,7 +16,7 @@ has produced both over-rejection of legal paths and live command injection.
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
-| Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` per value, or `escape_line_terminators()` on a finished line with fixed quoted wording | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does |
+| Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every `#`-comment file goes through; `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
 
 `contains_unsafe_chars` refuses `'` and every character in
 `LINE_TERMINATORS`, one check serving every command site, which is
@@ -28,7 +28,7 @@ not just the newline (2026-11-10).
 
 ## Comment Sites Sanitize, They Never Reject
 
-A value that only labels a comment cannot execute — until a newline closes
+A value that only labels a comment cannot execute, until a newline closes
 the comment and the rest of the value becomes an instruction:
 
 ```
@@ -37,9 +37,45 @@ RUN echo PWNED (detected via npm list -g)
 ```
 
 Both the npm global `prefix` and `pinned_package_list()`'s output shipped
-this way before 2026-08-15. Route comment interpolations through
-`sanitize_for_comment()`. Rejection is the wrong tool there: it costs
-legitimate values a rendered section for no safety gain.
+this way before 2026-08-15. Rejection is the wrong tool there: it costs
+legitimate values a rendered section for no safety gain. Escape instead.
+
+## Comment Lines Are Escaped Where the File Is Joined
+
+**Build a rendered file as a `Vec<String>`, one element per line, and
+join it with `render::comment::join_lines()`.** The join runs
+`escape_comment_text()` over every element whose first character after
+spaces and tabs is `#`, so a snapshot value in a comment line cannot end
+it, whichever site built the line and whether or not that site escaped.
+The Containerfile, the `/var` tmpfiles.d fragment, the kickstart
+suggestion and the users kickstart and blueprint fragments all join
+there.
+
+Per-site escaping was the rule until 2026-11-10 and it kept failing: a
+sweep after the `# Omitted:` fix found raw values in more than twenty
+comment sites (package names in `# TODO:`, group names, unmanaged
+paths, low-confidence language paths, static routes, `/etc/hosts`
+additions, proxy lines, secret paths and remediations, non-RPM binary
+paths and notes, five kickstart comments). A few hundred comment lines
+come from plain `format!("# ...")`, so only the place every line passes
+through can guard a site that does not exist yet.
+
+What the join does not do:
+
+- **It never touches an instruction line.** A value reaching a command
+  is refused or proved before it gets there (the sections below):
+  escaping it would silently change the command.
+- **It sees one element as one line.** An element that starts with a
+  terminator is not a comment and is left as it is, so never push a
+  comment as part of a multi-line element.
+- **It does not cover a file built another way.** The flatpak
+  provisioning unit in `configtree.rs` is assembled with `push_str` and
+  escapes its one value-carrying comment at the site. A new file builds
+  a line vector and joins it here, or it has no guard.
+
+Escaping a value at its site as well is harmless: the escaped text holds
+no character the join changes. `sanitize_for_comment()` still has a
+job, doubling quotes where a comment wraps a value in them.
 
 A FIXME is a comment site too, and the one most often missed: it is
 written *because* the value failed a check, so it is the line most likely
@@ -52,10 +88,12 @@ call, such as `OmissionReason::describe` (the `# Omitted:` line and
 refine's Omitted Services subtitle), is escaped on the finished
 Containerfile line, never inside the function: refine shows the raw
 value on its own surface, and a Containerfile escape baked into the
-shared text would show there as a literal `\n`. Use `escape_line_terminators()` on
-the whole line, not `sanitize_for_comment()`, whose quote doubling would
-turn the fixed `package 'nginx'` wording into `package ''nginx''`. The
-owner in that line shipped raw until 2026-11-10.
+shared text would show there as a literal `\n`. The join escapes that
+line already; the site also calls `escape_comment_text()` on the whole
+line because `ServiceRenderPlan.lines` is public. Do not use
+`sanitize_for_comment()` there, whose quote doubling would turn the fixed
+`package 'nginx'` wording into `package ''nginx''`. The owner in that
+line shipped raw until 2026-11-10.
 
 **A renderer that references a staged file asks the stager's question.**
 When the export refuses to write a file named by a snapshot value, every

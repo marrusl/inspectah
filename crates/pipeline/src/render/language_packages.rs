@@ -18,7 +18,7 @@ use inspectah_core::util::{
 
 use crate::build::extract::is_single_normal_component;
 
-use super::comment::{LINE_TERMINATORS, escape_line_terminators};
+use super::comment::{LINE_TERMINATORS, escape_comment_text};
 
 const HIGH_CONFIDENCE: &str = "high";
 const MEDIUM_CONFIDENCE: &str = "medium";
@@ -160,9 +160,9 @@ fn contains_unsafe_chars(s: &str) -> bool {
 
 /// Sanitize a value for display in Containerfile comments.
 ///
-/// Doubles single quotes, then applies [`escape_line_terminators`].
+/// Doubles single quotes, then applies [`escape_comment_text`].
 pub(super) fn sanitize_for_comment(s: &str) -> String {
-    escape_line_terminators(&s.replace('\'', "''"))
+    escape_comment_text(&s.replace('\'', "''"))
 }
 
 /// Restore the leading `/` on a path the collector stored relative.
@@ -947,32 +947,20 @@ mod tests {
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use std::collections::HashMap;
 
-    /// Every line terminator is escaped to visible text, so comment text
-    /// stays on one line in the file and in any viewer. Quotes are doubled
-    /// only by `sanitize_for_comment`; everything else passes through.
+    /// `sanitize_for_comment` doubles quotes on top of the comment escaper,
+    /// whose own cases are in `comment.rs`.
     #[test]
-    fn comment_escapers_leave_no_line_terminator() {
+    fn sanitize_for_comment_doubles_quotes_and_escapes() {
         let cases = [
-            ("plain", "plain", "plain"),
-            ("a\nb", "a\\nb", "a\\nb"),
-            ("a\rb", "a\\rb", "a\\rb"),
-            ("a\r\nb", "a\\r\\nb", "a\\r\\nb"),
-            ("a\u{0B}b", "a\\u{b}b", "a\\u{b}b"),
-            ("a\u{0C}b", "a\\u{c}b", "a\\u{c}b"),
-            ("a\u{85}b", "a\\u{85}b", "a\\u{85}b"),
-            ("a\u{2028}b", "a\\u{2028}b", "a\\u{2028}b"),
-            ("a\u{2029}b", "a\\u{2029}b", "a\\u{2029}b"),
-            ("it's", "it''s", "it's"),
-            ("tab\there", "tab\there", "tab\there"),
-            ("caf\u{e9}", "caf\u{e9}", "caf\u{e9}"),
+            ("plain", "plain"),
+            ("it's", "it''s"),
+            ("a\nb", "a\\nb"),
+            ("a\u{2028}b", "a\\u{2028}b"),
+            ("a\u{1b}b", "a\\u{1b}b"),
+            ("tab\there", "tab\there"),
         ];
-        for (input, sanitized, escaped) in cases {
+        for (input, sanitized) in cases {
             assert_eq!(sanitize_for_comment(input), sanitized, "{input:?}");
-            assert_eq!(escape_line_terminators(input), escaped, "{input:?}");
-            assert!(
-                !sanitized.contains(LINE_TERMINATORS),
-                "{input:?}: expected value holds a terminator"
-            );
         }
     }
 

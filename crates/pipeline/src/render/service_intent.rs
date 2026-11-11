@@ -4,7 +4,7 @@ use inspectah_core::types::services::{ServiceAction, ServiceStateChange};
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
-use super::comment::escape_line_terminators;
+use super::comment::escape_comment_text;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
@@ -577,7 +577,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
                 // The owner comes from the snapshot unchecked, so escape
                 // the finished line here rather than inside `describe`,
                 // which refine also calls and escapes for its own surface.
-                omission_comments.push(escape_line_terminators(&format!(
+                omission_comments.push(escape_comment_text(&format!(
                     "# Omitted: {} ({})",
                     u,
                     reason.describe(&owning_package)

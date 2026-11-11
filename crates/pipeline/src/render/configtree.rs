@@ -457,7 +457,11 @@ pub fn write_config_tree(
                 svc.push_str("# because no URL was captured. You must configure them manually.\n");
                 svc.push_str("# See: flatpak remote-modify --help\n");
                 for name in &unreconstructable {
-                    svc.push_str(&format!("# Remote '{name}': URL unknown\n"));
+                    // A string-built file the join guard does not cover.
+                    svc.push_str(&super::comment::escape_comment_text(&format!(
+                        "# Remote '{name}': URL unknown"
+                    )));
+                    svc.push('\n');
                 }
                 svc.push('\n');
             }

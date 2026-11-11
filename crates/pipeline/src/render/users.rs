@@ -178,7 +178,7 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         }
     }
 
-    lines.join("\n")
+    super::comment::join_lines(&lines)
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +272,7 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
         lines.push(String::new());
     }
 
-    lines.join("\n")
+    super::comment::join_lines(&lines)
 }
 
 // ---------------------------------------------------------------------------

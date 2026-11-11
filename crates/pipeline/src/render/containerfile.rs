@@ -251,7 +251,7 @@ fn render_containerfile_inner(
     lines.extend(tmpfiles_lines());
     lines.extend(validate_lines());
 
-    lines.join("\n")
+    super::comment::join_lines(&lines)
 }
 
 /// Check whether a specific inspector section is degraded (not failed).
@@ -2382,7 +2382,7 @@ pub(crate) fn render_tmpfiles_conf(snap: &InspectionSnapshot) -> Option<String> 
         return None;
     }
 
-    Some(lines.join("\n") + "\n")
+    Some(super::comment::join_lines(&lines) + "\n")
 }
 
 fn var_dir_section_lines(snap: &InspectionSnapshot, tmpfiles_staged: bool) -> Vec<String> {

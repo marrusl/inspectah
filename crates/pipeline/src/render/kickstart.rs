@@ -150,7 +150,7 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         }
     }
 
-    lines.join("\n")
+    super::comment::join_lines(&lines)
 }
 
 #[cfg(test)]
