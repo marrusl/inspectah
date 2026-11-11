@@ -68,7 +68,12 @@ What the join does not do:
   escaping it would silently change the command.
 - **It sees one element as one line.** An element that starts with a
   terminator is not a comment and is left as it is, so never push a
-  comment as part of a multi-line element.
+  comment as part of a multi-line element. Debug builds assert this: a
+  non-comment element holding a `#` line after a terminator panics in
+  `join_lines`, so a test that renders the branch finds it. Do not "fix"
+  the join by splitting elements on terminators first: a comment
+  carrying `\nRUN x` would split into an uncommented `RUN x` line and
+  escape nothing.
 - **It does not cover a file built another way.** Three `#`-comment
   files in `configtree.rs` are assembled with `push_str`. The flatpak
   provisioning unit escapes its one value-carrying comment at the site.

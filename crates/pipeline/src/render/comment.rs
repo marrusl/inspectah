@@ -25,7 +25,10 @@
 //! the join would silently change the command.
 //!
 //! A file assembled some other way does not get this guard, so build any
-//! new one as a `Vec<String>` of lines and join it here.
+//! new one as a `Vec<String>` of lines and join it here. Each element is
+//! one line: a comment folded into a multi-line element after its first
+//! line would reach the file unescaped, and debug builds assert that none
+//! is.
 
 /// Characters that some reader of a rendered file treats as ending a line:
 /// the Unicode mandatory line breaks (UAX #14 classes BK, CR, LF and NL).
@@ -85,6 +88,12 @@ fn is_comment_line(line: &str) -> bool {
 /// Each element is one line of output. A comment element that held a
 /// terminator would otherwise come out as two lines, the second one an
 /// instruction; escaped, it stays one.
+///
+/// An element is never split on its terminators before the comment test:
+/// a comment element carrying a hostile value would split into a comment
+/// and an uncommented instruction, and only the comment would be escaped.
+/// The one-line rule is checked in debug builds instead, see
+/// [`buried_comment_line`].
 pub(crate) fn join_lines<S: AsRef<str>>(lines: &[S]) -> String {
     lines
         .iter()
@@ -93,11 +102,28 @@ pub(crate) fn join_lines<S: AsRef<str>>(lines: &[S]) -> String {
             if is_comment_line(line) {
                 escape_comment_text(line)
             } else {
+                debug_assert!(
+                    !buried_comment_line(line),
+                    "a rendered element hides a comment line after its first, \
+                     which join_lines cannot escape; push it as its own element: {line:?}"
+                );
                 line.to_string()
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Whether an element that is not itself a comment holds a comment line
+/// after a terminator.
+///
+/// The join escapes an element only when it opens as a comment, so a
+/// `#` line folded into an instruction element, as in
+/// `format!("RUN x\n# {value}")`, would carry its value into the file
+/// unescaped. Only debug builds check it: every test render runs the
+/// check, and a release build never panics on snapshot input.
+fn buried_comment_line(element: &str) -> bool {
+    element.split(LINE_TERMINATORS).skip(1).any(is_comment_line)
 }
 
 #[cfg(test)]
@@ -159,5 +185,32 @@ mod tests {
         for (lines, joined) in cases {
             assert_eq!(join_lines(lines), *joined, "{lines:?}");
         }
+    }
+
+    /// An instruction element that hides a comment line after a
+    /// terminator is caught; one whose later lines are instructions, or a
+    /// comment element whatever it holds, is not.
+    #[test]
+    fn a_comment_after_a_terminator_in_an_instruction_is_caught() {
+        let cases = [
+            ("RUN x\n# value", true),
+            ("RUN x\r\n  # value", true),
+            ("RUN x\u{2028}\t#value", true),
+            ("RUN x\n    && y", false),
+            ("RUN x # trailing", false),
+            ("# a\n# b", false),
+            ("RUN x", false),
+        ];
+        for (element, buried) in cases {
+            let caught = !is_comment_line(element) && buried_comment_line(element);
+            assert_eq!(caught, buried, "{element:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "hides a comment line")]
+    #[cfg(debug_assertions)]
+    fn the_join_refuses_a_buried_comment_in_debug_builds() {
+        join_lines(&["RUN x\n# value"]);
     }
 }

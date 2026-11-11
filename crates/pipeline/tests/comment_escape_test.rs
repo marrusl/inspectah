@@ -23,12 +23,13 @@ use inspectah_core::types::nonrpm::{
 };
 use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::storage::{FstabEntry, StorageSection};
+use inspectah_core::types::storage::{FstabEntry, StorageSection, VarDirBacking, VarDirectory};
 use inspectah_core::util::{METHOD_GEM_LOCKFILE, METHOD_NPM_LOCKFILE, METHOD_PYTHON_VENV};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::kickstart::render_kickstart;
+use inspectah_pipeline::render::write_tmpfiles_conf;
 
 /// What the hostile value tries to start a line with.
 const PAYLOAD: &str = "RUN echo pwned";
@@ -613,6 +614,59 @@ const KICKSTART_ROWS: &[Row] = &[
 #[test]
 fn kickstart_comments_keep_every_hostile_value_inside_the_comment() {
     check_rows(KICKSTART_ROWS);
+}
+
+// ---------------------------------------------------------------------------
+// /var tmpfiles.d fragment
+// ---------------------------------------------------------------------------
+
+/// The `/var` fragment as `write_tmpfiles_conf` stages it, for a snapshot
+/// whose one directory has a mode and is not created by anything the
+/// export carries, so it renders here rather than as a `RUN mkdir`.
+fn var_fragment(path: &str, backing: VarDirBacking) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.storage = Some(StorageSection {
+        var_directories: vec![VarDirectory {
+            path: path.into(),
+            backing: Some(backing),
+            mode: Some("0750".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_tmpfiles_conf(&snap, dir.path()).expect("tmpfiles fragment");
+    std::fs::read_to_string(
+        dir.path()
+            .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+    )
+    .expect("fragment written")
+}
+
+const VAR_FRAGMENT_ROWS: &[Row] = &[
+    Row {
+        field: "refused /var path",
+        comment: "# FIXME: create /var/lib/x",
+        render: |v| var_fragment(&format!("/var/lib/{v}"), VarDirBacking::Unbacked),
+    },
+    Row {
+        field: "tmpfiles.d fragment the export does not carry",
+        comment: "# /var/lib/app: created on the host by /etc/tmpfiles.d/x",
+        render: |v| {
+            var_fragment(
+                "/var/lib/app",
+                VarDirBacking::Tmpfiles {
+                    conf: format!("/etc/tmpfiles.d/{v}"),
+                    line: "d /var/lib/app 0750 root root -".into(),
+                },
+            )
+        },
+    },
+];
+
+#[test]
+fn var_fragment_comments_keep_every_hostile_value_inside_the_comment() {
+    check_rows(VAR_FRAGMENT_ROWS);
 }
 
 // ---------------------------------------------------------------------------
