@@ -144,6 +144,24 @@ pub enum UnreadReason {
     Expand(ExpandError),
     /// The expanded path could not be read on the host.
     Unreadable(String),
+    /// The file at the expanded path is not a PGP public key block. It is
+    /// recorded excluded, with its content replaced, so nothing ships it.
+    NotPgp(String),
+}
+
+impl UnreadReason {
+    /// What to do about it, for the warning that names it.
+    pub fn remedy(&self) -> String {
+        match self {
+            Self::Expand(_) => "change that gpgkey= line to name a key file the image has \
+                                before the package install"
+                .into(),
+            Self::Unreadable(path) | Self::NotPgp(path) => format!(
+                "put the repo's public key in the build context and COPY it to {path} \
+                 before the package install, or change that gpgkey= line"
+            ),
+        }
+    }
 }
 
 impl fmt::Display for UnreadReason {
@@ -151,6 +169,7 @@ impl fmt::Display for UnreadReason {
         match self {
             Self::Expand(e) => e.fmt(f),
             Self::Unreadable(path) => write!(f, "{path} could not be read"),
+            Self::NotPgp(path) => write!(f, "{path} does not contain a PGP public key block"),
         }
     }
 }
@@ -179,7 +198,7 @@ pub struct GpgKeyScan {
 /// differ. Content that does not start with a PGP public key header is
 /// replaced with a placeholder to prevent arbitrary host file ingestion.
 /// Remote references (`https://...`) are left for dnf to fetch. A local
-/// reference that yields no key is returned in `unread`.
+/// reference that yields no usable key is returned in `unread`.
 pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars) -> GpgKeyScan {
     let mut scan = GpgKeyScan::default();
 
@@ -244,6 +263,10 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     "WARNING: gpgkey file {} does not contain a PGP public key block, content redacted",
                     key_path
                 );
+                scan.unread.push(UnreadGpgKey {
+                    reference: reference.to_string(),
+                    reason: UnreadReason::NotPgp(key_path.to_string()),
+                });
                 scan.keys.push(RepoFile {
                     path: key_path.to_string(),
                     content: format!(

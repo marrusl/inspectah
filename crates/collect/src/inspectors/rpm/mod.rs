@@ -196,7 +196,9 @@ impl RpmInspector {
         let vars = dnf_vars::DnfVars::from_host(exec);
         let mut gpg_keys = Vec::new();
         // Keyed by repo file, so the three sections of one `epel.repo`
-        // naming the same key give one warning.
+        // naming the same key give one warning. The warning is conditional
+        // rather than gated on an enabled section: a repo disabled on the
+        // host can still be enabled in the image.
         let mut unread = std::collections::BTreeSet::new();
         for repo in &repo_files {
             let scan = repos::extract_gpg_keys(&repo.content, exec, &vars);
@@ -209,10 +211,11 @@ impl RpmInspector {
                 inspector: "rpm".into(),
                 message: format!(
                     "GPG key {} named in {repo_path} was not collected: {}. \
-                     The image build cannot verify packages from that repo \
-                     until the key is added by hand.",
+                     If the image enables a repo from that file, dnf cannot \
+                     verify its packages. To fix it, {}.",
                     u.reference.escape_debug(),
-                    u.reason
+                    u.reason,
+                    u.reason.remedy()
                 ),
                 ..Default::default()
             })
@@ -4285,6 +4288,43 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
                 warning: None,
             },
             GpgCase {
+                name: "three sections naming one unreadable key give one warning",
+                repo: "\
+[epel]
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
+
+[epel-debuginfo]
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
+
+[epel-source]
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
+",
+                host: |m| m,
+                keys: &[],
+                warning: Some("$nosuchvar is not defined"),
+            },
+            GpgCase {
+                name: "an indented gpgkey= line continues the previous value",
+                repo: "[r]\nenabled=1\n  gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-indented\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-indented", PGP_KEY),
+                keys: &[],
+                warning: None,
+            },
+            GpgCase {
+                name: "a key file that is not a PGP block",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-garbage\n",
+                host: |m| m.with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-garbage", "not a key\n"),
+                // Recorded excluded with its content replaced, so nothing
+                // ships it, and now said in the snapshot.
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-garbage"],
+                warning: Some(
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-garbage does not contain a PGP public key block",
+                ),
+            },
+            GpgCase {
                 name: "https key is fetched by dnf, not collected or warned about",
                 repo: "[r]\ngpgkey=https://example.com/$nosuchvar.asc\n",
                 host: |m| m,
@@ -4307,6 +4347,47 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
                     );
                 }
             }
+        }
+    }
+
+    /// The whole warning, for an expansion failure and for a path that
+    /// could not be read: what was not collected, from which repo file,
+    /// when it matters, and what to do.
+    #[test]
+    fn gpg_key_warnings_say_when_they_matter_and_what_to_do() {
+        let cases = [
+            GpgCase {
+                name: "unknown variable",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar\n",
+                host: |m| m,
+                keys: &[],
+                warning: Some(
+                    "GPG key file:///etc/pki/rpm-gpg/RPM-GPG-KEY-$nosuchvar named in \
+                     /etc/yum.repos.d/epel.repo was not collected: dnf variable $nosuchvar \
+                     is not defined on this host. If the image enables a repo from that \
+                     file, dnf cannot verify its packages. To fix it, change that gpgkey= \
+                     line to name a key file the image has before the package install.",
+                ),
+            },
+            GpgCase {
+                name: "missing file",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-missing\n",
+                host: |m| m,
+                keys: &[],
+                warning: Some(
+                    "GPG key file:///etc/pki/rpm-gpg/RPM-GPG-KEY-missing named in \
+                     /etc/yum.repos.d/epel.repo was not collected: \
+                     /etc/pki/rpm-gpg/RPM-GPG-KEY-missing could not be read. If the image \
+                     enables a repo from that file, dnf cannot verify its packages. To fix \
+                     it, put the repo's public key in the build context and COPY it to \
+                     /etc/pki/rpm-gpg/RPM-GPG-KEY-missing before the package install, or \
+                     change that gpgkey= line.",
+                ),
+            },
+        ];
+        for case in &cases {
+            let (_, warnings) = inspect_with_epel_repo(case);
+            assert_eq!(warnings, case.warning.as_slice(), "{}", case.name);
         }
     }
 

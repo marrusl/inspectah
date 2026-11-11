@@ -105,7 +105,13 @@ expands but cannot be read:
 - a `${` that does not close as `${name}`, `${name:-word}` or
   `${name:+word}`: unterminated, with no name, or with an unknown operator.
   dnf leaves those as written, but a key path holding a literal `${` is not
-  one a repo means.
+  one a repo means;
+- a file that is read but is not a PGP public key block. It is still
+  recorded, excluded and with its content replaced, so nothing ships it.
+
+The warning is conditional ("If the image enables a repo from that file")
+rather than gated on an enabled section, since a repo disabled on the host
+can be enabled in the image, and it ends with what to do.
 
 Remote references (any `scheme://` other than `file://`) are skipped
 without a warning: dnf fetches them at build time.
