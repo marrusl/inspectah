@@ -148,9 +148,12 @@ pub enum SysctlDir { Etc, Run, UsrLocalLib, UsrLib }
 pub struct SysctlSection {
     /// Every `*.conf` entry in the four directories, sorted by (name, dir).
     pub files: Vec<SysctlFile>,
-    /// `sysctl -a` values for every key some assignment or exclusion names.
-    /// A key missing here was not in the kernel's output at scan time.
+    /// `sysctl -a` values for every key some assignment or exclusion names,
+    /// except those in `redacted_runtime`.
     pub runtime: BTreeMap<SysctlKey, String>,
+    /// Keys whose runtime value the redaction pass removed (§ 5.4), sorted.
+    /// A key in neither field was not in the kernel's output at scan time.
+    pub redacted_runtime: Vec<SysctlKey>,
 }
 
 pub struct SysctlFile {
@@ -168,9 +171,9 @@ pub enum SysctlFileBody {
     OutsideLink { target: String },
     /// A file that was read. `link_target` is the final target when the
     /// entry is a symlink (`99-sysctl.conf` -> `/etc/sysctl.conf`).
-    /// `redacted_lines` are the host line numbers whose text the redaction
-    /// pass replaced outright (§ 5.4); empty until redaction runs.
-    Read { link_target: Option<String>, content: String, redacted_lines: Vec<u32> },
+    /// `redacted` is set when the redaction pass replaced anything in
+    /// `content` (§ 5.4); false until redaction runs.
+    Read { link_target: Option<String>, content: String, redacted: bool },
 }
 
 impl SysctlFile {
@@ -183,8 +186,6 @@ pub enum SysctlLine {
     /// `-name` with no `=` (§ 5.2, Exclusions).
     Exclude { line_no: u32, name: SysctlName },
     Unparsed { line_no: u32, text: String },
-    /// A line listed in `redacted_lines`. Not parsed: what it held is unknown.
-    Redacted { line_no: u32 },
 }
 
 pub enum SysctlName {
@@ -201,7 +202,7 @@ pub struct SysctlKey(String);
 
 **Content, not parsed lines, is stored.** The snapshot keeps each file's text as read and derives its lines on demand. So no parsed key is ever read back from JSON, the redaction pass runs on whole file text with its multi-line context (§ 5.4), and the explanation cannot disagree with the files it explains.
 
-**`SysctlKey` on the wire.** The runtime map's keys are the one place a `SysctlKey` is deserialized. Deserialization goes through `TryFrom<String>`: the string is normalized with the parser's rule and accepted only if normalizing returns it unchanged. Anything else fails the snapshot load with an error that names the key. The dotted form and the `/proc/sys` path correspond one to one, so two distinct accepted strings are two distinct keys and the map cannot hold one key under two spellings. The canonical spelling of the man page's interface key is `net.ipv4.conf.enp3s0/200.forwarding`; `net/ipv4/conf/enp3s0.200/forwarding` normalizes to it and is rejected on the wire.
+**`SysctlKey` on the wire.** The runtime map's keys and the `redacted_runtime` entries are the only places a `SysctlKey` is deserialized. Deserialization goes through `TryFrom<String>`: the string is normalized with the parser's rule and accepted only if normalizing returns it unchanged. Anything else fails the snapshot load with an error that names the key, and so does a key present in both fields. The dotted form and the `/proc/sys` path correspond one to one, so two distinct accepted strings are two distinct keys and the map cannot hold one key under two spellings. The canonical spelling of the man page's interface key is `net.ipv4.conf.enp3s0/200.forwarding`; `net/ipv4/conf/enp3s0.200/forwarding` normalizes to it and is rejected on the wire.
 
 Resolution, in `inspectah-core`, pure:
 
@@ -222,17 +223,19 @@ pub enum SysctlExplanation {
     /// Every surviving file's lines are known. One row per concrete key
     /// that some surviving file names, sorted by key.
     Resolved(Vec<SysctlSetting>),
-    /// Some surviving file holds lines inspectah does not know. Any of
-    /// them could set, override or cancel any key, so no value, winner or
-    /// drift is stated for any key.
+    /// Some input is not known as the host had it: a surviving file
+    /// inspectah did not read or that redaction changed, or a runtime value
+    /// redaction removed. No value, winner or drift is stated for any key.
     Unknown(Vec<UnknownInput>),
 }
 
 pub enum UnknownInput {
     /// A surviving `OutsideLink`: systemd-sysctl reads it, inspectah did not.
     OutsideLink { file: SysctlFileRef, target: String },
-    /// A surviving file with `Redacted` lines (§ 5.4).
-    RedactedLines { file: SysctlFileRef, lines: Vec<u32> },
+    /// A surviving file whose content redaction changed (§ 5.4).
+    RedactedFile { file: SysctlFileRef },
+    /// A key in `redacted_runtime` (§ 5.4).
+    RedactedRuntime { key: SysctlKey },
 }
 
 pub struct SysctlSetting {
@@ -271,7 +274,7 @@ pub enum SysctlCarriage<'a> {
 }
 ```
 
-`effective()`: drop every file whose name appears in a smaller `SysctlDir`; masks and outside links shadow by name like any file. If any survivor is an `OutsideLink` or holds a `Redacted` line, the result is `Unknown`, listing every such survivor, and nothing else is computed. systemd keeps the last entry for a key, so one unknown line can replace a known winner, cancel it, or be the winner itself; there is no subset of keys whose outcome is safe to state. Otherwise: sort the survivors by name; apply each file's key assignments and key exclusions in file then line order, the last entry for a key winning; compare each `Writes` value with `runtime` through the existing `sysctl_values_equal` (`kernelboot.rs:261-265`, whitespace runs compare equal, which moves to `inspectah-core`), and return `Resolved`. Glob assignments and glob exclusions take no part. Comparing against the winner, not against each file, removes today's false drift from the inverted read order. A shadowed outside link or redacted file is never read by systemd and does not make the result `Unknown`.
+`effective()`: drop every file whose name appears in a smaller `SysctlDir`; masks and outside links shadow by name like any file. If any survivor is an `OutsideLink` or a `Read` file with `redacted` set, or `redacted_runtime` is not empty, the result is `Unknown`, listing every such survivor and every such key, and nothing else is computed. The state is section-level because systemd keeps the last entry for a key, so one unknown line in any file can replace a known winner, cancel it, or be the winner itself, changing which file wins for any key; there is no subset of keys whose outcome is safe to state. A removed runtime value makes the section `Unknown` by the same rule, so redaction anywhere in the section has one outcome. Otherwise: sort the survivors by name; apply each file's key assignments and key exclusions in file then line order, the last entry for a key winning; compare each `Writes` value with `runtime` through the existing `sysctl_values_equal` (`kernelboot.rs:261-265`, whitespace runs compare equal, which moves to `inspectah-core`), and return `Resolved`. Glob assignments and glob exclusions take no part. Comparing against the winner, not against each file, removes today's false drift from the inverted read order. A shadowed outside link or redacted file is never read by systemd and does not make the result `Unknown`.
 
 `vendor_replacements()` and `carriage()` depend on file names and config decisions only, so they hold whether the explanation is `Resolved` or `Unknown`.
 
@@ -281,33 +284,25 @@ Fields deliberately absent: no `disposition`, no `locked`, no `aggregate`. The s
 
 ### 5.4 Redaction
 
-The sysctl section holds host text no other pass sees: vendor and runtime files, `/etc` files read through links, and kernel values. `redact()` gains a sysctl pass in its kernel/boot block, beside the cmdline pass (`crates/pipeline/src/redaction/engine.rs:920-944`), so every stored fact is scrubbed on the snapshot object before anything serializes or displays it (`process-docs/skills/redaction-owns-the-snapshot-object.md`):
+The sysctl section holds host text no other pass sees: vendor and runtime files, `/etc` files read through links, and kernel values. `redact()` gains a sysctl pass in its kernel/boot block, beside the cmdline pass (`crates/pipeline/src/redaction/engine.rs:920-944`), so every stored fact is scrubbed on the snapshot object before anything serializes or displays it (`process-docs/skills/redaction-owns-the-snapshot-object.md`).
+
+**If redaction changes anything, the explanation is `Unknown`.** The pass is the config pass, used as it is: the same `PATTERNS`, the same `collect_eligible_matches` under the field's path (so the same comment exemption and eligibility filters), the same overlap dedup, the same whole-match replacement (`build_replacement`, `engine.rs:457`, applied at `:791`), the snapshot's one `CounterRegistry`, and the same findings. Nothing is parsed out of redacted text: a file the pass changed, or a runtime value it removed, makes `effective()` `Unknown` (§ 5.3), with an input naming the file or the key.
 
 | Field | Treatment |
 |---|---|
-| `SysctlFileBody::Read.content` | Scrubbed by the assignment-preserving pass below, under the file's full path (`/usr/lib/sysctl.d/50-default.conf`). Lines are parsed from the scrubbed text, so a redacted value reaches the explanation, the reports and refine only as its token. |
-| `Read.redacted_lines` | Written by that pass. Exempt: line numbers only. |
-| `Read.link_target`, `OutsideLink.target` | Scanned as one line of content; a match is replaced by its token. |
-| `runtime` values | Scrubbed by the same pass, so a key's runtime value and its file values carry the same token when they are equal. |
-| `name`, `dir`, `runtime` keys | Exempt: file names and kernel key names, exempt for the reason `ConfigFileEntry.path` is. |
-
-**Why the config pass cannot be reused as it is.** It replaces the whole match, and the generic credential pattern matches the key suffix and the `=` along with the value (`crates/pipeline/src/redaction/patterns.rs:73`; whole-match replacement in `build_replacement`, `engine.rs:457`, applied at `:791`). `db_password = canary-inside` becomes `REDACTED_PASSWORD_1`, and `net.ipv6.conf.eth0.stable_secret = fd00::1`, a real kernel key, becomes `net.ipv6.conf.eth0.stableREDACTED_PASSWORD_1`. Parsed afterwards, neither is an assignment, and the key would vanish from the explanation as if no file set it.
-
-**The assignment-preserving pass.** It finds matches exactly as the config pass does: the same `PATTERNS`, the same `collect_eligible_matches` under the file's path (so the same comment exemption and eligibility filters), the same overlap dedup, the same findings, and the snapshot's one `CounterRegistry`. Only the replacement differs. For a file, each surviving match is judged against the line it starts on, split by the § 5.2 grammar:
-
-1. **Value match.** The line is an assignment (it holds `=`); the match, ignoring one trailing line break, lies within that line; it ends after the value begins (the first non-whitespace byte after the line's first `=`); and the only `=` or `:` in the part of the match before the value is the line's first `=`. The last condition means the matched text left in place is a key-name word such as `_secret` or `password`, exempt like every key name, and never a separator-split secret inside the key. The value is marked secret.
-2. **Any other match**: a line that is not an assignment, a match that ends inside the key or holds another separator before the value, or one that runs onto a later line (a PEM block, for example). The whole match is replaced as the config pass replaces it, with that pass's token, followed by one line break for each line break the match held, so every later line keeps its host line number. Every line the match touched is added to `redacted_lines`.
-
-Each runtime value is scanned as the line `<key> = <value>` under the path `/proc/sys`; a match marks the value secret. Then one sweep replaces values: every assignment value in every read file, and every runtime value, whose whitespace-normalized text (runs of whitespace as one space, the rule `sysctl_values_equal` applies) was marked secret anywhere becomes `registry.token_for("sysctl_value", <normalized text>)`, which reads `REDACTED_SYSCTL_VALUE_<n>`. The replacement spans the whole value, from its first byte to the line's last non-whitespace byte, so the key, a leading `-`, the `=` and the spacing stay as written.
+| `SysctlFileBody::Read.content` | Scanned and replaced under the file's full path (`/usr/lib/sysctl.d/50-default.conf`). When anything is replaced, `redacted` is set. |
+| `Read.redacted` | Written by the pass. Exempt: a flag. |
+| `Read.link_target`, `OutsideLink.target` | Scanned as one line under the entry's path; a match is replaced as in content. A path is not a line systemd-sysctl parses, so a change here does not set `redacted`. |
+| `runtime` values | Each scanned as the line `<key> = <value>` under the path `/proc/sys`. On any match, the value is removed from `runtime` and its key added to `redacted_runtime`; no part of it is stored. A runtime value is shown only in a `Resolved` row, which a removed value rules out, so a scrubbed remainder would be text nothing reads. |
+| `name`, `dir`, `runtime` keys, `redacted_runtime` | Exempt: file names and kernel key names, exempt for the reason `ConfigFileEntry.path` is. |
 
 What this guarantees, and case 18 checks:
 
-- A redacted assignment keeps its key, so it is resolved, overridden and cancelled like any other line.
-- Equal values get one token wherever they appear, and different values different tokens, whichever pattern fired and whichever side it fired on. So `effective()` reports `Matches` when the secret file value equals the runtime value and `Differs` when it does not, through the same comparison as an unredacted key, and the drift line shows two tokens, never the values.
-- A line whose key was destroyed is `Redacted`, never `Unparsed` or absent, and while its file survives the explanation is `Unknown` (§ 5.3).
-- Every value the config pass would scrub is scrubbed, and so is every equal value in another sysctl file or the runtime map. The only matched text left in place is the key-name word before the `=`, which rule 1 confines to a key name.
+- No sysctl field holds text the config pass would replace, wherever the match falls: inside a key, across the `=`, or across lines, as a PEM block does, including one written on a single line with escaped line breaks.
+- No token is resolved, compared or displayed as a sysctl value. A token stands for a whole match, never for a value split off its key, so it cannot be joined to an equal value left in clear under another key; and since values are compared only when nothing was redacted, a host value that reads like a token is never compared with one.
+- A host whose files set a secret-bearing key, such as `net.ipv6.conf.*.stable_secret`, therefore gets no values or drift for any key; that cost is accepted (Mark, 2026-11-11).
 
-Findings join `all_findings`, so `FullyRedacted` and `PartiallyRedacted` account for them. Each file's scrubbed content goes into the post-redaction content map under its path (`engine.rs:1467-1490`) unless the path already has an entry, so a hint against a sysctl file resolves against what survived; an `/etc` file that also has a config entry keeps that entry's content there, and both copies were scrubbed of the same matches from the same bytes. The two copies can name one secret with different tokens: the Configuration Files row carries the config pass's whole-match token and the sysctl panel the value token. Neither holds the secret, and only the config copy is carried. The new fields join the two tests in `crates/pipeline/src/render/mod.rs`, `every_field_of_a_content_bearing_type_is_classified` and `exactly_the_exempt_fields_survive_the_export`, scrubbed or exempt as in the table, each with a planted sentinel.
+Findings join `all_findings`, so `FullyRedacted` and `PartiallyRedacted` account for them. Each file's scrubbed content goes into the post-redaction content map under its path (`engine.rs:1467-1490`) unless the path already has an entry, so a hint against a sysctl file resolves against what survived; an `/etc` file that also has a config entry keeps that entry's content there. Both copies are scrubbed by the same pass with the same registry, neither holds a matched secret, and only the config copy is carried: this pass changes nothing about carriage. The new fields join the two tests in `crates/pipeline/src/render/mod.rs`, `every_field_of_a_content_bearing_type_is_classified` and `exactly_the_exempt_fields_survive_the_export`, scrubbed or exempt as in the table, each with a planted sentinel.
 
 The outside-link rule (§ 5.2) is the other half: a link out of `/etc` and the sysctl directories, such as `/etc/sysctl.d/90-app.conf -> /var/lib/app/credentials`, is never read, so its content is never collected.
 
@@ -318,7 +313,7 @@ The `#### Sysctl Overrides` table (`audit.rs:585-604`) becomes `#### Sysctl`. On
 1. One line: "These values are trusted host configuration. The files that set them are carried as they were, not rewritten."
 2. When `effective()` is `Resolved`, a table of its rows: `Key | File value | Runtime value | Source`. File value is the written value, or `not written` for a `Cancelled` key. Runtime value prints `same` when it matches, `not exposed` when the kernel did not list the key, and the value otherwise. Source is the deciding line's file path and line number, plus `(link to /etc/sysctl.conf)` when the file was read through a link.
 
-   When it is `Unknown`, no table and no drift lines. In their place: "Values and drift are not stated for this host. systemd-sysctl applies the files below, and inspectah does not know what they set; any of them can set, override or cancel any key." Then one line per `UnknownInput`: "`<path>` links to `<target>`, outside `/etc` and the sysctl directories, and inspectah did not read it." or "`<path>` lines `<n>`, … were removed by redaction."
+   When it is `Unknown`, no table and no drift lines. In their place: "Values and drift are not stated for this host, because inspectah does not know every input below as the host had it. One unknown line can set, override or cancel any key." Then one line per `UnknownInput`: "`<path>` links to `<target>`, outside `/etc` and the sysctl directories, and inspectah did not read it.", "`<path>` held text that redaction replaced, so what it sets is not known.", or "The running value of `<key>` held text that redaction removed."
 3. **Runtime drift** (`Resolved` only), one line per `Differs` key: "`<key>` runs at `<runtime>`; the files request `<file value>` (`<source>`)." Above the lines, once: "These keys run at a value other than the one the files request. A tuned profile, another service, a hand-run `sysctl -w`, or a module that created the key after systemd-sysctl ran at early boot can each cause this, and some of them reapply at every boot, so the value after a reboot cannot be read from this scan. The image gets the files, not the running values." When the snapshot records an active tuned profile, the paragraph adds: "tuned profile `<profile>` is active on this host."
 4. **Vendor files replaced**, one line per `VendorReplacement`, worded by the file's `carriage()`:
    - Carried (a `Config` entry that is included): "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy."
@@ -326,7 +321,7 @@ The `#### Sysctl Overrides` table (`audit.rs:585-604`) becomes `#### Sysctl`. On
    - `NoConfigEntry`: "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` on this host. It has no Configuration Files row, so it reaches the target only if a package there ships it."
    The mask wording says "disables" in place of "replaces".
 5. **Not carried**: files in `/run/sysctl.d` (generated at runtime) and `/usr/local/lib/sysctl.d` (carried only as unmanaged files under `--include-unmanaged`); and every `/etc` file whose `carriage()` is an excluded or advisory entry, or `NoConfigEntry`, with that reason. An `/etc` outside link is listed here by its carriage like any file; what it does to the explanation is item 2's.
-6. **As written**: glob assignments, glob exclusions and unparsed lines, with file and line number.
+6. **As written**: glob assignments, glob exclusions and unparsed lines, with file and line number. A file with `redacted` set contributes none: once a multi-line match is replaced, its line numbers are not the host's. While it survives, item 2 names it.
 
 **Literal text.** Every interpolated value in this section (keys, values, file names, paths, link targets, unparsed text, profile names, the degradation reason) goes through one helper that renders it as an inline code span Markdown cannot reinterpret:
 
@@ -407,7 +402,8 @@ pub struct SysctlDriftDto { pub key: String, pub file_value: String, pub runtime
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UnknownInputDto {
     OutsideLink { path: String, target: String },
-    RedactedLines { path: String, lines: Vec<u32> },
+    RedactedFile { path: String },
+    RedactedRuntime { key: String },               // canonical `SysctlKey`
 }
 
 pub struct VendorReplacementDto {
@@ -501,7 +497,7 @@ The plan updates each.
 | `process-docs/skills/cross-inspector-shadow-passes.md` | `:11-12`, `:47-63`, `:122`: the sysctl pass and the two early-return tests that pair it with the service pass. One pass remains; the rule for adding a second still stands. |
 | `process-docs/skills/aggregate-vs-single-host-behavioral-split.md` | `:63-76`: the worked example describes a state that can no longer exist. Replace with one that still can, or drop it. |
 | `process-docs/skills/web-disposition-contract.md` | `:66`, `:81-84`, `:151-158`, `:170`: `SysctlDecisionDto` as a decision, and sysctl-shadowed config entries in the advisory bucket. |
-| `process-docs/skills/redaction-owns-the-snapshot-object.md` | The sysctl section's fields join the classified set, and the assignment-preserving pass is recorded as the rule for any content that is parsed after redaction (§ 5.4). |
+| `process-docs/skills/redaction-owns-the-snapshot-object.md` | The sysctl section's fields join the classified set, and the rule is recorded for content that is parsed after redaction: when the pass changes it, what it says is unknown, and nothing is parsed from the scrubbed text (§ 5.4). |
 | `process-docs/skills/real-host-validation-runs.md` | `:331-341`: the tab and space rule stays right; the note that `SysctlOverride.default` holds the file value goes with the struct. |
 | `process-docs/skills/containerfile-value-quoting.md` | `:51`, `:82`: the drop-in as a built line vector. |
 | `process-docs/skills/finding-disposition-serde-defaults.md` | `:40`: `SysctlOverride` in the list. |
@@ -513,7 +509,7 @@ The plan updates each.
 | `docs/tutorials/first-migration.md` | `:184`, `:259-261`, `:305`, `:472`: sysctl overrides, the merged drop-in, inventory sysctl files. |
 | `docs/diagrams/data-flow.html`, `docs/diagrams/software-architecture.html` | Any sysctl drop-in or shadow arrow. |
 
-**CHANGELOG:** user-visible. The plan adds an `[Unreleased]` entry: sysctl files are carried as the host had them, `99-inspectah-migrated.conf` is no longer written, runtime drift is reported and not carried, the per-key sysctl toggle is gone, System Tuning is back as a section with a read-only sysctl panel in single-host and fleet sessions, the collector now follows systemd's precedence including key exclusions, the audit table shows file and runtime values, a sysctl file inspectah could not read or redaction cut into makes the host's values and drift unstated rather than wrong, a redacted sysctl value keeps its key and shows as a `REDACTED_SYSCTL_VALUE_` token, and an RPM-owned config symlink re-pointed to `/dev/null` is carried as an empty file. Snapshots from earlier releases must be re-scanned (schema bump).
+**CHANGELOG:** user-visible. The plan adds an `[Unreleased]` entry: sysctl files are carried as the host had them, `99-inspectah-migrated.conf` is no longer written, runtime drift is reported and not carried, the per-key sysctl toggle is gone, System Tuning is back as a section with a read-only sysctl panel in single-host and fleet sessions, the collector now follows systemd's precedence including key exclusions, the audit table shows file and runtime values, a sysctl file inspectah could not read, or a sysctl file or running value that redaction changed, makes the host's values and drift unstated rather than wrong and names the file or key, and an RPM-owned config symlink re-pointed to `/dev/null` is carried as an empty file. Snapshots from earlier releases must be re-scanned (schema bump).
 
 ## 7. Out of scope
 
@@ -553,9 +549,13 @@ Required cases:
     - *Overlapping assignment.* `/usr/lib/sysctl.d/50-default.conf` sets `vm.swappiness = 10`; `/etc/sysctl.d/90-site.conf -> /usr/share/site/tuning.conf`, which holds `vm.swappiness = 60`; `sysctl -a` reports `60`. `effective()` is `Unknown` with one `OutsideLink` naming `/etc/sysctl.d/90-site.conf` and its target. The audit has no settings table and no drift line, prints the item 2 text naming the link, and does not contain `vm.swappiness` with either `10` or `60` as a value; the refine view's explanation is `unknown` with no settings or drift; `section_count` is 0.
     - *Overlapping exclusion.* The same with the outside file holding `-vm.swappiness` and runtime `60`: the same assertions. A resolver that skipped the link would report `Writes 10` and drift.
     - *Shadowed link.* `/run/sysctl.d/90-site.conf -> /usr/share/site/tuning.conf` and a regular `/etc/sysctl.d/90-site.conf` setting `vm.swappiness = 60`, runtime `60`: the link does not survive, the explanation is `Resolved`, `vm.swappiness` writes `60` from the `/etc` file, `Matches`, no drift line.
-18. **Redaction keeps assignment identity.** Collector-driven through the scan path, then asserted on the snapshot after a JSON reload of the tarball, on the audit, on the HTML report and on the refine view of the loaded session.
-    - *Value tokens.* An unowned `/etc/sysctl.d/80-app.conf` holds `net.ipv6.conf.default.stable_secret = fd00::1`, `net.ipv6.conf.eth0.stable_secret = fd00::2` and `db_password = canary-inside`; `/usr/lib/sysctl.d/10-vendor.conf` holds `api_token = canary-vendor`; `sysctl -a` reports `net.ipv6.conf.default.stable_secret = fd00::1` and `net.ipv6.conf.eth0.stable_secret = fd00::3`. `effective()` is `Resolved` with rows for exactly `api_token`, `db_password`, `net.ipv6.conf.default.stable_secret` and `net.ipv6.conf.eth0.stable_secret`, each attributed to its file and line. `default.stable_secret` writes a `REDACTED_SYSCTL_VALUE_` token with `Matches` and no drift line (matching runtime). `eth0.stable_secret` writes one token and is `Differs` with a different token, and its drift line shows both tokens (differing runtime). `db_password` and `api_token` write tokens and are `NotExposed`. None of `fd00::1`, `fd00::2`, `fd00::3`, `canary-inside` or `canary-vendor` appears in the snapshot JSON, the audit, the HTML report or the refine view, and the findings are counted in the redaction state. The config entry for `80-app.conf` holds none of them either.
-    - *Destroyed lines.* `/etc/sysctl.d/81-key.conf` holds `vm.swappiness = 10` on line 1, a five-line private-key block on lines 2 to 6, and `vm.dirty_ratio = 20` on line 7. Its `redacted_lines` are `[2, 3, 4, 5, 6]`, `lines()` gives `Redacted` for those and an assignment on line 7, `effective()` is `Unknown` with one `RedactedLines` naming the file and those lines, and the audit and refine view state no value or drift. No key material appears anywhere.
+18. **Redaction makes the explanation unknown.** Collector-driven through the scan path, then asserted on the snapshot after a JSON reload of the tarball, on the audit, on the HTML report and on the refine view of the loaded session. In every layout below but the last: `effective()` is `Unknown` with exactly the inputs named; the audit and the refine view hold the § 5.5 item 2 text with one line per input, no settings table and no drift line; `section_count` is 0; the canary appears in none of the snapshot JSON, the audit, the HTML report or the refine view; and the findings are counted in the redaction state.
+    - *Secret in a file.* An unowned `/etc/sysctl.d/80-app.conf` holds `vm.swappiness = 10` and `db_password = canary-inside`; `/usr/lib/sysctl.d/10-vendor.conf` sets `vm.dirty_ratio = 20`; `sysctl -a` reports `vm.swappiness = 60` and `vm.dirty_ratio = 30`. Inputs: one `RedactedFile` naming `/etc/sysctl.d/80-app.conf`. Canary: `canary-inside`. The config entry for `80-app.conf` is included, and it and the exported file are byte-identical to those of a twin scan of the same host whose `sysctl -a` fails, which has no sysctl section to redact: config carriage is unchanged.
+    - *Secret only at runtime.* `/etc/sysctl.d/85-core.conf` sets `kernel.core_pattern` to the literal `REDACTED_PASSWORD_1`; `sysctl -a` reports `kernel.core_pattern = password=canary-runtime`, the only password secret on the host, so the pass gives it that same token. Inputs: one `RedactedRuntime` naming `kernel.core_pattern`, and no `RedactedFile`. Canary: `canary-runtime`. The reloaded snapshot lists `kernel.core_pattern` in `redacted_runtime` and not in `runtime`. A resolver that compared the file literal with a runtime token would report `Matches`.
+    - *Secret only in the file, token-like runtime.* The mirror: `85-core.conf` sets `kernel.core_pattern = password=canary-file`, the only password secret on the host, and `sysctl -a` reports the literal `REDACTED_PASSWORD_1`. Inputs: one `RedactedFile` naming `85-core.conf`, and no `RedactedRuntime`. Canary: `canary-file`.
+    - *One-line PEM through an allowed link.* `/etc/sysctl.d/90-app.conf -> /etc/app/credentials.json`, read through because its final target is under `/etc`, holds on one physical line `{"private_key":"-----BEGIN PRIVATE KEY-----\nU0VDUkVUX0NBTkFSWQ==\n-----END PRIVATE KEY-----"}`, each `\n` written as the two characters. Inputs: one `RedactedFile` naming `90-app.conf`. Canary: the Base64 body `U0VDUkVUX0NBTkFSWQ`. "As written" holds no line from the file.
+    - *Equal values under different keys.* `/etc/sysctl.d/80-app.conf` holds `db_password = 60` and `vm.swappiness = 60`; `sysctl -a` reports `vm.swappiness = 60`. Inputs: one `RedactedFile` naming `80-app.conf`. The canary is the pairing: in the sysctl copy and in the config entry the line `vm.swappiness = 60` is unchanged and the password line holds one token, that token appears nowhere else in any output, and no output states a value for `vm.swappiness`.
+    - *Shadowed redacted file.* `/usr/lib/sysctl.d/50-x.conf` holds `db_password = canary-shadowed` and is shadowed by a regular `/etc/sysctl.d/50-x.conf` setting `vm.swappiness = 60`, runtime `60`. The shadowed file does not survive, so the explanation is `Resolved`, `vm.swappiness` writes `60` from the `/etc` file, `Matches`, no drift line. `canary-shadowed` appears in none of the surfaces above.
 19. **Literal rendering.** A file sets `kernel.core_pattern = |/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h`; another holds unparsed lines with `<img src=x>`, `[link](http://example.com)` and a run of three backticks; a file name holds a newline. The audit is parsed with a GFM-conformant parser added as a dev-dependency: the sysctl table has the expected rows, each with four cells whose code text equals the value exactly, and the section holds no HTML, link or image node. The HTML report holds the same strings escaped.
 20. **`SysctlKey` on the wire.** A snapshot whose runtime map holds the key `net.ipv4.conf.enp3s0/200.forwarding` loads, and serializes back with that exact key. A snapshot whose runtime map holds `net/ipv4/ip_forward`, or `net/ipv4/conf/enp3s0.200/forwarding`, fails to load, with that key in the error.
 21. **Aggregate.** Two hosts with different content for one `/etc/sysctl.d` path and no tuned selection produce two config variants and `kernel_boot.sysctl == None`; the aggregate audit prints the § 5.7 line; `AggregateViewResponse.sysctl` is `aggregate`; `sections` holds a `system_tuning` decision section with no items and no `sysctls` or `tuned` section.
