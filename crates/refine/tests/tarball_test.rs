@@ -207,6 +207,30 @@ fn reject_old_schema_version() {
     }
 }
 
+/// A schema-25 snapshot predates the `content_not_captured` advisory: a
+/// config file the scan could not read is in it as an included entry with
+/// empty content, which an export would copy over the real file. Refine
+/// refuses to open it rather than export from it.
+#[test]
+fn reject_schema_25_with_its_empty_failed_capture() {
+    let dir = tempdir().unwrap();
+    let snap_json = r#"{"schema_version": 25,
+        "redaction_state": {"state": "fully_redacted", "redacted_by": "t", "config_hash": "h"},
+        "config": {"files": [{"path": "/etc/httpd/conf.d/ssl.conf",
+            "kind": "rpm_owned_modified", "category": "other", "content": "",
+            "disposition": {"kind": "actionable", "include": true}}]}}"#;
+    let tarball = write_flat_tarball(dir.path(), snap_json);
+
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("unsupported schema version: 25"),
+            "expected the schema refusal, got: {msg}"
+        ),
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("a schema-25 snapshot must not open in refine"),
+    }
+}
+
 #[test]
 fn reject_missing_snapshot_json() {
     let dir = tempdir().unwrap();

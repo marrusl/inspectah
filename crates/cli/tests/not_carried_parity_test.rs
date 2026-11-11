@@ -52,7 +52,7 @@ use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
-use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
@@ -60,6 +60,7 @@ use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::{RedactOptions, redact};
 use inspectah_pipeline::render;
@@ -67,6 +68,7 @@ use inspectah_pipeline::render::not_carried::{
     NOT_CARRIED_REASON, apply_scan_package_defaults, not_carried_packages,
 };
 use inspectah_pipeline::validate::validate;
+use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
 
 // ── The fixture ──────────────────────────────────────────────────────
@@ -799,12 +801,42 @@ fn an_uncaptured_config_is_never_staged_on_either_path() {
     let collected = collected(&uncaptured_config_mock());
 
     let scan_dir = tempfile::tempdir().expect("tempdir");
-    let scan_snapshot = scan_export(collected.clone(), scan_dir.path());
+    scan_export(collected.clone(), scan_dir.path());
+    // The snapshot refine opens is the scan tarball's JSON, read back
+    // through refine's loader, so the advisory has to survive
+    // serialization and the schema gate to count.
+    let json = std::fs::read_to_string(scan_dir.path().join("inspection-snapshot.json"))
+        .expect("the scan writes its snapshot");
+    let reloaded = load_for_refine(&json).expect("the scan's own snapshot loads");
+    assert_eq!(reloaded.schema_version, SCHEMA_VERSION);
+    let reloaded_files = &reloaded.config.as_ref().expect("config section").files;
+    for path in [
+        OVERSIZED_RPM_CONFIG,
+        UNREADABLE_RPM_CONFIG,
+        OVERSIZED_UNOWNED,
+        UNREADABLE_UNOWNED,
+    ] {
+        let entry = reloaded_files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is in the reloaded snapshot"));
+        assert!(
+            matches!(
+                entry.disposition,
+                FindingKind::Advisory {
+                    advisory_type: AdvisoryType::ContentNotCaptured,
+                    ..
+                }
+            ),
+            "{path} is still content_not_captured after the JSON round trip: {:?}",
+            entry.disposition
+        );
+    }
     let mut roots = vec![("scan", scan_dir.path().to_path_buf())];
     let mut dirs = vec![scan_dir];
     for (label, snapshot) in [
         ("refine on the collected snapshot", collected),
-        ("refine on the scan tarball's snapshot", scan_snapshot),
+        ("refine on the scan tarball's reloaded snapshot", reloaded),
     ] {
         let dir = tempfile::tempdir().expect("tempdir");
         roots.push((label, refine_export(snapshot, dir.path())));

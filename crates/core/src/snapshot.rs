@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 25;
+pub const SCHEMA_VERSION: u32 = 26;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -104,19 +104,17 @@ impl InspectionSnapshot {
     /// Held equal to `SCHEMA_VERSION`: the loading contract is an exact
     /// match, not a rolling window.
     ///
-    /// Schema 25 replaces the `unit` filename on the three `/var`
-    /// directory-directive backings with `declared_by`, the full path of
-    /// every unit file that declares the directory. Two separate reasons
-    /// close the window on 24, and the first alone would be enough: the
-    /// field is renamed and retyped, so a schema-24 payload does not
-    /// deserialize at all. The second is why no migration is written
-    /// either. The declaring path is a collect-time observation, read
-    /// from a grep over the host's unit directories; the snapshot carries
-    /// no vendor unit bodies, so nothing at load time can recover from a
-    /// filename which file it named. A schema-24 snapshot is one taken
-    /// before the collector asked the question, and the answer is not
-    /// derivable after the fact.
-    const MIN_SCHEMA: u32 = 25;
+    /// Schema 26 adds the `content_not_captured` advisory: a config file
+    /// the collector found but could not read (over the size cap,
+    /// permission denied, not text) is recorded as that advisory instead
+    /// of as an included entry with empty content. A schema-25 payload
+    /// deserializes, which is why the window closes on it anyway. It was
+    /// collected before the collector told a failed read from an empty
+    /// file, so a failed read in it is an ordinary included entry with
+    /// empty content, and an export from it copies that empty file over
+    /// the real one. Nothing in the snapshot tells the two apart after
+    /// the fact: only a re-scan can.
+    const MIN_SCHEMA: u32 = 26;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -245,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 26, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 27, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

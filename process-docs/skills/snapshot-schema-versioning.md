@@ -9,11 +9,11 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 25;
+pub const SCHEMA_VERSION: u32 = 26;
 
 // ...
 
-const MIN_SCHEMA: u32 = 25;
+const MIN_SCHEMA: u32 = 26;
 
 if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
     return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
@@ -22,17 +22,17 @@ if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSIO
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 25). Only `schema_version == 25` loads; any other value is
+(both 26). Only `schema_version == 26` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
 
 **Raise `MIN_SCHEMA` with `SCHEMA_VERSION`, and decide it explicitly.**
-Bumping `SCHEMA_VERSION` alone widens the window: 25 with `MIN_SCHEMA`
-still 24 accepts both. Ask what the prior version *is* before leaving it
+Bumping `SCHEMA_VERSION` alone widens the window: 26 with `MIN_SCHEMA`
+still 25 accepts both. Ask what the prior version *is* before leaving it
 accepted, and derive the answer rather than reusing the last one.
 
-Two bumps, two different arguments, both landing on "reject":
+Three bumps, two different arguments, all landing on "reject":
 
 - 23 -> 24 added a cross-inspector annotation written once, at collect
   time, so a schema-23 snapshot is by definition one collected before
@@ -45,6 +45,13 @@ Two bumps, two different arguments, both landing on "reject":
   file on the host carried a directive) that nothing at load time could
   derive from the rest of the snapshot. **Unreadable and
   unupgradable.**
+- 25 -> 26 added the `content_not_captured` advisory, so the config
+  inspector records a file it could not read instead of an included
+  entry with empty content. A schema-25 payload parses, but a failed
+  read in it is that included empty entry, and an export copies it over
+  the real file. Nothing in the payload tells it from a file that is
+  really empty. **Semantic staleness**, with a correctness cost: the
+  stale snapshot is not just less informative, it exports a wrong file.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale
@@ -69,14 +76,32 @@ struct in a way that changes the JSON shape:
 
 ### What a Bump Touches Besides the Constant
 
-`cargo test --workspace` finds these, but knowing them up front saves a
-round trip. Test files embed `"schema_version": N` as a raw-JSON or
-`json!` literal in `crates/cli/src/commands/aggregate.rs`,
+`cargo test --workspace` finds most of these, but knowing them up front
+saves a round trip. Test files embed `"schema_version": N` as a raw-JSON
+or `json!` literal in `crates/cli/src/commands/aggregate.rs`,
 `crates/cli/tests/refine_e2e_test.rs` and
 `crates/refine/tests/normalize_test.rs`, and
 `crates/core/tests/snapshot_test.rs` plus the `snapshot.rs` unit tests
-name specific accepted and rejected versions. This file is the other
-one, and nothing fails when it goes stale.
+name specific accepted and rejected versions.
+`testdata/e2e-fixture.tar.gz` holds a serialized snapshot that
+`crates/refine/tests/testdata_tarballs_load.rs` loads, so it has to be
+rewritten at the new version: change the one `schema_version` value in
+its `inspection-snapshot.json` and re-pack it, leaving out any macOS
+`._` AppleDouble member and xattr headers a Finder or `bsdtar` pack adds.
+
+Nothing fails when these go stale: this file,
+`docs/reference/snapshot-schema.md` (it states the current version and
+quotes the refusal message), and the literals in
+`scripts/tests/check-sensitive-tarballs-test.sh`, which that script does
+not check but which should not read as an old snapshot.
+
+A bump also wants a test that the version just closed is refused
+through every production loader, with a payload that shows why it is
+refused: `InspectionSnapshot::load` (`crates/core/tests/snapshot_test.rs`),
+refine's `tarball::from_tarball`, which goes through `load_for_refine`
+(`crates/refine/tests/tarball_test.rs`), and `inspectah aggregate`'s
+`load_snapshot_from_tarball` (unit tests in
+`crates/cli/src/commands/aggregate.rs`).
 
 ### The serde(default) / skip_serializing_if Pattern
 

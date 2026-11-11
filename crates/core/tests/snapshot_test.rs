@@ -59,8 +59,27 @@ fn schema_24_is_rejected() {
     }
 }
 
+/// Schema 25 is the last version collected before the config inspector
+/// told a file it could not read from a file that is empty. In a 25
+/// payload a failed read is an included entry with empty content, as in
+/// this one, and nothing in it says the read failed; loading it would let
+/// an export copy the empty file over the real one. It deserializes, so
+/// only the version gate refuses it.
 #[test]
-fn schema_25_round_trips() {
+fn schema_25_is_rejected() {
+    let json = r#"{"schema_version": 25, "meta": {}, "system_type": "package-mode",
+        "preflight": {"status": "ok"}, "warnings": [], "redactions": [],
+        "config": {"files": [{"path": "/etc/httpd/conf.d/ssl.conf",
+            "kind": "rpm_owned_modified", "category": "other", "content": "",
+            "disposition": {"kind": "actionable", "include": true}}]}}"#;
+    match InspectionSnapshot::load(json) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 25),
+        other => panic!("expected UnsupportedVersion(25), got {other:?}"),
+    }
+}
+
+#[test]
+fn schema_26_round_trips() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         ..Default::default()
@@ -72,13 +91,13 @@ fn schema_25_round_trips() {
     );
 }
 
-/// A schema 25 snapshot does not serialize the lists the config walker
+/// A schema 26 snapshot does not serialize the lists the config walker
 /// now owns. Serde ignores unknown fields, so a 23 payload that still
 /// carries one of these keys loads and drops it; that is accepted and is
 /// not what this asserts. What it asserts is that nothing we write puts
 /// the duplicate back on the wire.
 #[test]
-fn schema_25_does_not_serialize_the_relocated_section_lists() {
+fn schema_26_does_not_serialize_the_relocated_section_lists() {
     let snap = InspectionSnapshot {
         schema_version: SCHEMA_VERSION,
         kernel_boot: Some(KernelBootSection::default()),
@@ -187,15 +206,15 @@ fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| (*k).to_string()).collect()
 }
 
-/// The snapshot format guard: schema 25 and the key sets of the package
+/// The snapshot format guard: schema 26 and the key sets of the package
 /// and service structs are pinned. Serde ignores unknown fields and
 /// defaults missing ones, so a field added, renamed or removed with
 /// `#[serde(default)]` passes every round-trip test; this one fails
 /// instead. Every `skip_serializing_if` field is set to a non-default
 /// value so it appears.
 #[test]
-fn schema_25_format_guard_pins_package_and_service_keys() {
-    assert_eq!(SCHEMA_VERSION, 25);
+fn schema_26_format_guard_pins_package_and_service_keys() {
+    assert_eq!(SCHEMA_VERSION, 26);
 
     let package = PackageEntry {
         locked: true,

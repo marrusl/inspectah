@@ -12,7 +12,7 @@ image-mode migration. The structure has 32 top-level fields, listed in the
 tables below. A snapshot loads only in the inspectah release that wrote it:
 see [Loading and schema version](#loading-and-schema-version).
 
-**Schema version:** 25
+**Schema version:** 26
 {: .label .label-blue }
 
 **Source:** `crates/core/src/snapshot.rs`
@@ -40,7 +40,7 @@ see [Loading and schema version](#loading-and-schema-version).
 
 | Field | Type | Description |
 |:------|:-----|:------------|
-| `schema_version` | `u32` | Schema version number, currently **25**. Checked on load: any other value is rejected. |
+| `schema_version` | `u32` | Schema version number, currently **26**. Checked on load: any other value is rejected. |
 | `meta` | `Map<String, Value>` | Free-form metadata written by `scan`: `hostname` (omitted when `/etc/hostname` is empty), `timestamp` (RFC 3339), and `inspectah_version`. |
 | `os_release` | `OsRelease?` | Parsed `/etc/os-release` fields (name, version, version ID, ID, ID-like, pretty name, variant ID). |
 | `system_type` | `SystemType` | Detected system kind, serialized as `package-mode`, `rpm-ostree`, or `bootc`. Default: `unknown`. |
@@ -122,16 +122,16 @@ Snapshots serialize to JSON via `serde`. Key behaviors:
 
 ## Loading and schema version
 
-`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 25. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 25 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward.
+`SCHEMA_VERSION` and `MIN_SCHEMA` in `crates/core/src/snapshot.rs` are both 26. The loading contract is an exact match, not a rolling window: a snapshot whose `schema_version` is anything other than 26 does not load, whether it is older or newer. There is no migration. A schema bump renames or retypes fields, and some of the data a new field holds is observed on the host at scan time, so it cannot be derived from an older snapshot afterward. Schema 26 adds a value, the `content_not_captured` advisory, for the same reason: a schema 25 snapshot still parses, but a config file its scan could not read is in it as an included entry with empty content, and nothing in it tells that apart from a file that is really empty.
 
 In practice:
 
 - A tarball from a different inspectah release does not load in `refine` or `aggregate` when the two releases use different schema versions, which is the usual case between releases. Re-scan the host with the release you are running.
-- `refine` stops with an error. For a tarball whose snapshot is schema 24, the output is:
+- `refine` stops with an error. For a tarball whose snapshot is schema 25, the output is:
 
   ```text
   Loading snapshot...
-  error: snapshot load error: unsupported schema version: 24 (accepted: 25)
+  error: snapshot load error: unsupported schema version: 25 (accepted: 26)
   ```
 
 - `aggregate` prints a warning for each tarball it cannot load and skips it, then refuses to merge fewer than two snapshots.
