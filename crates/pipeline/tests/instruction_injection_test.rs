@@ -1424,3 +1424,28 @@ fn sysctl_dropin_renders_benign_values() {
         "{out:?}"
     );
 }
+
+/// A GPG key path is the operand of `rpm --import`, so a relative path
+/// that starts with `-` or `#` is refused and stays off the `COPY` and
+/// import lines.
+#[test]
+fn gpg_key_relative_paths_are_refused() {
+    for value in ["-x/key", "#foo"] {
+        let output = materialized_containerfile(&with_gpg_key(value));
+        for line in output.split(LINE_TERMINATORS) {
+            if line.starts_with('#') {
+                continue;
+            }
+            assert!(
+                !line.split_whitespace().any(|w| w.contains(value)),
+                "{value:?} reached a command line: {line:?}\n{output}"
+            );
+        }
+        assert!(
+            output.split(LINE_TERMINATORS).any(|l| l
+                .starts_with("# FIXME: copy this GPG key in by hand")
+                && l.contains(value)),
+            "no GPG FIXME names {value:?}\n{output}"
+        );
+    }
+}

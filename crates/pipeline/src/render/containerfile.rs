@@ -621,6 +621,17 @@ fn packages_section_lines(
                 ));
                 continue;
             }
+            // `rpm --import` takes the path as a positional operand, so a
+            // relative path that starts with `-` or `#` is refused here,
+            // before it reaches either the COPY or the import line.
+            if !key.path.starts_with('/') {
+                gpg_body.push(format!(
+                    "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
+                     its path is not absolute: {}",
+                    language_packages::sanitize_for_comment(&key.path)
+                ));
+                continue;
+            }
             let rel = key.path.trim_start_matches('/');
             match rel.rsplit_once('/') {
                 Some((dir, _)) if !dir.is_empty() => {
