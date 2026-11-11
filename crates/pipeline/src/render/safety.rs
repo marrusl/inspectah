@@ -61,6 +61,8 @@ pub enum CopyTokenError {
         "it holds `\\` or `$`, which the Containerfile parser treats as escape or variable syntax"
     )]
     ParserSyntax,
+    #[error("it holds `*`, `?` or `[`, which a COPY source treats as a wildcard")]
+    Wildcard,
 }
 
 /// A path the export may write as a bare argument of a Containerfile
@@ -72,7 +74,9 @@ pub enum CopyTokenError {
 /// chose; no whitespace, which separates arguments, so `/opt/x /etc/`
 /// would copy into `/etc`; and no `\` or `$`, which the Containerfile
 /// parser reads as an escape (a trailing `\` continues the line) and as
-/// variable expansion.
+/// variable expansion. Nor `*`, `?` or `[`: the builder expands those as
+/// wildcards in a `COPY` source, so the line would copy every file the
+/// pattern matches rather than the one the snapshot named.
 ///
 /// [`CopyToken::parse`] is the only constructor, so a renderer that takes
 /// a `&CopyToken` cannot be handed an unproved path.
@@ -93,6 +97,9 @@ impl CopyToken {
         }
         if value.contains(['\\', '$']) {
             return Err(CopyTokenError::ParserSyntax);
+        }
+        if value.contains(['*', '?', '[']) {
+            return Err(CopyTokenError::Wildcard);
         }
         Ok(Self(value.to_string()))
     }
@@ -620,6 +627,20 @@ mod tests {
         assert_eq!(sanitize_shell_value("pkg&bg"), None);
         assert_eq!(sanitize_shell_value("pkg>file"), None);
         assert_eq!(sanitize_shell_value("pkg<file"), None);
+    }
+
+    #[test]
+    fn copy_token_refuses_wildcards() {
+        for (value, want) in [
+            ("opt/*", CopyTokenError::Wildcard),
+            ("opt/a?", CopyTokenError::Wildcard),
+            ("opt/[ab]", CopyTokenError::Wildcard),
+            ("opt/a b", CopyTokenError::Whitespace),
+            ("opt/$x", CopyTokenError::ParserSyntax),
+        ] {
+            assert_eq!(CopyToken::parse(value), Err(want), "{value}");
+        }
+        assert!(CopyToken::parse("opt/app-1.2/bin").is_ok());
     }
 
     #[test]

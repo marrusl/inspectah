@@ -271,6 +271,49 @@ fn copy_lines_render_benign_paths() {
     assert!(out.contains("COPY config/etc/ /etc/"), "{out}");
 }
 
+/// A `COPY` source is a wildcard pattern to the builder, so a path holding
+/// `*`, `?` or `[` would copy every file it matched. No separator row
+/// covers this: the hostile values above all hold a space too.
+#[test]
+fn copy_lines_refuse_wildcard_paths() {
+    let mut failures = Vec::new();
+    for segment in ["app*", "app?", "[ab]"] {
+        // The config `COPY` names only the top-level directory, so the
+        // wildcard goes there; the unmanaged one names the whole path.
+        let cases = [
+            (
+                format!("/opt/{segment}"),
+                render_containerfile(
+                    &with_unmanaged(vec![regular(format!("/opt/{segment}"))]),
+                    None,
+                    None,
+                ),
+            ),
+            (
+                format!("/{segment}"),
+                render_containerfile(&with_config_file(&format!("/{segment}/f.conf")), None, None),
+            ),
+            (
+                format!("/{segment}"),
+                materialized_containerfile(&with_config_file(&format!("/{segment}/f.conf"))),
+            ),
+        ];
+        for (path, out) in cases {
+            let path = path.as_str();
+            let named = out
+                .lines()
+                .any(|l| l.starts_with("COPY") && l.contains(path));
+            let fixme = out
+                .lines()
+                .any(|l| l.starts_with("# FIXME") && l.contains(path));
+            if named || !fixme {
+                failures.push(format!("{path}: named={named} fixme={fixme}\n{out}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
 // ---------------------------------------------------------------------------
 // Flatpak provisioning unit (systemd ExecStartPre= / ExecStart=, root at boot)
 // ---------------------------------------------------------------------------
