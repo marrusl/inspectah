@@ -32,7 +32,7 @@ Which proof depends on how the format reads the value:
 | Containerfile `RUN ln -sf '<target>' '<path>'` | path, target | `validate_path` on the path, `has_line_break_or_control` on the target, then single-quoted | `render::unmanaged` |
 | Containerfile `FROM` | image reference | `BareWord::parse_image_ref` | `render::safety` |
 | Containerfile `dnf group install "<name>"` | group name | `double_quoted_word_refusal`, then `operand_refusal` | `render::safety` |
-| Containerfile `RUN` operand (`dnf install`, `dnf module enable`, `dnf versionlock add`, `setsebool`, `semanage port`, `systemctl enable`/`disable`/`mask`) | package name, module name, stream and profiles, versionlock pattern, boolean name and value, port type, protocol and number, unit name | `shell_operand_refusal`: `sanitize_shell_value`, then `operand_refusal` (no leading `-` or `#`) | `render::safety` |
+| Containerfile `RUN` operand (`dnf install`, `dnf module enable`, `dnf versionlock add`, `setsebool`, `semanage port`, `systemctl enable`/`disable`/`mask`, `rpm --import`) | package name, module name, stream and profiles, versionlock pattern, boolean name and value, port type, protocol and number, unit name | `shell_operand_refusal`: `sanitize_shell_value`, then `operand_refusal` (no leading `-` or `#`) | `render::safety` |
 | systemd `ExecStart=` / `ExecStartPre=` (flatpak unit) | remote, app id, branch, URL | `BareWord::parse_name`, `BareWord::parse_url` | `render::safety` |
 | Kickstart `network --device=` | connection name | `BareWord::parse_name` | `render::kickstart` |
 | Kickstart `%post` `/etc/hosts` line | hosts line | `has_line_break_or_non_tab_control`, then `single_quote` | `render::kickstart` |
@@ -52,10 +52,13 @@ a unit test pins that, since every site it guards relies on it.
 
 `sanitize_shell_value` is a line and shell-word guard, not an option
 guard: it says nothing about where a word sits. A word in an operand
-position that starts with `-` is read by the command as an option
-(`--nogpgcheck`), and one that starts with `#` is read by the shell as a
-comment that cuts off the rest of a joined `RUN`. So the operand sites
-also ask `operand_refusal`, through `shell_operand_refusal`. It is a
+position that starts with `-` (`--nogpgcheck`) or `#` is refused and gets
+a FIXME in place of its line, so a value is never rendered where it could
+stand in for an option or a comment. So the operand sites also ask
+`operand_refusal`, through `shell_operand_refusal`. The `rpm --import`
+path of a GPG key is an operand too: a key path that is not absolute is
+refused with the GPG FIXME, which keeps it off both the `COPY` and the
+import line. It is a
 separate check because some values `sanitize_shell_value` guards sit after
 `=` (`--enablerepo=<id>`, kernel arguments) or inside another word, where
 a leading `-` is legitimate.
