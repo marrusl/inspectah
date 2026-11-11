@@ -823,6 +823,30 @@ fn sysctl_dropin_refuses_every_hostile_key_and_value() {
     check_rows(SYSCTL_VALUE_ROWS, &terminators());
 }
 
+/// No sysctl key starts with `/` or holds `..`, so neither is carried,
+/// whatever a reader would make of it.
+#[test]
+fn sysctl_dropin_refuses_absolute_and_climbing_keys() {
+    for key in [
+        "../../etc/passwd",
+        "net/../../etc/passwd",
+        "net.ipv4..conf",
+        "/proc/sys/kernel/x",
+        "/etc/passwd",
+    ] {
+        let out = sysctl_dropin(key, "1");
+        assert!(
+            out.lines().all(|l| l.starts_with('#') || !l.contains(key)),
+            "{key}: {out:?}"
+        );
+        assert!(
+            out.lines()
+                .any(|l| l.starts_with("# FIXME: sysctl") && l.contains(key)),
+            "{key}: {out:?}"
+        );
+    }
+}
+
 #[test]
 fn sysctl_dropin_renders_benign_values() {
     let out = sysctl_dropin("net.ipv4.ip_local_port_range", "32768\t60999");
@@ -835,6 +859,16 @@ fn sysctl_dropin_renders_benign_values() {
     assert!(
         out.lines()
             .any(|l| l == "net/ipv4/conf/eth0.100/rp_filter = 2"),
+        "{out:?}"
+    );
+    // Sysctl values are trusted host configuration: the renderer keeps
+    // them on their line and does not judge them, so a pipe core_pattern
+    // is carried as the host had it.
+    let pattern = "|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h";
+    let out = sysctl_dropin("kernel.core_pattern", pattern);
+    assert!(
+        out.lines()
+            .any(|l| l == format!("kernel.core_pattern = {pattern}")),
         "{out:?}"
     );
 }

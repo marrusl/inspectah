@@ -225,18 +225,28 @@ fn write_unit_file(dir: &Path, name: &str, suffix: &str, content: &str) {
 /// The key is a bare token before `=`, so it is held to the characters a
 /// `/proc/sys` path yields, `[A-Za-z0-9._/-]`, and may not start with `-`
 /// (which systemd-sysctl reads as "ignore failure"); a space, `=`, `#` or a
-/// line break there would change which key is set or add another. The
-/// value runs to the end of the line and holds spaces and tabs
+/// line break there would change which key is set or add another. It may
+/// not start with `/` or hold `..` either: no sysctl key does, and the
+/// check makes no assumption about how a reader resolves either one.
+///
+/// The value runs to the end of the line and holds spaces and tabs
 /// legitimately (`ip_local_port_range`), so only a line break or another
 /// control is refused, which would end the line and start a new setting.
+/// That is the whole guarantee: a value cannot add a line or a key. What
+/// the value does is not judged. Sysctl keys and values are host
+/// configuration, applied as the source host had them, so a pipe
+/// `kernel.core_pattern` is carried as it is (see the
+/// instruction-line-values skill).
 fn sysctl_refusal(key: &str, value: &str) -> Option<&'static str> {
-    let key_ok = !key.is_empty()
+    let key_chars_ok = !key.is_empty()
         && !key.starts_with('-')
         && key
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'-'));
-    if !key_ok {
+    if !key_chars_ok {
         Some("the key holds a character outside [A-Za-z0-9._/-] or starts with `-`")
+    } else if key.starts_with('/') || key.contains("..") {
+        Some("the key starts with `/` or holds `..`")
     } else if has_line_break_or_non_tab_control(value) {
         Some("the value holds a line break or control character")
     } else {
