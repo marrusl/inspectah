@@ -820,18 +820,20 @@ two with the documented sentences, in README.md and the audit report.
 (`No match for argument: dnf5`), so the dnf5-beside-dnf4 case was not
 run.
 
-**Every stock RHEL host now carries a false GPG warning.**
+**Every stock RHEL host carried a false GPG warning in this run.**
 `RPM-GPG-KEY-redhat-release` opens with several lines of prose before
 its first `-----BEGIN PGP PUBLIC KEY BLOCK-----` (line 10 on RHEL 9.8,
-line 12 on RHEL 10.2), and `is_pgp_key` tests `starts_with` after
-trimming whitespace. So the collector has always excluded that key as
-not PGP, and printed one stderr line per `redhat.repo` section (500 on
-RHEL 9.8, 209 on RHEL 10.2). Since `403843fd` it also writes a snapshot
-warning telling the operator to COPY the key in. The file is a real key
-file holding several key blocks, and the base image ships a copy of the
-same size, so the builds are unaffected: each image lists the Red Hat
-release keys as imported `gpg-pubkey` packages. A check that looks for
-the header anywhere in the file, not only at its start, would clear it.
+line 12 on RHEL 10.2), and `validate_gpg_content` tested `starts_with`
+after trimming whitespace. So the collector had always excluded that
+key as not PGP, and printed one stderr line per `redhat.repo` section
+(500 on RHEL 9.8, 209 on RHEL 10.2). Since `403843fd` it also wrote a
+snapshot warning telling the operator to COPY the key in. The file is a
+real key file holding several key blocks, and the base image ships a
+copy of the same size, so the builds were unaffected: each image lists
+the Red Hat release keys as imported `gpg-pubkey` packages. The
+collector now accepts a key file when any line begins with the header,
+so the stock key is collected, included and copied. That change has not
+been run scan to build on a real host yet.
 
 ## A redaction test that checks for the secret proves nothing about the file
 

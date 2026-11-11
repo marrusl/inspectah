@@ -106,8 +106,13 @@ expands but cannot be read:
   `${name:+word}`: unterminated, with no name, or with an unknown operator.
   dnf leaves those as written, but a key path holding a literal `${` is not
   one a repo means;
-- a file that is read but is not a PGP public key block. It is still
-  recorded, excluded and with its content replaced, so nothing ships it.
+- a file that is read but has no line beginning with
+  `-----BEGIN PGP PUBLIC KEY BLOCK-----` (spaces or tabs before it are
+  allowed; the header inside a line is not). It is still recorded,
+  excluded and with its content replaced, so nothing ships it. Text
+  before the header is fine: the stock `RPM-GPG-KEY-redhat-release`
+  opens with a paragraph of prose, and refusing it gave every RHEL host a
+  false warning.
 
 The warning is conditional ("If the image enables a repo from that file")
 rather than gated on an enabled section, since a repo disabled on the host
