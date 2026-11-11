@@ -1449,3 +1449,14 @@ fn gpg_key_relative_paths_are_refused() {
         );
     }
 }
+
+/// The group FIXME reads as a sentence: the reason follows "the name".
+#[test]
+fn group_fixme_reads_as_a_sentence() {
+    let output = group_containerfile("bad\"name");
+    assert!(
+        output.contains("not installed as a group: the name holds a quote"),
+        "{output}"
+    );
+    assert!(!output.contains("the name it "), "{output}");
+}

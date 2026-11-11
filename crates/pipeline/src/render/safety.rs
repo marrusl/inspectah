@@ -443,11 +443,11 @@ impl BareWord {
 /// terminator, which would end the instruction, and every other control.
 pub fn double_quoted_word_refusal(value: &str) -> Option<&'static str> {
     if value.is_empty() {
-        Some("it is empty")
+        Some("is empty")
     } else if has_line_break_or_control(value) {
-        Some("it holds a line break or control character")
+        Some("holds a line break or control character")
     } else if value.contains(['"', '\\', '$', '`']) {
-        Some("it holds a quote, backslash, `$` or backquote")
+        Some("holds a quote, backslash, `$` or backquote")
     } else {
         None
     }
