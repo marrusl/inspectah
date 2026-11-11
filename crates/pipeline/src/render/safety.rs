@@ -275,6 +275,78 @@ impl ExportToken {
     }
 }
 
+/// Why a value failed [`BareWord::parse_name`] or [`BareWord::parse_url`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BareWordError {
+    #[error(transparent)]
+    Token(#[from] TokenError),
+    #[error("starts with `-`, which the command would read as an option")]
+    LeadingDash,
+    #[error("does not start with a URL scheme letter")]
+    NoScheme,
+}
+
+/// A byte allowed in a [`BareWord`] URL: `[A-Za-z0-9._~:/?&=+,@-]`.
+///
+/// It leaves out whitespace, which separates `Exec*=` arguments; the line
+/// terminators, which end the directive; `%`, which starts a systemd
+/// specifier; `$`, which systemd expands as a variable; `\`, `'` and `"`,
+/// which systemd reads as escaping and quoting; and `;`.
+fn is_allowed_url_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'.' | b'_' | b'~' | b':' | b'/' | b'?' | b'&' | b'=' | b'+' | b',' | b'@' | b'-'
+        )
+}
+
+/// One argument the export may write bare, unquoted, into a generated
+/// command or directive line, such as a systemd `ExecStart=` line: a
+/// flatpak remote name, application id, branch, or remote URL.
+///
+/// The value is proved rather than quoted for systemd's command-line
+/// syntax, so no claim rests on how systemd unquotes. A name is an
+/// [`ExportToken`] (`[A-Za-z0-9._-]`) that does not start with `-`; a URL
+/// passes [`is_allowed_url_byte`] and starts with a letter, as a scheme
+/// does. Neither can hold a line break, so neither can add a directive to
+/// a unit that runs as root at boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BareWord(String);
+
+impl BareWord {
+    /// Validate a remote name, application id or branch.
+    pub fn parse_name(value: &str) -> Result<Self, BareWordError> {
+        ExportToken::parse(value)?;
+        if value.starts_with('-') {
+            return Err(BareWordError::LeadingDash);
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    /// Validate a remote URL.
+    pub fn parse_url(value: &str) -> Result<Self, BareWordError> {
+        if value.is_empty() {
+            return Err(TokenError::Empty.into());
+        }
+        if value.len() > MAX_EXPORT_PATH_LEN {
+            return Err(TokenError::TooLong.into());
+        }
+        if let Some(at) = value.bytes().position(|b| !is_allowed_url_byte(b)) {
+            return Err(TokenError::BadByte { at }.into());
+        }
+        if !value.as_bytes()[0].is_ascii_alphabetic() {
+            return Err(BareWordError::NoScheme);
+        }
+        Ok(Self(value.to_string()))
+    }
+}
+
+impl std::fmt::Display for BareWord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Why a name failed [`AccountName::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum AccountNameError {

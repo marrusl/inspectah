@@ -15,6 +15,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
@@ -250,4 +251,94 @@ fn copy_lines_render_benign_paths() {
     );
     let out = materialized_containerfile(&with_config_file("/etc/app/app.conf"));
     assert!(out.contains("COPY config/etc/ /etc/"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// Flatpak provisioning unit (systemd ExecStartPre= / ExecStart=, root at boot)
+// ---------------------------------------------------------------------------
+
+fn flatpak_app() -> FlatpakApp {
+    FlatpakApp {
+        app_id: "org.example.App".into(),
+        branch: "stable".into(),
+        remote: "flathub".into(),
+        remote_url: "https://dl.flathub.org/repo/".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    }
+}
+
+fn flatpak_unit(app: FlatpakApp) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![app],
+        ..Default::default()
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_config_tree(&snap, dir.path()).expect("write config tree");
+    std::fs::read_to_string(dir.path().join("flatpak/flatpak-provision.service"))
+        .expect("unit written")
+}
+
+const FLATPAK_ROWS: &[Row] = &[
+    Row {
+        field: "flatpak remote name",
+        render: |v| {
+            flatpak_unit(FlatpakApp {
+                remote: v.into(),
+                ..flatpak_app()
+            })
+        },
+        reached: Reached::Fixme("# FIXME: flatpak"),
+    },
+    Row {
+        field: "flatpak remote URL",
+        render: |v| {
+            flatpak_unit(FlatpakApp {
+                remote_url: format!("https://example.com/{v}"),
+                ..flatpak_app()
+            })
+        },
+        reached: Reached::Fixme("# FIXME: flatpak remote"),
+    },
+    Row {
+        field: "flatpak app id",
+        render: |v| {
+            flatpak_unit(FlatpakApp {
+                app_id: v.into(),
+                ..flatpak_app()
+            })
+        },
+        reached: Reached::Fixme("# FIXME: flatpak app"),
+    },
+    Row {
+        field: "flatpak branch",
+        render: |v| {
+            flatpak_unit(FlatpakApp {
+                branch: v.into(),
+                ..flatpak_app()
+            })
+        },
+        reached: Reached::Fixme("# FIXME: flatpak app"),
+    },
+];
+
+#[test]
+fn flatpak_unit_refuses_every_hostile_value() {
+    check_rows(FLATPAK_ROWS, &word_breakers());
+}
+
+#[test]
+fn flatpak_unit_renders_benign_values() {
+    let unit = flatpak_unit(flatpak_app());
+    assert!(
+        unit.contains(
+            "ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/\n"
+        ),
+        "{unit}"
+    );
+    assert!(
+        unit.contains("ExecStart=/usr/bin/flatpak install -y --noninteractive flathub org.example.App//stable\n"),
+        "{unit}"
+    );
 }

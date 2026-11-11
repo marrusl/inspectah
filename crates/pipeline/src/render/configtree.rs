@@ -20,7 +20,7 @@ use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::safety::{has_line_break_or_control, operator_kargs};
+use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
 /// Path prefix for quadlet unit files — excluded from config tree copy.
@@ -215,6 +215,26 @@ fn write_unit_file(dir: &Path, name: &str, suffix: &str, content: &str) {
             name.escape_debug()
         ),
     }
+}
+
+/// The remote, application id and branch of a flatpak `install` line,
+/// each proved a [`BareWord`], or why one is refused. An empty branch is
+/// kept empty, as the line has always rendered it.
+fn flatpak_install_words(
+    app: &inspectah_core::types::containers::FlatpakApp,
+) -> Result<(BareWord, BareWord, String), String> {
+    let remote =
+        BareWord::parse_name(&app.remote).map_err(|e| format!("the remote is refused ({e})"))?;
+    let app_id =
+        BareWord::parse_name(&app.app_id).map_err(|e| format!("the app id is refused ({e})"))?;
+    let branch = if app.branch.is_empty() {
+        String::new()
+    } else {
+        BareWord::parse_name(&app.branch)
+            .map_err(|e| format!("the branch {} is refused ({e})", app.branch))?
+            .to_string()
+    };
+    Ok((remote, app_id, branch))
 }
 
 /// Write all config files from snapshot to output_dir/config/ preserving
@@ -476,16 +496,46 @@ pub fn write_config_tree(
                 svc.push('\n');
             }
 
+            // Every value on an `Exec*=` line is a proved `BareWord`: the
+            // unit runs as root at boot, and a line break in a value would
+            // add a directive. A refused remote or app gets a FIXME, which
+            // this string-built file escapes at the site.
+            let mut fixmes = Vec::new();
+            let mut pre = Vec::new();
             for (name, url) in &remotes {
-                svc.push_str(&format!(
-                    "ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists {name} {url}\n"
-                ));
+                match (BareWord::parse_name(name), BareWord::parse_url(url)) {
+                    (Ok(name), Ok(url)) => pre.push(format!(
+                        "ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists {name} {url}\n"
+                    )),
+                    (Err(e), _) => fixmes.push(format!(
+                        "# FIXME: flatpak remote {name} not added: the name is refused ({e})"
+                    )),
+                    (_, Err(e)) => fixmes.push(format!(
+                        "# FIXME: flatpak remote {name} not added: the URL {url} is refused ({e})"
+                    )),
+                }
             }
+            let mut installs = Vec::new();
             for app in &included_flatpaks {
-                svc.push_str(&format!(
-                    "ExecStart=/usr/bin/flatpak install -y --noninteractive {} {}//{}\n",
-                    app.remote, app.app_id, app.branch
-                ));
+                match flatpak_install_words(app) {
+                    Ok((remote, app_id, branch)) => installs.push(format!(
+                        "ExecStart=/usr/bin/flatpak install -y --noninteractive {remote} {app_id}//{branch}\n"
+                    )),
+                    Err(why) => fixmes.push(format!(
+                        "# FIXME: flatpak app {} from remote {} not installed: {why}",
+                        app.app_id, app.remote
+                    )),
+                }
+            }
+            for fixme in &fixmes {
+                svc.push_str(&super::comment::escape_comment_text(fixme));
+                svc.push('\n');
+            }
+            if !fixmes.is_empty() {
+                svc.push('\n');
+            }
+            for line in pre.iter().chain(&installs) {
+                svc.push_str(line);
             }
             svc.push_str("ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n");
             svc.push_str("ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n");
