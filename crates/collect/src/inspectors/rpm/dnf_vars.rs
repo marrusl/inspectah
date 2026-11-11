@@ -9,6 +9,9 @@
 //! What is derived, and from where (dnf `dnf/cli/cli.py` `_read_conf_file`,
 //! `dnf/rpm/__init__.py` `detect_releasevers`, libdnf5 `conf/vars.cpp`):
 //!
+//! - **Which dnf.** `dnf --version` says whether the host's `dnf` is dnf4 or
+//!   dnf5; when it cannot be run, the presence of `/usr/bin/dnf5` decides.
+//!   It picks the vars directories and how a backslash escapes.
 //! - **Variable files.** Each file in a vars directory defines a variable
 //!   named after the file, whose value is the file's first line. dnf4 reads
 //!   `/etc/yum/vars` then `/etc/dnf/vars`; dnf5 reads
@@ -61,7 +64,8 @@ const PACKAGE_MARKER: &str = "@@";
 const PROVIDES_QUERY_FORMAT: &str =
     "@@%{NAME}\t%{VERSION}\n[%{PROVIDENAME}\t%{PROVIDEFLAGS}\t%{PROVIDEVERSION}\n]";
 
-/// Present on a host whose dnf is dnf5 (EL10, Fedora 41 and later).
+/// Present on a host with dnf5 installed. Only a fallback: EL9 can carry
+/// dnf5 beside the dnf4 that `dnf` runs.
 const DNF5_BINARY: &str = "/usr/bin/dnf5";
 const DNF4_VARS_DIRS: &[&str] = &["/etc/yum/vars", "/etc/dnf/vars"];
 const DNF5_VARS_DIRS: &[&str] = &["/usr/share/dnf5/vars.d", "/etc/dnf/vars"];
@@ -76,8 +80,10 @@ pub enum ExpandError {
     UnknownVariable(String),
     /// The variable's value could turn the path into a different one.
     UnsafeValue(String),
-    /// Syntax this expander does not follow (a backslash, a `$` with no
-    /// name, an unterminated or unknown `${...}` form).
+    /// A `${` that does not close as `${name}`, `${name:-word}` or
+    /// `${name:+word}` (unterminated, no name, an unknown operator), or
+    /// words nested deeper than dnf follows. dnf leaves such text as
+    /// written; a key path holding a literal `${` is not one a repo means.
     UnsupportedSyntax,
 }
 
@@ -101,55 +107,90 @@ impl fmt::Display for ExpandError {
     }
 }
 
+/// Which dnf the host's `dnf` command is. The two read different vars
+/// directories and escape differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnfFlavor {
+    Dnf4,
+    Dnf5,
+}
+
+impl DnfFlavor {
+    fn vars_dirs(self) -> &'static [&'static str] {
+        match self {
+            Self::Dnf4 => DNF4_VARS_DIRS,
+            Self::Dnf5 => DNF5_VARS_DIRS,
+        }
+    }
+
+    /// Whether a backslash before `next` is consumed, leaving `next` as a
+    /// literal. libdnf's `ConfigParser::substitute_expression` (dnf4) does
+    /// so before any character; libdnf5's `Vars::substitute_expression`
+    /// only before `$` and `\`, and before `}` inside a `${name:-word}`
+    /// word, keeping the backslash otherwise.
+    fn escapes(self, next: char, depth: usize) -> bool {
+        match self {
+            Self::Dnf4 => true,
+            Self::Dnf5 => next == '$' || next == '\\' || (next == '}' && depth > 0),
+        }
+    }
+}
+
+/// The host's dnf and its variables.
+struct HostDnf {
+    flavor: DnfFlavor,
+    values: HashMap<String, String>,
+}
+
 /// The scanned host's dnf variables, read on first use.
 pub struct DnfVars<'a> {
     exec: Option<&'a dyn Executor>,
-    values: OnceCell<HashMap<String, String>>,
+    host: OnceCell<HostDnf>,
 }
 
 impl<'a> DnfVars<'a> {
     /// Variables of the host behind `exec`. Nothing is read until a value
-    /// with a `$` is expanded, so a host whose repo files use no variables
-    /// runs no extra commands.
+    /// with a `$` or a backslash is expanded, so a host whose repo files
+    /// use neither runs no extra commands.
     pub fn from_host(exec: &'a dyn Executor) -> Self {
         Self {
             exec: Some(exec),
-            values: OnceCell::new(),
+            host: OnceCell::new(),
         }
     }
 
-    /// A fixed set of variables, for tests.
+    /// A fixed dnf and set of variables, for tests.
     #[cfg(test)]
-    pub fn from_values(values: HashMap<String, String>) -> Self {
+    pub fn from_values(flavor: DnfFlavor, values: HashMap<String, String>) -> Self {
         let cell = OnceCell::new();
-        let _ = cell.set(values);
+        let _ = cell.set(HostDnf { flavor, values });
         Self {
             exec: None,
-            values: cell,
+            host: cell,
         }
     }
 
-    fn values(&self) -> &HashMap<String, String> {
-        self.values.get_or_init(|| match self.exec {
+    fn host(&self) -> &HostDnf {
+        self.host.get_or_init(|| match self.exec {
             Some(exec) => detect(exec),
-            None => HashMap::new(),
+            None => HostDnf {
+                flavor: DnfFlavor::Dnf5,
+                values: HashMap::new(),
+            },
         })
     }
 
     /// Expand every dnf variable in `text`: `$name`, `${name}`,
-    /// `${name:-word}` and `${name:+word}`.
+    /// `${name:-word}` and `${name:+word}`, with backslash escapes as the
+    /// host's dnf reads them. A `$` with no name after it is left as
+    /// written, as dnf leaves it.
     pub fn expand(&self, text: &str) -> Result<String, ExpandError> {
-        if !text.contains('$') {
-            if text.contains('\\') {
-                return Err(ExpandError::UnsupportedSyntax);
-            }
+        if !text.contains(['$', '\\']) {
             return Ok(text.to_string());
         }
-        let (expanded, rest) = expand_until(text, self.values(), 0)?;
-        if !rest.is_empty() {
-            // A stray `}` at the top level.
-            return Err(ExpandError::UnsupportedSyntax);
-        }
+        let host = self.host();
+        // At depth 0 a `}` is ordinary text, so the whole input is consumed.
+        let (expanded, _) = expand_until(text, host.flavor, &host.values, 0)?;
         Ok(expanded)
     }
 }
@@ -158,6 +199,7 @@ impl<'a> DnfVars<'a> {
 /// Returns the expansion and the unconsumed remainder (starting at that `}`).
 fn expand_until<'t>(
     text: &'t str,
+    flavor: DnfFlavor,
     vars: &HashMap<String, String>,
     depth: usize,
 ) -> Result<(String, &'t str), ExpandError> {
@@ -168,7 +210,18 @@ fn expand_until<'t>(
     let mut rest = text;
     while let Some(c) = rest.chars().next() {
         match c {
-            '\\' => return Err(ExpandError::UnsupportedSyntax),
+            '\\' => match rest[1..].chars().next() {
+                Some(next) if flavor.escapes(next, depth) => {
+                    out.push(next);
+                    rest = &rest[1 + next.len_utf8()..];
+                }
+                // dnf5 keeps a backslash it does not consume, and both
+                // keep a trailing one.
+                _ => {
+                    out.push('\\');
+                    rest = &rest[1..];
+                }
+            },
             '}' if depth > 0 => return Ok((out, rest)),
             '$' => {
                 let after = &rest[1..];
@@ -183,7 +236,7 @@ fn expand_until<'t>(
                         out.push_str(lookup(vars, name)?);
                         rest = tail;
                     } else if let Some(word) = tail.strip_prefix(":-") {
-                        let (word, tail) = expand_until(word, vars, depth + 1)?;
+                        let (word, tail) = expand_until(word, flavor, vars, depth + 1)?;
                         let tail = tail
                             .strip_prefix('}')
                             .ok_or(ExpandError::UnsupportedSyntax)?;
@@ -193,7 +246,7 @@ fn expand_until<'t>(
                         }
                         rest = tail;
                     } else if let Some(word) = tail.strip_prefix(":+") {
-                        let (word, tail) = expand_until(word, vars, depth + 1)?;
+                        let (word, tail) = expand_until(word, flavor, vars, depth + 1)?;
                         let tail = tail
                             .strip_prefix('}')
                             .ok_or(ExpandError::UnsupportedSyntax)?;
@@ -208,9 +261,10 @@ fn expand_until<'t>(
                 } else {
                     let name_len = name_length(after);
                     if name_len == 0 {
-                        return Err(ExpandError::UnsupportedSyntax);
+                        out.push('$');
+                    } else {
+                        out.push_str(lookup(vars, &after[..name_len])?);
                     }
-                    out.push_str(lookup(vars, &after[..name_len])?);
                     rest = &after[name_len..];
                 }
             }
@@ -259,16 +313,39 @@ fn is_safe_value(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-' | b'~'))
 }
 
-/// Read the host's variables as dnf would.
-fn detect(exec: &dyn Executor) -> HashMap<String, String> {
+/// Which dnf the host's `dnf` runs. dnf5 names itself on the first line
+/// of `--version` (`dnf5 version 5.2.8.1`); dnf4 prints its bare version
+/// (`4.14.0`). When `dnf` cannot be run, an installed `/usr/bin/dnf5`
+/// decides, which is wrong only on a host carrying both.
+fn detect_flavor(exec: &dyn Executor) -> DnfFlavor {
+    let result = exec.run("dnf", &["--version"]);
+    if result.success() {
+        let first = result.stdout.lines().next().unwrap_or("").trim();
+        if first.starts_with("dnf5") || first.starts_with("5.") {
+            DnfFlavor::Dnf5
+        } else {
+            DnfFlavor::Dnf4
+        }
+    } else if exec.file_exists(Path::new(DNF5_BINARY)) {
+        DnfFlavor::Dnf5
+    } else {
+        DnfFlavor::Dnf4
+    }
+}
+
+/// Read the host's dnf and its variables as dnf would.
+fn detect(exec: &dyn Executor) -> HostDnf {
+    let flavor = detect_flavor(exec);
+    HostDnf {
+        flavor,
+        values: detect_values(exec, flavor),
+    }
+}
+
+fn detect_values(exec: &dyn Executor, flavor: DnfFlavor) -> HashMap<String, String> {
     let mut vars = HashMap::new();
 
-    let dirs = if exec.file_exists(Path::new(DNF5_BINARY)) {
-        DNF5_VARS_DIRS
-    } else {
-        DNF4_VARS_DIRS
-    };
-    for dir in dirs {
+    for dir in flavor.vars_dirs() {
         let Ok(mut entries) = exec.read_dir(Path::new(dir)) else {
             continue;
         };
@@ -408,7 +485,12 @@ mod tests {
     use inspectah_core::traits::executor::ExecResult;
 
     fn vars(pairs: &[(&str, &str)]) -> DnfVars<'static> {
+        vars_for(DnfFlavor::Dnf5, pairs)
+    }
+
+    fn vars_for(flavor: DnfFlavor, pairs: &[(&str, &str)]) -> DnfVars<'static> {
         DnfVars::from_values(
+            flavor,
             pairs
                 .iter()
                 .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
@@ -457,16 +539,48 @@ mod tests {
             ("/k/$ctrl", Err(ExpandError::UnsafeValue("ctrl".into()))),
             ("/k/$dollar", Err(ExpandError::UnsafeValue("dollar".into()))),
             ("/k/${slash:+x}", exp("/k/x")),
-            ("/k/$", Err(ExpandError::UnsupportedSyntax)),
-            ("/k/$-x", Err(ExpandError::UnsupportedSyntax)),
+            (
+                "/k/EPEL-$releasever_majorX",
+                Err(ExpandError::UnknownVariable("releasever_majorX".into())),
+            ),
+            // A `$` with no name after it stays as written, as in dnf.
+            ("/k/$", exp("/k/$")),
+            ("/k/$-x", exp("/k/$-x")),
+            ("/k/a${nope:-$}", exp("/k/a$")),
+            // Escapes dnf4 and dnf5 agree on.
+            ("/k/\\$releasever", exp("/k/$releasever")),
+            ("/k/a\\\\b", exp("/k/a\\b")),
+            ("/k/a${nope:-x\\}y}", exp("/k/ax}y")),
+            ("/k/a\\", exp("/k/a\\")),
+            // A `${` that does not close as one of dnf's three forms.
             ("/k/${releasever", Err(ExpandError::UnsupportedSyntax)),
             ("/k/${releasever:-x", Err(ExpandError::UnsupportedSyntax)),
             ("/k/${releasever:?x}", Err(ExpandError::UnsupportedSyntax)),
-            ("/k/\\$releasever", Err(ExpandError::UnsupportedSyntax)),
-            ("/k/a\\b", Err(ExpandError::UnsupportedSyntax)),
+            ("/k/${}", Err(ExpandError::UnsupportedSyntax)),
         ];
         for (input, expected) in cases {
             assert_eq!(&v.expand(input), expected, "input: {input:?}");
+        }
+    }
+
+    /// Where the two dnfs differ: dnf4 consumes a backslash before any
+    /// character, dnf5 only before `$`, `\`, and `}` inside a word.
+    #[test]
+    fn backslash_escapes_follow_the_hosts_dnf() {
+        let cases: &[(&str, &str, &str)] = &[
+            // (input, dnf4, dnf5)
+            ("/k/a\\b", "/k/ab", "/k/a\\b"),
+            ("/k/a\\}", "/k/a}", "/k/a\\}"),
+            ("/k/\\$x", "/k/$x", "/k/$x"),
+        ];
+        for (input, dnf4, dnf5) in cases {
+            for (flavor, expected) in [(DnfFlavor::Dnf4, dnf4), (DnfFlavor::Dnf5, dnf5)] {
+                assert_eq!(
+                    vars_for(flavor, &[]).expand(input).as_deref(),
+                    Ok(*expected),
+                    "{flavor:?} {input:?}"
+                );
+            }
         }
     }
 
@@ -495,7 +609,7 @@ mod tests {
                     system-release(releasever_minor)\t8\t2\n"),
             )
             .with_command("uname -m", ok("aarch64\n"));
-        let values = detect(&mock);
+        let values = detect(&mock).values;
         assert_eq!(values["releasever"], "10.2");
         assert_eq!(values["releasever_major"], "10");
         assert_eq!(values["releasever_minor"], "2");
@@ -512,7 +626,7 @@ mod tests {
                     system-release\t8\t10.1\n"),
             )
             .with_command("uname -m", ok("x86_64\n"));
-        let values = detect(&mock);
+        let values = detect(&mock).values;
         assert_eq!(values["releasever"], "10.1");
         assert_eq!(values["releasever_major"], "10");
         assert_eq!(values["releasever_minor"], "1");
@@ -525,7 +639,7 @@ mod tests {
             &provides_key("system-release(releasever)"),
             ok("@@system-release(releasever)\t9\nsystem-release(releasever)\t8\t9.9\n"),
         );
-        assert_eq!(detect(&mock)["releasever"], "9");
+        assert_eq!(detect(&mock).values["releasever"], "9");
     }
 
     /// A vars file wins over the rpmdb and over the split; a later
@@ -539,7 +653,7 @@ mod tests {
             .with_dir("/etc/dnf/vars", vec!["custom", "releasever_major"])
             .with_file("/etc/dnf/vars/custom", "new\nsecond line ignored\n")
             .with_file("/etc/dnf/vars/releasever_major", "9\n");
-        let values = detect(&mock);
+        let values = detect(&mock).values;
         assert_eq!(values["releasever"], "8");
         assert_eq!(values["releasever_major"], "9");
         assert_eq!(values["custom"], "new");
@@ -550,21 +664,85 @@ mod tests {
         );
     }
 
+    /// A vars-file `releasever_major` wins over the release package's
+    /// `system-release(releasever_major)` provide, as in dnf5.
     #[test]
-    fn dnf5_hosts_read_the_dnf5_vars_dirs() {
+    fn a_vars_file_major_beats_the_release_packages_provide() {
         let mock = MockExecutor::new()
-            .with_file(DNF5_BINARY, "")
-            .with_dir("/etc/yum/vars", vec!["custom"])
-            .with_file("/etc/yum/vars/custom", "dnf4-only\n")
-            .with_dir("/usr/share/dnf5/vars.d", vec!["custom"])
-            .with_file("/usr/share/dnf5/vars.d/custom", "dnf5\n");
-        assert_eq!(detect(&mock)["custom"], "dnf5");
+            .with_dir("/etc/dnf/vars", vec!["releasever_major"])
+            .with_file("/etc/dnf/vars/releasever_major", "9\n")
+            .with_command(
+                &provides_key("system-release(releasever)"),
+                ok("@@redhat-release\t10.2\n\
+                    system-release(releasever)\t8\t10.2\n\
+                    system-release(releasever_major)\t8\t10\n"),
+            );
+        let values = detect(&mock).values;
+        assert_eq!(values["releasever"], "10.2");
+        assert_eq!(values["releasever_major"], "9");
+    }
+
+    /// The dnf `dnf` runs decides the vars directories, whatever else is
+    /// installed; the binary is the fallback when `dnf` cannot be run.
+    #[test]
+    fn the_dnf_that_runs_picks_the_vars_dirs() {
+        let host = |dnf_version: Option<&str>, dnf5_binary: bool| {
+            let mut mock = MockExecutor::new()
+                .with_dir("/etc/yum/vars", vec!["custom"])
+                .with_file("/etc/yum/vars/custom", "dnf4\n")
+                .with_dir("/usr/share/dnf5/vars.d", vec!["custom"])
+                .with_file("/usr/share/dnf5/vars.d/custom", "dnf5\n");
+            if let Some(stdout) = dnf_version {
+                mock = mock.with_command("dnf --version", ok(stdout));
+            }
+            if dnf5_binary {
+                mock = mock.with_file(DNF5_BINARY, "");
+            }
+            mock
+        };
+        let cases = [
+            (
+                "EL9 with dnf5 installed beside dnf4",
+                host(
+                    Some("4.14.0\n  Installed: dnf-0:4.14.0-9.el9.noarch\n"),
+                    true,
+                ),
+                DnfFlavor::Dnf4,
+                "dnf4",
+            ),
+            (
+                "EL10",
+                host(
+                    Some("dnf5 version 5.2.8.1\ndnf5 plugin API version 2.0\n"),
+                    true,
+                ),
+                DnfFlavor::Dnf5,
+                "dnf5",
+            ),
+            (
+                "dnf cannot run, dnf5 binary present",
+                host(None, true),
+                DnfFlavor::Dnf5,
+                "dnf5",
+            ),
+            (
+                "dnf cannot run, no dnf5 binary",
+                host(None, false),
+                DnfFlavor::Dnf4,
+                "dnf4",
+            ),
+        ];
+        for (name, mock, flavor, custom) in cases {
+            let host = detect(&mock);
+            assert_eq!(host.flavor, flavor, "{name}");
+            assert_eq!(host.values["custom"], custom, "{name}");
+        }
     }
 
     #[test]
     fn unknown_machine_leaves_basearch_undefined() {
         let mock = MockExecutor::new().with_command("uname -m", ok("vax\n"));
-        let values = detect(&mock);
+        let values = detect(&mock).values;
         assert!(!values.contains_key("basearch"));
         assert!(!values.contains_key("arch"));
     }

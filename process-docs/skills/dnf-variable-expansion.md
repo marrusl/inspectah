@@ -46,11 +46,16 @@ Sources: dnf4 `dnf/cli/cli.py` (`_read_conf_file`), `dnf/rpm/__init__.py`
 libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 `conf/vars.cpp` and `include/libdnf5/conf/const.hpp`.
 
+- **Which dnf.** The collector runs `dnf --version`: dnf5 names itself on
+  the first line (`dnf5 version 5.2.8.1`), dnf4 prints a bare `4.x`
+  version. Only when `dnf` cannot be run does an installed
+  `/usr/bin/dnf5` decide. The binary alone is wrong on EL9, where dnf5 can
+  be installed beside the dnf4 that `dnf` runs.
 - **Vars files.** A file in a vars directory defines a variable named after
   the file; its value is the first line. dnf4 reads `/etc/yum/vars` then
   `/etc/dnf/vars`. dnf5 reads `/usr/share/dnf5/vars.d` then
   `/etc/dnf/vars`, and does not read `/etc/yum/vars`. A later directory
-  wins. The collector picks the dnf5 list when `/usr/bin/dnf5` exists.
+  wins.
 - **`releasever`.** A vars file wins. Otherwise dnf asks the rpmdb for the
   first package that provides `system-release(releasever)`,
   `system-release`, `distribution-release(releasever)`,
@@ -64,6 +69,12 @@ libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
   release package overrides the split. A vars file naming either one wins
   in dnf5. In dnf4 a detected provide beats a vars file for these two; the
   collector follows dnf5, since EL10 is the host where the variable is used.
+  Current dnf5 (`main` after commit `f9bc2076a3`) sets `releasever_major`
+  to an empty string when the release package lacks the
+  `system-release(releasever_major)` provide, overwriting the split; the
+  collector splits instead, because the empty value names
+  `RPM-GPG-KEY-EPEL-`, a key no image has, and the split is what dnf4,
+  older dnf5 and the measured RHEL 10.2 host give.
 - **`arch` / `basearch`.** The machine type and dnf's base architecture
   for it (`_BASEARCH_MAP` in `dnf/rpm/__init__.py`). The collector reads
   `uname -m` and maps the architectures EL and Fedora build for; an
@@ -73,7 +84,13 @@ libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 
 Syntax: `$name`, `${name}`, `${name:-word}` (word when unset or empty) and
 `${name:+word}` (word when set and non-empty), with names of ASCII letters,
-digits and `_`. dnf leaves an unknown `$name` as written.
+digits and `_`. dnf leaves an unknown `$name` as written, and a `$` with no
+name after it (`$`, `$-x`); the collector leaves the latter too.
+
+Escapes follow the host's dnf. dnf4 (libdnf `ConfigParser`) drops a
+backslash before any character; dnf5 (libdnf5 `Vars`) drops it only before
+`$` and `\`, and before `}` inside a `${name:-word}` word, and otherwise
+keeps it. Both keep a trailing backslash.
 
 ## What the collector refuses
 
@@ -85,8 +102,10 @@ expands but cannot be read:
 - a variable value other than ASCII letters, digits and `._+-~`, or one
   that is `.` or holds `..`: this refuses `/`, whitespace, line breaks,
   control and shell characters, and traversal;
-- a backslash, a `$` with no name, or an unterminated or unknown `${...}`
-  form.
+- a `${` that does not close as `${name}`, `${name:-word}` or
+  `${name:+word}`: unterminated, with no name, or with an unknown operator.
+  dnf leaves those as written, but a key path holding a literal `${` is not
+  one a repo means.
 
 Remote references (any `scheme://` other than `file://`) are skipped
 without a warning: dnf fetches them at build time.
