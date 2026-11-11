@@ -4,7 +4,7 @@ use inspectah_core::types::services::{ServiceAction, ServiceStateChange};
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
-use super::language_packages::escape_line_terminators;
+use super::comment::escape_line_terminators;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
