@@ -19,9 +19,10 @@
 //!   `# N config file(s) captured` line, for a host whose only config
 //!   finding is an RPM-owned file the operator changed.
 //!
-//! A last test reuses the fixture for a safety check rather than a parity
-//! claim: a config whose content the collector could not capture is
-//! staged by neither path.
+//! The last tests reuse the fixture for safety checks rather than parity
+//! claims: a config whose content the collector could not capture is
+//! staged by neither path, nor by `inspectah aggregate` or a refine export
+//! of the aggregate when only some hosts of a fleet could read it.
 //!
 //! **Scope.** Parity is claimed only for a classified, baseline-backed
 //! snapshot: one with leaf data from the collector and a base image, so
@@ -57,7 +58,8 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::traits::renderer::RenderContext;
-use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::aggregate::VariantSelection;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::{AdvisoryType, FindingKind};
@@ -67,6 +69,7 @@ use inspectah_pipeline::render;
 use inspectah_pipeline::render::not_carried::{
     NOT_CARRIED_REASON, apply_scan_package_defaults, not_carried_packages,
 };
+use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
@@ -345,17 +348,25 @@ fn scan_export(mut snapshot: InspectionSnapshot, out: &Path) -> InspectionSnapsh
 /// A refine session opened on `snapshot` and exported with no operations.
 /// Returns the unpacked export root.
 fn refine_export(snapshot: InspectionSnapshot, dir: &Path) -> PathBuf {
-    let session = RefineSession::new(snapshot);
+    export_session(RefineSession::new(snapshot), dir)
+}
+
+/// `session` exported with no operations. Returns the unpacked export root.
+fn export_session(session: RefineSession, dir: &Path) -> PathBuf {
     let tarball = dir.join("export.tar.gz");
     session
         .export_plan(session.generation())
         .expect("the generation matches")
         .render(&tarball)
         .expect("the export writes");
+    unpack(&tarball, dir)
+}
 
+/// Unpacks `tarball` under `dir` and returns its single top-level member.
+fn unpack(tarball: &Path, dir: &Path) -> PathBuf {
     let unpacked = dir.join("unpacked");
     std::fs::create_dir_all(&unpacked).expect("mkdir");
-    let file = std::fs::File::open(&tarball).expect("the tarball opens");
+    let file = std::fs::File::open(tarball).expect("the tarball opens");
     tar::Archive::new(flate2::read::GzDecoder::new(file))
         .unpack(&unpacked)
         .expect("the tarball unpacks");
@@ -883,4 +894,238 @@ fn an_uncaptured_config_is_never_staged_on_either_path() {
         );
     }
     drop(dirs);
+}
+
+// ── A config only some hosts of a fleet could capture ────────────────
+
+/// The RPM-owned config the fleet tests vary between hosts. Every host
+/// reports it modified; on some the copy is empty, on others the read
+/// fails.
+const FLEET_CONFIG: &str = EMPTIED_RPM_CONFIG;
+
+/// What one host's scan found at [`FLEET_CONFIG`].
+#[derive(Clone, Copy, Debug)]
+enum FleetCopy {
+    /// Read, and empty.
+    Empty,
+    /// Present, but the read was refused.
+    Unreadable,
+}
+
+/// The host from [`host_mock`], named `hostname`, with [`FLEET_CONFIG`]
+/// modified and found as `copy` says.
+fn fleet_host_mock(hostname: &str, copy: FleetCopy) -> MockExecutor {
+    let rpm_va = format!("{RPM_VA}S.5....T.  c {FLEET_CONFIG}\n");
+    let ownership = FILE_OWNERSHIP.replace(
+        "@@httpd\n/etc/httpd/conf/httpd.conf\n",
+        &format!("@@httpd\n/etc/httpd/conf/httpd.conf\n{FLEET_CONFIG}\n"),
+    );
+    let mock = host_mock()
+        .with_command("rpm -Va", ok(&rpm_va))
+        .with_command(
+            "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES}\\n]",
+            ok(&ownership),
+        )
+        .with_file("/etc/hostname", &format!("{hostname}\n"))
+        .with_dir("/etc/httpd", vec!["conf", "conf.d"])
+        .with_dir("/etc/httpd/conf.d", vec!["autoindex.conf"])
+        .with_file(FLEET_CONFIG, "");
+    match copy {
+        FleetCopy::Empty => mock,
+        FleetCopy::Unreadable => {
+            mock.with_file_error(FLEET_CONFIG, std::io::ErrorKind::PermissionDenied)
+        }
+    }
+}
+
+/// The merged snapshot and the two unpacked export roots for one fleet.
+struct FleetRun {
+    merged: InspectionSnapshot,
+    roots: Vec<(&'static str, PathBuf)>,
+    _dir: tempfile::TempDir,
+}
+
+/// Scans each host, packs its scan tarball, runs the `inspectah aggregate`
+/// binary over the tarballs, and exports the aggregate tarball from a
+/// refine session with no operations.
+fn fleet_run(hosts: &[(&str, FleetCopy)]) -> FleetRun {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut tarballs = Vec::new();
+    for (hostname, copy) in hosts {
+        let out = dir.path().join(hostname);
+        scan_export(collected(&fleet_host_mock(hostname, *copy)), &out);
+        let tarball = dir.path().join(format!("{hostname}.tar.gz"));
+        create_tarball(&out, &tarball, hostname).expect("the scan tarball packs");
+        tarballs.push(tarball);
+    }
+
+    let aggregate = dir.path().join("aggregate.tar.gz");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_inspectah"))
+        .arg("aggregate")
+        .args(&tarballs)
+        .arg("--output-file")
+        .arg(&aggregate)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("inspectah aggregate runs");
+    assert!(
+        output.status.success(),
+        "inspectah aggregate failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let aggregate_dir = dir.path().join("aggregate");
+    let aggregate_root = unpack(&aggregate, &aggregate_dir);
+    let json = std::fs::read_to_string(aggregate_root.join("inspection-snapshot.json"))
+        .expect("the aggregate carries its snapshot");
+    let merged = InspectionSnapshot::load(&json).expect("the merged snapshot loads");
+
+    let refine_dir = dir.path().join("refine");
+    std::fs::create_dir_all(&refine_dir).expect("mkdir");
+    let session =
+        inspectah_refine::tarball::from_tarball(&aggregate).expect("refine opens the aggregate");
+    let refine_root = export_session(session, &refine_dir);
+
+    FleetRun {
+        merged,
+        roots: vec![
+            ("inspectah aggregate", aggregate_root),
+            ("refine export of the aggregate", refine_root),
+        ],
+        _dir: dir,
+    }
+}
+
+impl FleetRun {
+    fn entries(&self, path: &str) -> Vec<&ConfigFileEntry> {
+        self.merged
+            .config
+            .as_ref()
+            .expect("config section")
+            .files
+            .iter()
+            .filter(|f| f.path == path)
+            .collect()
+    }
+
+    /// Neither export stages [`FLEET_CONFIG`] or keeps an empty variant of
+    /// it, and both still stage the config every host could read.
+    fn assert_fleet_config_not_staged(&self, label: &str) {
+        let staged = FLEET_CONFIG.trim_start_matches('/');
+        for (export, root) in &self.roots {
+            let surfaces = Surfaces::read(root);
+            assert!(
+                !surfaces.etc_files.iter().any(|f| f == staged),
+                "{label}, {export}: {FLEET_CONFIG} is staged: {:?}",
+                surfaces.etc_files
+            );
+            assert!(
+                surfaces
+                    .etc_files
+                    .iter()
+                    .any(|f| f == MODIFIED_CONFIG.trim_start_matches('/')),
+                "{label}, {export}: the config every host read is still staged"
+            );
+            let variants = root.join("aggregate/variants").join(staged);
+            let kept: Vec<_> = std::fs::read_dir(&variants)
+                .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+                .unwrap_or_default();
+            assert!(
+                kept.is_empty(),
+                "{label}, {export}: no host's content is unknown-as-empty: {kept:?}"
+            );
+        }
+    }
+}
+
+/// The disposition of an entry the collector could not capture, if it is
+/// one.
+fn capture_failure(entry: &ConfigFileEntry) -> Option<&str> {
+    match &entry.disposition {
+        FindingKind::Advisory {
+            advisory_type: AdvisoryType::ContentNotCaptured,
+            rationale,
+        } => Some(rationale),
+        _ => None,
+    }
+}
+
+/// One host's empty copy of a config and another host's refused read of
+/// the same file are not one variant. The merged snapshot keeps the
+/// refused read as its own `content_not_captured` advisory, with its
+/// reason and only that host, and the empty copy counts only the host it
+/// came from, so no entry claims both hosts and nothing is staged. Run
+/// with the hosts swapped, since the first host of a variant is the one
+/// its merged entry is built from.
+#[test]
+fn a_fleet_config_one_host_could_not_read_is_not_staged_empty() {
+    for (empty_host, unreadable_host) in [("host-a", "host-b"), ("host-b", "host-a")] {
+        let label = format!("empty on {empty_host}, unreadable on {unreadable_host}");
+        let run = fleet_run(&[
+            (empty_host, FleetCopy::Empty),
+            (unreadable_host, FleetCopy::Unreadable),
+        ]);
+
+        let entries = run.entries(FLEET_CONFIG);
+        assert_eq!(entries.len(), 2, "{label}: {entries:?}");
+        assert!(
+            entries.iter().all(|e| !e.disposition.is_included()),
+            "{label}: nothing is included: {entries:?}"
+        );
+
+        let uncaptured = entries
+            .iter()
+            .find(|e| capture_failure(e).is_some())
+            .unwrap_or_else(|| panic!("{label}: the refused read survives: {entries:?}"));
+        let reason = capture_failure(uncaptured).expect("a capture failure");
+        assert!(
+            reason.contains("permission denied"),
+            "{label}: the reason survives: {reason}"
+        );
+        assert_eq!(uncaptured.variant_selection, VariantSelection::Alternative);
+        let prevalence = uncaptured.aggregate.as_ref().expect("prevalence");
+        assert_eq!(
+            prevalence.hosts,
+            vec![unreadable_host.to_string()],
+            "{label}"
+        );
+
+        let captured = entries
+            .iter()
+            .find(|e| capture_failure(e).is_none())
+            .unwrap_or_else(|| panic!("{label}: the empty copy: {entries:?}"));
+        assert_eq!(captured.content, "", "{label}");
+        assert_eq!(captured.variant_selection, VariantSelection::Selected);
+        let prevalence = captured.aggregate.as_ref().expect("prevalence");
+        assert_eq!(
+            (prevalence.count, prevalence.total),
+            (1, 2),
+            "{label}: the refused read is no vote for the empty copy"
+        );
+        assert_eq!(prevalence.hosts, vec![empty_host.to_string()], "{label}");
+
+        run.assert_fleet_config_not_staged(&label);
+    }
+}
+
+/// When no host could read the config, the merge is one advisory naming
+/// every host, and nothing is staged.
+#[test]
+fn a_fleet_config_no_host_could_read_is_one_advisory() {
+    let run = fleet_run(&[
+        ("host-a", FleetCopy::Unreadable),
+        ("host-b", FleetCopy::Unreadable),
+    ]);
+
+    let entries = run.entries(FLEET_CONFIG);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = entries[0];
+    let reason = capture_failure(entry)
+        .unwrap_or_else(|| panic!("still content_not_captured: {:?}", entry.disposition));
+    assert!(reason.contains("permission denied"), "{reason}");
+    assert_eq!(entry.variant_selection, VariantSelection::Only);
+    let prevalence = entry.aggregate.as_ref().expect("prevalence");
+    assert_eq!((prevalence.count, prevalence.total), (2, 2));
+
+    run.assert_fleet_config_not_staged("unreadable on both hosts");
 }

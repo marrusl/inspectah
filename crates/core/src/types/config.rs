@@ -1,5 +1,5 @@
-use super::FindingKind;
 use super::aggregate::{AggregatePrevalence, VariantSelection};
+use super::{AdvisoryType, FindingKind};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +91,23 @@ pub struct ConfigFileEntry {
     /// `disposition` is `Inventory` whenever this is `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadowed_by: Option<ConfigShadow>,
+}
+
+impl ConfigFileEntry {
+    /// Whether the collector captured this file's content.
+    ///
+    /// False for a `ContentNotCaptured` advisory: the file exists on the
+    /// host, but `content` is empty because the read failed, not because
+    /// the file is. Such an entry is no evidence of what the file holds.
+    pub fn content_captured(&self) -> bool {
+        !matches!(
+            self.disposition,
+            FindingKind::Advisory {
+                advisory_type: AdvisoryType::ContentNotCaptured,
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

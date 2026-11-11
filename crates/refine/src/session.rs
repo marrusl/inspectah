@@ -3674,10 +3674,12 @@ fn write_aggregate_variants(snap: &InspectionSnapshot, out: &Path) -> Result<(),
         Ok(create_confined_dir(&root, rel)?)
     };
 
-    // Config file alternatives
+    // Config file alternatives. A host whose copy could not be read has no
+    // content to preserve: an empty `.content` file here would claim one.
     if let Some(ref cfg) = snap.config {
         for entry in &cfg.files {
-            if entry.variant_selection == VariantSelection::Alternative {
+            if entry.variant_selection == VariantSelection::Alternative && entry.content_captured()
+            {
                 let hash = format!("{:x}", Sha256::digest(entry.content.as_bytes()));
                 let short = &hash[..12];
                 let dir = variant_dir(&entry.path)?;

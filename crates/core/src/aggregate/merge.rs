@@ -29,6 +29,15 @@ pub trait AggregateMergeable: Clone {
     fn content_variant_key(&self) -> Option<Cow<'_, str>> {
         None
     }
+
+    /// Whether this observation carries the item's content.
+    ///
+    /// An observation that does not (the collector found the item but
+    /// could not read it) says nothing about what the content is, so
+    /// [`merge_with_variants`] keeps it out of every content variant.
+    fn content_captured(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +131,10 @@ impl AggregateMergeable for ConfigFileEntry {
             "{:x}",
             Sha256::digest(self.content.as_bytes())
         )))
+    }
+
+    fn content_captured(&self) -> bool {
+        ConfigFileEntry::content_captured(self)
     }
 }
 
@@ -587,6 +600,21 @@ pub fn merge_items<T: AggregateMergeable + serde::Serialize>(
     result
 }
 
+/// The sub-group an observation joins in [`merge_with_variants`].
+///
+/// Observations whose content was not captured share one group of their
+/// own, whatever their (empty) content hashes to. Keying them by hash
+/// would put a host that could not read a file into the same group as a
+/// host whose copy really is empty, and count it as a vote for that empty
+/// payload: the merged entry would then claim every host and be included,
+/// and the export would copy an empty file over the one the first host
+/// could not read.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum VariantKey {
+    Captured(String),
+    NotCaptured,
+}
+
 /// Sub-groups variant-capable items by content hash and assigns variant
 /// selection roles.
 ///
@@ -594,16 +622,27 @@ pub fn merge_items<T: AggregateMergeable + serde::Serialize>(
 /// - Multiple variants: most-prevalent is [`VariantSelection::Selected`],
 ///   rest are [`VariantSelection::Alternative`]. Ties are broken by
 ///   lexicographic content hash for deterministic output.
+///
+/// Observations whose content was not captured form their own entry (see
+/// [`VariantKey`]), keep the disposition the collector gave them, and rank
+/// after every captured variant, so they are never `Selected` over real
+/// content. Every host they name still counts toward the path's
+/// aggregate host list, so no captured variant reaches `count == total`
+/// while a host could not be read, and narrowing leaves it excluded.
 fn merge_with_variants<T: AggregateMergeable>(
     group: &mut [(usize, T)],
     total_hosts: usize,
     hostnames: &[String],
 ) -> Vec<T> {
-    let mut subgroups: HashMap<String, Vec<(usize, &T)>> = HashMap::new();
+    let mut subgroups: HashMap<VariantKey, Vec<(usize, &T)>> = HashMap::new();
     for (idx, item) in group.iter() {
-        // Safe to unwrap: caller verified content_variant_key().is_some()
-        let hash = item.content_variant_key().unwrap().into_owned();
-        subgroups.entry(hash).or_default().push((*idx, item));
+        let key = if item.content_captured() {
+            // Safe to unwrap: caller verified content_variant_key().is_some()
+            VariantKey::Captured(item.content_variant_key().unwrap().into_owned())
+        } else {
+            VariantKey::NotCaptured
+        };
+        subgroups.entry(key).or_default().push((*idx, item));
     }
 
     fn unique_hosts<U: AggregateMergeable>(
@@ -648,8 +687,8 @@ fn merge_with_variants<T: AggregateMergeable>(
     };
     let aggregate_count = aggregate_hosts.len() as i32;
 
-    let mut ranked: Vec<(String, Vec<(usize, &T)>)> = subgroups.into_iter().collect();
-    ranked.sort_by(|(hash_a, hosts_a), (hash_b, hosts_b)| {
+    let mut ranked: Vec<(VariantKey, Vec<(usize, &T)>)> = subgroups.into_iter().collect();
+    ranked.sort_by(|(key_a, hosts_a), (key_b, hosts_b)| {
         let count_a = {
             let mut h: Vec<usize> = hosts_a.iter().map(|(i, _)| *i).collect();
             h.sort();
@@ -662,11 +701,16 @@ fn merge_with_variants<T: AggregateMergeable>(
             h.dedup();
             h.len()
         };
-        count_b.cmp(&count_a).then_with(|| hash_a.cmp(hash_b))
+        let uncaptured_a = *key_a == VariantKey::NotCaptured;
+        let uncaptured_b = *key_b == VariantKey::NotCaptured;
+        uncaptured_a
+            .cmp(&uncaptured_b)
+            .then_with(|| count_b.cmp(&count_a))
+            .then_with(|| key_a.cmp(key_b))
     });
 
     let mut variant_results = Vec::new();
-    for (i, (_hash, subgroup)) in ranked.iter().enumerate() {
+    for (i, (_key, subgroup)) in ranked.iter().enumerate() {
         let hosts = unique_hosts(subgroup, hostnames);
         let mut item = subgroup[0].1.clone();
         *item.aggregate_mut() = Some(AggregatePrevalence {
@@ -2479,6 +2523,152 @@ mod tests {
             assert!(agg_hosts.contains(&"web-02".to_string()));
             assert!(agg_hosts.contains(&"web-03".to_string()));
         }
+    }
+
+    /// One host's observation of a config path, for the uncaptured-content
+    /// merge tests.
+    #[derive(Clone, Copy)]
+    enum Observed {
+        /// Captured, with this content (empty included).
+        Captured(&'static str),
+        /// Found, but the content could not be read.
+        NotCaptured,
+    }
+
+    const UNCAPTURED_PATH: &str = "/etc/example.conf";
+    const UNCAPTURED_RATIONALE: &str = "Content not captured: permission denied reading the file.";
+
+    fn observed_entry(observed: Observed) -> crate::types::config::ConfigFileEntry {
+        use crate::types::AdvisoryType;
+        use crate::types::config::ConfigFileEntry;
+
+        match observed {
+            Observed::Captured(content) => ConfigFileEntry {
+                path: UNCAPTURED_PATH.into(),
+                content: content.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            Observed::NotCaptured => ConfigFileEntry {
+                path: UNCAPTURED_PATH.into(),
+                disposition: FindingKind::advisory(
+                    AdvisoryType::ContentNotCaptured,
+                    UNCAPTURED_RATIONALE,
+                ),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn merge_observed(observations: &[Observed]) -> Vec<crate::types::config::ConfigFileEntry> {
+        use crate::types::config::ConfigSection;
+
+        let hostnames: Vec<String> = (1..=observations.len())
+            .map(|i| format!("web-{i:02}"))
+            .collect();
+        let sections = observations
+            .iter()
+            .map(|o| {
+                Some(ConfigSection {
+                    files: vec![observed_entry(*o)],
+                })
+            })
+            .collect();
+        merge_config_sections(sections, observations.len(), &hostnames)
+            .expect("merge should succeed")
+            .files
+    }
+
+    /// A host that could not read a file is no evidence of its content. It
+    /// does not join the variant of a host whose copy is really empty, keeps
+    /// its advisory and reason, and is never `Selected` over captured
+    /// content. Each case is run with the hosts in both orders, since the
+    /// first host of a variant is the one its merged entry is cloned from.
+    #[test]
+    fn an_uncaptured_config_is_no_vote_for_any_payload() {
+        use Observed::{Captured, NotCaptured};
+
+        // (observations by host, captured content expected Selected, its count)
+        let cases: &[(&[Observed], &str, i32)] = &[
+            (&[Captured(""), NotCaptured], "", 1),
+            (
+                &[Captured("a=1\n"), Captured("a=1\n"), NotCaptured],
+                "a=1\n",
+                2,
+            ),
+            (&[NotCaptured, NotCaptured, Captured("a=1\n")], "a=1\n", 1),
+        ];
+        for (observations, selected_content, selected_count) in cases {
+            for order in [
+                observations.to_vec(),
+                observations.iter().rev().copied().collect(),
+            ] {
+                let total = order.len() as i32;
+                let uncaptured_hosts: Vec<String> = order
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| matches!(o, NotCaptured))
+                    .map(|(i, _)| format!("web-{:02}", i + 1))
+                    .collect();
+                let merged = merge_observed(&order);
+                let label = format!("{} hosts, uncaptured on {uncaptured_hosts:?}", order.len());
+
+                assert_eq!(merged.len(), 2, "{label}: {merged:?}");
+                assert!(
+                    merged.iter().all(|e| !e.disposition.is_included()),
+                    "{label}: no host's copy reached every host, so nothing is included: {merged:?}"
+                );
+
+                let selected = merged
+                    .iter()
+                    .find(|e| e.content_captured())
+                    .unwrap_or_else(|| panic!("{label}: a captured variant: {merged:?}"));
+                assert_eq!(selected.content, *selected_content, "{label}");
+                assert_eq!(
+                    selected.variant_selection,
+                    VariantSelection::Selected,
+                    "{label}"
+                );
+                let prevalence = selected.aggregate.as_ref().expect("prevalence");
+                assert_eq!(prevalence.count, *selected_count, "{label}: votes");
+                assert_eq!(prevalence.aggregate_count, Some(total), "{label}");
+
+                let uncaptured = merged
+                    .iter()
+                    .find(|e| !e.content_captured())
+                    .unwrap_or_else(|| panic!("{label}: the uncaptured entry: {merged:?}"));
+                assert_eq!(
+                    uncaptured.disposition,
+                    observed_entry(NotCaptured).disposition,
+                    "{label}: the advisory and its reason survive"
+                );
+                assert_eq!(
+                    uncaptured.variant_selection,
+                    VariantSelection::Alternative,
+                    "{label}"
+                );
+                let prevalence = uncaptured.aggregate.as_ref().expect("prevalence");
+                assert_eq!(prevalence.hosts, uncaptured_hosts, "{label}");
+            }
+        }
+    }
+
+    /// When no host could read the file, the merge has one entry: the
+    /// advisory, on every host, never included.
+    #[test]
+    fn a_config_no_host_could_read_merges_to_one_advisory() {
+        let merged = merge_observed(&[Observed::NotCaptured, Observed::NotCaptured]);
+
+        assert_eq!(merged.len(), 1, "{merged:?}");
+        let entry = &merged[0];
+        assert_eq!(
+            entry.disposition,
+            observed_entry(Observed::NotCaptured).disposition
+        );
+        assert!(!entry.disposition.is_included());
+        assert_eq!(entry.variant_selection, VariantSelection::Only);
+        let prevalence = entry.aggregate.as_ref().expect("prevalence");
+        assert_eq!((prevalence.count, prevalence.total), (2, 2));
     }
 
     /// Regression: when the majority repo is split across multiple payload

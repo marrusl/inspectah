@@ -128,6 +128,13 @@ is classified as Divergent. This conservative approach ensures that config
 differences surface for review rather than being hidden behind an aggregate
 count.
 
+A host whose copy of the file the scan could not read (over 256 KiB,
+permission denied, or not text) is not a variant. It says nothing about the
+content, so it does not count toward any variant, and it is listed as its own
+`content_not_captured` entry with the reason and the hosts it came from. Since
+that host still has the file, no variant reaches every host, and none is
+included by default.
+
 This is why inspectah prioritizes config findings in aggregate mode. An infrastructure where
 every host has the same packages but different `/etc/sysctl.conf` values is not
 really converged -- and the migration plan needs to account for those
