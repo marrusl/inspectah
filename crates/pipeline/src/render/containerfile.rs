@@ -769,8 +769,8 @@ fn packages_section_lines(
                 .iter()
                 .filter(|g| ctx.is_renderable(&g.name))
                 .filter(|g| {
-                    // The quotes keep the name one word, but `dnf` still
-                    // reads a word that starts with `-` as an option.
+                    // The quotes keep the name one word, but a name that
+                    // starts with `-` is refused at an operand site.
                     let refusal =
                         double_quoted_word_refusal(&g.name).or_else(|| operand_refusal(&g.name));
                     if let Some(why) = refusal {

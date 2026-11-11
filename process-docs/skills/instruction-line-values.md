@@ -54,7 +54,7 @@ a unit test pins that, since every site it guards relies on it.
 guard: it says nothing about where a word sits. A word in an operand
 position that starts with `-` (`--nogpgcheck`) or `#` is refused and gets
 a FIXME in place of its line, so a value is never rendered where it could
-stand in for an option or a comment. So the operand sites also ask
+stand in for an option or a comment. The operand sites also ask
 `operand_refusal`, through `shell_operand_refusal`. The `rpm --import`
 path of a GPG key is an operand too: a key path that is not absolute is
 refused with the GPG FIXME, which keeps it off both the `COPY` and the

@@ -122,17 +122,15 @@ impl std::fmt::Display for CopyToken {
 ///
 /// This is separate from [`sanitize_shell_value`], which is a line and
 /// shell-word guard and says nothing about where a word sits. In an
-/// operand position a leading `-` makes the command read the word as one
-/// of its options (`--nogpgcheck`), and a leading `#` makes the shell read
-/// it, and everything after it on the line, as a comment, which cuts off
-/// the rest of a joined `RUN`. A value after `=` or inside another word
-/// can start with either legitimately, so the check belongs at the
-/// operand sites only.
+/// operand position a word that starts with `-` (`--nogpgcheck`) or `#`
+/// could stand in for an option or a comment, so inspectah does not write
+/// one there. A value after `=` or inside another word can start with
+/// either legitimately, so the check belongs at the operand sites only.
 pub fn operand_refusal(value: &str) -> Option<&'static str> {
     if value.starts_with('-') {
-        Some("starts with `-`, which the command would read as an option")
+        Some("starts with `-`, which inspectah does not write as an operand")
     } else if value.starts_with('#') {
-        Some("starts with `#`, which the shell would read as a comment")
+        Some("starts with `#`, which inspectah does not write as an operand")
     } else {
         None
     }
@@ -344,7 +342,7 @@ impl ExportToken {
 pub enum BareWordError {
     #[error(transparent)]
     Token(#[from] TokenError),
-    #[error("starts with `-`, which the command would read as an option")]
+    #[error("starts with `-`, which inspectah does not write as an operand")]
     LeadingDash,
     #[error("does not start with a URL scheme letter")]
     NoScheme,
@@ -476,11 +474,10 @@ pub enum AccountNameError {
 /// instruction (`useradd`, `groupadd`, `chpasswd`, `install -o`).
 ///
 /// [`ExportToken`]'s byte set, which is shadow-utils' portable name set,
-/// with the refusals shadow-utils makes on top of it: a leading `-`,
-/// which `useradd` and `groupadd` would read as an option; `.` and `..`;
-/// and an all-digit name, which `useradd -G` reads as a numeric id. A
-/// trailing `$` (Samba machine accounts) is refused too, because it is
-/// not in the token set: such a user gets a FIXME rather than a command.
+/// with the refusals shadow-utils makes on top of it: a leading `-`;
+/// `.` and `..`; and an all-digit name. A trailing `$` (Samba machine
+/// accounts) is refused too, because it is not in the token set: such a
+/// user gets a FIXME rather than a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountName(ExportToken);
 

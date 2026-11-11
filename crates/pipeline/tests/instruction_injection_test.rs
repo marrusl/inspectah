@@ -635,8 +635,8 @@ fn from_and_group_lines_render_benign_values() {
 // Operands of RUN commands (dnf, systemctl, setsebool, semanage)
 // ---------------------------------------------------------------------------
 
-/// Words a command would read as an option, or the shell as the start of
-/// a comment, when they stand as an operand.
+/// Words that start with `-` or `#`, which inspectah refuses to write as
+/// an operand.
 const OPERAND_VALUES: &[&str] = &["--nogpgcheck", "-oalice", "#foo"];
 
 /// A row for one operand site: the FIXME prefix the refusal writes.

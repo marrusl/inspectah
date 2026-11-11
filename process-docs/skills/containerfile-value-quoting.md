@@ -15,7 +15,7 @@ has produced both over-rejection of legal paths and live command injection.
 | Context | Example site | Treatment | Predicate that matters |
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
-| Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
+| Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list that could hold a word starting with `-` | a blacklist here is structurally incomplete, so this row should stay empty |
 | Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every line-vector renderer goes through (the string-built files in `configtree.rs` escape at the site or carry fixed text); `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
 
 `contains_unsafe_chars` refuses `'` and every character in
