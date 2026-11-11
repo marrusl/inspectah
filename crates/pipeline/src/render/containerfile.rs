@@ -563,10 +563,19 @@ fn packages_section_lines(
     }
 
     // Repo files
+    // Counted from what the stager writes: a repo file whose path it
+    // refuses is not under `config/`, and the config section below names
+    // it in a FIXME.
+    let refused_repo_paths: std::collections::HashSet<&str> = unstaged_files(snap)
+        .into_iter()
+        .filter(|(src, _)| src.kind == StagedFileKind::RepoFile)
+        .map(|(src, _)| src.path)
+        .collect();
     let included_repos: usize = rpm
         .repo_files
         .iter()
         .filter(|r| r.disposition.is_included() && !r.is_default_repo)
+        .filter(|r| !refused_repo_paths.contains(r.path.as_str()))
         .count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];

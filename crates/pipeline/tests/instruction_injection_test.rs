@@ -1460,3 +1460,44 @@ fn group_fixme_reads_as_a_sentence() {
     );
     assert!(!output.contains("the name it "), "{output}");
 }
+
+fn repo_file_at(path: &str) -> RepoFile {
+    RepoFile {
+        path: path.into(),
+        content: "x".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    }
+}
+
+const REPO_COPY: &str = "COPY config/etc/yum.repos.d/ /etc/yum.repos.d/";
+
+/// The repo directory is copied only when the stager wrote a file in it.
+#[test]
+fn repo_copy_needs_a_staged_repo_file() {
+    let bad1 = "/etc/yum.repos.d/a\nRUN echo pwned.repo";
+    let bad2 = "/etc/yum.repos.d/b\nRUN echo pwned.repo";
+    let snap = rpm_snap(RpmSection {
+        repo_files: vec![repo_file_at(bad1), repo_file_at(bad2)],
+        ..Default::default()
+    });
+    let output = materialized_containerfile(&snap);
+    assert!(!output.contains(REPO_COPY), "{output}");
+    assert!(!output.contains("Custom Repositories"), "{output}");
+    let fixmes = output
+        .split(LINE_TERMINATORS)
+        .filter(|l| l.starts_with("# FIXME") && l.contains("repo file"))
+        .count();
+    assert_eq!(fixmes, 2, "{output}");
+
+    let snap = rpm_snap(RpmSection {
+        repo_files: vec![
+            repo_file_at(bad1),
+            repo_file_at("/etc/yum.repos.d/good.repo"),
+        ],
+        ..Default::default()
+    });
+    let output = materialized_containerfile(&snap);
+    assert!(output.contains(REPO_COPY), "{output}");
+    assert!(output.contains("Custom Repositories (1)"), "{output}");
+}
