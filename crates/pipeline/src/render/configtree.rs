@@ -254,6 +254,119 @@ fn sysctl_refusal(key: &str, value: &str) -> Option<&'static str> {
     }
 }
 
+/// A kind of snapshot file the config tree stager writes at the file's
+/// own path, under `config/` or, for a drop-in, under `drop-ins/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagedFileKind {
+    ConfigFile,
+    RepoFile,
+    GpgKey,
+    FirewallZone,
+    DropIn,
+}
+
+impl StagedFileKind {
+    /// What a FIXME calls a file of this kind.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ConfigFile => "config file",
+            Self::RepoFile => "repo file",
+            Self::GpgKey => "GPG key",
+            Self::FirewallZone => "firewall zone",
+            Self::DropIn => "service drop-in",
+        }
+    }
+}
+
+/// One included snapshot file the stager writes at its own path.
+pub(crate) struct StagedSource<'a> {
+    pub(crate) kind: StagedFileKind,
+    pub(crate) path: &'a str,
+    content: &'a str,
+}
+
+/// Every included file the stager writes at its own path, in the order it
+/// writes them.
+///
+/// [`write_config_tree`] stages from this list and the Containerfile
+/// reports from [`unstaged_files`], which reads the same list through the
+/// same [`validate_path`], so a file the stager refuses is always one the
+/// Containerfile names in a FIXME.
+pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>> {
+    let mut out = Vec::new();
+    if let Some(config) = &snap.config {
+        out.extend(
+            config
+                .files
+                .iter()
+                .filter(|f| f.disposition.is_included())
+                .map(|f| StagedSource {
+                    kind: StagedFileKind::ConfigFile,
+                    path: &f.path,
+                    content: &f.content,
+                }),
+        );
+    }
+    if let Some(rpm) = &snap.rpm {
+        for (kind, files) in [
+            (StagedFileKind::RepoFile, &rpm.repo_files),
+            (StagedFileKind::GpgKey, &rpm.gpg_keys),
+        ] {
+            out.extend(
+                files
+                    .iter()
+                    .filter(|f| f.disposition.is_included())
+                    .map(|f| StagedSource {
+                        kind,
+                        path: &f.path,
+                        content: &f.content,
+                    }),
+            );
+        }
+    }
+    if let Some(network) = &snap.network {
+        out.extend(
+            network
+                .firewall_zones
+                .iter()
+                .filter(|z| z.disposition.is_included())
+                .map(|z| StagedSource {
+                    kind: StagedFileKind::FirewallZone,
+                    path: &z.path,
+                    content: &z.content,
+                }),
+        );
+    }
+    if let Some(services) = &snap.services {
+        out.extend(
+            services
+                .drop_ins
+                .iter()
+                .filter(|d| d.disposition.is_included())
+                .map(|d| StagedSource {
+                    kind: StagedFileKind::DropIn,
+                    path: &d.path,
+                    content: &d.content,
+                }),
+        );
+    }
+    out
+}
+
+/// Every included file [`write_config_tree`] does not write because
+/// [`validate_path`] refuses its path, with the reason.
+pub(crate) fn unstaged_files(snap: &InspectionSnapshot) -> Vec<(StagedSource<'_>, PathError)> {
+    staged_sources(snap)
+        .into_iter()
+        .filter_map(
+            |src| match validate_path(src.path.trim_start_matches('/')) {
+                Ok(()) => None,
+                Err(e) => Some((src, e)),
+            },
+        )
+        .collect()
+}
+
 /// The remote, application id and branch of a flatpak `install` line,
 /// each proved a [`BareWord`], or why one is refused. An empty branch is
 /// kept empty, as the line has always rendered it.
@@ -291,73 +404,33 @@ pub fn write_config_tree(
     let svc_paths = service_owned_paths(snap);
     let ctr_paths = container_owned_paths(snap);
 
-    // Config files
-    if let Some(ref config) = snap.config {
-        for entry in &config.files {
-            if !entry.disposition.is_included() {
-                continue;
-            }
-            let rel = entry.path.trim_start_matches('/');
-            if rel.is_empty() {
-                continue;
-            }
-            if dhcp_paths.contains(rel) {
-                continue;
-            }
-            if rel.starts_with(QUADLET_PREFIX) || ctr_paths.contains(rel) {
-                continue;
-            }
-            if svc_paths.contains(rel) {
-                continue;
-            }
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            let dest = config_dir.join(rel);
-            safe_write_file(&dest, &entry.content);
+    // Config files, repo files, GPG keys and firewall zones under
+    // `config/`, systemd drop-ins under `drop-ins/`. Service-owned
+    // config paths are left to the services renderer, which handles their
+    // materialization. A path `validate_path` refuses is not written, and
+    // the Containerfile names it from `unstaged_files`.
+    let drop_ins_dir = output_dir.join("drop-ins");
+    for src in staged_sources(snap) {
+        let rel = src.path.trim_start_matches('/');
+        if rel.is_empty() {
+            continue;
         }
-    }
-
-    // Repo files
-    if let Some(ref rpm) = snap.rpm {
-        for repo in &rpm.repo_files {
-            if !repo.disposition.is_included() || repo.path.is_empty() {
-                continue;
-            }
-            let rel = repo.path.trim_start_matches('/');
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            let dest = config_dir.join(rel);
-            safe_write_file(&dest, &repo.content);
+        if src.kind == StagedFileKind::ConfigFile
+            && (dhcp_paths.contains(rel)
+                || rel.starts_with(QUADLET_PREFIX)
+                || ctr_paths.contains(rel)
+                || svc_paths.contains(rel))
+        {
+            continue;
         }
-
-        for key in &rpm.gpg_keys {
-            if !key.disposition.is_included() || key.path.is_empty() {
-                continue;
-            }
-            let rel = key.path.trim_start_matches('/');
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            let dest = config_dir.join(rel);
-            safe_write_file(&dest, &key.content);
+        if validate_path(rel).is_err() {
+            continue;
         }
-    }
-
-    // Firewall zones
-    if let Some(ref network) = snap.network {
-        for zone in &network.firewall_zones {
-            if !zone.disposition.is_included() || zone.path.is_empty() {
-                continue;
-            }
-            let rel = zone.path.trim_start_matches('/');
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            let dest = config_dir.join(rel);
-            safe_write_file(&dest, &zone.content);
-        }
+        let base = match src.kind {
+            StagedFileKind::DropIn => &drop_ins_dir,
+            _ => &config_dir,
+        };
+        safe_write_file(&base.join(rel), src.content);
     }
 
     // Kernel boot files
@@ -406,23 +479,6 @@ pub fn write_config_tree(
                 toml.push_str(&format!("append = [\"{k}\"]\n"));
             }
             let _ = std::fs::write(kargs_dir.join("inspectah-migrated.toml"), &toml);
-        }
-    }
-
-    // Systemd drop-ins — write to drop-ins/ only. Service-owned paths
-    // are excluded from config/ via the svc_paths filter above; the
-    // services renderer handles their materialization.
-    if let Some(ref services) = snap.services {
-        let drop_ins_dir = output_dir.join("drop-ins");
-        for di in &services.drop_ins {
-            if !di.disposition.is_included() {
-                continue;
-            }
-            let rel = di.path.trim_start_matches('/');
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            safe_write_file(&drop_ins_dir.join(rel), &di.content);
         }
     }
 

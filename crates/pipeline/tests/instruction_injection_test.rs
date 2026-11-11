@@ -23,9 +23,12 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
 use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
 use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
-use inspectah_core::types::network::{NMConnection, NetworkSection};
+use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
-use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{
+    InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
+};
+use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
@@ -312,6 +315,143 @@ fn copy_lines_refuse_wildcard_paths() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Files the config tree stager writes at their own path
+// ---------------------------------------------------------------------------
+
+fn with_repo_file(path: &str) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![RepoFile {
+            path: path.into(),
+            content: "[app]\nbaseurl=https://example.com/\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+fn with_gpg_key(path: &str) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        gpg_keys: vec![RepoFile {
+            path: path.into(),
+            content: "key".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+fn with_firewall_zone(path: &str) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.network = Some(NetworkSection {
+        firewall_zones: vec![FirewallZone {
+            path: path.into(),
+            name: "app".into(),
+            content: "<zone/>".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+fn with_drop_in(path: &str) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.services = Some(ServiceSection {
+        drop_ins: vec![SystemdDropIn {
+            unit: "app.service".into(),
+            path: path.into(),
+            content: "[Service]\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// A file the stager refuses by path is not written, and the Containerfile
+/// names it in a FIXME, whichever kind it is and whichever way the roots
+/// are found. Without the FIXME the file would leave the image silently.
+const STAGED_ROWS: &[Row] = &[
+    Row {
+        field: "repo file path (snapshot roots)",
+        render: |v| {
+            render_containerfile(
+                &with_repo_file(&format!("/etc/yum.repos.d/{v}.repo")),
+                None,
+                None,
+            )
+        },
+        reached: Reached::Fixme("# FIXME: repo file"),
+    },
+    Row {
+        field: "repo file path (materialized roots)",
+        render: |v| {
+            materialized_containerfile(&with_repo_file(&format!("/etc/yum.repos.d/{v}.repo")))
+        },
+        reached: Reached::Fixme("# FIXME: repo file"),
+    },
+    Row {
+        field: "GPG key path",
+        render: |v| materialized_containerfile(&with_gpg_key(&format!("/etc/pki/rpm-gpg/{v}"))),
+        reached: Reached::Fixme("# FIXME: GPG key"),
+    },
+    Row {
+        field: "firewall zone path",
+        render: |v| {
+            materialized_containerfile(&with_firewall_zone(&format!(
+                "/etc/firewalld/zones/{v}.xml"
+            )))
+        },
+        reached: Reached::Fixme("# FIXME: firewall zone"),
+    },
+    Row {
+        field: "service drop-in path",
+        render: |v| {
+            materialized_containerfile(&with_drop_in(&format!(
+                "/etc/systemd/system/app.service.d/{v}.conf"
+            )))
+        },
+        reached: Reached::Fixme("# FIXME: service drop-in"),
+    },
+];
+
+#[test]
+fn refused_staged_paths_are_named_not_dropped() {
+    check_rows(STAGED_ROWS, &terminators());
+}
+
+/// The refused file is not in the export, and the benign one still is.
+#[test]
+fn stager_writes_only_the_paths_it_accepts() {
+    let mut snap = with_repo_file("/etc/yum.repos.d/good.repo");
+    if let Some(rpm) = snap.rpm.as_mut() {
+        rpm.repo_files.push(RepoFile {
+            path: "/etc/yum.repos.d/x\nRUN echo pwned.repo".into(),
+            content: "x".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_config_tree(&snap, dir.path()).expect("write config tree");
+    let repos = dir.path().join("config/etc/yum.repos.d");
+    let mut names: Vec<String> = std::fs::read_dir(&repos)
+        .expect("repo dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["good.repo"]);
 }
 
 // ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
-use super::configtree::{staged_unit_file, validate_path};
+use super::configtree::{StagedFileKind, staged_unit_file, unstaged_files, validate_path};
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
@@ -600,6 +600,15 @@ fn packages_section_lines(
                     "# FIXME: copy this GPG key in by hand, or exclude it, then rebuild; \
                      its path contains unsafe characters: {}",
                     super::safety::html_escape(&key.path)
+                ));
+                continue;
+            }
+            // The config tree stager does not write a key whose path it
+            // refuses, so nothing below may name one.
+            if let Err(e) = validate_path(key.path.trim_start_matches('/')) {
+                gpg_body.push(format!(
+                    "# FIXME: GPG key {} not copied: {e}",
+                    language_packages::sanitize_for_comment(&key.path)
                 ));
                 continue;
             }
@@ -1404,7 +1413,16 @@ fn config_section_lines(
         None => config_copy_roots_from_snapshot(snap),
     };
 
+    // Every file the config tree stager refuses by path, from the
+    // stager's own list and check. GPG keys are left to the GPG section,
+    // which also keeps a refused key off its `rpm --import` line.
+    let unstaged: Vec<_> = unstaged_files(snap)
+        .into_iter()
+        .filter(|(src, _)| src.kind != StagedFileKind::GpgKey)
+        .collect();
+
     let has_config_content = !config_roots.is_empty()
+        || !unstaged.is_empty()
         || snap
             .config
             .as_ref()
@@ -1437,16 +1455,13 @@ fn config_section_lines(
         }
 
         // A file the config tree stager refuses is never written, so
-        // say so here, from the stager's own check.
-        if let Some(config) = &snap.config {
-            for f in config.files.iter().filter(|f| f.disposition.is_included()) {
-                if let Err(e) = validate_path(f.path.trim_start_matches('/')) {
-                    cfg_body.push(format!(
-                        "# FIXME: config file {} not copied: {e}",
-                        language_packages::sanitize_for_comment(&f.path)
-                    ));
-                }
-            }
+        // say so here.
+        for (src, e) in &unstaged {
+            cfg_body.push(format!(
+                "# FIXME: {} {} not copied: {e}",
+                src.kind.label(),
+                language_packages::sanitize_for_comment(src.path)
+            ));
         }
 
         // A root is a bare COPY argument, so it is a proved `CopyToken`.
