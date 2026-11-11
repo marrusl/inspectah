@@ -25,3 +25,6 @@ minijinja = { version = "2", features = ["builtins"] }
 [dev-dependencies]
 insta.workspace = true
 tempfile.workspace = true
+# Parses the blueprint TOML fragment in tests, to prove a snapshot value
+# cannot add a key. Already in the workspace through inspectah-core.
+toml = "0.8"

@@ -5,8 +5,11 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use std::io;
 use std::path::Path;
 
+use super::comment::LINE_TERMINATORS;
 use super::language_packages::sanitize_for_comment;
-use super::safety::{AccountName, CryptHash, ExportPath, sanitize_shell_value};
+use super::safety::{
+    AccountName, CryptHash, ExportPath, double_quoted_word_refusal, sanitize_shell_value,
+};
 use crate::build::extract::is_single_normal_component;
 
 // ---------------------------------------------------------------------------
@@ -101,6 +104,33 @@ fn useradd_refusal(u: &serde_json::Value) -> Option<&'static str> {
     None
 }
 
+/// `s` as a TOML basic string, quotes included.
+///
+/// Every value in the blueprint fragment goes through this, so none can
+/// close its string and start a key. TOML has a real escaping rule and
+/// legitimate values need it (a GECOS-style home with a quote is still a
+/// home), so the value is escaped, not refused: `"` and `\` get a
+/// backslash, and every control character and line terminator is written
+/// as a `\uXXXX` escape. U+0085, U+2028 and U+2029 are legal raw in a TOML
+/// string, but an editor may break the line there, so they are escaped
+/// too.
+fn toml_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() || LINE_TERMINATORS.contains(&c) => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 // ---------------------------------------------------------------------------
 // 1. Kickstart renderer
 // ---------------------------------------------------------------------------
@@ -126,6 +156,16 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         if name.is_empty() {
             continue;
         }
+        // Every value on a kickstart directive line is proved, as on the
+        // Containerfile's `groupadd` and `useradd` lines: a space adds an
+        // option and a line break adds a directive.
+        if AccountName::parse(name).is_err() {
+            lines.push(format!(
+                "# FIXME: group {} not created: the name is not a valid group name",
+                sanitize_for_comment(name)
+            ));
+            continue;
+        }
         if gid > 0 {
             lines.push(format!("group --name={name} --gid={gid}"));
         } else {
@@ -137,6 +177,15 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
     for u in &users {
         let name = str_field(u, "name");
         if name.is_empty() {
+            continue;
+        }
+        // A refusal costs the whole user, and its keys, as in the
+        // Containerfile: dropping one field would create a different user.
+        if let Some(reason) = useradd_refusal(u) {
+            lines.push(format!(
+                "# FIXME: user {} not created: {reason}",
+                sanitize_for_comment(name)
+            ));
             continue;
         }
         let uid = uid_field(u, "uid");
@@ -163,18 +212,34 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
             opts.push_str(&format!(" --groups={}", groups_list.join(",")));
         }
 
-        // Password (conditional)
+        // Password (conditional). A refused hash costs only the password.
         let pw = str_field(u, "password_hash");
+        let mut pw_fixme = None;
         if !pw.is_empty() {
-            opts.push_str(&format!(" --iscrypted --password={pw}"));
+            match CryptHash::parse(pw) {
+                Ok(hash) => opts.push_str(&format!(" --iscrypted --password={}", hash.as_str())),
+                Err(_) => {
+                    pw_fixme = Some(format!(
+                        "# FIXME: password for user {name} not set: the hash is not a crypt(3) string"
+                    ))
+                }
+            }
         }
 
         lines.push(opts);
+        lines.extend(pw_fixme);
 
-        // SSH keys
+        // SSH keys: inside double quotes, so only what ends or acts there
+        // is refused; a key's spaces are legitimate.
         let keys = ssh_keys(u);
         for key in &keys {
-            lines.push(format!("sshkey --username={name} \"{key}\""));
+            match double_quoted_word_refusal(key) {
+                None => lines.push(format!("sshkey --username={name} \"{key}\"")),
+                Some(why) => lines.push(format!(
+                    "# FIXME: SSH key for user {name} not written: the key {why}: {}",
+                    sanitize_for_comment(key)
+                )),
+            }
         }
     }
 
@@ -207,7 +272,7 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
             continue;
         }
         lines.push("[[customizations.group]]".into());
-        lines.push(format!("name = \"{name}\""));
+        lines.push(format!("name = {}", toml_string(name)));
         if gid > 0 {
             lines.push(format!("gid = {gid}"));
         }
@@ -227,7 +292,7 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
         let shell = str_field(u, "shell");
 
         lines.push("[[customizations.user]]".into());
-        lines.push(format!("name = \"{name}\""));
+        lines.push(format!("name = {}", toml_string(name)));
         if uid > 0 {
             lines.push(format!("uid = {uid}"));
         }
@@ -235,17 +300,17 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
             lines.push(format!("gid = {gid}"));
         }
         if !home.is_empty() {
-            lines.push(format!("home = \"{home}\""));
+            lines.push(format!("home = {}", toml_string(home)));
         }
         if !shell.is_empty() {
-            lines.push(format!("shell = \"{shell}\""));
+            lines.push(format!("shell = {}", toml_string(shell)));
         }
         if !groups_list.is_empty() {
             lines.push(format!(
                 "groups = [{}]",
                 groups_list
                     .iter()
-                    .map(|g| format!("\"{g}\""))
+                    .map(|g| toml_string(g))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -254,13 +319,13 @@ pub fn render_blueprint_toml(snap: &InspectionSnapshot) -> String {
         // Password
         let pw = str_field(u, "password_hash");
         if !pw.is_empty() {
-            lines.push(format!("password = \"{pw}\""));
+            lines.push(format!("password = {}", toml_string(pw)));
         }
 
         // SSH key — blueprint supports a single `key` field
         let keys = ssh_keys(u);
         if let Some(first_key) = keys.first() {
-            lines.push(format!("key = \"{first_key}\""));
+            lines.push(format!("key = {}", toml_string(first_key)));
             if keys.len() > 1 {
                 lines.push(format!(
                     "# NOTE: {} additional SSH key(s) cannot be expressed in blueprint TOML (single key only)",

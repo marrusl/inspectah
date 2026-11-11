@@ -7,8 +7,9 @@
 //! renders the whole file through the real render path for every
 //! separator in the row's set, and checks the output split on every line
 //! terminator: no line that is not a comment carries the payload, and the
-//! row reached its site (a FIXME names the refused value, or a benign
-//! value renders the expected line). One field per row, because a fixture
+//! row reached its site (a FIXME names the refused value or, for a field
+//! the FIXME does not quote, a FIXME is present). Each group also has a
+//! test that a benign value still renders its line. One field per row, because a fixture
 //! that poisons two fields only reaches the first one the renderer
 //! refuses.
 
@@ -23,10 +24,12 @@ use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
 use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::kickstart::render_kickstart;
+use inspectah_pipeline::render::users;
 
 /// What the hostile value tries to place on a line of its own.
 const PAYLOAD: &str = "RUN echo pwned";
@@ -72,8 +75,9 @@ fn hostile(sep: &str) -> String {
 enum Reached {
     /// A comment line starting with this text carries the payload.
     Fixme(&'static str),
-    /// Rendering this benign value yields a line containing this text.
-    Benign(&'static str, &'static str),
+    /// A comment line starting with this text is present. For a field the
+    /// FIXME does not quote (it names the user, not the refused home).
+    Refused(&'static str),
 }
 
 struct Row {
@@ -102,21 +106,17 @@ fn failure(row: &Row, output: &str) -> Option<String> {
     {
         return Some(format!("no `{prefix}` line names the refused value"));
     }
+    if let Reached::Refused(prefix) = row.reached
+        && !lines.iter().any(|l| l.trim_start().starts_with(prefix))
+    {
+        return Some(format!("no `{prefix}` line"));
+    }
     None
 }
 
 fn check_rows(rows: &[Row], seps: &[String]) {
     let mut failures = Vec::new();
     for row in rows {
-        if let Reached::Benign(value, expect) = row.reached {
-            let output = (row.render)(value);
-            if !output.lines().any(|l| l.contains(expect)) {
-                failures.push(format!(
-                    "{}: benign value {value:?} did not render {expect:?}\n{output}",
-                    row.field
-                ));
-            }
-        }
         for sep in seps {
             let output = (row.render)(&hostile(sep));
             if let Some(why) = failure(row, &output) {
@@ -527,4 +527,207 @@ fn kickstart_hosts_line_reaches_the_shell_as_one_literal() {
             "{sep:?}: {line}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Users kickstart (anaconda directives) and blueprint TOML
+// ---------------------------------------------------------------------------
+
+fn base_user() -> serde_json::Value {
+    serde_json::json!({
+        "name": "alice",
+        "uid": 1001,
+        "gid": 1001,
+        "home": "/home/alice",
+        "shell": "/bin/bash",
+        "include": true,
+        "supplementary_groups": ["wheel"],
+        "password_hash": "$6$salt$hash",
+        "ssh_keys": ["ssh-ed25519 AAAAC3Nz alice@host"]
+    })
+}
+
+fn base_group() -> serde_json::Value {
+    serde_json::json!({"name": "devs", "gid": 1010, "source": "custom", "include": true})
+}
+
+fn users_snap(user: serde_json::Value, group: serde_json::Value) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![user],
+        groups: vec![group],
+        ..Default::default()
+    });
+    snap
+}
+
+/// `base_user()` with `field` set to `value`.
+fn user_with(field: &str, value: serde_json::Value) -> serde_json::Value {
+    let mut u = base_user();
+    u[field] = value;
+    u
+}
+
+fn ks_user(field: &str, value: serde_json::Value) -> String {
+    users::render_kickstart(&users_snap(user_with(field, value), base_group()))
+}
+
+const USERS_KS_ROWS: &[Row] = &[
+    Row {
+        field: "kickstart group name",
+        render: |v| {
+            let mut g = base_group();
+            g["name"] = v.into();
+            users::render_kickstart(&users_snap(base_user(), g))
+        },
+        reached: Reached::Fixme("# FIXME: group"),
+    },
+    Row {
+        field: "kickstart user name",
+        render: |v| ks_user("name", v.into()),
+        reached: Reached::Fixme("# FIXME: user"),
+    },
+    Row {
+        field: "kickstart supplementary group",
+        render: |v| ks_user("supplementary_groups", serde_json::json!([v])),
+        reached: Reached::Refused("# FIXME: user"),
+    },
+    Row {
+        field: "kickstart home",
+        render: |v| ks_user("home", format!("/home/{v}").into()),
+        reached: Reached::Refused("# FIXME: user"),
+    },
+    Row {
+        field: "kickstart shell",
+        render: |v| ks_user("shell", format!("/bin/{v}").into()),
+        reached: Reached::Refused("# FIXME: user"),
+    },
+    Row {
+        field: "kickstart password hash",
+        render: |v| ks_user("password_hash", format!("$6$s${v}").into()),
+        reached: Reached::Refused("# FIXME: password"),
+    },
+];
+
+/// An SSH key holds spaces legitimately, so its row is driven by what
+/// ends or acts inside the double quotes it is written in.
+const USERS_KS_KEY_ROWS: &[Row] = &[Row {
+    field: "kickstart sshkey",
+    render: |v| {
+        ks_user(
+            "ssh_keys",
+            serde_json::json!([format!("ssh-ed25519 AAAA {v}")]),
+        )
+    },
+    reached: Reached::Fixme("# FIXME: SSH key"),
+}];
+
+#[test]
+fn users_kickstart_refuses_every_hostile_value() {
+    check_rows(USERS_KS_ROWS, &word_breakers());
+    check_rows(USERS_KS_KEY_ROWS, &double_quote_breakers());
+}
+
+#[test]
+fn users_kickstart_renders_benign_values() {
+    let out = users::render_kickstart(&users_snap(base_user(), base_group()));
+    for line in [
+        "group --name=devs --gid=1010",
+        "user --name=alice --uid=1001 --gid=1001 --shell=/bin/bash --homedir=/home/alice --groups=wheel --iscrypted --password=$6$salt$hash",
+        "sshkey --username=alice \"ssh-ed25519 AAAAC3Nz alice@host\"",
+    ] {
+        assert!(out.lines().any(|l| l == line), "missing {line:?}\n{out}");
+    }
+}
+
+/// Builds the JSON value a user field holds from a hostile string.
+type FieldValue = fn(&str) -> serde_json::Value;
+
+/// Every string field of the blueprint, poisoned one at a time with every
+/// terminator, CRLF, a quote and a backslash. The fragment must parse,
+/// hold exactly the tables and keys a benign user and group produce, and
+/// carry the hostile value back unchanged in its own field.
+#[test]
+fn users_blueprint_values_never_add_a_key() {
+    let mut seps = terminators();
+    seps.extend(
+        ["\"", "\\", "'", "\"\"\"", "=", "[x]"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    let user_fields: &[(&str, FieldValue)] = &[
+        ("name", |v| v.into()),
+        ("home", |v| v.into()),
+        ("shell", |v| v.into()),
+        ("password_hash", |v| v.into()),
+        ("ssh_keys", |v| serde_json::json!([v])),
+        ("supplementary_groups", |v| serde_json::json!([v])),
+    ];
+    let user_keys = [
+        "gid", "groups", "home", "key", "name", "password", "shell", "uid",
+    ];
+    let mut failures = Vec::new();
+    for sep in &seps {
+        let value = format!("x{sep}injected = true");
+        let mut cases: Vec<(String, InspectionSnapshot)> = user_fields
+            .iter()
+            .map(|(f, make)| {
+                (
+                    f.to_string(),
+                    users_snap(user_with(f, make(&value)), base_group()),
+                )
+            })
+            .collect();
+        let mut g = base_group();
+        g["name"] = value.clone().into();
+        cases.push(("group name".into(), users_snap(base_user(), g)));
+
+        for (field, snap) in cases {
+            let out = users::render_blueprint_toml(&snap);
+            let doc: toml::Table = match out.parse() {
+                Ok(d) => d,
+                Err(e) => {
+                    failures.push(format!("{field} ({sep:?}): not TOML: {e}\n{out}"));
+                    continue;
+                }
+            };
+            let custom = doc["customizations"].as_table().expect("customizations");
+            let keys: Vec<String> = doc.keys().cloned().collect();
+            let user = custom["user"].as_array().expect("user")[0]
+                .as_table()
+                .expect("t");
+            let group = custom["group"].as_array().expect("group")[0]
+                .as_table()
+                .expect("t");
+            let mut ukeys: Vec<&str> = user.keys().map(String::as_str).collect();
+            ukeys.sort();
+            let mut gkeys: Vec<&str> = group.keys().map(String::as_str).collect();
+            gkeys.sort();
+            let mut ckeys: Vec<&str> = custom.keys().map(String::as_str).collect();
+            ckeys.sort();
+            if keys != ["customizations"]
+                || ckeys != ["group", "user"]
+                || ukeys != user_keys
+                || gkeys != ["gid", "name"]
+            {
+                failures.push(format!("{field} ({sep:?}): keys changed\n{out}"));
+                continue;
+            }
+            let carried = match field.as_str() {
+                "name" => user["name"].as_str(),
+                "home" => user["home"].as_str(),
+                "shell" => user["shell"].as_str(),
+                "password_hash" => user["password"].as_str(),
+                "ssh_keys" => user["key"].as_str(),
+                "supplementary_groups" => user["groups"][0].as_str(),
+                _ => group["name"].as_str(),
+            };
+            if carried != Some(value.as_str()) {
+                failures.push(format!(
+                    "{field} ({sep:?}): value not carried: {carried:?}\n{out}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
