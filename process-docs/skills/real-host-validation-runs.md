@@ -729,7 +729,8 @@ without a warning. The snapshot then has no `gpg_keys`, and the export
 has no `COPY config/etc/pki/rpm-gpg/`. EL9's file names the key
 literally, so EL9 is unaffected. With the host's key added by hand to a
 copy of each context, under that one `COPY` line, both RHEL 10 exports
-built, in 324 s and 242 s.
+built, in 324 s and 242 s. Both now build unmodified: see
+[§ Measured, 2026-11-11: gpgkey= dnf variables, scan to build](#measured-2026-11-11-gpgkey-dnf-variables-scan-to-build).
 
 **The images.**
 
@@ -759,6 +760,78 @@ leaf, annotated as a cached repo-less RPM, and included. The scan
 installs it with `COPY repoless-packages/...`, and the not-carried
 block is byte-identical to the main scan's, with 24 entries. Classified
 before the repo-less pass, it would have been in the class.
+
+### Measured, 2026-11-11: gpgkey= dnf variables, scan to build
+
+Run at `403843fd` on RHEL 9.8 and RHEL 10.2, both aarch64, each reverted
+to its clean snapshot, given a standard drift run, and scanned as root.
+No other plants.
+
+**Both RHEL 10 exports build unmodified.** The scan collects
+`RPM-GPG-KEY-EPEL-10` once per section that names it (six: three in
+`epel.repo`, three in `epel-testing.repo`), each with
+`gpgkey_references` holding the literal `...-EPEL-$releasever_major`.
+The scan Containerfile copies the key and installs `epel-release` from
+the Repo-enabling block with no "does not carry" FIXME, the audit says
+`yes` under Carried by Export, and refine reports `epel` as `verified`
+and accepts excluding it. The scan build and an unchanged refine export
+both passed, in 471 s and 400 s, with `Importing GPG key 0xE37ED158 ...
+From: /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10` in each log. Both ended in
+`bootc container lint` with three warnings, `nonempty-boot`,
+`nonempty-run-tmp` and `var-tmpfiles`: `rhel-bootc:10.2` adds the first.
+
+The scan image has `epel-release` and now `dnf-plugins-core` with it, as
+a weak dependency. That closes the 2026-11-09 gap where the RHEL 10 scan
+counted `dnf-plugins-core` as pulled in but installed neither. The
+refine export excludes `epel-release` by default on both majors, so its
+image has the key and the EPEL packages (`htop`, `bat`, `fd-find`) but
+not `epel-release`.
+
+**RHEL 9 is unchanged.** EPEL 9 names its key literally, so its nine
+entries carry no reference. Both builds passed, in 668 s and 476 s, with
+the two known lint warnings.
+
+**RHEL 10.2 runs dnf4, not dnf5.** `dnf --version` prints `4.20.0` on
+its first line (RHEL 9.8: `4.14.0`), `/usr/bin/dnf` links to `dnf-3`,
+and no `/usr/share/dnf5/vars.d` exists. So the dnf5 empty-`releasever_major`
+question does not arise on this release. On both hosts `redhat-release`
+provides `system-release(releasever)`, `(releasever_major)` and
+`(releasever_minor)` with flag `8` (`EQUAL`), as `10`, `10`, `2` and `9`,
+`9`, `8`, and dnf's own values match the expansion. `dnf config-manager
+--dump-variables` is the dnf4 dump. On RHEL 9.8 it leaves out
+vars-file variables; read them through the dnf API instead:
+
+```
+sudo python3 -I -c 'import dnf; b=dnf.Base(); b.conf.substitutions.update_from_etc("/"); b.read_all_repos(); print({r.id: list(r.gpgkey) for r in b.repos.values()})'
+```
+
+`update_from_etc` is the step that reads the vars directories. Without
+it the API leaves `$name` unexpanded, which looks like dnf ignoring the
+file.
+
+**Probing the vars directories.** A disabled repo file with one section
+per case, `gpgkey=` naming `RPM-GPG-KEY-$gkprobe-$releasever_major`
+(`/etc/yum/vars/gkprobe` holding `EPEL`), the same through
+`${gkprobe2}` in `/etc/dnf/vars`, `$nosuchvar`, and `/etc/os-release`.
+On both hosts the scan resolved the first two to the EPEL key, as dnf
+did, which confirms the dnf4 directory list. It warned for the other
+two with the documented sentences, in README.md and the audit report.
+`dnf5` is not installable on RHEL 9.8 from BaseOS, AppStream or EPEL 9
+(`No match for argument: dnf5`), so the dnf5-beside-dnf4 case was not
+run.
+
+**Every stock RHEL host now carries a false GPG warning.**
+`RPM-GPG-KEY-redhat-release` opens with several lines of prose before
+its first `-----BEGIN PGP PUBLIC KEY BLOCK-----` (line 10 on RHEL 9.8,
+line 12 on RHEL 10.2), and `is_pgp_key` tests `starts_with` after
+trimming whitespace. So the collector has always excluded that key as
+not PGP, and printed one stderr line per `redhat.repo` section (500 on
+RHEL 9.8, 209 on RHEL 10.2). Since `403843fd` it also writes a snapshot
+warning telling the operator to COPY the key in. The file is a real key
+file holding several key blocks, and the base image ships a copy of the
+same size, so the builds are unaffected: each image lists the Red Hat
+release keys as imported `gpg-pubkey` packages. A check that looks for
+the header anywhere in the file, not only at its start, would clear it.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
