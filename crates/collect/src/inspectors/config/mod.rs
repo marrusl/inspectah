@@ -296,7 +296,7 @@ impl Inspector for ConfigInspector {
         if let Some(major) = modernization::os_major_version(ctx.source_system) {
             for (path, disposition) in modernization::check_modernization_patterns(exec, major) {
                 if let Some(existing) = section.files.iter_mut().find(|f| f.path == path) {
-                    existing.disposition = disposition;
+                    existing.disposition = with_modernization(&existing.disposition, disposition);
                 } else {
                     section.files.push(ConfigFileEntry {
                         path: path.clone(),
@@ -500,6 +500,32 @@ fn read_config_content(
             Err(CaptureFailure::PermissionDenied)
         }
         Err(e) => Err(CaptureFailure::Unreadable(e)),
+    }
+}
+
+/// The disposition a collected entry takes when a modernization pattern
+/// matches its path.
+///
+/// A `ContentNotCaptured` entry keeps that type, with the modernization
+/// advice appended to its rationale, so the reports carry both reasons.
+/// The type is what tells every later stage that the entry has no content:
+/// the fleet merge keeps it out of the content variants on that basis.
+/// Any other disposition is replaced by the modernization advisory.
+fn with_modernization(existing: &FindingKind, modernization: FindingKind) -> FindingKind {
+    match (existing, &modernization) {
+        (
+            FindingKind::Advisory {
+                advisory_type: AdvisoryType::ContentNotCaptured,
+                rationale: failure,
+            },
+            FindingKind::Advisory {
+                rationale: advice, ..
+            },
+        ) => FindingKind::advisory(
+            AdvisoryType::ContentNotCaptured,
+            format!("{failure} Modernization: {advice}"),
+        ),
+        _ => modernization,
     }
 }
 

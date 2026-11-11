@@ -487,6 +487,79 @@ fn a_config_whose_content_was_not_captured_is_an_advisory() {
     }
 }
 
+/// A modernization pattern that matches a file whose content was not
+/// captured adds its advice without replacing the capture failure. The
+/// entry stays a `ContentNotCaptured` advisory, so it is never staged and
+/// the fleet merge still treats it as no content, and its rationale gives
+/// both reasons. A read error other than permission denied does not mark
+/// the section degraded, so for this file the advisory is the only record
+/// of the failure.
+///
+/// A captured file under the same pattern takes the modernization
+/// advisory, as before.
+#[test]
+fn a_modernization_match_keeps_the_capture_failure() {
+    const UNREADABLE: &str = "/etc/xinetd.d/tftp";
+    const READABLE: &str = "/etc/xinetd.d/rsync";
+    let exec = MockExecutor::new()
+        .with_dir("/etc", vec!["xinetd.d"])
+        .with_dir("/etc/xinetd.d", vec!["tftp", "rsync"])
+        .with_file(UNREADABLE, "")
+        .with_file_error(UNREADABLE, std::io::ErrorKind::InvalidData)
+        .with_file(READABLE, "service rsync\n{\n}\n");
+    let rpm_state = RpmState::default();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("a non-permission read error does not degrade the section");
+    let section = match output.section {
+        SectionData::Config(s) => s,
+        other => panic!("expected SectionData::Config, got {other:?}"),
+    };
+    let entry = |path: &str| {
+        section
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path} is collected: {:?}", section.files))
+    };
+
+    let unreadable = entry(UNREADABLE);
+    match &unreadable.disposition {
+        FindingKind::Advisory {
+            advisory_type: AdvisoryType::ContentNotCaptured,
+            rationale,
+        } => {
+            assert!(
+                rationale.contains("could not be read"),
+                "the capture failure survives: {rationale}"
+            );
+            assert!(
+                rationale.contains("xinetd is deprecated"),
+                "the modernization advice is added: {rationale}"
+            );
+        }
+        other => panic!("{UNREADABLE}: still a capture failure, got {other:?}"),
+    }
+    assert!(!unreadable.disposition.is_included());
+    assert!(!unreadable.content_captured());
+
+    match &entry(READABLE).disposition {
+        FindingKind::Advisory {
+            advisory_type: AdvisoryType::Modernization,
+            rationale,
+        } => assert!(rationale.contains("xinetd is deprecated"), "{rationale}"),
+        other => panic!("{READABLE}: a modernization advisory, got {other:?}"),
+    }
+}
+
 /// No /etc directory -- produces empty section.
 #[test]
 fn test_config_inspector_no_etc() {
