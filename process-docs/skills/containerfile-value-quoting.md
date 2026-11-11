@@ -16,7 +16,7 @@ has produced both over-rejection of legal paths and live command injection.
 |---|---|---|---|
 | Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
-| Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every `#`-comment file goes through; `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
+| Comment text | `# npm global packages: {prefix}` | escaped for you by `comment::join_lines()`, the join every line-vector renderer goes through (the string-built files in `configtree.rs` escape at the site or carry fixed text); `sanitize_for_comment()` per value where the quotes should double | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does, and so is every other control but tab, since ESC starts a terminal escape sequence |
 
 `contains_unsafe_chars` refuses `'` and every character in
 `LINE_TERMINATORS`, one check serving every command site, which is
@@ -49,7 +49,8 @@ spaces and tabs is `#`, so a snapshot value in a comment line cannot end
 it, whichever site built the line and whether or not that site escaped.
 The Containerfile, the `/var` tmpfiles.d fragment, the kickstart
 suggestion and the users kickstart and blueprint fragments all join
-there.
+there. The `#`-comment files built with `push_str` in `configtree.rs`
+do not; see the last item below.
 
 Per-site escaping was the rule until 2026-11-10 and it kept failing: a
 sweep after the `# Omitted:` fix found raw values in more than twenty
@@ -68,10 +69,12 @@ What the join does not do:
 - **It sees one element as one line.** An element that starts with a
   terminator is not a comment and is left as it is, so never push a
   comment as part of a multi-line element.
-- **It does not cover a file built another way.** The flatpak
-  provisioning unit in `configtree.rs` is assembled with `push_str` and
-  escapes its one value-carrying comment at the site. A new file builds
-  a line vector and joins it here, or it has no guard.
+- **It does not cover a file built another way.** Three `#`-comment
+  files in `configtree.rs` are assembled with `push_str`. The flatpak
+  provisioning unit escapes its one value-carrying comment at the site.
+  The sysctl fragment and the kernel arguments TOML write fixed comment
+  text only. A new file builds a line vector and joins it here, or it
+  has no guard.
 
 Escaping a value at its site as well is harmless: the escaped text holds
 no character the join changes. `sanitize_for_comment()` still has a

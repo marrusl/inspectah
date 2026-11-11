@@ -1,7 +1,7 @@
 //! Comment lines in rendered files.
 //!
-//! **Every renderer that writes a file where `#` starts a comment joins its
-//! lines with [`join_lines`].** That covers the Containerfile, the `/var`
+//! **Every renderer that builds its file as a vector of lines joins it with
+//! [`join_lines`].** Those files are the Containerfile, the `/var`
 //! tmpfiles.d fragment, the kickstart suggestion, and the users kickstart
 //! and blueprint fragments. The join escapes [`escape_comment_text`]'s
 //! characters in every comment line, so a snapshot value interpolated into
@@ -9,6 +9,12 @@
 //! or not its site remembered to escape. A site that escapes its own value
 //! first loses nothing: the escaped text holds none of these characters,
 //! so the join leaves it as it is.
+//!
+//! Three `#`-comment files in `configtree.rs` are built with `push_str`
+//! instead and do not pass through the join. The flatpak provisioning unit
+//! escapes its one value-carrying comment at the site. The sysctl fragment
+//! and the kernel arguments TOML write fixed comment text only, so nothing
+//! from the snapshot reaches a comment there.
 //!
 //! The guard sits at the join rather than at each `format!("# ...")`
 //! because the renderers emit a few hundred comment lines from plain
