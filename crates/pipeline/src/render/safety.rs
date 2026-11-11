@@ -40,6 +40,14 @@ pub fn has_line_break_or_control(s: &str) -> bool {
         .any(|c| c.is_control() || LINE_TERMINATORS.contains(&c))
 }
 
+/// [`has_line_break_or_control`] with tab allowed, for a value whose
+/// format separates fields with tabs as well as spaces (an `/etc/hosts`
+/// line, a sysctl value read from `/proc/sys`).
+pub fn has_line_break_or_non_tab_control(s: &str) -> bool {
+    s.chars()
+        .any(|c| c != '\t' && (c.is_control() || LINE_TERMINATORS.contains(&c)))
+}
+
 /// Why a path failed [`CopyToken::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CopyTokenError {
@@ -99,6 +107,17 @@ impl std::fmt::Display for CopyToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// `s` as one single-quoted POSIX shell word: every `'` becomes `'\''`.
+///
+/// Inside single quotes the shell substitutes nothing and splits nothing,
+/// so this is safe for any value that holds no line break. It is not safe
+/// for one that does: the shell keeps the newline, but a Containerfile or
+/// kickstart parser reading the file line by line ends the line there.
+/// Refuse those with [`has_line_break_or_control`] first.
+pub fn single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Returns true if the given string is a valid tuned profile name.

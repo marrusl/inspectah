@@ -2,6 +2,9 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 
+use super::language_packages::sanitize_for_comment;
+use super::safety::{BareWord, has_line_break_or_non_tab_control, single_quote};
+
 /// Render a kickstart suggestion file from the snapshot.
 pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
     let mut lines = vec![
@@ -29,9 +32,18 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
             lines.push("# --- DHCP connections ---".into());
             for c in &dhcp_conns {
                 let name = if c.name.is_empty() { "eth0" } else { &c.name };
-                lines.push(format!(
-                    "network --bootproto=dhcp --device={name} --activate"
-                ));
+                // A bare option value on a directive line: proved, so it
+                // cannot add an option or, with a line break, a directive.
+                match BareWord::parse_name(name) {
+                    Ok(device) => lines.push(format!(
+                        "network --bootproto=dhcp --device={device} --activate"
+                    )),
+                    Err(e) => lines.push(format!(
+                        "# FIXME: network connection {} not written: the name is refused ({e}); \
+                         set --device to its interface name",
+                        sanitize_for_comment(name)
+                    )),
+                }
             }
             lines.push(String::new());
         }
@@ -65,11 +77,24 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         // /etc/hosts additions
         if !network.hosts_additions.is_empty() {
             lines.push("# --- /etc/hosts additions ---".into());
+            // Single quotes keep `$(...)` and backquotes inert in the
+            // %post shell. A line break is refused: inside the quotes the
+            // shell would keep it, but the kickstart parser reads the
+            // script line by line, and a `%end` line closes the section.
+            let mut refused = Vec::new();
             lines.push("%post".into());
             for h in &network.hosts_additions {
-                lines.push(format!("echo \"{h}\" >> /etc/hosts"));
+                if has_line_break_or_non_tab_control(h) {
+                    refused.push(format!(
+                        "# FIXME: /etc/hosts line {} not written: it holds a line break or control character",
+                        sanitize_for_comment(h)
+                    ));
+                } else {
+                    lines.push(format!("printf '%s\\n' {} >> /etc/hosts", single_quote(h)));
+                }
             }
             lines.push("%end".into());
+            lines.extend(refused);
             lines.push(String::new());
         }
 

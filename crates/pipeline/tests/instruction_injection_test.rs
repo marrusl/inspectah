@@ -20,11 +20,13 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
 use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
+use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, PackageState, RpmSection};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::write_config_tree;
 use inspectah_pipeline::render::containerfile::render_containerfile;
+use inspectah_pipeline::render::kickstart::render_kickstart;
 
 /// What the hostile value tries to place on a line of its own.
 const PAYLOAD: &str = "RUN echo pwned";
@@ -437,4 +439,92 @@ fn from_and_group_lines_render_benign_values() {
     // A refused group's member is installed on its own instead.
     let out = group_containerfile("x\nRUN y");
     assert!(out.lines().any(|l| l.trim() == "vim \\"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// Kickstart suggestion (anaconda directives and the %post shell)
+// ---------------------------------------------------------------------------
+
+fn kickstart_with(network: NetworkSection) -> String {
+    let mut snap = InspectionSnapshot::new();
+    snap.network = Some(network);
+    render_kickstart(&snap)
+}
+
+fn dhcp_connection(name: &str) -> String {
+    kickstart_with(NetworkSection {
+        connections: vec![NMConnection {
+            name: name.into(),
+            method: "auto".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+}
+
+fn hosts_addition(line: &str) -> String {
+    kickstart_with(NetworkSection {
+        hosts_additions: vec![line.into()],
+        ..Default::default()
+    })
+}
+
+const KICKSTART_DEVICE_ROWS: &[Row] = &[Row {
+    field: "DHCP connection name in network --device=",
+    render: dhcp_connection,
+    reached: Reached::Fixme("# FIXME: network"),
+}];
+
+const KICKSTART_HOSTS_ROWS: &[Row] = &[Row {
+    field: "/etc/hosts addition in %post",
+    render: hosts_addition,
+    reached: Reached::Fixme("# FIXME: /etc/hosts"),
+}];
+
+#[test]
+fn kickstart_network_refuses_every_hostile_device_name() {
+    check_rows(KICKSTART_DEVICE_ROWS, &word_breakers());
+}
+
+#[test]
+fn kickstart_hosts_refuses_every_line_break() {
+    check_rows(KICKSTART_HOSTS_ROWS, &terminators());
+}
+
+#[test]
+fn kickstart_renders_benign_network_values() {
+    let out = dhcp_connection("eth0");
+    assert!(
+        out.contains("network --bootproto=dhcp --device=eth0 --activate"),
+        "{out}"
+    );
+}
+
+/// A hosts line keeps every character but a line break, so it is quoted
+/// rather than refused. Run the rendered `printf` through `sh` and check
+/// it prints the value back unchanged: nothing in it was substituted or
+/// split, and no command ran.
+#[test]
+fn kickstart_hosts_line_reaches_the_shell_as_one_literal() {
+    for sep in [" ", "\t", "'", "\"", "$(", "`", "\\", "%", ";", "&&", "#"] {
+        let value = format!("10.0.0.1 db{sep}$(echo pwned) `echo pwned`");
+        let out = hosts_addition(&value);
+        let line = out
+            .lines()
+            .find(|l| l.starts_with("printf "))
+            .unwrap_or_else(|| panic!("{sep:?}: no printf line\n{out}"));
+        let command = line
+            .strip_suffix(" >> /etc/hosts")
+            .unwrap_or_else(|| panic!("{sep:?}: unexpected line {line:?}"));
+        let printed = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .output()
+            .expect("run sh");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout),
+            format!("{value}\n"),
+            "{sep:?}: {line}"
+        );
+    }
 }
