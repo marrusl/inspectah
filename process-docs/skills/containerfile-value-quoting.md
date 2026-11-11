@@ -14,13 +14,17 @@ has produced both over-rejection of legal paths and live command injection.
 
 | Context | Example site | Treatment | Predicate that matters |
 |---|---|---|---|
-| Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and `\n` only — everything else is inert inside the quotes |
+| Inside single quotes in a command | `RUN python3 -m venv '{abs_path}'` | quote at the site | `'` and the line terminators only: everything else is inert inside the quotes |
 | Bare token in a command | none left: the npm global list was the last, now `RUN npm install -g -- '{name}@{version}' ...` | quote it, never blacklist; put `--` before a token list the command reads options from | a blacklist here is structurally incomplete, so this row should stay empty |
 | Comment text | `# npm global packages: {prefix}` | `sanitize_for_comment()` per value, or `escape_line_terminators()` on a finished line with fixed quoted wording | `\n` closes the comment; every other Unicode mandatory line break (`\r`, VT, FF, U+0085, U+2028, U+2029) is escaped too, since a viewer may break the line there whether or not the build parser does |
 
-`UNSAFE_SHELL_CHARS` is `'` and `\n`, one set serving every command site,
-which is correct only because every command site single-quotes. A new
+`contains_unsafe_chars` refuses `'` and every character in
+`LINE_TERMINATORS`, one check serving every command site, which is
+correct only because every command site single-quotes. A new
 interpolation added bare inherits a predicate that admits `;`, `$` and `>`.
+The quotes make a carriage return or U+2028 inert to the shell but not to
+a terminal, which breaks the line there, so every terminator is refused,
+not just the newline (2026-11-10).
 
 ## Comment Sites Sanitize, They Never Reject
 
@@ -71,8 +75,8 @@ predicate, never a follow-up to it.**
 
 `render_pip_item` derives `venv_name` from the path's final component and
 interpolates it into `/tmp/<name>-requirements.txt`, which is a separate
-token from the venv path and gets none of its quoting. Narrowing
-`UNSAFE_SHELL_CHARS` to `'` and `\n` while those sites are bare turns a
+token from the venv path and gets none of its quoting. Narrowing the
+path predicate to `'` and `\n` while those sites are bare turns a
 visible over-rejection into command substitution in a `RUN`:
 
 ```

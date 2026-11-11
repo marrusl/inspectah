@@ -18,7 +18,7 @@ use inspectah_core::util::{
 
 use crate::build::extract::is_single_normal_component;
 
-use super::comment::escape_line_terminators;
+use super::comment::{LINE_TERMINATORS, escape_line_terminators};
 
 const HIGH_CONFIDENCE: &str = "high";
 const MEDIUM_CONFIDENCE: &str = "medium";
@@ -145,19 +145,17 @@ fn pinned_package_list(item: &NonRpmItem) -> String {
     sanitize_for_comment(&joined)
 }
 
-/// Characters that make a token unsafe to interpolate into a rendered
-/// `RUN` line. Every shell interpolation in this module is single-quoted
-/// (paths, the venv name, and each npm-global token), so only the
-/// characters that break out of a single-quoted literal are refused: the
-/// quote itself, and the newline, which also ends a Containerfile
-/// instruction or comment. Do not interpolate a checked value anywhere
-/// unquoted: this set is safe only because every site quotes.
-const UNSAFE_SHELL_CHARS: &[char] = &['\'', '\n'];
-
-/// Returns true if a string contains characters that are unsafe to render
-/// into a shell command.
+/// Returns true if a token is unsafe to interpolate into a rendered `RUN`
+/// line. Every shell interpolation in this module is single-quoted (paths,
+/// the venv name, and each npm-global token), so only what breaks out of a
+/// single-quoted literal or out of the line is refused: the quote itself,
+/// and every character in [`LINE_TERMINATORS`]. The newline ends a
+/// Containerfile instruction; the others are line breaks to a terminal or
+/// editor, and what the build parser makes of them is unverified. Do not
+/// interpolate a checked value anywhere unquoted: this check is safe only
+/// because every site quotes.
 fn contains_unsafe_chars(s: &str) -> bool {
-    s.contains(UNSAFE_SHELL_CHARS)
+    s.contains('\'') || s.contains(LINE_TERMINATORS)
 }
 
 /// Sanitize a value for display in Containerfile comments.
@@ -252,7 +250,7 @@ fn render_pip_item(item: &NonRpmItem) -> Vec<String> {
         // space in the name gives `COPY` three arguments, and any shell
         // metacharacter reaching the `RUN` lines would execute. Quoting it
         // is also what makes the narrow path predicate safe: these sites
-        // must stay quoted while `UNSAFE_SHELL_CHARS` admits metacharacters.
+        // must stay quoted while `contains_unsafe_chars` admits metacharacters.
         let venv_name = std::path::Path::new(&abs_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -944,7 +942,6 @@ fn scrub_gemfile_lock_line(line: &str) -> LineOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::comment::LINE_TERMINATORS;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::nonrpm::{LanguagePackage, NonRpmSoftwareSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
@@ -2397,9 +2394,10 @@ mod tests {
     /// `pip_path_with_spaces_renders_with_quotes` misses this because its
     /// space is in a parent directory, so the name comes out clean.
     ///
-    /// `UNSAFE_SHELL_CHARS` refuses only `'` and `\n`, so names carrying
-    /// `$` or `;` render too, and this proves `$(id)` cannot reach a `RUN`
-    /// line unquoted. The quoting is what made that narrowing safe.
+    /// `contains_unsafe_chars` refuses only `'` and line terminators, so
+    /// names carrying `$` or `;` render too, and this proves `$(id)` cannot
+    /// reach a `RUN` line unquoted. The quoting is what made that narrowing
+    /// safe.
     #[test]
     fn venv_directory_name_is_quoted_at_its_own_interpolation_sites() {
         for name in [
@@ -2456,6 +2454,52 @@ mod tests {
             .lines()
             .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
             .collect()
+    }
+
+    /// A path or package name holding any line terminator renders no active
+    /// line. Single quotes make every other character inert to the shell,
+    /// but not to whatever reads the Containerfile's lines: a carriage
+    /// return or U+2028 inside the quotes is still a line break to a
+    /// terminal, and the build parser's handling of the non-newline ones
+    /// is unverified.
+    #[test]
+    fn every_line_terminator_refuses_the_active_lines() {
+        const INJECTED: &str = "RUN echo pwned";
+        for terminator in LINE_TERMINATORS {
+            let value = format!("x{terminator}{INJECTED}");
+            let path = format!("/opt/app/{value}");
+            for (label, item, runtime) in [
+                (
+                    "pip venv",
+                    pip_venv_item(&path, HIGH_CONFIDENCE, true, vec![("flask", "2.3.3")]),
+                    "python3",
+                ),
+                ("npm project", npm_item(&path, HIGH_CONFIDENCE), "nodejs"),
+                ("gem project", gem_item(&path, HIGH_CONFIDENCE), "rubygems"),
+                (
+                    "npm global package",
+                    npm_global_item(
+                        "/usr/local/lib/node_modules",
+                        HIGH_CONFIDENCE,
+                        vec![(value.as_str(), "1.0.0", false)],
+                    ),
+                    "nodejs",
+                ),
+            ] {
+                let output = language_package_lines(&test_snap(vec![item], &[runtime])).join("\n");
+                for line in active_lines(&output) {
+                    assert!(
+                        !line.contains(INJECTED),
+                        "{label} {terminator:?}: the value reached an active line {line:?}: \
+                         {output}"
+                    );
+                }
+                assert!(
+                    output.contains("unsafe characters"),
+                    "{label} {terminator:?}: the value must be refused: {output}"
+                );
+            }
+        }
     }
 
     /// The npm-global prefix is interpolated into a comment line and was
