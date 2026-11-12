@@ -50,7 +50,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | `dnf repoquery --installed` (`%{from_repo}`) | Source repository of each package; falls back to `rpm -qi` |
 | `dnf group list --installed`, `dnf group info` | Installed package groups |
 | `/etc/yum.repos.d/` | Repository configuration files |
-| `gpgkey=` paths in those repo files | Imported GPG keys (a file is kept only if it starts with a PGP public key header) |
+| `gpgkey=` paths in those repo files | Imported GPG keys (a file is kept only if one of its lines begins with a PGP public key header; a file that also holds a PGP private key block is refused) |
 | `/etc/dnf/modules.d/*.module` | Enabled module streams |
 | `/etc/yum/pluginconf.d/versionlock.list`, `/etc/dnf/plugins/versionlock.list` | Version lock entries |
 | `dnf repolist --enabled` | Enabled repository list (for repo-less detection) |
