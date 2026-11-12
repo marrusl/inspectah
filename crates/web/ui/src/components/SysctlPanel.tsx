@@ -3,6 +3,7 @@ import { Content } from "@patternfly/react-core";
 import { Table, Thead, Tbody, Tr, Th, Td } from "@patternfly/react-table";
 import type {
   AsWrittenLineDto,
+  CarriageDto,
   NotCarriedDto,
   SysctlFileDto,
   SysctlHostView,
@@ -29,6 +30,8 @@ import {
   NOT_CARRIED_EXCLUDED_VIA_LINE,
   NOT_CARRIED_LABEL,
   NOT_CARRIED_NO_CONFIG_ENTRY_LINE,
+  NOT_CARRIED_REFUSED_LINE,
+  NOT_CARRIED_REFUSED_VIA_LINE,
   NOT_CARRIED_RUNTIME_DIR_LINE,
   NOT_CARRIED_USR_LOCAL_LIB_LINE,
   OUTSIDE_LINK_LINE,
@@ -49,6 +52,7 @@ import {
   VENDOR_VERB_REPLACES,
   fillRuns,
   valueRun,
+  type SysctlHole,
   type SysctlRun,
 } from "./sysctlCopy";
 
@@ -319,15 +323,27 @@ function unknownInputRuns(
   }
 }
 
+/**
+ * Item 4's template for a carriage state. A file the export refuses is not
+ * carried, so it takes the not-carried line, as the audit words it.
+ */
+function vendorTemplate(carriage: CarriageDto): string {
+  switch (carriage.kind) {
+    case "carried":
+      return VENDOR_CARRIED_LINE;
+    case "excluded":
+    case "advisory":
+    case "refused":
+      return VENDOR_NOT_CARRIED_LINE;
+    case "no_config_entry":
+      return VENDOR_NO_CONFIG_ENTRY_LINE;
+  }
+}
+
 /** Item 4, worded by how the admin file reaches the image. */
 function vendorRuns(v: VendorReplacementDto): SysctlRun[] {
   const verb = v.action === "masks" ? VENDOR_VERB_DISABLES : VENDOR_VERB_REPLACES;
-  const template =
-    v.carriage.kind === "carried"
-      ? VENDOR_CARRIED_LINE
-      : v.carriage.kind === "no_config_entry"
-        ? VENDOR_NO_CONFIG_ENTRY_LINE
-        : VENDOR_NOT_CARRIED_LINE;
+  const template = vendorTemplate(v.carriage);
   const configPath =
     v.carriage.kind === "no_config_entry" ? undefined : v.carriage.config_path;
   return fillRuns(template, {
@@ -348,29 +364,52 @@ function notCarriedRuns(n: NotCarriedDto): SysctlRun[] {
     case "no_config_entry":
       return fillRuns(NOT_CARRIED_NO_CONFIG_ENTRY_LINE, { path: { value: n.path } });
     case "excluded":
-    case "advisory": {
-      const own = reason.config_path === n.path;
-      const template =
-        reason.kind === "excluded"
-          ? own
-            ? NOT_CARRIED_EXCLUDED_LINE
-            : NOT_CARRIED_EXCLUDED_VIA_LINE
-          : own
-            ? NOT_CARRIED_ADVISORY_LINE
-            : NOT_CARRIED_ADVISORY_VIA_LINE;
-      return own
-        ? fillRuns(template, {
-            path: { value: n.path, configPath: reason.config_path },
-          })
-        : fillRuns(template, {
-            path: { value: n.path },
-            config_path: {
-              value: reason.config_path,
-              configPath: reason.config_path,
-            },
-          });
-    }
+      return entryRuns(
+        n.path,
+        reason.config_path,
+        NOT_CARRIED_EXCLUDED_LINE,
+        NOT_CARRIED_EXCLUDED_VIA_LINE,
+        {},
+      );
+    case "advisory":
+      return entryRuns(
+        n.path,
+        reason.config_path,
+        NOT_CARRIED_ADVISORY_LINE,
+        NOT_CARRIED_ADVISORY_VIA_LINE,
+        {},
+      );
+    case "refused":
+      // The refusal is fixed copy (`PathError`'s text), not a host value.
+      return entryRuns(
+        n.path,
+        reason.config_path,
+        NOT_CARRIED_REFUSED_LINE,
+        NOT_CARRIED_REFUSED_VIA_LINE,
+        { reason: { copy: reason.reason } },
+      );
   }
+}
+
+/**
+ * Item 5 for an `/etc` file a config entry decides: the `own` line when the
+ * entry is the file's own path, which then links to the row, else the `via`
+ * line, whose `{config_path}` links to it.
+ */
+function entryRuns(
+  path: string,
+  configPath: string,
+  own: string,
+  via: string,
+  holes: Record<string, SysctlHole>,
+): SysctlRun[] {
+  return configPath === path
+    ? fillRuns(own, { ...holes, path: { value: path, configPath } })
+    : fillRuns(via, {
+        ...holes,
+        path: { value: path },
+        config_path: { value: configPath, configPath },
+      });
 }
 
 /** Item 6. */

@@ -140,6 +140,65 @@ describe("SysctlPanel", () => {
     );
   });
 
+  it("says a file the export refuses is not carried", () => {
+    // The wording of `case_19_refused_path_audit`: the refusal as plain
+    // copy, the paths as host values, and a vendor line that never claims
+    // the replacement reaches the target.
+    const refusal = "path contains a line break or control character";
+    const { panel } = renderPanel(
+      host({
+        vendor_replacements: [
+          {
+            action: "shadows",
+            path: "/etc/sysctl.d/70-new\nline.conf",
+            vendor_path: "/usr/lib/sysctl.d/70-new\nline.conf",
+            carriage: {
+              kind: "refused",
+              config_path: "/etc/sysctl.d/70-new\nline.conf",
+              reason: refusal,
+            },
+          },
+        ],
+        not_carried: [
+          {
+            path: "/etc/sysctl.d/70-new\nline.conf",
+            reason: {
+              kind: "refused",
+              config_path: "/etc/sysctl.d/70-new\nline.conf",
+              reason: refusal,
+            },
+          },
+          {
+            path: "/etc/sysctl.d/99-sysctl.conf",
+            reason: {
+              kind: "refused",
+              config_path: `/etc/sysctl\n${HOSTILE}.conf`,
+              reason: refusal,
+            },
+          },
+        ],
+      }),
+    );
+    expect(panel.querySelector("img")).toBeNull();
+    paragraph(
+      panel,
+      "/etc/sysctl.d/70-new\\u{a}line.conf replaces /usr/lib/sysctl.d/70-new\\u{a}line.conf on this host. It is not carried, so on the target the vendor file applies.",
+    );
+    paragraph(
+      panel,
+      `/etc/sysctl.d/70-new\\u{a}line.conf: its Configuration Files row is included, but the export refuses the path (${refusal}) and does not write the file.`,
+    );
+    paragraph(
+      panel,
+      `/etc/sysctl.d/99-sysctl.conf: the Configuration Files row that carries it, /etc/sysctl\\u{a}${HOSTILE}.conf, is included, but the export refuses that path (${refusal}) and does not write the file.`,
+    );
+    expect(within(panel).queryByText(/on the target as well/)).toBeNull();
+    // The refusal is copy, not a host value: never a code span.
+    for (const code of panel.querySelectorAll("code")) {
+      expect(code.textContent).not.toContain(refusal);
+    }
+  });
+
   it("shows the unknown explanation in place of the table", () => {
     const { panel } = renderPanel(
       host({

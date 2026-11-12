@@ -583,6 +583,7 @@ export type CarriageDto =
   | { kind: "carried"; config_path: string }
   | { kind: "excluded"; config_path: string }
   | { kind: "advisory"; config_path: string }
+  | { kind: "refused"; config_path: string; reason: string }
   | { kind: "no_config_entry" };
 
 /** Rust: NotCarriedDto. */
@@ -597,6 +598,7 @@ export type NotCarriedReason =
   | { kind: "usr_local_lib" }
   | { kind: "excluded"; config_path: string }
   | { kind: "advisory"; config_path: string }
+  | { kind: "refused"; config_path: string; reason: string }
   | { kind: "no_config_entry" };
 
 /** Rust: AsWrittenLineDto, tagged on `kind`. */

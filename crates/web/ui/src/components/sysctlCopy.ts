@@ -68,7 +68,7 @@ export const VENDOR_VERB_DISABLES = "disables";
 /** Item 4, the admin file is carried. */
 export const VENDOR_CARRIED_LINE =
   "{admin} {verb} {vendor} entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy.";
-/** Item 4, the admin file's config entry is excluded or advisory. */
+/** Item 4, the admin file's config entry is excluded, advisory or refused by the export. */
 export const VENDOR_NOT_CARRIED_LINE =
   "{admin} {verb} {vendor} on this host. It is not carried, so on the target the vendor file applies.";
 /** Item 4, the admin file has no config entry. */
@@ -94,6 +94,18 @@ export const NOT_CARRIED_ADVISORY_LINE =
 /** Item 5, an `/etc` file carried through another path's entry, which is an advisory. */
 export const NOT_CARRIED_ADVISORY_VIA_LINE =
   "{path}: the Configuration Files row that carries it, {config_path}, is an advisory.";
+/**
+ * Item 5, an `/etc` file whose own config entry is included at a path the
+ * export refuses; `{reason}` is the refusal.
+ */
+export const NOT_CARRIED_REFUSED_LINE =
+  "{path}: its Configuration Files row is included, but the export refuses the path ({reason}) and does not write the file.";
+/**
+ * Item 5, an `/etc` file carried through another path's entry, which is
+ * included at a path the export refuses.
+ */
+export const NOT_CARRIED_REFUSED_VIA_LINE =
+  "{path}: the Configuration Files row that carries it, {config_path}, is included, but the export refuses that path ({reason}) and does not write the file.";
 /** Item 5, an `/etc` file with no config entry. */
 export const NOT_CARRIED_NO_CONFIG_ENTRY_LINE =
   "{path}: it has no Configuration Files row.";
