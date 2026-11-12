@@ -75,11 +75,28 @@ stays open as "Downloaded, with warnings", with the accessible name
 `failure` as `warning` (the export itself succeeded; the dialog keeps
 `danger` for "Export failed"), `notice` as `info`. The text is the alert
 title as a React text node. Alerts are not individually dismissable;
-closing the dialog dismisses them. Every entry is shown: the planned
-pre-download not-carried notice, which would let the post-download list
-skip a notice already shown, does not exist yet. Its data does: the view
-payload's `not_carried_notice` is the header's notice entry byte for
-byte (see `not-carried-auto-packages.md`, Refine projection contract).
+closing the dialog dismisses them.
+
+### The pre-download notice and the dedupe
+
+Before download, the dialog shows the view payload's
+`not_carried_notice` when it is non-null, as an `info` alert collapsed to
+a count. The count is the `not_carried_packages` rows with
+`owns_enabled_unit` set (never re-derived from `enabled_units`); expanding
+lists those rows and their units. Its "Review not-carried packages" link
+closes the dialog and has `App.tsx` switch to the packages view and
+reveal the Not carried group (`NotCarriedGroup.tsx`: expand, scroll,
+focus the toggle). Without a handler (aggregate mode, which has no
+notice anyway) the alert has no link, never a dead one.
+
+After download, `withoutShownNotice` (`exportWarnings.ts`) drops header
+entries whose `kind` and `text` equal the view's notice, and only those.
+The server builds both from `not_carried_notice_for` on the same list,
+so equality is the whole test; never match on a text pattern. A header
+notice that differs (the view and the export drifted) has not been seen
+and stays in the list. If nothing is left, the dialog closes as it does
+for `[]`. The notice compared is the one the dialog showed, taken from
+its props when Export is pressed.
 
 The header is already in the CORS `expose_headers` list
 (`crates/web/src/lib.rs`), which matters only for a cross-origin dev page;

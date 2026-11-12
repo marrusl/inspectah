@@ -77,7 +77,11 @@ Anything run-specific in a body has to be pinned at the input, not
 scrubbed from the output: the fleet merge writes the wall clock into
 `aggregate_meta.merged_at`, which `/api/health` reports, so the
 aggregate session sets it to a constant before the session opens.
-Prefer this pattern for any new fixture a frontend test loads.
+Prefer this pattern for any new fixture a frontend test loads. A
+browser test that needs the packages view with real rows can serve one
+of these recordings as `/api/view` and override only the fields it
+varies, as `e2e/not-carried.spec.ts` does with `files-no-tuned`; its
+`.groups.json` also gives the sidebar real section links to click.
 
 ## See Also
 

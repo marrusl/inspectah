@@ -183,6 +183,13 @@ closures only), so they stay in `not_carried_packages` although dnf will
 install them with it. Including `firewalld` leaves `python3-firewall`
 listed. Nothing in the payload marks these rows; it is text for the UI.
 
+**The UI.** `NotCarriedGroup.tsx` renders the rows in the packages view,
+below the package list, in array order, with the owners marked by the
+flag; its Include sends the op above from `MainContent.tsx`. It renders
+nothing for `[]`, since the payload cannot say why the list is empty.
+The group text states the known limit. The Export dialog's pre-download
+notice and its dedupe are in `refine-export-warnings-header.md`.
+
 ## Rule for new code
 
 A new consumer that needs "is this package in the image" asks the
