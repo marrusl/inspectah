@@ -1447,12 +1447,13 @@ fn audit(snap: &InspectionSnapshot) -> String {
 }
 
 /// The `#### Sysctl` block of an audit: its heading up to the next
-/// heading of the same or a higher level.
+/// heading. Every host value in the block is in a code span, so no line
+/// of it starts with `#`.
 fn sysctl_block(md: &str) -> Vec<&str> {
     let mut lines = md.lines().skip_while(|l| *l != "#### Sysctl");
     let heading = lines.next().expect("the audit has a `#### Sysctl` block");
     std::iter::once(heading)
-        .chain(lines.take_while(|l| !l.starts_with("### ") && !l.starts_with("#### ")))
+        .chain(lines.take_while(|l| !l.starts_with('#')))
         .collect()
 }
 

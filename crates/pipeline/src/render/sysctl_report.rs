@@ -34,6 +34,114 @@ pub const AGGREGATE_LINE: &str = "Sysctl explanation is per host and is not avai
 /// Ends the line shown when the explanation is unavailable.
 pub const UNAVAILABLE_TAIL: &str = "Sysctl files are still carried as Configuration Files.";
 
+/// Precedes [`UNAVAILABLE_TAIL`] when the explanation is unavailable.
+pub const UNAVAILABLE_LINE: &str = "Sysctl explanation unavailable: {reason}.";
+
+// The sentences below hold named `{placeholder}` holes; [`fill`] puts a
+// surface's already-encoded values in them.
+
+/// Item 2, `Unknown`: a surviving outside link.
+pub const OUTSIDE_LINK_LINE: &str = "{path} links to {target}, outside `/etc` and the sysctl directories, and inspectah did not read it.";
+/// Item 2, `Unknown`: a surviving file redaction changed.
+pub const REDACTED_FILE_LINE: &str =
+    "{path} held text that redaction replaced, so what it sets is not known.";
+/// Item 2, `Unknown`: a runtime value redaction removed.
+pub const REDACTED_RUNTIME_LINE: &str =
+    "The running value of {key} held text that redaction removed.";
+
+/// Item 2 table: Runtime value when the kernel runs the value written.
+pub const RUNTIME_SAME: &str = "same";
+/// Item 2 table: Runtime value when `sysctl -a` did not list the key.
+pub const RUNTIME_NOT_EXPOSED: &str = "not exposed";
+/// Item 2 table: File value when the last entry for the key is an
+/// exclusion.
+pub const FILE_NOT_WRITTEN: &str = "not written";
+/// Item 2 table: follows the Source when the file was read through a link.
+pub const LINK_NOTE: &str = "(link to {target})";
+
+/// Item 3's label.
+pub const DRIFT_LABEL: &str = "Runtime drift";
+/// Item 3: one drifted key.
+pub const DRIFT_LINE: &str = "{key} runs at {runtime}; the files request {file_value} ({source}).";
+/// Item 3: added to [`DRIFT_INTRO`] when a tuned profile is active.
+pub const TUNED_ACTIVE_LINE: &str = "tuned profile {profile} is active on this host.";
+
+/// Item 4's label.
+pub const VENDOR_LABEL: &str = "Vendor files replaced";
+/// Item 4's verb for a file that shadows a vendor file.
+pub const VENDOR_VERB_REPLACES: &str = "replaces";
+/// Item 4's verb for a mask.
+pub const VENDOR_VERB_DISABLES: &str = "disables";
+/// Item 4, the admin file is carried.
+pub const VENDOR_CARRIED_LINE: &str = "{admin} {verb} {vendor} entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy.";
+/// Item 4, the admin file's config entry is excluded or advisory.
+pub const VENDOR_NOT_CARRIED_LINE: &str = "{admin} {verb} {vendor} on this host. It is not carried, so on the target the vendor file applies.";
+/// Item 4, the admin file has no config entry.
+pub const VENDOR_NO_CONFIG_ENTRY_LINE: &str = "{admin} {verb} {vendor} on this host. It has no Configuration Files row, so it reaches the target only if a package there ships it.";
+
+/// Item 5's label.
+pub const NOT_CARRIED_LABEL: &str = "Not carried";
+/// Item 5, a file in `/run/sysctl.d`.
+pub const NOT_CARRIED_RUNTIME_DIR_LINE: &str = "{path}: generated at runtime.";
+/// Item 5, a file in `/usr/local/lib/sysctl.d`.
+pub const NOT_CARRIED_USR_LOCAL_LIB_LINE: &str =
+    "{path}: carried only as unmanaged files under `--include-unmanaged`.";
+/// Item 5, an `/etc` file whose own config entry is excluded.
+pub const NOT_CARRIED_EXCLUDED_LINE: &str = "{path}: its Configuration Files row is excluded.";
+/// Item 5, an `/etc` file carried through another path's entry, which is
+/// excluded.
+pub const NOT_CARRIED_EXCLUDED_VIA_LINE: &str =
+    "{path}: the Configuration Files row that carries it, {config_path}, is excluded.";
+/// Item 5, an `/etc` file whose own config entry is an advisory.
+pub const NOT_CARRIED_ADVISORY_LINE: &str = "{path}: its Configuration Files row is an advisory.";
+/// Item 5, an `/etc` file carried through another path's entry, which is
+/// an advisory.
+pub const NOT_CARRIED_ADVISORY_VIA_LINE: &str =
+    "{path}: the Configuration Files row that carries it, {config_path}, is an advisory.";
+/// Item 5, an `/etc` file with no config entry.
+pub const NOT_CARRIED_NO_CONFIG_ENTRY_LINE: &str = "{path}: it has no Configuration Files row.";
+
+/// Item 6's label.
+pub const AS_WRITTEN_LABEL: &str = "As written";
+/// Item 6, a glob assignment.
+pub const AS_WRITTEN_GLOB_ASSIGN_LINE: &str = "{at}: glob {pattern} set to {value}, not expanded.";
+/// Item 6, a glob exclusion.
+pub const AS_WRITTEN_GLOB_EXCLUDE_LINE: &str = "{at}: glob exclusion {pattern}, not expanded.";
+/// Item 6, a line the parser could not read.
+pub const AS_WRITTEN_UNPARSED_LINE: &str = "{at}: unparsed line {text}.";
+
+/// Put `values` in the `{name}` holes of a copy template, in one pass, so
+/// a value that itself holds `{name}` text is never substituted again.
+/// Each surface passes values already encoded for it (a Markdown code
+/// span, HTML-escaped text).
+///
+/// # Panics
+///
+/// When the template names a hole `values` does not fill, or leaves one
+/// unclosed: the templates are this module's constants, so either is a
+/// programming error the tests catch.
+pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut filled = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        filled.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .expect("every hole in a sysctl copy template is closed");
+        let name = &after[..close];
+        let value = values
+            .iter()
+            .find(|(hole, _)| *hole == name)
+            .map(|(_, value)| *value)
+            .unwrap_or_else(|| panic!("sysctl copy template hole `{name}` has no value"));
+        filled.push_str(value);
+        rest = &after[close + 1..];
+    }
+    filled.push_str(rest);
+    filled
+}
+
 /// The warnings' inspector name for the kernel/boot inspector, whose
 /// degradation is the reason the explanation is unavailable.
 const KERNEL_BOOT_INSPECTOR: &str = "KernelBoot";
@@ -347,5 +455,45 @@ fn carriage_state(entry: Option<&ConfigFileEntry>) -> CarriageState {
         CarriageState::Advisory { config_path }
     } else {
         CarriageState::Excluded { config_path }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_puts_each_value_in_its_hole_once() {
+        let cases = [
+            (
+                "plain",
+                "{a} and {b}.",
+                vec![("a", "1"), ("b", "2")],
+                "1 and 2.",
+            ),
+            ("repeated hole", "{a}{a}", vec![("a", "x")], "xx"),
+            (
+                "value holding a hole name",
+                "{a} then {b}",
+                vec![("a", "{b}"), ("b", "B")],
+                "{b} then B",
+            ),
+            (
+                "value holding braces",
+                "{a}.",
+                vec![("a", "`\\u{a}`")],
+                "`\\u{a}`.",
+            ),
+            ("no holes", DRIFT_INTRO, vec![], DRIFT_INTRO),
+        ];
+        for (name, template, values, expected) in cases {
+            assert_eq!(fill(template, &values), expected, "{name}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "hole `b` has no value")]
+    fn fill_refuses_an_unfilled_hole() {
+        fill("{a} {b}", &[("a", "1")]);
     }
 }
