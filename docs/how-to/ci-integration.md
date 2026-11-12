@@ -52,10 +52,10 @@ To review: inspectah refine ./scan-output.tar.gz
 ```
 
 When the scan leaves out packages that own a unit enabled on the host,
-one more line follows, in quiet mode too:
+one more line follows, in quiet mode too. On a stock RHEL 10.2 host:
 
 ```
-Notice: 3 packages that own a unit enabled on the source host are not carried: cronie, firewalld, rsyslog. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
+Notice: 5 packages that own a unit enabled on the source host are not carried: audit, audit-rules, cronie and 2 more. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
 ```
 
 It goes to stderr like the rest and does not change the exit code.

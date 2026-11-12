@@ -116,10 +116,11 @@ The notice-first order is pinned end to end by
 same not-carried defaults into its tarball, and an operator who builds
 from that tarball never sees the Export dialog. So after the tarball is
 written, `run_scan` (`crates/cli/src/commands/scan.rs`) calls the same
-`not_carried_notice` on the scan's snapshot and prints it on stderr:
+`not_carried_notice` on the scan's snapshot and prints it on stderr. On a
+stock RHEL 10.2 host:
 
 ```
-Notice: 3 packages that own a unit enabled on the source host are not carried: cronie, firewalld, rsyslog. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
+Notice: 5 packages that own a unit enabled on the source host are not carried: audit, audit-rules, cronie and 2 more. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
 ```
 
 - The line is `ExportWarning`'s `Display`: the label is the kind's
