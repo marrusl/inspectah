@@ -545,9 +545,9 @@ impl SectionStats {
                 // Inventory shares the advisory bucket: it is the other
                 // display-only disposition, never a decision either. The
                 // Config section does reach this arm -- a config file whose
-                // path is a sysctl source is shadowed to inventory during
-                // collection -- so the bucket choice is load-bearing, not
-                // theoretical.
+                // path is a service drop-in the services section carries is
+                // shadowed to inventory during collection -- so the bucket
+                // choice is load-bearing, not theoretical.
                 FindingKind::Advisory { .. } | FindingKind::Inventory => stats.advisory += 1,
             }
         }
@@ -1087,9 +1087,9 @@ mod section_stats_tests {
     /// The partition invariant cannot prove this and never could: every
     /// item increments `total` once and exactly one bucket once, so the
     /// sum holds whichever bucket receives it. This is the guard for the
-    /// assignment, and the only one that reaches the `Inventory` arm
-    /// directly: a sysctl-shadowed config file is counted as inventory in
-    /// the Config section, but no refine fixture builds that state.
+    /// assignment, and the one that reaches the `Inventory` arm directly:
+    /// a config file shadowed by a service drop-in is counted as inventory
+    /// in the Config section.
     #[test]
     fn every_disposition_lands_in_its_designated_bucket() {
         // Expectations are the whole bucket vector, not just the bucket

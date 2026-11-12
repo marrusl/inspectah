@@ -1245,12 +1245,15 @@ fn scan_without_canary(layout: &str, host: SysctlHost, canary: &str) -> Inspecti
     let tree = render_export(&snap);
     for relative in tree_paths(tree.path()) {
         let file = tree.path().join(&relative);
-        if let Ok(bytes) = std::fs::read(&file) {
-            assert!(
-                !String::from_utf8_lossy(&bytes).contains(canary),
-                "{layout}: `{canary}` survives in the export's {relative}"
-            );
+        if file.is_dir() {
+            continue;
         }
+        let bytes = std::fs::read(&file)
+            .unwrap_or_else(|e| panic!("{layout}: the export's {relative} reads: {e}"));
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "{layout}: `{canary}` survives in the export's {relative}"
+        );
     }
     snap
 }
