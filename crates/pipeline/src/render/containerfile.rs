@@ -698,7 +698,7 @@ fn packages_section_lines(
         }
         for (path, reason) in &base_shipped {
             gpg_body.push(format!(
-                "# Not copied: {} ({})",
+                "# Not copied: {}: {}",
                 language_packages::sanitize_for_comment(path),
                 language_packages::sanitize_for_comment(reason)
             ));

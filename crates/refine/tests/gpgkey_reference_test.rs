@@ -372,7 +372,7 @@ fn a_key_the_base_image_ships_is_shown_but_not_copied() {
     assert!(
         containerfile
             .lines()
-            .any(|l| l.starts_with('#') && l.contains(STOCK_KEY) && l.contains(STOCK_REASON)),
+            .any(|l| l == format!("# Not copied: {STOCK_KEY}: {STOCK_REASON}")),
         "the Containerfile names the key it leaves to the base image:\n{containerfile}"
     );
     assert!(
