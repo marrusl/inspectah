@@ -267,6 +267,7 @@ fn case_03_same_name_shadow_each_adjacent_pair() {
         (SysctlDir::Run, SysctlDir::UsrLocalLib),
         (SysctlDir::UsrLocalLib, SysctlDir::UsrLib),
         (SysctlDir::Etc, SysctlDir::UsrLib),
+        (SysctlDir::Run, SysctlDir::UsrLib),
     ];
     for (higher, lower) in pairs {
         let snap = reload(&scan(
