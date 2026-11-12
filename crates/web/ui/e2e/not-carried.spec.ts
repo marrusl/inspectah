@@ -50,6 +50,26 @@ const PYTHON3_FIREWALL = {
   owns_enabled_unit: false,
 };
 
+/** firewalld as the package list shows it once included. */
+const FIREWALLD_INCLUDED = {
+  entry: {
+    aggregate: null,
+    arch: "noarch",
+    disposition: { include: true, kind: "actionable" },
+    epoch: "0",
+    name: "firewalld",
+    release: "1.el9",
+    repo_attribution: { kind: "unrecorded" },
+    source_repo: "baseos",
+    state: "added",
+    version: "1.3.4",
+  },
+  triage: {
+    primary_reason: "package_baseline_match",
+    triage: { investigate: null, mode: "single_host" },
+  },
+};
+
 const NOTICE_BOTH = {
   kind: "notice",
   text: "2 packages that own a unit enabled on the source host are not carried: cronie, firewalld. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.",
@@ -85,9 +105,10 @@ test.describe("Not carried", () => {
     const base = JSON.parse(
       fs.readFileSync(recorded("files-no-tuned.view"), "utf-8"),
     );
+    // Server order: unit owners first, then the rest; each by name, then arch.
     current = {
       ...base,
-      not_carried_packages: [FIREWALLD, CRONIE, PYTHON3_FIREWALL],
+      not_carried_packages: [CRONIE, FIREWALLD, PYTHON3_FIREWALL],
       not_carried_notice: NOTICE_BOTH,
     };
     opBodies = [];
@@ -101,9 +122,16 @@ test.describe("Not carried", () => {
     await page.route("**/api/op", (route) => {
       opBodies.push(route.request().postDataJSON());
       // firewalld included: its row leaves, python3-firewall stays (the
-      // known limit) and the notice drops its name.
+      // known limit), the notice drops its name, and firewalld joins the
+      // package list as an included decision in a new generation.
+      const view = current as {
+        packages: unknown[];
+        generation: number;
+      };
       current = {
         ...current,
+        packages: [...view.packages, FIREWALLD_INCLUDED],
+        generation: view.generation + 1,
         not_carried_packages: [CRONIE, PYTHON3_FIREWALL],
         not_carried_notice: NOTICE_CRONIE,
       };
@@ -132,8 +160,8 @@ test.describe("Not carried", () => {
       .getByTestId(/^not-carried-row-/)
       .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
     expect(ids).toEqual([
-      "not-carried-row-firewalld.noarch",
       "not-carried-row-cronie.x86_64",
+      "not-carried-row-firewalld.noarch",
       "not-carried-row-python3-firewall.noarch",
     ]);
     await expect(
@@ -164,6 +192,9 @@ test.describe("Not carried", () => {
     await expect(
       group.getByTestId("not-carried-row-python3-firewall.noarch"),
     ).toBeVisible();
+    await expect(
+      page.getByRole("checkbox", { name: "firewalld.noarch" }),
+    ).toBeChecked();
   });
 
   async function exportWith(
