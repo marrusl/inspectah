@@ -771,10 +771,14 @@ const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
 /// - A read file's `content` is scanned and replaced under the file's own
 ///   path; `redacted` records whether anything in it changed, which is
 ///   what makes `SysctlSection::effective()` report the file as unknown.
-///   A content finding equal to one in `recorded` is not returned: an
-///   `/etc` file with a config entry holds the same text there, and the
-///   config pass has already recorded that match at that path. The
-///   content is scrubbed either way; only the second record goes.
+///   When a config entry at the same path held byte-identical text before
+///   either pass scrubbed it (`config_originals`), the config pass has
+///   already recorded these very matches, so a content finding equal to
+///   one in `recorded` at that path is not returned again, one for one.
+///   A finding carries no matched text, so equal findings alone do not
+///   prove the same match: when the two reads differ (the file changed
+///   between the collectors' reads), every finding is kept. The content
+///   is scrubbed either way; only the second record of a match goes.
 /// - `link_target` and `OutsideLink.target` are scanned as one line under
 ///   the entry's path. A path is not a line systemd-sysctl parses, so a
 ///   change there does not set `redacted`.
@@ -789,6 +793,7 @@ fn redact_sysctl_section(
     section: &mut SysctlSection,
     registry: &mut CounterRegistry,
     recorded: &[RedactionFinding],
+    config_originals: &HashMap<String, Vec<String>>,
 ) -> Vec<RedactionFinding> {
     let mut findings = Vec::new();
     for file in &mut section.files {
@@ -809,6 +814,13 @@ fn redact_sysctl_section(
                 let before = content.clone();
                 let content_findings = scan_and_redact_field(content, &path, registry);
                 *redacted = *content != before;
+                let same_text_as_config = config_originals
+                    .get(&path)
+                    .is_some_and(|originals| originals.contains(&before));
+                if !same_text_as_config {
+                    findings.extend(content_findings);
+                    continue;
+                }
                 // One finding per match per path: each recorded finding
                 // at this path stands for one of ours, at most once.
                 let mut unmatched: Vec<&RedactionFinding> =
@@ -843,6 +855,37 @@ fn redact_sysctl_section(
     findings
 }
 
+/// The unscrubbed text of each config entry whose path is also a read
+/// sysctl file, by path. Only those paths are kept, so the clone stays
+/// small.
+fn config_originals_at_sysctl_paths(snapshot: &InspectionSnapshot) -> HashMap<String, Vec<String>> {
+    let mut originals: HashMap<String, Vec<String>> = HashMap::new();
+    let (Some(config), Some(sysctl)) = (
+        snapshot.config.as_ref(),
+        snapshot
+            .kernel_boot
+            .as_ref()
+            .and_then(|kb| kb.sysctl.as_ref()),
+    ) else {
+        return originals;
+    };
+    let sysctl_paths: HashSet<String> = sysctl
+        .files
+        .iter()
+        .filter(|f| matches!(f.body, SysctlFileBody::Read { .. }))
+        .map(|f| f.path())
+        .collect();
+    for entry in &config.files {
+        if sysctl_paths.contains(&entry.path) {
+            originals
+                .entry(entry.path.clone())
+                .or_default()
+                .push(entry.content.clone());
+        }
+    }
+    originals
+}
+
 /// Redact a snapshot in place, setting its `redaction_state` and populating `redactions`.
 ///
 /// - Scans config file contents and shadow entries for secrets.
@@ -852,6 +895,9 @@ fn redact_sysctl_section(
 pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     let mut all_findings: Vec<RedactionFinding> = Vec::new();
     let mut registry = CounterRegistry::default();
+    // Taken before the config pass scrubs anything: the sysctl pass needs
+    // the text as read to know whether a config entry is the same copy.
+    let config_originals = config_originals_at_sysctl_paths(snapshot);
 
     // Scan config file contents
     if let Some(ref mut config) = snapshot.config {
@@ -1026,7 +1072,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         // The sysctl section: vendor, runtime and link-read files and
         // kernel values that no other pass sees.
         if let Some(ref mut sysctl) = kernelboot.sysctl {
-            let sysctl_findings = redact_sysctl_section(sysctl, &mut registry, &all_findings);
+            let sysctl_findings =
+                redact_sysctl_section(sysctl, &mut registry, &all_findings, &config_originals);
             all_findings.extend(sysctl_findings);
         }
 
@@ -3792,5 +3839,106 @@ mod tests {
                 snap.redaction_state
             );
         }
+    }
+    /// A snapshot whose `/etc/sysctl.d/80-app.conf` config entry holds
+    /// `config` and whose sysctl copy holds `sysctl`, both as read.
+    fn sysctl_and_config_snapshot(config: &str, sysctl: &str) -> InspectionSnapshot {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        use inspectah_core::types::sysctl::{SysctlDir, SysctlFile};
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: SYSCTL_APP_CONF.to_string(),
+                content: config.to_string(),
+                ..Default::default()
+            }],
+        });
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl: Some(SysctlSection {
+                files: vec![SysctlFile {
+                    dir: SysctlDir::Etc,
+                    name: "80-app.conf".into(),
+                    body: SysctlFileBody::Read {
+                        link_target: None,
+                        content: sysctl.to_string(),
+                        redacted: false,
+                    },
+                }],
+                runtime: Default::default(),
+                redacted_runtime: Vec::new(),
+            }),
+            ..Default::default()
+        });
+        snap
+    }
+
+    const SYSCTL_APP_CONF: &str = "/etc/sysctl.d/80-app.conf";
+
+    fn sysctl_copy(snap: &InspectionSnapshot) -> (&str, bool) {
+        let section = snap
+            .kernel_boot
+            .as_ref()
+            .and_then(|kb| kb.sysctl.as_ref())
+            .expect("the sysctl section");
+        match &section.files[0].body {
+            SysctlFileBody::Read {
+                content, redacted, ..
+            } => (content, *redacted),
+            other => panic!("expected a read file, got {other:?}"),
+        }
+    }
+
+    /// The config entry and the sysctl copy of one path read differently
+    /// (the file changed between the two collectors' reads), but their
+    /// findings are equal field for field, since a finding holds no
+    /// matched text. Both are separate secrets and both findings stay.
+    ///
+    /// Not collector-driven: the scan harness's `MockExecutor` returns one
+    /// content per path, so a scan cannot produce two different reads of
+    /// the same file. The snapshot is planted here instead.
+    #[test]
+    fn test_sysctl_copy_read_differently_keeps_both_findings() {
+        let mut snap = sysctl_and_config_snapshot(
+            "db_password = canary-config\n",
+            "db_password = canary-sysctl\n",
+        );
+        redact(&mut snap, &RedactOptions::default());
+
+        let written = serde_json::to_string(&snap).unwrap();
+        assert!(!written.contains("canary-config"), "{written}");
+        assert!(!written.contains("canary-sysctl"), "{written}");
+        let config = &snap.config.as_ref().unwrap().files[0].content;
+        assert!(config.contains("REDACTED_"), "{config:?}");
+        let (content, redacted) = sysctl_copy(&snap);
+        assert!(content.contains("REDACTED_"), "{content:?}");
+        assert!(redacted);
+        let at_path: Vec<_> = snap
+            .redactions
+            .iter()
+            .filter(|f| f.path == SYSCTL_APP_CONF)
+            .collect();
+        assert_eq!(at_path.len(), 2, "{at_path:?}");
+        assert_eq!(at_path[0], at_path[1], "the two findings are equal");
+    }
+
+    /// The same text in both copies is one match recorded once, and the
+    /// shared registry gives both copies the same token.
+    #[test]
+    fn test_sysctl_copy_read_identically_is_one_finding() {
+        let text = "db_password = canary-same\n";
+        let mut snap = sysctl_and_config_snapshot(text, text);
+        redact(&mut snap, &RedactOptions::default());
+
+        let config = snap.config.as_ref().unwrap().files[0].content.clone();
+        let (content, redacted) = sysctl_copy(&snap);
+        assert!(!content.contains("canary-same"), "{content:?}");
+        assert_eq!(content, config, "one token for one secret");
+        assert!(redacted);
+        let at_path = snap
+            .redactions
+            .iter()
+            .filter(|f| f.path == SYSCTL_APP_CONF)
+            .count();
+        assert_eq!(at_path, 1, "{:?}", snap.redactions);
     }
 }

@@ -211,7 +211,10 @@ snapshot's one counter registry, and findings into `all_findings` like
 any other, one per match per path. An `/etc` sysctl file that is also a
 config entry is scrubbed in both copies, but the config pass has already
 recorded its matches, so the sysctl pass drops a content finding equal
-to one already recorded at that path. Recording both listed the file
+to one already recorded at that path. It does so only when the two
+copies held byte-identical text before scrubbing: a finding carries no
+matched text, so two different secrets on the same line read as equal
+findings, and a file that changed between the two reads must keep both. Recording both listed the file
 twice in `secrets-review.md` and counted each match twice wherever
 `redactions` is counted. A new consumer that parses content after redaction follows
 the same rule: give the pass a flag to set, and read the flag.
