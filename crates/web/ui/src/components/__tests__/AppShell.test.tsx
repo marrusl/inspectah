@@ -104,6 +104,40 @@ describe("AppShell", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("passes the not-carried notice to the Export dialog and its link closes it", async () => {
+    const user = userEvent.setup();
+    const onReviewNotCarried = vi.fn();
+    renderAppShell({
+      notCarriedPackages: [
+        {
+          item_id: { kind: "Package", key: { name: "cronie", arch: "x86_64" } },
+          display_name: "cronie",
+          source_repo: "baseos",
+          enabled_units: ["crond.service"],
+          owns_enabled_unit: true,
+        },
+      ],
+      notCarriedNotice: {
+        kind: "notice",
+        text: "1 package that owns a unit enabled on the source host is not carried: cronie.",
+      },
+      onReviewNotCarried,
+    });
+
+    await user.click(screen.getByRole("button", { name: /export/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Export tarball" });
+    expect(within(dialog).getByTestId("not-carried-notice")).toHaveTextContent(
+      "1 package that owns an enabled unit will not be carried",
+    );
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Review not-carried packages" }),
+    );
+
+    expect(onReviewNotCarried).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Export tarball" })).toBeNull();
+  });
+
   it("opens section search on / key and passes sectionSearchOpen to children", async () => {
     renderAppShell();
 

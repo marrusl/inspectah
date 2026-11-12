@@ -14,7 +14,9 @@ import type {
   LanguagePackageEnv,
   UnmanagedFileGroup,
   SectionGroupMeta,
+  NotCarriedRow,
 } from "../api/types";
+import type { ExportWarning } from "../api/exportWarnings";
 import type { DecisionItemKind } from "./DecisionItem";
 import type { UserDecision } from "../api/types";
 import type { AggregateSummary } from "./StatsBar";
@@ -106,6 +108,12 @@ export interface AppShellProps {
   groups?: SectionGroupMeta[];
   /** Number of uploaded RPMs that did not match any package (gates export). */
   unmatchedUploadCount?: number;
+  /** The view's not-carried rows, for the Export dialog's notice. */
+  notCarriedPackages?: NotCarriedRow[];
+  /** The view's not-carried notice; null or absent shows none. */
+  notCarriedNotice?: ExportWarning | null;
+  /** Shows the Not carried group (the notice's review link). */
+  onReviewNotCarried?: () => void;
 }
 
 /**
@@ -151,6 +159,9 @@ export function AppShell({
   sectionIds,
   groups,
   unmatchedUploadCount = 0,
+  notCarriedPackages,
+  notCarriedNotice,
+  onReviewNotCarried,
 }: AppShellProps) {
   const [cfPanelOpen, setCfPanelOpen] = useState(() =>
     isAggregateMode ? readPanelPref() : initialPanelOpen(),
@@ -279,6 +290,9 @@ export function AppShell({
         sessionIsSensitive={sessionIsSensitive}
         onViewUpdate={onExportComplete}
         unmatchedUploadCount={unmatchedUploadCount}
+        notCarriedPackages={notCarriedPackages}
+        notCarriedNotice={notCarriedNotice}
+        onReviewNotCarried={onReviewNotCarried}
       />
     </Page>
   );

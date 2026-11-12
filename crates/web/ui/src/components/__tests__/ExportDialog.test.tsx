@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExportDialog } from "../ExportDialog";
-import type { ViewResponse } from "../../api/types";
+import type { NotCarriedRow, ViewResponse } from "../../api/types";
 import { mockStats } from "../../test-utils/mockStats";
 
 // --- Mock fetch globally ---
@@ -46,6 +46,28 @@ const MOCK_VIEW: ViewResponse = {
   session_is_sensitive: false,
   not_carried_packages: [],
   not_carried_notice: null,
+};
+
+function notCarried(name: string, units: string[]): NotCarriedRow {
+  return {
+    item_id: { kind: "Package", key: { name, arch: "x86_64" } },
+    display_name: name,
+    source_repo: "baseos",
+    enabled_units: units,
+    owns_enabled_unit: units.length > 0,
+  };
+}
+
+const NOT_CARRIED_ROWS: NotCarriedRow[] = [
+  notCarried("firewalld", ["firewalld.service"]),
+  notCarried("rhc", ["rhcd.service"]),
+  notCarried("python3-firewall", []),
+];
+
+/** What the server sends as `not_carried_notice` for NOT_CARRIED_ROWS. */
+const VIEW_NOTICE = {
+  kind: "notice" as const,
+  text: "2 packages that own a unit enabled on the source host are not carried: firewalld, rhc. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.",
 };
 
 describe("ExportDialog", () => {
@@ -436,6 +458,75 @@ describe("ExportDialog", () => {
       expect(entry).toHaveTextContent("<b>bold</b>.noarch: not exported");
       expect(entry.querySelector("b")).toBeNull();
     });
+
+    describe("with the not-carried notice shown before download", () => {
+      function renderWithNotice(onClose = vi.fn()) {
+        render(
+          <ExportDialog
+            isOpen={true}
+            onClose={onClose}
+            stats={MOCK_STATS}
+            generation={7}
+            sessionIsSensitive={false}
+            onViewUpdate={vi.fn()}
+            notCarriedPackages={NOT_CARRIED_ROWS}
+            notCarriedNotice={VIEW_NOTICE}
+            onReviewNotCarried={vi.fn()}
+          />,
+        );
+        return onClose;
+      }
+
+      it("skips the header entry equal to the view's notice", async () => {
+        const user = userEvent.setup();
+        mockTarball({
+          "x-export-warnings": JSON.stringify([
+            VIEW_NOTICE,
+            { kind: "failure", text: FAILURE },
+          ]),
+        });
+        renderWithNotice();
+
+        await user.click(screen.getByRole("button", { name: "Export" }));
+
+        await screen.findByText("Downloaded, with warnings");
+        expect(screen.getByTestId("export-warning-0")).toHaveTextContent(
+          FAILURE,
+        );
+        expect(screen.queryByTestId("export-warning-1")).toBeNull();
+        expect(screen.queryByText(VIEW_NOTICE.text)).toBeNull();
+      });
+
+      it("closes when the notice was the only entry", async () => {
+        const user = userEvent.setup();
+        mockTarball({ "x-export-warnings": JSON.stringify([VIEW_NOTICE]) });
+        const onClose = renderWithNotice();
+
+        await user.click(screen.getByRole("button", { name: "Export" }));
+
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(
+          screen.queryByText("Downloaded, with warnings"),
+        ).not.toBeInTheDocument();
+      });
+
+      it("shows a header notice that differs from the view's", async () => {
+        const user = userEvent.setup();
+        const drifted = {
+          kind: "notice",
+          text: VIEW_NOTICE.text.replace("2 packages", "3 packages"),
+        };
+        mockTarball({ "x-export-warnings": JSON.stringify([drifted]) });
+        renderWithNotice();
+
+        await user.click(screen.getByRole("button", { name: "Export" }));
+
+        expect(await screen.findByTestId("export-warning-0")).toHaveTextContent(
+          drifted.text,
+        );
+      });
+    });
   });
 
   it("handles 409 stale generation: re-fetches view and closes", async () => {
@@ -639,5 +730,89 @@ describe("ExportDialog", () => {
     );
 
     expect(screen.queryByText(/Advisory findings/)).not.toBeInTheDocument();
+  });
+
+  describe("not-carried notice before download", () => {
+    function renderNotice(
+      props: Partial<React.ComponentProps<typeof ExportDialog>> = {},
+    ) {
+      const handlers = { onClose: vi.fn(), onReviewNotCarried: vi.fn() };
+      render(
+        <ExportDialog
+          isOpen={true}
+          stats={MOCK_STATS}
+          generation={7}
+          sessionIsSensitive={false}
+          onViewUpdate={vi.fn()}
+          notCarriedPackages={NOT_CARRIED_ROWS}
+          notCarriedNotice={VIEW_NOTICE}
+          {...handlers}
+          {...props}
+        />,
+      );
+      return handlers;
+    }
+
+    it("shows nothing when the view has no notice", () => {
+      renderNotice({ notCarriedNotice: null });
+      expect(screen.queryByTestId("not-carried-notice")).toBeNull();
+    });
+
+    it("is an info alert counting the rows that own an enabled unit", () => {
+      renderNotice();
+      const alert = screen.getByTestId("not-carried-notice");
+      expect(alert).toHaveClass("pf-m-info");
+      expect(alert).toHaveTextContent(
+        "2 packages that own enabled units will not be carried",
+      );
+    });
+
+    it("uses the singular for one owner", () => {
+      renderNotice({
+        notCarriedPackages: [
+          notCarried("cronie", ["crond.service"]),
+          notCarried("python3-firewall", []),
+        ],
+      });
+      expect(screen.getByTestId("not-carried-notice")).toHaveTextContent(
+        "1 package that owns an enabled unit will not be carried",
+      );
+    });
+
+    it("keeps the names collapsed until expanded", async () => {
+      const user = userEvent.setup();
+      renderNotice();
+      const alert = screen.getByTestId("not-carried-notice");
+      expect(within(alert).queryByText("rhc")).toBeNull();
+
+      await user.click(
+        within(alert).getByRole("button", { name: "Show not-carried details" }),
+      );
+
+      expect(within(alert).getByText("firewalld")).toBeInTheDocument();
+      expect(within(alert).getByText("rhcd.service")).toBeInTheDocument();
+      // Only the owners: the notice is about units, not every listed package.
+      expect(within(alert).queryByText("python3-firewall")).toBeNull();
+    });
+
+    it("links to the group, closing the dialog", async () => {
+      const user = userEvent.setup();
+      const { onClose, onReviewNotCarried } = renderNotice();
+
+      await user.click(
+        screen.getByRole("button", { name: "Review not-carried packages" }),
+      );
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onReviewNotCarried).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers no link when nothing can show the group", () => {
+      renderNotice({ onReviewNotCarried: undefined });
+      expect(
+        screen.queryByRole("button", { name: "Review not-carried packages" }),
+      ).toBeNull();
+      expect(screen.getByTestId("not-carried-notice")).toBeInTheDocument();
+    });
   });
 });

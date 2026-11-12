@@ -8,11 +8,15 @@ import {
   Button,
   Content,
   Alert,
+  AlertActionLink,
 } from "@patternfly/react-core";
-import type { RefineStats, ViewResponse } from "../api/types";
+import type { NotCarriedRow, RefineStats, ViewResponse } from "../api/types";
 import { exportTarball, fetchView } from "../api/client";
 import { ApiError } from "../api/types";
+import { withoutShownNotice } from "../api/exportWarnings";
 import type { ExportWarning } from "../api/exportWarnings";
+
+const NO_ROWS: NotCarriedRow[] = [];
 
 export interface ExportDialogProps {
   isOpen: boolean;
@@ -23,6 +27,15 @@ export interface ExportDialogProps {
   onViewUpdate: (view: ViewResponse) => void;
   /** Number of uploaded RPMs that did not match any package. */
   unmatchedUploadCount?: number;
+  /** The view's `not_carried_packages`; the notice counts the unit owners. */
+  notCarriedPackages?: NotCarriedRow[];
+  /**
+   * The view's `not_carried_notice`. Non-null shows the pre-download
+   * notice, and the post-download list skips the header entry equal to it.
+   */
+  notCarriedNotice?: ExportWarning | null;
+  /** Shows the Not carried group. Without it the notice has no link. */
+  onReviewNotCarried?: () => void;
 }
 
 export function ExportDialog({
@@ -33,6 +46,9 @@ export function ExportDialog({
   sessionIsSensitive,
   onViewUpdate,
   unmatchedUploadCount = 0,
+  notCarriedPackages = NO_ROWS,
+  notCarriedNotice = null,
+  onReviewNotCarried,
 }: ExportDialogProps) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,8 +87,10 @@ export function ExportDialog({
       a.download = "inspectah-refine-output.tar.gz";
       a.click();
       URL.revokeObjectURL(url);
-      if (warnings.length > 0) {
-        setDownloadWarnings(warnings);
+      // The notice was on screen before download; do not repeat it.
+      const unseen = withoutShownNotice(warnings, notCarriedNotice);
+      if (unseen.length > 0) {
+        setDownloadWarnings(unseen);
       } else {
         onClose();
       }
@@ -98,7 +116,7 @@ export function ExportDialog({
     } finally {
       setExporting(false);
     }
-  }, [generation, sensitiveAck, onClose, onViewUpdate]);
+  }, [generation, sensitiveAck, notCarriedNotice, onClose, onViewUpdate]);
 
   const handleClose = useCallback(() => {
     setError(null);
@@ -108,6 +126,15 @@ export function ExportDialog({
     setDownloadWarnings(null);
     onClose();
   }, [onClose]);
+
+  const handleReviewNotCarried = useCallback(() => {
+    handleClose();
+    onReviewNotCarried?.();
+  }, [handleClose, onReviewNotCarried]);
+
+  // The server's flag decides ownership; the rows with it set are exactly
+  // the packages the notice counts.
+  const unitOwners = notCarriedPackages.filter((r) => r.owns_enabled_unit);
 
   if (downloadWarnings !== null) {
     return (
@@ -170,6 +197,56 @@ export function ExportDialog({
             <strong>Generation:</strong> {generation}
           </p>
         </Content>
+
+        {notCarriedNotice !== null && (
+          // Info, compact and collapsed: a stock host lists unit owners, so
+          // this shows on nearly every export.
+          <Alert
+            variant="info"
+            isInline
+            isExpandable
+            toggleAriaLabel="Show not-carried details"
+            data-testid="not-carried-notice"
+            title={
+              unitOwners.length === 0
+                ? notCarriedNotice.text
+                : unitOwners.length === 1
+                  ? "1 package that owns an enabled unit will not be carried"
+                  : `${unitOwners.length} packages that own enabled units will not be carried`
+            }
+            actionLinks={
+              onReviewNotCarried ? (
+                <AlertActionLink onClick={handleReviewNotCarried}>
+                  Review not-carried packages
+                </AlertActionLink>
+              ) : undefined
+            }
+            style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}
+          >
+            <Content>
+              <p>
+                These units are enabled on the source host, but their packages
+                are left out of the image:
+              </p>
+              <ul>
+                {unitOwners.map((r) => (
+                  <li key={`${r.item_id.key.name}.${r.item_id.key.arch}`}>
+                    <strong>{r.display_name}</strong>{" "}
+                    {r.enabled_units.map((u) => (
+                      <code key={u} style={{ marginRight: "0.5em" }}>
+                        {u}
+                      </code>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                The export lists them in the audit report's Not carried table
+                and the Containerfile's <code># Not carried</code> block.
+              </p>
+            </Content>
+          </Alert>
+        )}
 
         <Alert variant="info" isInline isPlain title="Reference sections">
           Reference sections (network, storage, scheduled tasks, etc.) are

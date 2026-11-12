@@ -567,6 +567,17 @@ function SingleHostApp({
     [isMobile, closeSidebarOverlay],
   );
 
+  // The Export dialog's "Review not-carried packages" link: bring up the
+  // packages view and have the Not carried group expand and scroll into view.
+  const [revealNotCarried, setRevealNotCarried] = useState(false);
+  const handleReviewNotCarried = useCallback(() => {
+    setActiveSection("packages");
+    setRevealNotCarried(true);
+  }, []);
+  const handleNotCarriedRevealed = useCallback(() => {
+    setRevealNotCarried(false);
+  }, []);
+
   const handleExportViewUpdate = useCallback(
     (_updatedView: ViewResponse) => {
       view.invalidate();
@@ -652,6 +663,9 @@ function SingleHostApp({
         onSearchNavigate={handleNavigateFromSearch}
         groups={groups.data ?? undefined}
         unmatchedUploadCount={rpmUpload.unmatchedUploads.length}
+        notCarriedPackages={view.data?.not_carried_packages}
+        notCarriedNotice={view.data?.not_carried_notice}
+        onReviewNotCarried={handleReviewNotCarried}
         toolbarExtra={
           rpmUpload.needsUploadCount > 0 ? (
             <ToolbarItem>
@@ -739,6 +753,8 @@ function SingleHostApp({
                 rpmRowStates={rpmRowStates}
                 onUploadClick={handleUploadClick}
                 onRemoveRpmUpload={handleRemoveRpmUpload}
+                revealNotCarried={revealNotCarried}
+                onNotCarriedRevealed={handleNotCarriedRevealed}
               />
             </div>
             {isMobile && sidebarOverlayOpen && (
