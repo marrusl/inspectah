@@ -36,6 +36,15 @@ drifted in two independent ways:
    50 of them; at 82 tests on 2026-11-08 the local run fails 49 to 51
    with or without a fixture server on 8642, so the groups route is not
    the only cause (see `docs/contributing/testing.md`).
+3. **The preset view crashes the app.** As of 2026-11-12 the package
+   and config rows in `single-host/view.json` have no `disposition`, so
+   `isIncluded` in `src/api/disposition.ts` throws inside `MainContent`
+   and the page goes blank a moment after the stats bar renders. A
+   `beforeEach` that waits for `.inspectah-statsbar` still passes; the
+   next locator then times out. Capture `page.on("pageerror")` to see
+   it. `e2e/export-warnings.spec.ts` works around it by serving the
+   preset view with its item lists emptied, which is enough for a test
+   that only needs the stats bar and the Export dialog.
 
 **The compensating control named in `fixture_structure_test.rs`'s header
 is nominal.** That file says Rust-type compatibility is "proven by
