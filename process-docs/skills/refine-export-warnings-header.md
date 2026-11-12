@@ -77,7 +77,9 @@ stays open as "Downloaded, with warnings", with the accessible name
 title as a React text node. Alerts are not individually dismissable;
 closing the dialog dismisses them. Every entry is shown: the planned
 pre-download not-carried notice, which would let the post-download list
-skip a notice already shown, does not exist yet.
+skip a notice already shown, does not exist yet. Its data does: the view
+payload's `not_carried_notice` is the header's notice entry byte for
+byte (see `not-carried-auto-packages.md`, Refine projection contract).
 
 The header is already in the CORS `expose_headers` list
 (`crates/web/src/lib.rs`), which matters only for a cross-origin dev page;

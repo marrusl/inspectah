@@ -87,6 +87,9 @@ no list is emitted, when:
 - Scan stderr: `inspectah scan` prints the same notice as one
   `Notice: ...` line after it writes the tarball, quiet mode included,
   and nothing with `--inspect-only`.
+- Refine view: `GET /api/view` carries the list as
+  `not_carried_packages` and the notice as `not_carried_notice`; see
+  [Refine projection contract](#refine-projection-contract).
 
 Order on every surface: packages owning a unit in `services.enabled_units`
 first, then the rest; each part by name, then arch. The display name is
@@ -109,9 +112,76 @@ dependencies and records nothing else.
   unit file in `file_ownership`) record the owner by name, so every arch of
   a name is credited with the same units.
 - Refine has no code of its own for the class: it reads the dispositions
-  its tier defaults produce. `crates/cli/tests/not_carried_parity_test.rs`
+  its tier defaults produce, and its view shows `not_carried_packages`
+  as built here. `crates/cli/tests/not_carried_parity_test.rs`
   holds the two exports equal only for a classified, baseline-backed host;
   read its scope note before claiming more.
+
+## Refine projection contract
+
+`DecisionProjection` (`crates/refine/src/projection/decisions.rs`)
+builds both fields from one `not_carried_packages` call on
+`snapshot_projected()`, the snapshot the export renders from, and
+`build_web_view` copies them into the view payload. Every response that
+returns a view (`GET /api/view`, `POST /api/op`, `/api/undo`,
+`/api/redo`, `/api/reset`) carries them at the top level:
+
+```json
+"not_carried_packages": [
+  {
+    "item_id": {"kind": "Package", "key": {"name": "firewalld", "arch": "noarch"}},
+    "display_name": "firewalld",
+    "source_repo": "baseos",
+    "enabled_units": ["firewalld.service"],
+    "owns_enabled_unit": true
+  }
+],
+"not_carried_notice": {"kind": "notice", "text": "1 package that owns a unit enabled on the source host is not carried: firewalld. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile."}
+```
+
+- `not_carried_packages` is always present, in the `# Not carried`
+  block's order. It is `[]` when nothing is listed and under the
+  classifier's fallback (an aggregate, or no leaf data); the payload does
+  not say which.
+- `item_id` is the identity `SetInclude` takes. `display_name` is the
+  block's name (`name.arch` only when two arches of a name are listed).
+  `enabled_units` are sorted unit names, display only.
+- `owns_enabled_unit` is `NotCarriedPackage::owns_enabled_unit`, the test
+  `not_carried_notice` filters on, so the rows with it set are exactly the
+  packages the notice counts. A client reads the flag and never decides
+  "owns an enabled unit" itself.
+- `not_carried_notice` is the `ExportWarning` the next `POST /api/tarball`
+  puts first in `x-export-warnings`, byte for byte, or `null`. Both come
+  from `not_carried_notice_for` on the same list, so a client can show it
+  before download and skip the header entry equal to it afterwards.
+
+**Including one** is the ordinary package op, no new action:
+
+```json
+POST /api/op
+{"kind": "Op", "op": "SetInclude",
+ "target": {"item_id": <row.item_id>, "include": true}}
+```
+
+The response is the new view: the row is gone from
+`not_carried_packages`, the notice no longer names it (or is `null`),
+and the package appears in `packages` as a changed decision, since the
+view's leaf filter keeps a package whose disposition differs from the
+session's original. The export then installs it (the `original_includes`
+bypass of the Containerfile's leaf filter), drops it from the `# Not
+carried` block and the audit table, emits its units again, and stops
+provisioning its `/var` directories, which the package now creates.
+`include: false` on the same `item_id` (or `/api/undo`) restores all of
+it. `including_a_listed_package_carries_it_and_excluding_it_restores_the_list`
+in `crates/cli/tests/not_carried_parity_test.rs` pins every surface;
+`the_view_carries_the_not_carried_rows_and_notice` in
+`crates/web/tests/api_test.rs` pins the payload and the header match.
+
+**Known limit, for the UI to explain:** including an auto package does
+not credit its own dependencies as pulled in (the tree records leaf
+closures only), so they stay in `not_carried_packages` although dnf will
+install them with it. Including `firewalld` leaves `python3-firewall`
+listed. Nothing in the payload marks these rows; it is text for the UI.
 
 ## Rule for new code
 
