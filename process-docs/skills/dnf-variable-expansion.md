@@ -181,16 +181,26 @@ are the one rule for what an exclusion leaves: a `.repo` file stays carried
 while at least one section the host **enabled** in it is not excluded, and
 a key stays while a host-enabled, not-excluded section names it (resolved
 through `is_key_named_by` when the index is built). Host-disabled sections
-never count. EPEL's `epel.repo` holds `[epel-debuginfo]` and
+never count, so a key named only by host-disabled sections is dropped once
+the enabled sections that kept it are excluded, even while a carried file
+still lists a disabled section naming it (Mark, 2026-11-12). EPEL's
+`epel.repo` holds `[epel-debuginfo]` and
 `[epel-source]` at `enabled=0`, and counting them kept the file and the
 key after `epel` was excluded. The session's exclude cascade is the only
-writer of those dispositions; the stager, the Containerfile (`Custom
-Repositories`, `GPG Keys`, `rpm --import`), `repo_enabling` and the audit
-read them from the projection, so none of them re-derives the rule.
+place that applies this rule. Load-time normalization
+(`normalize_inspectah_repo_files`) and the locked clamp also set these
+dispositions, for their own reasons. The stager, the Containerfile
+(`Custom Repositories`, `GPG Keys`, `rpm --import`), `repo_enabling` and
+the audit read the projected result, so none of them re-derives the rule.
+The rule is reached only through a repo op the member-based no-op check
+accepts: a repo with no effective member, or whose members are all
+excluded already, cannot be excluded, so its file and key keep shipping.
 
-The rule acts only on an exclusion. With no repo op the projection keeps
-the scan's dispositions, including a file whose sections are all disabled
-and a key only disabled sections name. A `shipped_by_base` key is never
+The rule acts only on an exclusion that reaches a file (Mark,
+2026-11-12). With no repo op the projection keeps the scan's dispositions,
+so a file whose sections are all disabled on the host still ships in the
+scan export and in an unchanged refine export, and so does a key only
+disabled sections name. A `shipped_by_base` key is never
 re-included. A `.repo` file the host modified is also in `config.files`,
 and either inclusion stages it (an open defect), so for a modified file
 the repo exclusion alone does not stop it shipping.
