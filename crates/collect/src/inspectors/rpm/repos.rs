@@ -293,6 +293,24 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
     scan
 }
 
+/// Collapse keys recorded at the same path into one entry, in first-seen
+/// order, with the `gpgkey_references` of every entry at that path.
+///
+/// Every section that names a key yields an entry for it, and RHEL's
+/// `redhat.repo` names the stock key from hundreds of sections. Entries at
+/// one path were read from one file, so they differ only in the
+/// references that named them.
+pub fn record_each_key_once(keys: Vec<RepoFile>) -> Vec<RepoFile> {
+    let mut once: Vec<RepoFile> = Vec::new();
+    for key in keys {
+        match once.iter_mut().find(|k| k.path == key.path) {
+            Some(first) => first.gpgkey_references.extend(key.gpgkey_references),
+            None => once.push(key),
+        }
+    }
+    once
+}
+
 fn is_default_repo(path: &str) -> bool {
     let filename = Path::new(path)
         .file_name()

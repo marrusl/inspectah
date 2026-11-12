@@ -97,10 +97,19 @@ fn baseline() -> BaselineData {
     }
 }
 
+/// How many entries a snapshot records for a key several sections name.
+#[derive(Debug, Clone, Copy)]
+enum KeyEntries {
+    /// The collector records each key path once.
+    OnePerPath,
+    /// Snapshots collected before that recorded one entry per section
+    /// naming the key, and must still load and behave the same.
+    OnePerSection,
+}
+
 /// `epel-release` installed `@commandline` and served by `[epel]`, with
-/// `htop` from `[epel]` and `nethogs` from `[epel-testing]`. The collector
-/// records one key entry per section that names the key.
-fn snapshot(repo: &str) -> InspectionSnapshot {
+/// `htop` from `[epel]` and `nethogs` from `[epel-testing]`.
+fn snapshot(repo: &str, entries: KeyEntries) -> InspectionSnapshot {
     let package = |name: &str, source_repo: &str| PackageEntry {
         name: name.into(),
         version: "10".into(),
@@ -112,7 +121,10 @@ fn snapshot(repo: &str) -> InspectionSnapshot {
     };
     let mut epel_release = package("epel-release", "@commandline");
     epel_release.repo_enabling_from = vec![RepoId::new("epel")];
-    let key_entries = repo.matches("gpgkey=").count();
+    let key_entries = match entries {
+        KeyEntries::OnePerPath => 1,
+        KeyEntries::OnePerSection => repo.matches("gpgkey=").count(),
+    };
 
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
@@ -153,6 +165,15 @@ fn exclude_repo(session: &mut RefineSession, id: &str) {
         .unwrap_or_else(|e| panic!("repo {id} can be excluded: {e:?}"));
 }
 
+fn include_repo(session: &mut RefineSession, id: &str) {
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Repo { path: id.into() },
+            include: true,
+        })
+        .unwrap_or_else(|e| panic!("repo {id} can be included: {e:?}"));
+}
+
 /// Each key entry's disposition, after projection.
 fn key_dispositions(session: &RefineSession) -> Vec<bool> {
     session
@@ -167,55 +188,70 @@ fn key_dispositions(session: &RefineSession) -> Vec<bool> {
 
 #[test]
 fn a_key_named_with_a_dnf_variable_carries_its_repo_enabling_package() {
-    let snap = snapshot(EL10_EPEL_REPO);
+    for entries in [KeyEntries::OnePerPath, KeyEntries::OnePerSection] {
+        carries_its_repo_enabling_package(entries);
+    }
+}
+
+fn carries_its_repo_enabling_package(entries: KeyEntries) {
+    let snap = snapshot(EL10_EPEL_REPO, entries);
 
     let containerfile = scan_containerfile(&snap);
     assert!(
         containerfile.contains("# === Repo-enabling packages (1) ===")
             && containerfile.lines().any(|l| l.trim() == "epel-release \\"),
-        "epel-release installs from the carried definition:\n{containerfile}"
+        "{entries:?}: epel-release installs from the carried definition:\n{containerfile}"
     );
     assert!(
         !containerfile.contains("which this export does not carry"),
-        "no false not-carried FIXME:\n{containerfile}"
+        "{entries:?}: no false not-carried FIXME:\n{containerfile}"
     );
 
     let audit = render::audit::render_audit(&snap);
     assert!(
         audit.contains("| epel-release | epel | yes |"),
-        "the audit report says the export carries it:\n{audit}"
+        "{entries:?}: the audit report says the export carries it:\n{audit}"
     );
 
     let session = RefineSession::new(snap);
     assert_eq!(
         session.repo_index().provenance(&RepoId::new("epel")),
         RepoProvenance::Verified,
-        "the key the section names was captured"
+        "{entries:?}: the key the section names was captured"
     );
 }
 
 #[test]
 fn refine_cascades_an_exclude_to_a_key_named_with_a_dnf_variable() {
-    let mut session = RefineSession::new(snapshot(TWO_ENABLED_SECTIONS));
-    for id in ["epel", "epel-testing"] {
+    for (entries, count) in [(KeyEntries::OnePerPath, 1), (KeyEntries::OnePerSection, 2)] {
+        let mut session = RefineSession::new(snapshot(TWO_ENABLED_SECTIONS, entries));
+        for id in ["epel", "epel-testing"] {
+            assert_eq!(
+                session.repo_index().provenance(&RepoId::new(id)),
+                RepoProvenance::Verified,
+                "{entries:?}: {id}"
+            );
+        }
+
+        exclude_repo(&mut session, "epel");
         assert_eq!(
-            session.repo_index().provenance(&RepoId::new(id)),
-            RepoProvenance::Verified,
-            "{id}"
+            key_dispositions(&session),
+            vec![true; count],
+            "{entries:?}: epel-testing still names the key"
+        );
+
+        exclude_repo(&mut session, "epel-testing");
+        assert_eq!(
+            key_dispositions(&session),
+            vec![false; count],
+            "{entries:?}: no included section names the key, so every entry of it is excluded"
+        );
+
+        include_repo(&mut session, "epel");
+        assert_eq!(
+            key_dispositions(&session),
+            vec![true; count],
+            "{entries:?}: a section naming the key is back in, so every entry of it is"
         );
     }
-
-    exclude_repo(&mut session, "epel");
-    assert_eq!(
-        key_dispositions(&session),
-        [true, true],
-        "epel-testing still names the key"
-    );
-
-    exclude_repo(&mut session, "epel-testing");
-    assert_eq!(
-        key_dispositions(&session),
-        [false, false],
-        "no included section names the key, so every entry of it is excluded"
-    );
 }
