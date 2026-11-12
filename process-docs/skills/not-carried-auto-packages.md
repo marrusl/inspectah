@@ -79,11 +79,14 @@ no list is emitted, when:
 - Refine export warnings: one `notice` entry in `x-export-warnings` when
   the list holds packages that own an enabled unit, naming the count and
   the first three by display name, then `and N more`, and pointing at the
-  audit table and the `# Not carried` block. `not_carried_notice` in
-  `crates/refine/src/session.rs` builds it from `not_carried_packages`
-  filtered to entries with `enabled_units`; it never decides "owns an
-  enabled unit" itself. Names are sanitized and bounded because the
-  entry rides in a header. Contract: `refine-export-warnings-header.md`.
+  audit table and the `# Not carried` block. `not_carried_notice`, in
+  this module, builds it from `not_carried_packages` filtered to entries
+  with `enabled_units`; it never decides "owns an enabled unit" itself.
+  Names are sanitized and bounded because the entry rides in a header.
+  Contract: `refine-export-warnings-header.md`.
+- Scan stderr: `inspectah scan` prints the same notice as one
+  `Notice: ...` line after it writes the tarball, quiet mode included,
+  and nothing with `--inspect-only`.
 
 Order on every surface: packages owning a unit in `services.enabled_units`
 first, then the rest; each part by name, then arch. The display name is

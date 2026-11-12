@@ -179,6 +179,11 @@ Inspecting host rhel9...
 The tarball is written to your current directory. The filename includes
 the hostname and a timestamp.
 
+If the scan leaves out packages that own a unit enabled on the host,
+such as `firewalld` or `cronie`, it ends with a `Notice:` line naming
+them and pointing at the Not carried table in `audit-report.md`.
+Include those packages in `inspectah refine` if the image needs them.
+
 ## Understand the output
 
 Extract the tarball to see what inspectah produced:

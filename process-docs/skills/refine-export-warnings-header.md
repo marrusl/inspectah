@@ -14,7 +14,7 @@ The value is a JSON array of objects, never a bare string:
 ```
 
 - `kind` is `"failure"` or `"notice"`, the serialized
-  `ExportWarningKind` (`crates/refine/src/export_warning.rs`).
+  `ExportWarningKind` (`crates/pipeline/src/export_warning.rs`).
   A failure is something the operator asked for that is not in the
   export. A notice is worth knowing about an export that is otherwise as
   asked. A client styles by `kind` and never infers severity from `text`.
@@ -28,15 +28,17 @@ The value is a JSON array of objects, never a bare string:
 ## Producers
 
 `ExportWarning` has private fields and two constructors, `failure()` and
-`notice()`, so an entry without a kind does not compile. Everything
-`render_refine_export` returns is built in `crates/refine/src/session.rs`:
+`notice()`; producers build entries only through those, so every entry
+names its kind (`Deserialize` exists so a test can parse the header
+back). `render_refine_export` in `crates/refine/src/session.rs` returns:
 
-- `not_carried_notice`: one notice, first in the list, when the export
+- `not_carried_notice` (`crates/pipeline/src/render/not_carried.rs`):
+  one notice, first in the list, when the export
   leaves out not-carried packages that own a unit enabled on the source
   host. It reads `not_carried_packages`, the list the `# Not carried`
   block renders, and filters to entries with enabled units. See
   `not-carried-auto-packages.md`.
-- `not_verified_warning`: one failure per included package that claimed
+- `not_verified_warning` (`session.rs`): one failure per included package that claimed
   a staged upload the export could not prove. Its `name.arch` is
   sanitized and cut to `NOT_VERIFIED_ID_MAX` (128) bytes.
 
@@ -94,7 +96,8 @@ pins the division.
 
 The cap bounds the number of entries, not their size, and a snapshot
 chooses how long a package name is. So every snapshot-named string is
-also length-bounded, through `sanitize_bounded` in `session.rs`: a
+also length-bounded, through `sanitize_bounded` in
+`crates/pipeline/src/export_warning.rs`: a
 failure's id to `NOT_VERIFIED_ID_MAX` (128) bytes, each notice name to
 `NOT_CARRIED_NOTICE_NAME_MAX` (64), and the notice names at most three.
 `not_verified_warning_bounds_a_hostile_package_id` serializes the worst
@@ -106,6 +109,34 @@ measures about 4.2 KB. A new producer that puts a snapshot string in
 The notice-first order is pinned end to end by
 `the_notice_leads_a_failure_from_the_same_export` in
 `crates/cli/tests/not_carried_parity_test.rs`.
+
+## The scan prints the notice too
+
+`inspectah scan` has no refine export and no header, but it writes the
+same not-carried defaults into its tarball, and an operator who builds
+from that tarball never sees the Export dialog. So after the tarball is
+written, `run_scan` (`crates/cli/src/commands/scan.rs`) calls the same
+`not_carried_notice` on the scan's snapshot and prints it on stderr:
+
+```
+Notice: 3 packages that own a unit enabled on the source host are not carried: cronie, firewalld, rsyslog. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
+```
+
+- The line is `ExportWarning`'s `Display`: the label is the kind's
+  (`Notice`, `Failure`), capitalized like the scan's `Warning:` and
+  `Error:` lines on the same stream, never read from the text.
+- It is the last thing printed, after the completion summary, in every
+  verbosity including `--quiet`: quiet hides progress, not results.
+- Nothing goes to stdout. `--inspect-only` prints nothing, because it
+  writes neither the audit report nor the Containerfile the text points
+  at.
+- No cap (there is at most one entry) and the exit status is unchanged.
+- Both pointers hold for the scan tarball: `render_all` writes the
+  `### Not carried` table and the `# Not carried` block, and
+  `the_scan_prints_a_notice_for_not_carried_unit_owners` asserts both
+  next to the line. The command needs root and a real host, so that
+  test runs the layer under it (collect, `apply_scan_package_defaults`,
+  `render_all`) and the same `not_carried_notice` and `Display`.
 
 ## It is not the record
 

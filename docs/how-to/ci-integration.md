@@ -51,6 +51,15 @@ Report: ./scan-output.tar.gz
 To review: inspectah refine ./scan-output.tar.gz
 ```
 
+When the scan leaves out packages that own a unit enabled on the host,
+one more line follows, in quiet mode too:
+
+```
+Notice: 3 packages that own a unit enabled on the source host are not carried: cronie, firewalld, rsyslog. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.
+```
+
+It goes to stderr like the rest and does not change the exit code.
+
 ## Exit codes
 
 inspectah uses exit codes to communicate scan completeness. Use these in
