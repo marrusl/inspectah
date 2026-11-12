@@ -288,7 +288,9 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
 ";
 
 /// The EPEL snapshot plus `redhat.repo`, a site repo and the stock key, which the
-/// scan left out because the base image ships it.
+/// scan left out because the base image ships it. `corp-release` is
+/// repo-enabling for the site repo and owns the stock key's path, so its
+/// own files include a key the export does not copy.
 fn snapshot_with_stock_key() -> InspectionSnapshot {
     let mut snap = snapshot(EL10_EPEL_REPO, KeyEntries::OnePerPath);
     let rpm = snap.rpm.as_mut().expect("rpm section");
@@ -310,6 +312,20 @@ fn snapshot_with_stock_key() -> InspectionSnapshot {
             ..Default::default()
         });
     }
+    rpm.packages_added.push(PackageEntry {
+        name: "corp-release".into(),
+        version: "1".into(),
+        release: "1".into(),
+        arch: "noarch".into(),
+        source_repo: "@commandline".into(),
+        repo_enabling_from: vec![RepoId::new("corp-a")],
+        disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    rpm.file_ownership.push(FileOwnershipEntry {
+        package_name: "corp-release".into(),
+        paths: vec!["/etc/yum.repos.d/corp.repo".into(), STOCK_KEY.into()],
+    });
     rpm.repo_files.push(RepoFile {
         path: "/etc/yum.repos.d/corp.repo".into(),
         content: CORP_REPO.into(),
@@ -338,8 +354,10 @@ fn stock_key(session: &RefineSession) -> RepoFile {
 }
 
 /// A key the base image ships is not copied, and every surface that shows
-/// keys says so and why. Including a repo that names it again does not
-/// copy it: the base image's own file is the one the image should keep.
+/// keys says so and why. A repo-enabling package that owns the key still
+/// installs by name, since the image has the file. Including a repo that
+/// names it again does not copy it: the base image's own file is the one
+/// the image should keep.
 #[test]
 fn a_key_the_base_image_ships_is_shown_but_not_copied() {
     let snap = snapshot_with_stock_key();
@@ -356,11 +374,21 @@ fn a_key_the_base_image_ships_is_shown_but_not_copied() {
         "the Containerfile names the key it leaves to the base image:\n{containerfile}"
     );
     assert!(
-        containerfile.contains("# === Repo-enabling packages (1) ==="),
-        "EPEL still carried:\n{containerfile}"
+        containerfile.contains("# === Repo-enabling packages (2) ===")
+            && containerfile.lines().any(|l| l.trim() == "epel-release \\")
+            && containerfile.lines().any(|l| l.trim() == "corp-release \\"),
+        "EPEL and corp-release install by name:\n{containerfile}"
+    );
+    assert!(
+        !containerfile.contains("which this export does not carry"),
+        "a key the base image ships is not a dropped file:\n{containerfile}"
     );
 
     let audit = render::audit::render_audit(&snap);
+    assert!(
+        audit.contains("| corp-release | corp-a | yes |"),
+        "the audit report says the export carries corp-release's repo:\n{audit}"
+    );
     assert!(
         audit.contains(&format!("| {STOCK_KEY} | {STOCK_REASON} |")),
         "the audit report names the key and the reason:\n{audit}"
