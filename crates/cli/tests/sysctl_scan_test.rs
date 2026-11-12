@@ -2009,10 +2009,70 @@ const CORE_PATTERN: &str = "|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c
 /// A file name holding a line break.
 const NEWLINE_NAME: &str = "70-new\nline.conf";
 
+/// The top-level nodes of a parsed audit's `#### Sysctl` block: the
+/// heading's following siblings up to the next heading of level 4 or
+/// higher.
+fn sysctl_block_nodes<'a>(root: comrak::nodes::Node<'a>) -> Vec<comrak::nodes::Node<'a>> {
+    use comrak::nodes::NodeValue;
+
+    let heading_text = |node: comrak::nodes::Node<'_>| -> String {
+        node.descendants()
+            .filter_map(|n| match &n.data.borrow().value {
+                NodeValue::Text(text) => Some(text.to_string()),
+                _ => None,
+            })
+            .collect()
+    };
+    let start = root
+        .children()
+        .find(|n| {
+            matches!(&n.data.borrow().value, NodeValue::Heading(h) if h.level == 4)
+                && heading_text(n) == "Sysctl"
+        })
+        .expect("a `Sysctl` heading");
+    start
+        .following_siblings()
+        .skip(1)
+        .take_while(|n| !matches!(&n.data.borrow().value, NodeValue::Heading(h) if h.level <= 4))
+        .collect()
+}
+
+/// The sysctl table's body rows as a GFM parser reads them: each cell is
+/// a code span, given as its literal, or fixed text.
+fn parsed_table_rows(block: &[comrak::nodes::Node<'_>]) -> Vec<Vec<String>> {
+    use comrak::nodes::NodeValue;
+
+    let cell_text = |cell: comrak::nodes::Node<'_>| -> String {
+        cell.children()
+            .map(|n| match &n.data.borrow().value {
+                NodeValue::Code(code) => code.literal.clone(),
+                NodeValue::Text(text) => text.to_string(),
+                other => panic!("unexpected node in a cell: {other:?}"),
+            })
+            .collect()
+    };
+    let table = block
+        .iter()
+        .find(|n| matches!(n.data.borrow().value, NodeValue::Table(_)))
+        .expect("the sysctl table");
+    table
+        .children()
+        .skip(1)
+        .map(|row| row.children().map(cell_text).collect())
+        .collect()
+}
+
+/// GFM parsing options with the table extension on.
+fn gfm_tables() -> comrak::Options<'static> {
+    let mut options = comrak::Options::default();
+    options.extension.table = true;
+    options
+}
+
 #[test]
 fn case_19_literal_rendering_audit() {
     use comrak::nodes::NodeValue;
-    use comrak::{Arena, Options, parse_document};
+    use comrak::{Arena, parse_document};
 
     let md = audit(&reload(&scan(
         SysctlHost::new()
@@ -2034,32 +2094,8 @@ fn case_19_literal_rendering_audit() {
     )));
 
     let arena = Arena::new();
-    let mut options = Options::default();
-    options.extension.table = true;
-    let root = parse_document(&arena, &md, &options);
-
-    // The block's nodes: the `Sysctl` heading's following siblings up to
-    // the next heading of level 4 or higher.
-    let heading_text = |node: comrak::nodes::Node<'_>| -> String {
-        node.descendants()
-            .filter_map(|n| match &n.data.borrow().value {
-                NodeValue::Text(text) => Some(text.to_string()),
-                _ => None,
-            })
-            .collect()
-    };
-    let start = root
-        .children()
-        .find(|n| {
-            matches!(&n.data.borrow().value, NodeValue::Heading(h) if h.level == 4)
-                && heading_text(n) == "Sysctl"
-        })
-        .expect("a `Sysctl` heading");
-    let block: Vec<_> = start
-        .following_siblings()
-        .skip(1)
-        .take_while(|n| !matches!(&n.data.borrow().value, NodeValue::Heading(h) if h.level <= 4))
-        .collect();
+    let root = parse_document(&arena, &md, &gfm_tables());
+    let block = sysctl_block_nodes(root);
 
     for node in block.iter().flat_map(|n| n.descendants()) {
         let value = &node.data.borrow().value;
@@ -2075,27 +2111,8 @@ fn case_19_literal_rendering_audit() {
         );
     }
 
-    // A cell is a code span, whose literal is the value, or fixed text.
-    let cell_text = |cell: comrak::nodes::Node<'_>| -> String {
-        cell.children()
-            .map(|n| match &n.data.borrow().value {
-                NodeValue::Code(code) => code.literal.clone(),
-                NodeValue::Text(text) => text.to_string(),
-                other => panic!("unexpected node in a cell: {other:?}"),
-            })
-            .collect()
-    };
-    let table = block
-        .iter()
-        .find(|n| matches!(n.data.borrow().value, NodeValue::Table(_)))
-        .expect("the sysctl table");
-    let rows: Vec<Vec<String>> = table
-        .children()
-        .skip(1)
-        .map(|row| row.children().map(cell_text).collect())
-        .collect();
     assert_eq!(
-        rows,
+        parsed_table_rows(&block),
         [
             [
                 "kernel.core_pattern",
@@ -2125,6 +2142,42 @@ fn case_19_literal_rendering_audit() {
         assert!(
             code_literals.iter().any(|l| l == text),
             "`{text}` is one code span: {code_literals:#?}"
+        );
+    }
+}
+
+/// GFM removes the backslash of an unpaired `\|` in a table cell and
+/// keeps every backslash pair, so no run of backslashes before `|` reads
+/// back as a backslash then a pipe. The cell writes the backslash next to
+/// the pipe as `\u{5c}`; every other character is unchanged.
+#[test]
+fn case_19_literal_rendering_backslash_before_pipe_audit() {
+    use comrak::{Arena, parse_document};
+
+    for (backslashes, value, shown) in [
+        (1, r"a\|b", r"a\u{5c}|b"),
+        (2, r"a\\|b", r"a\\u{5c}|b"),
+        (3, r"a\\\|b", r"a\\\u{5c}|b"),
+    ] {
+        let md = audit(&reload(&scan(
+            SysctlHost::new()
+                .file(
+                    "/etc/sysctl.d/50-core.conf",
+                    &format!("kernel.core_pattern = {value}\n"),
+                )
+                .sysctl_a(&format!("kernel.core_pattern = {value}\n")),
+        )));
+        let arena = Arena::new();
+        let root = parse_document(&arena, &md, &gfm_tables());
+        assert_eq!(
+            parsed_table_rows(&sysctl_block_nodes(root)),
+            [[
+                "kernel.core_pattern",
+                shown,
+                "same",
+                "/etc/sysctl.d/50-core.conf:1"
+            ]],
+            "{backslashes} backslash(es) before a pipe"
         );
     }
 }

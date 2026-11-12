@@ -19,9 +19,13 @@ span nothing can reinterpret:
   strips exactly one space from each end of such a span, so padding keeps
   the literal exact; an all-space value is never stripped and is not padded.
 - `md_code_cell` writes `|` as `\|`. GFM splits cells before inline parsing,
-  honors that escape inside a code span and removes the backslash. Do not
-  double backslashes anywhere: inside a code span one is already literal,
-  and doubling changes the value.
+  honors that escape inside a code span and removes the backslash. Its
+  pipe unescaping pairs each backslash with the byte after it and removes
+  only the backslash of an unpaired `\|`, so a host `\|` cannot be written
+  with backslashes alone: `\\|` reads back as two backslashes and a pipe.
+  A backslash immediately before a pipe is therefore written `\u{5c}`, the
+  helper's escape form, then the pipe as `\|`. No other backslash changes,
+  and none is doubled: inside a code span one is already literal.
 - An empty value prints `(empty)`.
 
 Test it by parsing the rendered report with a GFM-conformant parser, not by

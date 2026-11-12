@@ -12,8 +12,11 @@
 //!   value, so an embedded run cannot close it;
 //! - in a table cell, `|` becomes `\|`. GFM splits a row into cells before
 //!   inline parsing, honors that escape inside a code span, then removes
-//!   the backslash (cmark-gfm `table.c`, `unescape_pipes`). Backslashes are
-//!   never doubled: inside a code span one is already literal.
+//!   the backslash (cmark-gfm `table.c`, `unescape_pipes`). That removal
+//!   pairs each backslash with the byte after it, so a backslash
+//!   immediately before a `|` in the value is written `\u{5c}`; no other
+//!   backslash changes, and none is doubled, because inside a code span
+//!   one is already literal.
 //!
 //! An empty value renders as the fixed text `(empty)`.
 
@@ -43,8 +46,27 @@ pub fn md_code(value: &str) -> String {
 }
 
 /// As [`md_code`], with `|` written `\|` for a GFM table cell.
+///
+/// A backslash immediately before a `|` is written `\u{5c}`, the same
+/// escape [`md_code`] uses for control characters. GFM's pipe unescaping
+/// pairs each backslash with the byte after it and removes only the
+/// backslash of an unpaired `\|` (cmark-gfm `table.c` and comrak
+/// `parser/table.rs`, `unescape_pipes`), so no run of backslashes before
+/// `\|` reads back as a backslash followed by a pipe.
 pub fn md_code_cell(value: &str) -> String {
-    md_code(value).replace('|', "\\|")
+    /// The escape for a backslash that sits before a pipe.
+    const BACKSLASH_ESCAPE: &str = "\\u{5c}";
+
+    let mut kept = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'|') {
+            kept.push_str(BACKSLASH_ESCAPE);
+        } else {
+            kept.push(c);
+        }
+    }
+    md_code(&kept).replace('|', "\\|")
 }
 
 /// Escape every character that could end a line: control characters
@@ -96,7 +118,8 @@ mod tests {
         let cases = [
             ("pipe", "|/usr/lib/x %P", "`\\|/usr/lib/x %P`"),
             ("two pipes", "a|b|c", "`a\\|b\\|c`"),
-            ("backslash before pipe", "a\\|b", "`a\\\\|b`"),
+            ("backslash before pipe", "a\\|b", "`a\\u{5c}\\|b`"),
+            ("two backslashes before pipe", "a\\\\|b", "`a\\\\u{5c}\\|b`"),
             ("backslash not doubled", "a\\b", "`a\\b`"),
             ("empty", "", "(empty)"),
             ("newline", "a\nb", "`a\\u{a}b`"),
