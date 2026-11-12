@@ -245,7 +245,11 @@ do. It has no checkboxes. The panel shows:
 - Lines reported as written, such as globs, which inspectah does not
   expand.
 
-Each file path in the panel opens its Configuration Files row.
+The Files table at the end of the panel names each file's Configuration
+Files row as a link, or "none" when the file has no row. Use that link to
+include or exclude the file. A file path in the vendor, not-carried or
+unknown-input lines also links to its row when it has one. The source
+paths in the values table and the drift lines are plain text.
 
 When inspectah does not know every input, the panel states no values or
 drift for the host and names the reason instead: a file it could not read,
