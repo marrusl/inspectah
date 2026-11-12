@@ -77,7 +77,7 @@ use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
 use inspectah_refine::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::normalize::load_for_refine;
-use inspectah_refine::session::RefineSession;
+use inspectah_refine::session::{RefineSession, render_refine_export};
 use inspectah_refine::types::{ItemId, RefinementOp};
 
 // ── The fixture ──────────────────────────────────────────────────────
@@ -822,6 +822,54 @@ fn no_notice_once_the_unit_owners_are_included() {
                 .iter()
                 .all(|w| w.kind() != ExportWarningKind::Notice),
             "{label}: {warnings:?}"
+        );
+    }
+}
+
+/// The notice leads the warnings when the export also has failures, so
+/// the header's cap can only ever drop failures behind it. The repo-less
+/// package claims a staged upload, and with no upload directory prepared
+/// nothing can prove it, so the export demotes it with a failure.
+#[test]
+fn the_notice_leads_a_failure_from_the_same_export() {
+    for (label, snapshot) in refine_snapshots() {
+        let mut projected = RefineSession::new(snapshot).snapshot_projected();
+        let agent = projected
+            .rpm
+            .as_mut()
+            .expect("the rpm section")
+            .packages_added
+            .iter_mut()
+            .find(|p| p.name == REPOLESS_PACKAGE)
+            .expect("the repo-less package");
+        agent.uploaded = true;
+        agent.disposition = FindingKind::included();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let warnings = render_refine_export(
+            &projected,
+            &dir.path().join("export.tar.gz"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the export writes");
+
+        let kinds: Vec<ExportWarningKind> = warnings.iter().map(ExportWarning::kind).collect();
+        assert_eq!(
+            kinds,
+            vec![ExportWarningKind::Notice, ExportWarningKind::Failure],
+            "{label}: {warnings:?}"
+        );
+        assert!(
+            warnings[0].text().contains("firewalld, rhc"),
+            "{label}: {warnings:?}"
+        );
+        assert_eq!(
+            warnings[1].text(),
+            format!("{REPOLESS_PACKAGE}.x86_64: staged RPM not verified, not exported"),
+            "{label}"
         );
     }
 }
