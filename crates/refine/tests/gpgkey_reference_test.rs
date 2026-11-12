@@ -102,8 +102,10 @@ fn baseline() -> BaselineData {
 enum KeyEntries {
     /// The collector records each key path once.
     OnePerPath,
-    /// Snapshots collected before that recorded one entry per section
-    /// naming the key, and must still load and behave the same.
+    /// One entry per section naming the key, as snapshots collected
+    /// before that recorded it. Those snapshots predate schema 26 and the
+    /// loader rejects them, but rendering and refine must still behave the
+    /// same on repeated entries at one path.
     OnePerSection,
 }
 

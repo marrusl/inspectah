@@ -133,9 +133,11 @@ without a warning: dnf fetches them at build time.
 Every section that names a key yields a key entry, and a RHEL host's
 `redhat.repo` names the stock key from hundreds of sections (209 on RHEL
 10.2, 500 on RHEL 9.8). `repos::record_each_key_once` collapses them per
-path and unions `gpgkey_references`. Snapshots from before still carry one
-entry per section, so consumers keep acting on **every** entry at a path
-(the refine cascade does), never on the first match only.
+path and unions `gpgkey_references`. Snapshots from before carried one
+entry per section. They predate schema 26, so the loader rejects them, but
+consumers still act on **every** entry at a path (the refine cascade
+does), never on the first match only, and repeated entries render and
+refine as before.
 
 A key whose path a **base-image** package owns (`file_ownership` against
 the baseline's package names) and which `rpm -Va` did not report
