@@ -89,16 +89,30 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
 /// taken as a GPG key.
 const PGP_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
 
+/// Armor lines of PGP private key material. A file holding any of them is
+/// refused even if it also holds a public key block, since the redaction
+/// patterns do not cover PGP armor and the file would otherwise be stored
+/// verbatim and staged into the image.
+const PGP_PRIVATE_ARMOR: [&str; 4] = [
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    "-----END PGP PRIVATE KEY BLOCK-----",
+    "-----BEGIN PGP SECRET KEY BLOCK-----",
+    "-----END PGP SECRET KEY BLOCK-----",
+];
+
 /// Validate that file content looks like a GPG public key: some line
-/// begins with the armored header, after optional spaces or tabs. Text
-/// before it is allowed, since the stock `RPM-GPG-KEY-redhat-release`
-/// opens with prose. A header that only appears inside a line is not
-/// accepted. Non-PGP content is rejected to prevent arbitrary file
-/// ingestion.
+/// begins with the armored header, after optional spaces or tabs, and no
+/// PGP private or secret key armor appears anywhere in it. Text before the
+/// header is allowed, since the stock `RPM-GPG-KEY-redhat-release` opens
+/// with prose. A header that only appears inside a line is not accepted.
+/// Other content is rejected to prevent arbitrary file ingestion.
 fn validate_gpg_content(content: &str) -> bool {
-    content
-        .lines()
-        .any(|line| line.trim_start_matches([' ', '\t']).starts_with(PGP_HEADER))
+    !PGP_PRIVATE_ARMOR
+        .iter()
+        .any(|armor| content.contains(armor))
+        && content
+            .lines()
+            .any(|line| line.trim_start_matches([' ', '\t']).starts_with(PGP_HEADER))
 }
 
 /// The `gpgkey=` values of a repo file, read the way dnf's ini parser
@@ -611,10 +625,23 @@ uid                  Red Hat, Inc. (release key 2) <security@redhat.com>
         let el9 = format!("{EL9_REDHAT_RELEASE_PREAMBLE}{ARMORED_BLOCK}");
         let el10 = format!("{EL10_REDHAT_RELEASE_PREAMBLE}{ARMORED_BLOCK}");
         let mid_line = format!("prose {ARMORED_BLOCK}");
-        let cases: [(&str, &str, bool); 3] = [
+        let private_above = format!(
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQdGB...\n\
+             -----END PGP PRIVATE KEY BLOCK-----\n{ARMORED_BLOCK}"
+        );
+        let secret_above = format!(
+            "-----BEGIN PGP SECRET KEY BLOCK-----\n\nlQdGB...\n\
+             -----END PGP SECRET KEY BLOCK-----\n{ARMORED_BLOCK}"
+        );
+        let private_end_only =
+            format!("lQdGB...\n-----END PGP PRIVATE KEY BLOCK-----\n{ARMORED_BLOCK}");
+        let cases: [(&str, &str, bool); 6] = [
             ("RHEL 9.8 stock key", &el9, true),
             ("RHEL 10.2 stock key", &el10, true),
             ("header inside a line", &mid_line, false),
+            ("private block above a public block", &private_above, false),
+            ("secret block above a public block", &secret_above, false),
+            ("private END above a public block", &private_end_only, false),
         ];
         for (name, content, collected) in cases {
             let mock = MockExecutor::new().with_file(KEY_PATH, content);
