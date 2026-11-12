@@ -144,7 +144,11 @@ impl Inspector for ConfigInspector {
 
             let (content, disposition) = capture_config(exec, path, &mut degraded_reasons);
 
-            let kind = classify_rpm_va_kind(flags);
+            let kind = if is_rpm_owned_dev_null_link(exec, path, flags) {
+                ConfigFileKind::RpmOwnedModified
+            } else {
+                classify_rpm_va_kind(flags)
+            };
 
             // Default/unmodified configs don't belong in the snapshot.
             // Only modified (content-changed) RPM configs are migration-relevant.
@@ -448,6 +452,30 @@ fn is_authselect_pam_link(exec: &dyn Executor, path: &str, flags: &str) -> bool 
         Ok(resolved) => resolved.to_string_lossy().starts_with(AUTHSELECT_PREFIX),
         Err(_) => false,
     }
+}
+
+/// Where an admin points a package symlink to mask the file it names.
+const DEV_NULL: &str = "/dev/null";
+
+/// § 5.1's RPM-owned mask rule: an `rpm -Va` entry with the readLink flag
+/// `L` whose path resolves, through any number of hops, to `/dev/null` is
+/// an RPM-owned config an admin masked, so it is `RpmOwnedModified`.
+///
+/// RPM verifies a file that is not a regular file through `L` alone: it
+/// skips the size and digest checks for it (`lib/verify.c`,
+/// `rpmVerifyFile`). `classify_rpm_va_kind` reads only those two columns,
+/// so without this rule the row is `RpmOwnedDefault` and dropped, and
+/// because its path is in `rpm_va_paths` the unowned walk skips it too.
+/// The mask is then lost. Its content is read as for any entry, which for
+/// `/dev/null` is empty, so the image gets an empty file of the same name.
+///
+/// A link re-pointed to any other file is not covered: carrying it needs
+/// a decision the spec leaves to the defaults work.
+fn is_rpm_owned_dev_null_link(exec: &dyn Executor, path: &str, flags: &str) -> bool {
+    flags.contains('L')
+        && exec
+            .resolve_final_target(Path::new(path))
+            .is_ok_and(|resolved| resolved == Path::new(DEV_NULL))
 }
 
 /// Why the collector could not capture a config file's content.

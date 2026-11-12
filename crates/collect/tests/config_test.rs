@@ -919,3 +919,154 @@ fn kernel_module_and_initramfs_directories_are_config_entries() {
          so nothing else will put it in the image"
     );
 }
+
+/// § 5.1's RPM-owned mask rule. RPM verifies a non-regular file through
+/// the readLink column only, so `rpm -Va` reports a package symlink an
+/// admin re-pointed to `/dev/null` as `....L....` and nothing else. Such a
+/// row is a modified config: it is carried as an empty file of the same
+/// name, which masks the vendor file the way the link did.
+///
+/// Each row is its own host. The non-`/dev/null` link and the authselect
+/// link are the controls that keep their old result, and the regular file
+/// shows the content rule is untouched.
+#[test]
+fn an_rpm_owned_link_re_pointed_to_dev_null_is_a_modified_config() {
+    struct Case {
+        name: &'static str,
+        rpm_va: &'static str,
+        path: &'static str,
+        links: &'static [(&'static str, &'static str)],
+        /// What the executor reads at `path`; `MockExecutor::read_file`
+        /// does not follow links, so a link row registers its target's
+        /// content here.
+        content: &'static str,
+        /// `Some(content)` when the row yields an included
+        /// `RpmOwnedModified` entry; `None` when it yields no entry.
+        expected: Option<&'static str>,
+    }
+    const SYSCTL_LINK: &str = "/etc/sysctl.d/99-sysctl.conf";
+    const SYSCTL_CONF: &str = "kernel.sysrq = 0\n";
+    const DEV_NULL: &str = "/dev/null";
+
+    let cases = [
+        Case {
+            name: "link to /dev/null",
+            rpm_va: "....L....  c /etc/sysctl.d/99-sysctl.conf\n",
+            path: SYSCTL_LINK,
+            links: &[(SYSCTL_LINK, DEV_NULL)],
+            content: "",
+            expected: Some(""),
+        },
+        Case {
+            name: "link to a real file",
+            rpm_va: "....L....  c /etc/sysctl.d/99-sysctl.conf\n",
+            path: SYSCTL_LINK,
+            links: &[(SYSCTL_LINK, "/etc/sysctl.conf")],
+            content: SYSCTL_CONF,
+            expected: None,
+        },
+        Case {
+            name: "two-hop link to /dev/null",
+            rpm_va: "....L....  c /etc/sysctl.d/99-sysctl.conf\n",
+            path: SYSCTL_LINK,
+            links: &[
+                (SYSCTL_LINK, "/etc/sysctl.d/50-hop.conf"),
+                ("/etc/sysctl.d/50-hop.conf", DEV_NULL),
+            ],
+            content: "",
+            expected: Some(""),
+        },
+        Case {
+            name: "non-sysctl link to /dev/null",
+            rpm_va: "....L....  c /etc/systemd/logind.conf.d/x.conf\n",
+            path: "/etc/systemd/logind.conf.d/x.conf",
+            links: &[("/etc/systemd/logind.conf.d/x.conf", DEV_NULL)],
+            content: "",
+            expected: Some(""),
+        },
+        Case {
+            name: "authselect PAM link",
+            rpm_va: "....L....  c /etc/pam.d/system-auth\n",
+            path: "/etc/pam.d/system-auth",
+            links: &[("/etc/pam.d/system-auth", "/etc/authselect/system-auth")],
+            content: "# authselect-generated\n",
+            expected: None,
+        },
+        Case {
+            name: "content-modified regular file",
+            rpm_va: "S.5....T.  c /etc/sysctl.conf\n",
+            path: "/etc/sysctl.conf",
+            links: &[],
+            content: SYSCTL_CONF,
+            expected: Some(SYSCTL_CONF),
+        },
+    ];
+
+    for case in cases {
+        let mut exec = MockExecutor::new()
+            .with_dir("/etc", vec![])
+            .with_file(case.path, case.content);
+        for (link, target) in case.links {
+            exec = exec.with_link(link, target);
+        }
+        let rpm_state = RpmState {
+            verification_results: parse_rpm_va(case.rpm_va),
+            ..Default::default()
+        };
+        let flags = rpm_state.verification_results[0].flags.clone();
+        let source = pkg_source();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+
+        let output = ConfigInspector::new()
+            .inspect(&ctx, &NullProgress)
+            .unwrap_or_else(|e| panic!("{}: inspector should succeed: {e:?}", case.name));
+        let section = match &output.section {
+            SectionData::Config(s) => s,
+            other => panic!("{}: expected SectionData::Config, got {other:?}", case.name),
+        };
+        let entries: Vec<_> = section
+            .files
+            .iter()
+            .filter(|f| f.path == case.path)
+            .collect();
+
+        match case.expected {
+            None => assert!(
+                entries.is_empty(),
+                "{}: no entry expected at {}, got {entries:?}",
+                case.name,
+                case.path
+            ),
+            Some(content) => {
+                assert_eq!(
+                    entries.len(),
+                    1,
+                    "{}: exactly one entry expected at {}, got {:?}",
+                    case.name,
+                    case.path,
+                    section.files
+                );
+                let entry = entries[0];
+                assert_eq!(
+                    entry.kind,
+                    ConfigFileKind::RpmOwnedModified,
+                    "{}",
+                    case.name
+                );
+                assert!(entry.disposition.is_included(), "{}", case.name);
+                assert_eq!(entry.content, content, "{}", case.name);
+                assert_eq!(
+                    entry.rpm_va_flags.as_deref(),
+                    Some(flags.as_str()),
+                    "{}",
+                    case.name
+                );
+            }
+        }
+    }
+}
