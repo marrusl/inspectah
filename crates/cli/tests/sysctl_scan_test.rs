@@ -24,7 +24,9 @@ use inspectah_pipeline::render::report::render_report;
 use inspectah_pipeline::render::sysctl_report::{
     DRIFT_INTRO, TRUST_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
 };
+use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
+use inspectah_web::adapter::build_web_view;
 use sysctl_hosts::{
     SysctlHost, export_session, reload, render_export, scan, scan_without_config, session,
 };
@@ -2462,5 +2464,414 @@ fn case_19_literal_rendering_empty_value_html() {
     assert!(
         text.contains("kernel.foo (empty) same /etc/sysctl.d/50-empty.conf:1"),
         "{text}"
+    );
+}
+
+// ── Refine view ──────────────────────────────────────────────────────
+
+/// The session's whole view response, as `/api/view` serializes it.
+fn view(session: &RefineSession) -> serde_json::Value {
+    serde_json::to_value(build_web_view(session)).expect("the view serializes")
+}
+
+/// The view's `sysctl` object.
+fn sysctl_view(session: &RefineSession) -> serde_json::Value {
+    serde_json::to_value(build_web_view(session).sysctl).expect("the sysctl view serializes")
+}
+
+/// The view's file row at `path`.
+fn view_file<'a>(sysctl: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    sysctl["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .find(|f| f["path"] == path)
+        .unwrap_or_else(|| panic!("no file row at {path}: {sysctl}"))
+}
+
+/// A line ref as the view serializes it.
+fn line_json(path: &str, line: u32) -> serde_json::Value {
+    serde_json::json!({"path": path, "line": line, "link_target": null})
+}
+
+/// Every object key anywhere in `value`.
+fn json_keys(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .flat_map(|(key, v)| std::iter::once(key.clone()).chain(json_keys(v)))
+            .collect(),
+        serde_json::Value::Array(items) => items.iter().flat_map(json_keys).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Neither a settings row nor a drift row is anywhere in `sysctl`.
+fn assert_no_settings_or_drift(layout: &str, sysctl: &serde_json::Value) {
+    let keys = json_keys(sysctl);
+    assert!(
+        !keys.iter().any(|k| k == "settings" || k == "drift"),
+        "{layout}: no settings or drift in {sysctl}"
+    );
+}
+
+/// The one-row `vm.swappiness` explanation both shadow layouts resolve to.
+fn swappiness_writes_60_from(path: &str) -> serde_json::Value {
+    serde_json::json!({
+        "state": "resolved",
+        "settings": [{
+            "key": "vm.swappiness",
+            "outcome": {
+                "kind": "writes",
+                "value": "60",
+                "from": line_json(path, 1),
+                "runtime": {"kind": "matches"},
+            },
+            "overwritten": [],
+        }],
+        "drift": [],
+    })
+}
+
+#[test]
+fn case_05_rpm_owned_mask_view() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(SYSCTL_CONF, "vm.swappiness = 10\n")
+            .link(RPM_MASK, "/dev/null")
+            .rpm_owned(SYSCTL_CONF, "procps-ng")
+            .rpm_owned(RPM_MASK, "procps-ng")
+            .rpm_va("....L....", RPM_MASK)
+            .sysctl_a("vm.swappiness = 60\n"),
+    ));
+    let sysctl = sysctl_view(&session(&snap));
+
+    let mask = view_file(&sysctl, RPM_MASK);
+    assert_eq!(mask["body"], serde_json::json!({"kind": "mask"}));
+    assert_eq!(mask["config_path"], RPM_MASK);
+    assert!(
+        !sysctl["vendor_replacements"]
+            .to_string()
+            .contains("99-sysctl.conf"),
+        "the mask replaces no vendor file: {}",
+        sysctl["vendor_replacements"]
+    );
+}
+
+#[test]
+fn case_06_sysctl_conf_through_the_symlink_view() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(SYSCTL_CONF, "vm.swappiness = 10\n")
+            .link(RPM_MASK, "../sysctl.conf")
+            .rpm_owned(SYSCTL_CONF, "procps-ng")
+            .rpm_owned(RPM_MASK, "procps-ng")
+            .rpm_va("S.5....T.", SYSCTL_CONF)
+            .sysctl_a("vm.swappiness = 10\n"),
+    ));
+    let mut refined = session(&snap);
+
+    let before = sysctl_view(&refined);
+    assert_eq!(before["vendor_replacements"], serde_json::json!([]));
+    let link = view_file(&before, RPM_MASK);
+    assert_eq!(link["config_path"], SYSCTL_CONF);
+    assert_eq!(
+        link["body"],
+        serde_json::json!({"kind": "read", "link_target": SYSCTL_CONF})
+    );
+    assert_eq!(before["not_carried"], serde_json::json!([]));
+
+    refined
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: SYSCTL_CONF.into(),
+            },
+            include: false,
+        })
+        .expect("the exclusion applies");
+    let after = sysctl_view(&refined);
+    assert_eq!(
+        after["not_carried"],
+        serde_json::json!([{
+            "path": RPM_MASK,
+            "reason": {"kind": "excluded", "config_path": SYSCTL_CONF},
+        }])
+    );
+}
+
+#[test]
+fn case_12_one_drifted_key_does_not_drop_the_file_view() {
+    const TUNING: &str = "/etc/sysctl.d/90-tuning.conf";
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(
+                TUNING,
+                "# site tuning\n\
+                 vm.swappiness = 10\n\
+                 vm.dirty_ratio = 20\n\
+                 vm.dirty_background_ratio = 5\n\
+                 kernel.sysrq = 0\n\
+                 net.ipv4.ip_forward = 1\n\
+                 net.core.somaxconn = 4096\n\
+                 fs.file-max = 2097152\n",
+            )
+            .sysctl_a(
+                "fs.file-max = 2097152\n\
+                 kernel.sysrq = 0\n\
+                 net.core.somaxconn = 4096\n\
+                 net.ipv4.ip_forward = 1\n\
+                 vm.dirty_background_ratio = 5\n\
+                 vm.dirty_ratio = 20\n\
+                 vm.swappiness = 60\n",
+            ),
+    ));
+    let mut refined = session(&snap);
+
+    let sysctl = sysctl_view(&refined);
+    let explanation = &sysctl["explanation"];
+    assert_eq!(explanation["state"], "resolved");
+    assert_eq!(
+        explanation["settings"].as_array().expect("settings").len(),
+        7,
+        "{explanation}"
+    );
+    assert_eq!(
+        explanation["drift"],
+        serde_json::json!([{
+            "key": "vm.swappiness",
+            "file_value": "10",
+            "runtime": "60",
+            "from": line_json(TUNING, 2),
+        }])
+    );
+
+    refined
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: TUNING.into(),
+            },
+            include: false,
+        })
+        .expect("a sysctl config row is an ordinary toggleable row");
+}
+
+#[test]
+fn case_15_mask_only_and_glob_only_view() {
+    let mask_only = sysctl_view(&session(&reload(&scan(
+        SysctlHost::new()
+            .file("/usr/lib/sysctl.d/50-x.conf", "vm.swappiness = 10\n")
+            .link("/etc/sysctl.d/50-x.conf", "/dev/null")
+            .sysctl_a("vm.swappiness = 60\n"),
+    ))));
+    let glob_only = sysctl_view(&session(&reload(&scan(SysctlHost::new().file(
+        "/etc/sysctl.d/50-rp.conf",
+        "net.ipv4.conf.*.rp_filter = 2\n",
+    )))));
+
+    for (layout, sysctl) in [("mask only", &mask_only), ("glob only", &glob_only)] {
+        assert_eq!(sysctl["state"], "host", "{layout}: {sysctl}");
+        assert_eq!(
+            sysctl["explanation"],
+            serde_json::json!({"state": "resolved", "settings": [], "drift": []}),
+            "{layout}"
+        );
+    }
+    assert_eq!(
+        mask_only["vendor_replacements"],
+        serde_json::json!([{
+            "action": "masks",
+            "path": "/etc/sysctl.d/50-x.conf",
+            "vendor_path": "/usr/lib/sysctl.d/50-x.conf",
+            "carriage": {"kind": "carried", "config_path": "/etc/sysctl.d/50-x.conf"},
+        }])
+    );
+    assert_eq!(
+        glob_only["as_written"],
+        serde_json::json!([{
+            "kind": "glob_assign",
+            "at": line_json("/etc/sysctl.d/50-rp.conf", 1),
+            "pattern": "net.ipv4.conf.*.rp_filter",
+            "value": "2",
+        }])
+    );
+}
+
+#[test]
+fn case_16_collection_failures_view() {
+    let hosts = [
+        (
+            "sysctl -a fails",
+            failure_host().sysctl_a_fails(1),
+            "sysctl: sysctl -a failed with exit code 1",
+        ),
+        (
+            "/run/sysctl.d cannot be listed",
+            failure_host()
+                .sysctl_a("vm.swappiness = 10\n")
+                .dir_error("/run/sysctl.d", std::io::ErrorKind::PermissionDenied),
+            "sysctl: cannot list /run/sysctl.d:",
+        ),
+        (
+            "a dangling link",
+            failure_host()
+                .sysctl_a("vm.swappiness = 10\n")
+                .dangling_link("/etc/sysctl.d/90-x.conf", "/etc/sysctl.d/gone.conf"),
+            "sysctl: cannot read /etc/sysctl.d/90-x.conf:",
+        ),
+    ];
+    for (layout, host, cause) in hosts {
+        let sysctl = sysctl_view(&session(&reload(&scan(host))));
+        let mut keys: Vec<&String> = sysctl.as_object().expect("an object").keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["reason", "state"], "{layout}: {sysctl}");
+        assert_eq!(sysctl["state"], "unavailable", "{layout}");
+        let reason = sysctl["reason"].as_str().expect("a reason");
+        assert!(reason.contains(cause), "{layout}: `{cause}` in {reason:?}");
+    }
+}
+
+#[test]
+fn case_17_outside_links_view() {
+    for (layout, outside) in [
+        ("overlapping assignment", "vm.swappiness = 60\n"),
+        ("overlapping exclusion", "-vm.swappiness\n"),
+    ] {
+        let sysctl = sysctl_view(&session(&reload(&scan(overlapping_host(outside)))));
+        assert_eq!(
+            sysctl["explanation"],
+            serde_json::json!({
+                "state": "unknown",
+                "inputs": [{"kind": "outside_link", "path": SITE_LINK, "target": SITE_TARGET}],
+            }),
+            "{layout}"
+        );
+        assert_no_settings_or_drift(layout, &sysctl);
+    }
+
+    let canary = view(&session(&reload(&scan(
+        SysctlHost::new()
+            .link("/etc/sysctl.d/90-app.conf", "/var/lib/app/credentials")
+            .file("/var/lib/app/credentials", "password: canary-outside\n"),
+    ))));
+    assert!(!canary.to_string().contains("canary-outside"));
+
+    let shadowed = sysctl_view(&session(&reload(&scan(
+        SysctlHost::new()
+            .link("/run/sysctl.d/90-site.conf", SITE_TARGET)
+            .file(SITE_TARGET, "vm.swappiness = 10\n")
+            .file(SITE_LINK, "vm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    ))));
+    assert_eq!(
+        shadowed["explanation"],
+        swappiness_writes_60_from(SITE_LINK)
+    );
+}
+
+#[test]
+fn case_18_redaction_makes_the_explanation_unknown_view() {
+    let redacted_file = |path: &str| serde_json::json!({"kind": "redacted_file", "path": path});
+    let unknown_layouts = [
+        (
+            "secret in a file",
+            secret_in_a_file_host().sysctl_a("vm.dirty_ratio = 30\nvm.swappiness = 60\n"),
+            "canary-inside",
+            vec![redacted_file(APP_CONF)],
+        ),
+        (
+            "secret only at runtime",
+            SysctlHost::new()
+                .file(CORE_CONF, "kernel.core_pattern = REDACTED_PASSWORD_1\n")
+                .sysctl_a("kernel.core_pattern = password=canary-runtime\n"),
+            "canary-runtime",
+            vec![serde_json::json!({"kind": "redacted_runtime", "key": "kernel.core_pattern"})],
+        ),
+        (
+            "secret only in the file",
+            SysctlHost::new()
+                .file(CORE_CONF, "kernel.core_pattern = password=canary-file\n")
+                .sysctl_a("kernel.core_pattern = REDACTED_PASSWORD_1\n"),
+            "canary-file",
+            vec![redacted_file(CORE_CONF)],
+        ),
+        (
+            "one-line PEM through an allowed link",
+            SysctlHost::new()
+                .link("/etc/sysctl.d/90-app.conf", "/etc/app/credentials.json")
+                .file("/etc/app/credentials.json", ONE_LINE_PEM),
+            "U0VDUkVUX0NBTkFSWQ",
+            vec![redacted_file("/etc/sysctl.d/90-app.conf")],
+        ),
+        (
+            "equal values under different keys",
+            SysctlHost::new()
+                .file(APP_CONF, "db_password = 60\nvm.swappiness = 60\n")
+                .sysctl_a("vm.swappiness = 60\n"),
+            "db_password = 60",
+            vec![redacted_file(APP_CONF)],
+        ),
+    ];
+    for (layout, host, canary, inputs) in unknown_layouts {
+        let snap = reload(&scan(host));
+        let refined = session(&snap);
+        let sysctl = sysctl_view(&refined);
+        assert_eq!(
+            sysctl["explanation"],
+            serde_json::json!({"state": "unknown", "inputs": inputs}),
+            "{layout}"
+        );
+        assert_no_settings_or_drift(layout, &sysctl);
+        assert!(
+            !view(&refined).to_string().contains(canary),
+            "{layout}: `{canary}` is in the view"
+        );
+
+        if layout == "equal values under different keys" {
+            let content = &config_entry(&snap, APP_CONF).content;
+            let token = content.lines().next().expect("the password line");
+            assert!(token.starts_with("REDACTED_"), "{content:?}");
+            assert!(
+                !sysctl.to_string().contains(token),
+                "{layout}: `{token}` is in the sysctl view"
+            );
+        }
+    }
+
+    let shadowed = session(&reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/usr/lib/sysctl.d/50-x.conf",
+                "db_password = canary-shadowed\n",
+            )
+            .file("/etc/sysctl.d/50-x.conf", "vm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    )));
+    assert_eq!(
+        sysctl_view(&shadowed)["explanation"],
+        swappiness_writes_60_from("/etc/sysctl.d/50-x.conf")
+    );
+    assert!(!view(&shadowed).to_string().contains("canary-shadowed"));
+}
+
+#[test]
+fn no_sysctl_item_id_view() {
+    let whole = view(&session(&reload(&scan(drifted_key_host()))));
+    let object = whole.as_object().expect("an object");
+    assert!(!object.contains_key("sysctls"), "no sysctl decision rows");
+    assert_eq!(whole["sysctl"]["state"], "host");
+
+    let op = |item_id: serde_json::Value| serde_json::json!({"op": "SetInclude", "target": {"item_id": item_id, "include": false}});
+    serde_json::from_value::<RefinementOp>(op(serde_json::json!({
+        "kind": "Config",
+        "key": {"path": "/etc/sysctl.d/90-swap.conf"},
+    })))
+    .expect("the positive control: a config op deserializes");
+    let refused = serde_json::from_value::<RefinementOp>(op(serde_json::json!({
+        "kind": "Sysctl",
+        "key": {"key": "vm.swappiness"},
+    })));
+    assert!(
+        refused.is_err(),
+        "a sysctl op has no target, got {refused:?}"
     );
 }

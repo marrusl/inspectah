@@ -1,13 +1,12 @@
 use crate::types::{
     RefinedConfig, RefinedDropIn, RefinedFlatpak, RefinedPackage, RefinedQuadlet,
-    RefinedServiceState, RefinedSysctl, RefinedTunedSelection, Triage, TriageAnnotation,
-    TriageBucket, TriageReason, TriageTag,
+    RefinedServiceState, RefinedTunedSelection, Triage, TriageAnnotation, TriageBucket,
+    TriageReason, TriageTag,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileKind};
 use inspectah_core::types::finding::ShadowType;
-use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
@@ -702,59 +701,6 @@ pub fn classify_containers(
         .collect();
 
     (quadlets, flatpaks)
-}
-
-/// Sysctl keys that produce transient or non-reproducible effects and should
-/// be excluded from migration output.
-const SYSCTL_DENY_LIST: &[&str] = &["vm.drop_caches", "vm.compact_memory", "kernel.sysrq"];
-
-/// Classify sysctl overrides into triage buckets.
-///
-/// Only file-backed overrides (source under `/etc/sysctl.d/` or `/etc/sysctl.conf`)
-/// are promoted to Site. Runtime-only observations also get Site classification
-/// but carry a `RuntimeOnlyObservation` annotation so the frontend can present
-/// them differently. Deny-listed keys are excluded entirely.
-pub fn classify_sysctls(snap: &InspectionSnapshot) -> Vec<RefinedSysctl> {
-    let kernel_boot = match &snap.kernel_boot {
-        Some(kb) => kb,
-        None => return Vec::new(),
-    };
-
-    kernel_boot
-        .sysctl_overrides
-        .iter()
-        .filter(|s| !SYSCTL_DENY_LIST.contains(&s.key.as_str()))
-        .map(|s| RefinedSysctl {
-            entry: s.clone(),
-            triage: classify_single_sysctl(s),
-        })
-        .collect()
-}
-
-fn is_file_backed(source: &str) -> bool {
-    source.starts_with("/etc/sysctl.d/") || source == "/etc/sysctl.conf"
-}
-
-fn classify_single_sysctl(s: &SysctlOverride) -> TriageTag {
-    let file_backed = is_file_backed(&s.source);
-
-    let reason = if file_backed {
-        TriageReason::SysctlFileBackedOverride
-    } else {
-        TriageReason::SysctlNoBaseline
-    };
-
-    let annotations = if file_backed {
-        vec![]
-    } else {
-        vec![TriageAnnotation::RuntimeOnlyObservation]
-    };
-
-    TriageTag {
-        triage: Triage::SingleHost(TriageBucket::Site),
-        primary_reason: reason,
-        annotations,
-    }
 }
 
 /// Classify tuned profile selection into triage buckets.
@@ -2567,160 +2513,6 @@ mod container_classification {
         let (quadlets, flatpaks) = classify_containers(&snap);
         assert!(quadlets.is_empty());
         assert!(flatpaks.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod sysctl_classification {
-    use super::*;
-    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
-
-    fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
-        match &tag.triage {
-            Triage::SingleHost(b) => assert_eq!(*b, expected, "bucket mismatch"),
-            Triage::Aggregate(_) => panic!("expected SingleHost, got Aggregate"),
-        }
-    }
-
-    #[test]
-    fn sysctl_file_backed_is_site() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![SysctlOverride {
-                    key: "net.ipv4.ip_forward".into(),
-                    runtime: "1".into(),
-                    default: "0".into(),
-                    source: "/etc/sysctl.d/99-custom.conf".into(),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = classify_sysctls(&snap);
-        assert_eq!(result.len(), 1);
-        assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(
-            result[0].triage.primary_reason,
-            TriageReason::SysctlFileBackedOverride
-        );
-        assert!(
-            result[0].triage.annotations.is_empty(),
-            "file-backed sysctl should have no annotations"
-        );
-    }
-
-    #[test]
-    fn sysctl_sysctl_conf_is_site() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![SysctlOverride {
-                    key: "net.core.somaxconn".into(),
-                    runtime: "4096".into(),
-                    default: "128".into(),
-                    source: "/etc/sysctl.conf".into(),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = classify_sysctls(&snap);
-        assert_eq!(result.len(), 1);
-        assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(
-            result[0].triage.primary_reason,
-            TriageReason::SysctlFileBackedOverride
-        );
-    }
-
-    #[test]
-    fn sysctl_runtime_only_has_annotation() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![SysctlOverride {
-                    key: "net.ipv4.ip_forward".into(),
-                    runtime: "1".into(),
-                    default: "0".into(),
-                    source: "runtime".into(),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = classify_sysctls(&snap);
-        assert_eq!(result.len(), 1);
-        assert_bucket(&result[0].triage, TriageBucket::Site);
-        assert_eq!(
-            result[0].triage.primary_reason,
-            TriageReason::SysctlNoBaseline
-        );
-        assert!(
-            result[0]
-                .triage
-                .annotations
-                .contains(&TriageAnnotation::RuntimeOnlyObservation),
-            "runtime-only sysctl must have RuntimeOnlyObservation annotation"
-        );
-    }
-
-    #[test]
-    fn sysctl_deny_list_excluded() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![
-                    SysctlOverride {
-                        key: "vm.drop_caches".into(),
-                        runtime: "3".into(),
-                        default: "0".into(),
-                        source: "/etc/sysctl.d/99-custom.conf".into(),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                    },
-                    SysctlOverride {
-                        key: "vm.compact_memory".into(),
-                        runtime: "1".into(),
-                        default: "0".into(),
-                        source: "runtime".into(),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                    },
-                    SysctlOverride {
-                        key: "kernel.sysrq".into(),
-                        runtime: "16".into(),
-                        default: "0".into(),
-                        source: "/etc/sysctl.d/10-sysrq.conf".into(),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                    },
-                ],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let result = classify_sysctls(&snap);
-        assert!(
-            result.is_empty(),
-            "all deny-listed sysctls should be excluded, got {}",
-            result.len()
-        );
-    }
-
-    #[test]
-    fn no_sysctls_returns_empty() {
-        let snap = InspectionSnapshot::default();
-        let result = classify_sysctls(&snap);
-        assert!(result.is_empty());
     }
 }
 

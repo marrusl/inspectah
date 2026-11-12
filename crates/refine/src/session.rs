@@ -347,12 +347,6 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             })
             .map(|e| e.locked)
             .unwrap_or(false),
-        ItemId::Sysctl { key } => snapshot
-            .kernel_boot
-            .as_ref()
-            .and_then(|kb| kb.sysctl_overrides.iter().find(|s| s.key == *key))
-            .map(|s| s.locked)
-            .unwrap_or(false),
         // Item kinds without locked field or not yet handled: not lockable
         _ => false,
     }
@@ -435,15 +429,8 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
             }
         }
     }
-    if let Some(ref mut kb) = snapshot.kernel_boot {
-        for s in &mut kb.sysctl_overrides {
-            if s.locked {
-                s.disposition = FindingKind::excluded();
-            }
-        }
-        // Loaded modules are inventory: no surface toggles them, so a
-        // lock has nothing to hold shut.
-    }
+    // Loaded modules are inventory: no surface toggles them, so a lock
+    // has nothing to hold shut.
     if let Some(ref mut net) = snapshot.network {
         for c in &mut net.connections {
             if c.locked && !c.disposition.is_inventory() {
@@ -2180,17 +2167,6 @@ impl RefineSession {
                             )));
                         }
                     }
-                    ItemId::Sysctl { key } => {
-                        let found = self
-                            .original
-                            .kernel_boot
-                            .as_ref()
-                            .map(|kb| kb.sysctl_overrides.iter().any(|s| s.key == *key))
-                            .unwrap_or(false);
-                        if !found {
-                            return Err(RefineError::UnknownTarget(key.clone()));
-                        }
-                    }
                     ItemId::TunedSelection { profile } => {
                         let found = self
                             .original
@@ -2874,14 +2850,6 @@ impl RefineSession {
                                         })
                                 {
                                     flatpak.disposition = FindingKind::from_bool(*include);
-                                }
-                            }
-                            ItemId::Sysctl { key } => {
-                                if let Some(ref mut kb) = snap.kernel_boot
-                                    && let Some(sysctl) =
-                                        kb.sysctl_overrides.iter_mut().find(|s| s.key == *key)
-                                {
-                                    sysctl.disposition = FindingKind::from_bool(*include);
                                 }
                             }
                             ItemId::TunedSelection { profile } => {
@@ -5670,81 +5638,22 @@ mod tests {
         );
     }
 
-    // ── Sysctl / Tuned SetInclude tests ───────────────────────────────
+    // ── Tuned SetInclude tests ────────────────────────────────────────
 
-    use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+    use inspectah_core::types::kernelboot::KernelBootSection;
 
-    /// Build a snapshot with sysctl overrides and tuned profile for SetInclude tests.
+    /// Build a snapshot with a tuned profile for SetInclude tests.
     fn test_snapshot_with_kernel_boot() -> InspectionSnapshot {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
             kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![
-                    SysctlOverride {
-                        key: "net.ipv4.ip_forward".into(),
-                        runtime: "1".into(),
-                        default: "0".into(),
-                        source: "/etc/sysctl.d/99-custom.conf".into(),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                    },
-                    SysctlOverride {
-                        key: "vm.swappiness".into(),
-                        runtime: "10".into(),
-                        default: "60".into(),
-                        source: "/etc/sysctl.d/99-custom.conf".into(),
-                        disposition: FindingKind::included(),
-                        locked: false,
-                        aggregate: None,
-                    },
-                ],
                 tuned_active: "throughput-performance".into(),
                 tuned_disposition: FindingKind::included(),
                 ..Default::default()
             }),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn exclude_sysctl_sets_include_false() {
-        let snap = test_snapshot_with_kernel_boot();
-        let mut session = RefineSession::new(snap);
-
-        session
-            .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Sysctl {
-                    key: "net.ipv4.ip_forward".into(),
-                },
-                include: false,
-            })
-            .unwrap();
-
-        let projected = session.snapshot_projected();
-        let kb = projected.kernel_boot.as_ref().unwrap();
-
-        let ip_fwd = kb
-            .sysctl_overrides
-            .iter()
-            .find(|s| s.key == "net.ipv4.ip_forward")
-            .unwrap();
-        assert!(
-            !ip_fwd.disposition.is_included(),
-            "ip_forward sysctl must be excluded"
-        );
-
-        // Other sysctl must be unaffected.
-        let swappiness = kb
-            .sysctl_overrides
-            .iter()
-            .find(|s| s.key == "vm.swappiness")
-            .unwrap();
-        assert!(
-            swappiness.disposition.is_included(),
-            "vm.swappiness must remain included"
-        );
     }
 
     #[test]
@@ -5771,26 +5680,6 @@ mod tests {
         assert_eq!(
             kb.tuned_active, "throughput-performance",
             "tuned_active profile name must be preserved"
-        );
-    }
-
-    #[test]
-    fn unknown_sysctl_key_is_error() {
-        let snap = test_snapshot_with_kernel_boot();
-        let mut session = RefineSession::new(snap);
-
-        let result = session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::Sysctl {
-                key: "kernel.nonexistent".into(),
-            },
-            include: false,
-        });
-
-        assert!(result.is_err(), "unknown sysctl key must be rejected");
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("kernel.nonexistent"),
-            "error must name the unknown target, got: {err}"
         );
     }
 

@@ -1794,7 +1794,7 @@ fn normalize_selinux_includes_mode_and_modules() {
 }
 
 #[test]
-fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
+fn normalize_kernel_boot_maps_cmdline_and_config_pointers() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
     let sections = build_web_sections(&session.reference());
@@ -1816,12 +1816,12 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     assert_eq!(cmdline.title, "Kernel cmdline");
     assert!(cmdline.detail.as_ref().unwrap().contains("quiet"));
 
-    let sysctl = customizations
-        .items
-        .iter()
-        .find(|i| i.id == "kernel.sysrq")
-        .unwrap();
-    assert!(sysctl.subtitle.as_ref().unwrap().contains("16"));
+    // A sysctl key is not a decision: no row stands for one.
+    assert!(
+        !customizations.items.iter().any(|i| i.id == "kernel.sysrq"),
+        "no sysctl key row: {:?}",
+        customizations.items
+    );
 
     // The modules-load.d row points at the Configuration Files row that
     // decides the file. Its title is the whole path: two files named

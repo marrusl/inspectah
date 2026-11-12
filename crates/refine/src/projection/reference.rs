@@ -15,8 +15,8 @@ use super::types::{
     RefFirewallDirectRule, RefFirewallZone, RefFlatpakRefItem, RefFstabEntry, RefKernelBoot,
     RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
     RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
-    RefServices, RefStaticRoute, RefStorage, RefSysctlOverride, RefVarDirectory,
-    RefVersionChangeItem, RefVersionChanges, ReferenceProjection,
+    RefServices, RefStaticRoute, RefStorage, RefVarDirectory, RefVersionChangeItem,
+    RefVersionChanges, ReferenceProjection,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -359,7 +359,7 @@ const KERNEL_BOOT_CONFIG_CATEGORIES: &[ConfigCategory] = &[
 /// Project kernel/boot data from snapshot into reference format.
 ///
 /// Extracts kernel command line, GRUB defaults, tuned profile,
-/// locale/timezone, sysctl overrides, alternatives, and pointers at the
+/// locale/timezone, alternatives, and pointers at the
 /// `config.files` entries that carry kernel and boot configuration.
 ///
 /// String fields use `Option<String>` with `None` for empty values so the web
@@ -397,19 +397,6 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
         }
     };
 
-    let sysctl_overrides = kb
-        .sysctl_overrides
-        .iter()
-        .map(|s| RefSysctlOverride {
-            key: s.key.clone(),
-            runtime: s.runtime.clone(),
-            default: s.default.clone(),
-            source: s.source.clone(),
-            disposition: s.disposition.clone(),
-            locked: s.locked,
-        })
-        .collect();
-
     RefKernelBoot {
         cmdline: non_empty(&kb.cmdline),
         grub_defaults: non_empty(&kb.grub_defaults),
@@ -417,7 +404,6 @@ pub fn project_ref_kernel_boot(snap: &InspectionSnapshot) -> RefKernelBoot {
         tuned_disposition: kb.tuned_disposition.clone(),
         locale: kb.locale.clone(),
         timezone: kb.timezone.clone(),
-        sysctl_overrides,
         customizations_from_config,
         alternatives: kb
             .alternatives
@@ -1607,7 +1593,7 @@ mod tests {
 
     // ── project_ref_kernel_boot tests ───────────────────────────────
 
-    use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, SysctlOverride};
+    use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection};
 
     #[test]
     fn test_no_kernel_boot_returns_default() {
@@ -1623,7 +1609,6 @@ mod tests {
         assert!(result.tuned_active.is_none());
         assert!(result.locale.is_none());
         assert!(result.timezone.is_none());
-        assert!(result.sysctl_overrides.is_empty());
         assert!(result.customizations_from_config.is_empty());
         assert!(result.alternatives.is_empty());
     }
@@ -1690,43 +1675,6 @@ mod tests {
         let result = project_ref_kernel_boot(&snap);
 
         assert_eq!(result.cmdline.as_deref(), Some(long_cmdline));
-    }
-
-    #[test]
-    fn test_sysctl_overrides_extracted() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection {
-                sysctl_overrides: vec![
-                    SysctlOverride {
-                        key: "kernel.sysrq".into(),
-                        runtime: "16".into(),
-                        default: "0".into(),
-                        source: "/etc/sysctl.d/99-custom.conf".into(),
-                        ..Default::default()
-                    },
-                    SysctlOverride {
-                        key: "net.ipv4.ip_forward".into(),
-                        runtime: "1".into(),
-                        default: "0".into(),
-                        source: "/etc/sysctl.d/k8s.conf".into(),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let result = project_ref_kernel_boot(&snap);
-
-        assert_eq!(result.sysctl_overrides.len(), 2);
-        assert_eq!(result.sysctl_overrides[0].key, "kernel.sysrq");
-        assert_eq!(result.sysctl_overrides[0].runtime, "16");
-        assert_eq!(
-            result.sysctl_overrides[0].source,
-            "/etc/sysctl.d/99-custom.conf"
-        );
-        assert_eq!(result.sysctl_overrides[1].key, "net.ipv4.ip_forward");
     }
 
     /// The kernel/boot section points at the `config.files` entries
@@ -1848,13 +1796,6 @@ mod tests {
                 tuned_active: "virtual-guest".into(),
                 locale: Some("C.UTF-8".into()),
                 timezone: Some("UTC".into()),
-                sysctl_overrides: vec![SysctlOverride {
-                    key: "vm.swappiness".into(),
-                    runtime: "10".into(),
-                    default: "60".into(),
-                    source: "/etc/sysctl.d/swap.conf".into(),
-                    ..Default::default()
-                }],
                 alternatives: vec![AlternativeEntry {
                     name: "java".into(),
                     path: "/usr/lib/jvm/java-17".into(),
@@ -1872,7 +1813,6 @@ mod tests {
         assert_eq!(result.tuned_active.as_deref(), Some("virtual-guest"));
         assert_eq!(result.locale.as_deref(), Some("C.UTF-8"));
         assert_eq!(result.timezone.as_deref(), Some("UTC"));
-        assert_eq!(result.sysctl_overrides.len(), 1);
         assert!(result.customizations_from_config.is_empty());
         assert_eq!(result.alternatives.len(), 1);
         assert_eq!(result.alternatives[0].status, "manual");

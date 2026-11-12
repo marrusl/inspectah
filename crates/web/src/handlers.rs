@@ -834,18 +834,6 @@ pub async fn batch_toggle_group(
             // Kernel boot items
             if include_kernel && let Some(ref kernel) = snap.kernel_boot {
                 // Loaded modules are inventory and carry no op.
-                // Sysctls
-                for sysctl in &kernel.sysctl_overrides {
-                    if sysctl.disposition.is_advisory() || sysctl.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::Sysctl {
-                            key: sysctl.key.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
                 // Tuned
                 if !kernel.tuned_disposition.is_advisory() {
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {

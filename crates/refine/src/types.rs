@@ -4,7 +4,6 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::{AggregateSnapshotMeta, PrevalenceZone, RepoSourceEntry};
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
-use inspectah_core::types::kernelboot::SysctlOverride;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
@@ -107,9 +106,6 @@ pub enum ItemId {
     },
 
     // Kernel/boot section
-    Sysctl {
-        key: String,
-    },
     TunedSelection {
         profile: String,
     },
@@ -325,7 +321,6 @@ pub enum TriageAnnotation {
     SensitivePath,
     FirstBootProvisioned,
     RequiresProjectedPackage { name: String },
-    RuntimeOnlyObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -351,9 +346,6 @@ pub enum TriageReason {
     QuadletPresentInBaseImage,
     FlatpakProvisionedOnFirstBoot,
     FlatpakIncompleteProvenance,
-    SysctlBaselineMatch,
-    SysctlFileBackedOverride,
-    SysctlNoBaseline,
     TunedBaselineMatch,
     TunedNonDefaultProfile,
     TunedCustomProfile,
@@ -391,9 +383,6 @@ impl TriageReason {
             Self::QuadletPresentInBaseImage => "Quadlet present in base image",
             Self::FlatpakProvisionedOnFirstBoot => "Flatpak provisioned at first boot",
             Self::FlatpakIncompleteProvenance => "Incomplete provenance for manifest",
-            Self::SysctlBaselineMatch => "Matches base image kernel parameter",
-            Self::SysctlFileBackedOverride => "Non-default kernel parameter",
-            Self::SysctlNoBaseline => "No baseline available for comparison",
             Self::TunedBaselineMatch => "Matches base image tuned profile",
             Self::TunedNonDefaultProfile => "Non-default tuned profile",
             Self::TunedCustomProfile => "Custom profile in /etc/tuned/",
@@ -479,13 +468,6 @@ pub struct RefinedQuadlet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedFlatpak {
     pub entry: FlatpakApp,
-    pub triage: TriageTag,
-}
-
-/// A classified sysctl override with triage assignment.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RefinedSysctl {
-    pub entry: SysctlOverride,
     pub triage: TriageTag,
 }
 
@@ -929,19 +911,6 @@ mod item_id_tests {
                 unit: "sshd.service".into(),
             },
             include: true,
-        };
-        let json = serde_json::to_string(&op).unwrap();
-        let back: RefinementOp = serde_json::from_str(&json).unwrap();
-        assert_eq!(op, back);
-    }
-
-    #[test]
-    fn set_include_with_sysctl_serde_roundtrip() {
-        let op = RefinementOp::SetInclude {
-            item_id: ItemId::Sysctl {
-                key: "net.ipv4.ip_forward".into(),
-            },
-            include: false,
         };
         let json = serde_json::to_string(&op).unwrap();
         let back: RefinementOp = serde_json::from_str(&json).unwrap();

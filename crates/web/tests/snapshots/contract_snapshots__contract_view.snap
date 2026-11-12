@@ -201,23 +201,10 @@ expression: json
       }
     ]
   },
-  "sysctls": [
-    {
-      "default": "0",
-      "include": true,
-      "key": "net.ipv4.ip_forward",
-      "locked": false,
-      "runtime": "1",
-      "source": "/etc/sysctl.d/k8s.conf",
-      "triage": {
-        "primary_reason": "sysctl_file_backed_override",
-        "triage": {
-          "mode": "single_host",
-          "site": null
-        }
-      }
-    }
-  ],
+  "sysctl": {
+    "reason": "",
+    "state": "unavailable"
+  },
   "tuned": [],
   "users_groups_decisions": [],
   "version_changes": [

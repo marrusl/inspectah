@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline_summary::BaselineSummary;
 use crate::types::{
-    RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState, RefinedSysctl,
-    RefinedTunedSelection, RepoProvenance, RepoTier,
+    RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState, RefinedTunedSelection,
+    RepoProvenance, RepoTier,
 };
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::ShadowType;
@@ -24,7 +24,6 @@ pub struct DecisionProjection {
     pub service_dropins: Vec<RefinedDropIn>,
     pub quadlets: Vec<RefinedQuadlet>,
     pub flatpaks: Vec<RefinedFlatpak>,
-    pub sysctls: Vec<RefinedSysctl>,
     pub tuned: Vec<RefinedTunedSelection>,
     pub repo_groups: Vec<RepoGroup>,
     pub version_changes: Vec<VersionChange>,
@@ -220,7 +219,6 @@ pub struct RefKernelBoot {
     pub tuned_disposition: FindingKind,
     pub locale: Option<String>,
     pub timezone: Option<String>,
-    pub sysctl_overrides: Vec<RefSysctlOverride>,
     /// Pointers at the `config.files` entries this section's subject
     /// matter lives in. The row mirrors the entry's decision rather than
     /// restating its content, so there is one decision per file and this
@@ -260,19 +258,6 @@ pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files"
 /// entry. The Service Drop-ins row keyed by the same path is the one
 /// decision, and the Configuration Files row is inventory.
 pub const CONTROLLED_IN_SERVICE_DROP_INS: &str = "controlled in Service Drop-ins";
-
-#[derive(Debug, Clone)]
-pub struct RefSysctlOverride {
-    pub key: String,
-    pub runtime: String,
-    pub default: String,
-    pub source: String,
-    /// The whole finding, not an `is_included()` bool: flattening it
-    /// would discard the Advisory and Inventory cases that decide
-    /// whether this row offers a control at all.
-    pub disposition: FindingKind,
-    pub locked: bool,
-}
 
 #[derive(Debug, Clone)]
 pub struct RefAlternativeEntry {

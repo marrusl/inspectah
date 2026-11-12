@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use inspectah_core::types::AdvisoryType;
+use inspectah_core::types::sysctl::SysctlDir;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::types::{ItemId, RefinedView, RepoProvenance, RepoTier, TriageTag};
@@ -241,16 +242,220 @@ pub struct FlatpakDecisionDto {
     pub lifecycle: String,
 }
 
-/// A classified sysctl override, projected for the view response.
+// -- Sysctl panel DTOs (read-only; built by `sysctl_view::project_sysctl`) --
+//
+// The sysctl panel explains the host's sysctl search path. It holds no
+// decision: no disposition, no item id and nothing an op can target. Each
+// `/etc` sysctl file is decided by its Configuration Files row, which
+// `config_path` names. Values are raw host strings; the frontend renders
+// them as text.
+
+/// The sysctl panel for a view.
 #[derive(Serialize, Clone, Debug)]
-pub struct SysctlDecisionDto {
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SysctlViewDto {
+    /// Single host with a collected section.
+    Host(SysctlHostView),
+    /// Fleet aggregate: no explanation is merged.
+    Aggregate,
+    /// Single host whose `kernel_boot` or `sysctl` is `None`; `reason`
+    /// is the kernel/boot degradation.
+    Unavailable { reason: String },
+}
+
+/// One host's sysctl explanation and the facts derived from it.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlHostView {
+    pub explanation: SysctlExplanationDto,
+    pub vendor_replacements: Vec<VendorReplacementDto>,
+    /// The sysctl files the image does not get.
+    pub not_carried: Vec<NotCarriedDto>,
+    /// Glob lines and unparsed lines, reported as written.
+    pub as_written: Vec<AsWrittenLineDto>,
+    /// Every collected file, sorted by (name, dir).
+    pub files: Vec<SysctlFileDto>,
+    pub tuned_active: Option<String>,
+}
+
+/// What systemd-sysctl would do on the host, or why it cannot be stated.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SysctlExplanationDto {
+    /// `drift` holds the `differs` rows of `settings`, in key order.
+    Resolved {
+        settings: Vec<SysctlSettingDto>,
+        drift: Vec<SysctlDriftDto>,
+    },
+    Unknown {
+        inputs: Vec<UnknownInputDto>,
+    },
+}
+
+/// A line in a sysctl file. `path` is the directory joined with the name;
+/// `link_target` is set when the file was read through a link.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlLineRefDto {
+    pub path: String,
+    pub line: u32,
+    pub link_target: Option<String>,
+}
+
+/// The outcome for one concrete key.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlSettingDto {
+    /// The canonical `SysctlKey`.
     pub key: String,
+    pub outcome: SysctlOutcomeDto,
+    /// Earlier entries for this key, in apply order.
+    pub overwritten: Vec<SysctlLineRefDto>,
+}
+
+/// What the last entry for a key does.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SysctlOutcomeDto {
+    Writes {
+        value: String,
+        from: SysctlLineRefDto,
+        runtime: RuntimeDto,
+    },
+    /// The last entry is an exclusion; `runtime` is `None` when the kernel
+    /// did not list the key.
+    Cancelled {
+        by: SysctlLineRefDto,
+        runtime: Option<String>,
+    },
+}
+
+/// How the kernel's value compares with the value written.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeDto {
+    Matches,
+    Differs { runtime: String },
+    NotExposed,
+}
+
+/// A key the kernel runs at a value other than the one the files request.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlDriftDto {
+    pub key: String,
+    pub file_value: String,
     pub runtime: String,
-    pub default: String,
-    pub source: String,
-    pub triage: TriageTag,
-    pub include: bool,
-    pub locked: bool,
+    pub from: SysctlLineRefDto,
+}
+
+/// One input that makes the explanation unknown.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UnknownInputDto {
+    OutsideLink {
+        path: String,
+        target: String,
+    },
+    RedactedFile {
+        path: String,
+    },
+    /// `key` is the canonical `SysctlKey`.
+    RedactedRuntime {
+        key: String,
+    },
+}
+
+/// An `/etc/sysctl.d` file that replaces the same-named vendor file.
+#[derive(Serialize, Clone, Debug)]
+pub struct VendorReplacementDto {
+    pub action: ReplacementAction,
+    /// `/etc/sysctl.d/<name>`.
+    pub path: String,
+    /// `/usr/lib/sysctl.d/<name>`.
+    pub vendor_path: String,
+    pub carriage: CarriageDto,
+}
+
+/// Whether the admin file replaces the vendor file or masks it.
+#[derive(Serialize, Clone, Copy, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplacementAction {
+    Shadows,
+    Masks,
+}
+
+/// How an `/etc` sysctl file reaches the image. `config_path` is the
+/// Configuration Files row the panel links to: the file's own path, or
+/// `/etc/sysctl.conf` for the package's `99-sysctl.conf` link.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CarriageDto {
+    Carried { config_path: String },
+    Excluded { config_path: String },
+    Advisory { config_path: String },
+    NoConfigEntry,
+}
+
+/// A sysctl file the image does not get, and why.
+#[derive(Serialize, Clone, Debug)]
+pub struct NotCarriedDto {
+    pub path: String,
+    pub reason: NotCarriedReason,
+}
+
+/// Why a sysctl file is not carried.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NotCarriedReason {
+    /// A file in `/run/sysctl.d`.
+    RuntimeDir,
+    /// A file in `/usr/local/lib/sysctl.d`, carried only on the
+    /// unmanaged-file path.
+    UsrLocalLib,
+    Excluded {
+        config_path: String,
+    },
+    Advisory {
+        config_path: String,
+    },
+    NoConfigEntry,
+}
+
+/// A line reported as written: a glob, which is not expanded, or a line
+/// the parser could not read.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AsWrittenLineDto {
+    GlobAssign {
+        at: SysctlLineRefDto,
+        pattern: String,
+        value: String,
+    },
+    GlobExclude {
+        at: SysctlLineRefDto,
+        pattern: String,
+    },
+    Unparsed {
+        at: SysctlLineRefDto,
+        text: String,
+    },
+}
+
+/// One collected sysctl file, without its content: the Configuration
+/// Files row shows the content.
+#[derive(Serialize, Clone, Debug)]
+pub struct SysctlFileDto {
+    pub path: String,
+    pub dir: SysctlDir,
+    pub body: SysctlFileBodyDto,
+    /// Set when `carriage()` names a config entry.
+    pub config_path: Option<String>,
+}
+
+/// What a collected file is.
+#[derive(Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SysctlFileBodyDto {
+    Read { link_target: Option<String> },
+    Mask,
+    OutsideLink { target: String },
 }
 
 /// A classified tuned profile selection, projected for the view response.
@@ -311,7 +516,8 @@ pub struct ViewResponse {
     pub service_dropins: Vec<DropInDecisionDto>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
-    pub sysctls: Vec<SysctlDecisionDto>,
+    /// The read-only sysctl panel. Always present.
+    pub sysctl: SysctlViewDto,
     pub tuned: Vec<TunedDecisionDto>,
     pub users_groups_decisions: Vec<UserGroupDecision>,
     pub package_groups: Vec<GroupInfo>,

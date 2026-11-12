@@ -3,6 +3,7 @@ pub mod aggregate_handlers;
 pub mod assets;
 pub mod error;
 pub mod handlers;
+pub mod sysctl_view;
 pub mod upload;
 pub mod web_types;
 

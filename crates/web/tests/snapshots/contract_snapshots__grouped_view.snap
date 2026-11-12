@@ -152,7 +152,10 @@ expression: json
       }
     ]
   },
-  "sysctls": [],
+  "sysctl": {
+    "reason": "",
+    "state": "unavailable"
+  },
   "tuned": [],
   "users_groups_decisions": [],
   "version_changes": []

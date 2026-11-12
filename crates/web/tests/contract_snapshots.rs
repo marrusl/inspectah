@@ -423,6 +423,54 @@ async fn grouped_view_contract() {
     insta::assert_json_snapshot!("grouped_view", json);
 }
 
+/// An excluded, locked kernel-module config entry decides on its Kernel
+/// & Boot pointer row through `ItemId::Config`, carrying the entry's real
+/// include and lock state. A locked `Config` target is refused as a
+/// silent no-op, so a row that dropped the lock would report an enabled
+/// control whose activation does nothing.
+#[test]
+fn a_locked_excluded_config_pointer_row_decides_as_config() {
+    const MODPROBE: &str = "/etc/modprobe.d/driftify.conf";
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: MODPROBE.into(),
+            kind: ConfigFileKind::Unowned,
+            category: ConfigCategory::KernelModule,
+            content: "blacklist nouveau".into(),
+            disposition: FindingKind::excluded(),
+            locked: true,
+            ..Default::default()
+        }],
+    });
+
+    let row = build_web_sections(&project_reference(&snap))
+        .into_iter()
+        .find(|s| s.id == "kernel_boot")
+        .expect("kernel_boot section")
+        .subsections
+        .into_iter()
+        .find(|s| s.id == "customizations")
+        .expect("the customizations subsection")
+        .items
+        .into_iter()
+        .find(|i| i.id == MODPROBE)
+        .expect("the config entry has a pointer row");
+    let decision = row
+        .decision
+        .expect("a config-backed row decides under ItemId::Config");
+    assert_eq!(
+        serde_json::to_value(&decision.item_id).unwrap(),
+        serde_json::json!({"kind": "Config", "key": {"path": MODPROBE}})
+    );
+    assert!(!decision.include);
+    assert!(
+        decision.locked,
+        "a locked Config target is refused as a silent no-op, so the row \
+         must not report an enabled control"
+    );
+}
+
 // -- The assertion Task 19 deferred to this one -----------------------------
 //
 // It is function-level: `build_web_sections` is the unit that gained

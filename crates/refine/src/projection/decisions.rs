@@ -4,7 +4,7 @@ use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChange;
 use inspectah_core::types::users::UserGroupDecision;
 
-use crate::classify::{classify_containers, classify_services, classify_sysctls, classify_tuned};
+use crate::classify::{classify_containers, classify_services, classify_tuned};
 use crate::repo_index::RepoIndex;
 use crate::session::RefineSession;
 
@@ -25,7 +25,6 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let (quadlets, flatpaks) = classify_containers(&snap);
 
     // Classify kernel/boot
-    let sysctls = classify_sysctls(&snap);
     let tuned = classify_tuned(&snap);
 
     // Version changes from RPM section
@@ -56,7 +55,6 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         service_dropins,
         quadlets,
         flatpaks,
-        sysctls,
         tuned,
         repo_groups,
         version_changes,
@@ -187,7 +185,6 @@ mod tests {
         assert!(proj.service_dropins.is_empty());
         assert!(proj.quadlets.is_empty());
         assert!(proj.flatpaks.is_empty());
-        assert!(proj.sysctls.is_empty());
         assert!(proj.tuned.is_empty());
         assert!(proj.version_changes.is_empty());
         assert!(proj.users_groups.is_empty());

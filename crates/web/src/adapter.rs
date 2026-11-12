@@ -29,12 +29,13 @@ use inspectah_refine::projection::{
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ItemId;
 
+use crate::sysctl_view::project_sysctl;
 use crate::web_types::{
     ContextAdvisory, ContextDecision, ContextItem, ContextSubsection, DropInDecisionDto,
     FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto,
     PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
-    ServiceDecisionDto, SysctlDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto,
-    UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
+    ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
+    VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -202,21 +203,6 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             include: f.entry.disposition.is_included(),
             locked: f.entry.locked,
             lifecycle: "first_boot".to_string(),
-        })
-        .collect();
-
-    // Map sysctl decisions
-    let sysctls: Vec<SysctlDecisionDto> = decisions
-        .sysctls
-        .iter()
-        .map(|s| SysctlDecisionDto {
-            key: s.entry.key.clone(),
-            runtime: s.entry.runtime.clone(),
-            default: s.entry.default.clone(),
-            source: s.entry.source.clone(),
-            triage: s.triage.clone(),
-            include: s.entry.disposition.is_included(),
-            locked: s.entry.locked,
         })
         .collect();
 
@@ -505,7 +491,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         service_dropins,
         quadlets,
         flatpaks,
-        sysctls,
+        sysctl: project_sysctl(&session.snapshot_projected()),
         tuned,
         users_groups_decisions: decisions.users_groups.clone(),
         package_groups,
@@ -1018,25 +1004,6 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
                 },
                 &data.tuned_disposition,
                 false,
-            ),
-            ..Default::default()
-        });
-    }
-
-    // sysctl_overrides → customizations
-    for so in &data.sysctl_overrides {
-        custom_items.push(ContextItem {
-            id: so.key.clone(),
-            title: so.key.clone(),
-            subtitle: Some(format!("\"{}\" (default: \"{}\")", so.runtime, so.default)),
-            detail: Some(so.source.clone()),
-            searchable_text: format!("{} {} {} {}", so.key, so.runtime, so.default, so.source),
-            decision: context_decision(
-                ItemId::Sysctl {
-                    key: so.key.clone(),
-                },
-                &so.disposition,
-                so.locked,
             ),
             ..Default::default()
         });
@@ -2614,18 +2581,10 @@ mod tests {
 
     #[test]
     fn web_kernel_boot_section_splits_customizations_and_defaults() {
-        use inspectah_refine::projection::{RefKernelBoot, RefSysctlOverride};
+        use inspectah_refine::projection::RefKernelBoot;
 
         let data = RefKernelBoot {
             tuned_active: Some("throughput-performance".into()),
-            sysctl_overrides: vec![RefSysctlOverride {
-                key: "vm.swappiness".into(),
-                runtime: "10".into(),
-                default: "60".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                locked: false,
-            }],
             cmdline: Some("BOOT_IMAGE=/vmlinuz-5.14.0 root=/dev/mapper/rhel-root".into()),
             locale: Some("en_US.UTF-8".into()),
             ..Default::default()
@@ -2642,12 +2601,6 @@ mod tests {
                 .iter()
                 .any(|i| i.title == "Active tuned profile")
         );
-        assert!(
-            section.subsections[0]
-                .items
-                .iter()
-                .any(|i| i.title == "vm.swappiness")
-        );
 
         assert_eq!(section.subsections[1].id, "defaults_context");
         assert_eq!(section.subsections[1].display_name, "Defaults / Context");
@@ -2662,66 +2615,6 @@ mod tests {
                 .items
                 .iter()
                 .any(|i| i.title == "Locale")
-        );
-    }
-
-    /// A sysctl row offers a control only where there is a decision to
-    /// make: `context_decision` refuses `Advisory` and `Inventory`
-    /// (§ 3.5), because a row that rendered one would offer a toggle the
-    /// server rejects.
-    ///
-    /// This is the only fixture in the workspace that puts a
-    /// non-`Actionable` disposition on a sysctl. Every other
-    /// `SysctlOverride` literal is `included()` or `excluded()`, so
-    /// without this case the sysctl call site could construct a
-    /// `ContextDecision` directly and no test would notice.
-    #[test]
-    fn a_non_actionable_sysctl_row_offers_no_control() {
-        use inspectah_refine::projection::{RefKernelBoot, RefSysctlOverride};
-
-        let sysctl = |key: &str, disposition: FindingKind| RefSysctlOverride {
-            key: key.into(),
-            runtime: "1".into(),
-            default: "0".into(),
-            source: "/etc/sysctl.d/99-custom.conf".into(),
-            disposition,
-            locked: false,
-        };
-        let data = RefKernelBoot {
-            sysctl_overrides: vec![
-                sysctl("net.ipv4.ip_forward", FindingKind::included()),
-                sysctl("vm.swappiness", FindingKind::inventory()),
-            ],
-            ..Default::default()
-        };
-
-        let section = web_kernel_boot_section(&data);
-        let items = &section
-            .subsections
-            .iter()
-            .find(|s| s.id == "customizations")
-            .expect("the customizations subsection")
-            .items;
-        let decision_of = |key: &str| {
-            items
-                .iter()
-                .find(|i| i.id == key)
-                .unwrap_or_else(|| panic!("row {key} is present"))
-                .decision
-                .as_ref()
-        };
-
-        // Both halves: the actionable row must still decide, or "no
-        // decision" would be satisfied by a section that renders none.
-        assert_eq!(
-            decision_of("net.ipv4.ip_forward").map(|d| d.include),
-            Some(true),
-            "an actionable sysctl is decided on its own row"
-        );
-        assert!(
-            decision_of("vm.swappiness").is_none(),
-            "a non-actionable sysctl row must offer no toggle, got {:?}",
-            decision_of("vm.swappiness")
         );
     }
 
