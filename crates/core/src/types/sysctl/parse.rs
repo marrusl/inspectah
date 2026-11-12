@@ -114,6 +114,25 @@ mod tests {
                 "net.ipv4.conf.enp3s0/200.forwarding",
                 "net.ipv4.conf.enp3s0/200.forwarding",
             ),
+            // systemd simplifies the path: no leading or trailing
+            // separator, no repeated one, no `.` component.
+            ("/vm/swappiness", "vm.swappiness"),
+            (".vm.swappiness", "vm.swappiness"),
+            ("vm/swappiness/", "vm.swappiness"),
+            ("vm.swappiness.", "vm.swappiness"),
+            ("vm//swappiness", "vm.swappiness"),
+            ("vm..swappiness", "vm.swappiness"),
+            ("//vm///swappiness//", "vm.swappiness"),
+            ("net/./ipv4/ip_forward", "net.ipv4.ip_forward"),
+            (
+                "net//ipv4/conf/enp3s0.200//forwarding",
+                "net.ipv4.conf.enp3s0/200.forwarding",
+            ),
+            (
+                "net..ipv4.conf.enp3s0/200..forwarding",
+                "net.ipv4.conf.enp3s0/200.forwarding",
+            ),
+            ("swappiness", "swappiness"),
         ];
         for (input, expected) in cases {
             assert_eq!(

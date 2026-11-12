@@ -225,31 +225,72 @@ pub struct SysctlKey(String);
 impl SysctlKey {
     /// Normalizing constructor: the only way to build a key from text.
     ///
-    /// `sysctl.d(5)` accepts `.` or `/` as the separator and decides by the
-    /// first one: after a `/` the name is a `/proc/sys` path, after a `.`
-    /// dots and slashes are interchanged to get one. Rendering that path
-    /// the way `sysctl -a` does interchanges them again, so a name whose
-    /// first separator is `/` has every `.` and `/` swapped and any other
-    /// name is already dotted.
+    /// systemd's `sysctl_normalize` (`src/basic/sysctl-util.c`, v252 and
+    /// v257), then the dotted rendering `sysctl -a` prints:
+    ///
+    /// 1. `sysctl.d(5)` accepts `.` or `/` as the separator and decides by
+    ///    the first one: after a `/` the name is already a `/proc/sys`
+    ///    path, after a `.` dots and slashes are interchanged to get one.
+    /// 2. The path is simplified as `path_simplify` does: repeated
+    ///    separators collapse, `.` components and a trailing separator go.
+    /// 3. A leading separator goes, unless it is the whole path.
+    /// 4. The path is rendered dotted by interchanging dots and slashes
+    ///    again, so a literal `.` in a component becomes `/`.
+    ///
+    /// So `-/vm/swappiness` excludes `vm.swappiness`, as systemd reads it.
     pub fn normalize(name: &str) -> SysctlKey {
         let first_separator = name.chars().find(|c| matches!(c, '.' | '/'));
-        if first_separator != Some('/') {
-            return SysctlKey(name.to_string());
-        }
-        SysctlKey(
-            name.chars()
-                .map(|c| match c {
-                    '.' => '/',
-                    '/' => '.',
-                    other => other,
-                })
-                .collect(),
-        )
+        let path = if first_separator == Some('.') {
+            swap_separators(name)
+        } else {
+            name.to_string()
+        };
+        let simplified = simplify_path(&path);
+        let relative = match simplified.strip_prefix('/') {
+            Some(rest) if !rest.is_empty() => rest,
+            _ => simplified.as_str(),
+        };
+        SysctlKey(swap_separators(relative))
     }
 
     /// The key in dotted form.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Interchange `.` and `/`: between a `/proc/sys` path and its dotted
+/// rendering, either way.
+fn swap_separators(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '.' => '/',
+            '/' => '.',
+            other => other,
+        })
+        .collect()
+}
+
+/// systemd's `path_simplify` (`src/basic/path-util.c`): drop empty and
+/// `.` components, keep one leading `/` on an absolute path, and give `.`
+/// for a relative path left with no component. `..` is kept, as systemd
+/// keeps it. systemd stops simplifying at a component over `NAME_MAX`
+/// bytes; no `/proc/sys` name is that long, so that case is not followed.
+fn simplify_path(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let joined = path
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    if path.starts_with('/') {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
     }
 }
 

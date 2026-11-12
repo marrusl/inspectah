@@ -920,6 +920,33 @@ fn case_10_key_exclusion_both_orders() {
     );
 }
 
+/// systemd simplifies a key's path before comparing it, so an exclusion
+/// spelled with a leading slash cancels the dotted assignment before it.
+#[test]
+fn case_10_key_exclusion_other_spelling() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/etc/sysctl.d/10-set.conf",
+                "vm.swappiness = 10\n-/vm/swappiness\n",
+            )
+            .sysctl_a("vm.swappiness = 60\n"),
+    ));
+    assert_eq!(
+        resolved(section(&snap)),
+        [SysctlSetting {
+            key: SysctlKey::normalize("vm.swappiness"),
+            outcome: SysctlOutcome::Cancelled {
+                by: line(SysctlDir::Etc, "10-set.conf", 2),
+                runtime: Some("60".into()),
+            },
+            overwritten: vec![line(SysctlDir::Etc, "10-set.conf", 1)],
+        }],
+        "the two spellings are one key, and the last entry writes nothing"
+    );
+    assert_eq!(runtime_keys(&snap), ["vm.swappiness"]);
+}
+
 #[test]
 fn case_10_key_exclusion_unlisted_key() {
     let snap = reload(&scan(

@@ -122,7 +122,13 @@ fn sysctl_key_on_the_wire() {
     assert_eq!(runtime.keys().collect::<Vec<_>>(), vec![canonical]);
     assert_eq!(runtime[canonical], "1");
 
-    for spelling in ["net/ipv4/ip_forward", "net/ipv4/conf/enp3s0.200/forwarding"] {
+    for spelling in [
+        "net/ipv4/ip_forward",
+        "net/ipv4/conf/enp3s0.200/forwarding",
+        ".vm.swappiness",
+        "vm.swappiness.",
+        "vm..swappiness",
+    ] {
         let json = snapshot_with_sysctl_runtime(&format!(r#"{{"{spelling}": "1"}}"#), "[]");
         let err = InspectionSnapshot::load(&json)
             .expect_err("a non-canonical key must fail the load")
