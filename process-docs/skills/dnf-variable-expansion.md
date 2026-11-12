@@ -119,7 +119,11 @@ expands but cannot be read:
   excluded and with its content replaced, so nothing ships it. Text
   before the header is fine: the stock `RPM-GPG-KEY-redhat-release`
   opens with a paragraph of prose, and refusing it gave every RHEL host a
-  false warning.
+  false warning;
+- a file that holds PGP private or secret key armor (`BEGIN` or `END`
+  line) anywhere, even above a valid public block. Accepting a header on
+  any line would otherwise ingest it verbatim, and the redaction patterns
+  do not match PGP armor.
 
 The warning is conditional ("If the image enables a repo from that file")
 rather than gated on an enabled section, since a repo disabled on the host
@@ -148,8 +152,12 @@ base would replace the EL10 key with the EL9 one. Being owned by *some*
 package is not enough: EPEL's key is owned by `epel-release`, which the
 base image lacks, and leaving it out breaks the EL10 EPEL build exactly as
 on 2026-11-09. No baseline, a host that is not package-based (no `rpm
--Va`), or an ownership query that failed all mean carry: a missing key
-fails the build, a redundant copy does not.
+-Va`), an `rpm -Va` that failed, or an ownership query that failed all
+mean carry: a missing key fails the build, a redundant copy does not.
+`rpm -Va` exits 1 whenever it reports a modified file, so its exit code
+alone is not failure: the collector reads a non-zero exit with no output
+as failed (`SupplementaryData::rpm_va` is `None`), and an empty list as a
+clean verify.
 
 Consumers ask `RepoFile::is_in_image` ("copied or shipped by the base"),
 not `disposition.is_included()`, when the question is whether dnf in the
