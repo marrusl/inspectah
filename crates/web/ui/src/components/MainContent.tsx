@@ -280,7 +280,9 @@ export function MainContent({
 
   // Requests in flight, by item: packages by "name.arch" (the package
   // toggle and the Not carried Include act on the same item), repos by
-  // section id, groups by name.
+  // section id, groups by name. Each key is the whole of its op's item_id
+  // key. "name.arch" is unambiguous because an RPM arch never contains a
+  // dot, and it is the identifier the package rows already hand back.
   const packageGuard = usePendingGuard();
   const repoGuard = usePendingGuard();
   const groupGuard = usePendingGuard();

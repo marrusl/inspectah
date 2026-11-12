@@ -290,3 +290,53 @@ describe.each(CASES)("pending guard: $name", (c) => {
     expect(mock).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * The flatpak op identifies an item by (app_id, remote, branch). Rows that
+ * share an app_id are distinct items and must not share a guard.
+ */
+describe.each([
+  { differ: "remote", other: { ...FLATPAK, remote: "fedora" } },
+  { differ: "branch", other: { ...FLATPAK, branch: "beta" } },
+])("pending guard: flatpaks differing only by $differ", ({ other }) => {
+  it("guards each row by its own identity", async () => {
+    const { mock } = holdRequests("applyOp");
+    render(
+      <ContainerSection
+        quadlets={[]}
+        flatpaks={[FLATPAK, other]}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+    const rows = screen.getAllByTestId("flatpak-item-org.mozilla.firefox");
+    const boxes = screen.getAllByRole("checkbox", {
+      name: "Toggle org.mozilla.firefox",
+    });
+
+    act(() => {
+      fireEvent.keyDown(rows[0], { key: " " });
+    });
+    expect(boxes[0]).toBeDisabled();
+    expect(boxes[1]).toBeEnabled();
+
+    act(() => {
+      fireEvent.keyDown(rows[1], { key: " " });
+      fireEvent.keyDown(rows[0], { key: " " });
+    });
+
+    expect(mock).toHaveBeenCalledTimes(2);
+    const sentTo = (f: FlatpakDecisionDto) =>
+      expect.objectContaining({
+        target: expect.objectContaining({
+          item_id: {
+            kind: "Flatpak",
+            key: { app_id: f.app_id, remote: f.remote, branch: f.branch },
+          },
+        }),
+      });
+    expect(mock).toHaveBeenNthCalledWith(1, sentTo(FLATPAK));
+    expect(mock).toHaveBeenNthCalledWith(2, sentTo(other));
+    expect(boxes[1]).toBeDisabled();
+  });
+});

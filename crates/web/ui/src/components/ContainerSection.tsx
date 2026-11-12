@@ -32,6 +32,23 @@ const LEVEL_BORDER: Record<string, string> = {
   universal: "none",
 };
 
+/**
+ * Guard keys, one per item kind, built from the same fields as the op's
+ * `item_id` so distinct items never share a guard. JSON keeps the encoding
+ * unambiguous whatever characters the fields hold.
+ */
+function quadletGuardKey(path: string): string {
+  return JSON.stringify(["quadlet", path]);
+}
+
+function flatpakGuardKey(
+  appId: string,
+  remote: string,
+  branch: string,
+): string {
+  return JSON.stringify(["flatpak", appId, remote, branch]);
+}
+
 function badgeTextForTriage(triage: TriageTag): string | null {
   const level = triageBucketToAttention(triage);
   if (level === "routine") return null;
@@ -49,7 +66,6 @@ export function ContainerSection({
 
   const handleToggleQuadlet = useCallback(
     (path: string, currentInclude: boolean) => {
-      const id = `quadlet:${path}`;
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -57,7 +73,7 @@ export function ContainerSection({
           include: !currentInclude,
         },
       };
-      runGuarded(id, () =>
+      runGuarded(quadletGuardKey(path), () =>
         applyOp(op)
           .then((updatedView) => onViewUpdate(updatedView))
           .catch((err) =>
@@ -77,7 +93,6 @@ export function ContainerSection({
       branch: string,
       currentInclude: boolean,
     ) => {
-      const id = `flatpak:${appId}`;
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -85,7 +100,7 @@ export function ContainerSection({
           include: !currentInclude,
         },
       };
-      runGuarded(id, () =>
+      runGuarded(flatpakGuardKey(appId, remote, branch), () =>
         applyOp(op)
           .then((updatedView) => onViewUpdate(updatedView))
           .catch((err) =>
@@ -128,7 +143,7 @@ export function ContainerSection({
         const borderLeft = LEVEL_BORDER[bucket] ?? "none";
         const badge = badgeTextForTriage(q.triage);
         const level = triageBucketToAttention(q.triage);
-        const isPending = pendingIds.has(`quadlet:${q.path}`);
+        const isPending = pendingIds.has(quadletGuardKey(q.path));
 
         return (
           <div
@@ -265,7 +280,9 @@ export function ContainerSection({
         const borderLeft = LEVEL_BORDER[bucket] ?? "none";
         const badge = badgeTextForTriage(f.triage);
         const level = triageBucketToAttention(f.triage);
-        const isPending = pendingIds.has(`flatpak:${f.app_id}`);
+        const isPending = pendingIds.has(
+          flatpakGuardKey(f.app_id, f.remote, f.branch),
+        );
 
         return (
           <div

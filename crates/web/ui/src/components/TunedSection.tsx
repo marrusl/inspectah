@@ -30,6 +30,11 @@ const LEVEL_BORDER: Record<string, string> = {
   universal: "none",
 };
 
+/** Guard key: the profile, the whole of the op's `item_id` key. */
+function tunedGuardKey(profile: string): string {
+  return `tuned:${profile}`;
+}
+
 function badgeTextForTriage(triage: TriageTag): string | null {
   const level = triageBucketToAttention(triage);
   if (level === "routine") return null;
@@ -45,7 +50,6 @@ export function TunedSection({
 
   const handleToggle = useCallback(
     (profile: string, currentInclude: boolean) => {
-      const id = `tuned:${profile}`;
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -53,7 +57,7 @@ export function TunedSection({
           include: !currentInclude,
         },
       };
-      runGuarded(id, () =>
+      runGuarded(tunedGuardKey(profile), () =>
         applyOp(op)
           .then((updatedView) => onViewUpdate(updatedView))
           .catch((err) =>
@@ -89,7 +93,7 @@ export function TunedSection({
         const borderLeft = LEVEL_BORDER[bucket] ?? "none";
         const badge = badgeTextForTriage(t.triage);
         const level = triageBucketToAttention(t.triage);
-        const isPending = pendingIds.has(`tuned:${t.active_profile}`);
+        const isPending = pendingIds.has(tunedGuardKey(t.active_profile));
 
         return (
           <div
