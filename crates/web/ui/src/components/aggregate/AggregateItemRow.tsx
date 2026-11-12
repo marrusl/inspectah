@@ -95,8 +95,6 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.path;
     case "KernelModule":
       return itemId.key.name;
-    case "Sysctl":
-      return itemId.key.key;
     case "TunedSelection":
       return itemId.key.profile;
     case "CronJob":

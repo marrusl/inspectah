@@ -2,15 +2,10 @@ import type {
   ConfigFileEntry,
   DropInDecisionDto,
   RefinedConfig,
-  SysctlDecisionDto,
 } from "../api/types";
 
 /** Section ID the Service Drop-ins rows render under. */
 const SERVICES_SECTION_ID = "services";
-/** Section ID the sysctl override rows render under. */
-const KERNEL_BOOT_SECTION_ID = "kernel_boot";
-/** Mirrors SYNTHESIZED_SYSCTL_FILE in inspectah-core. */
-const SYNTHESIZED_SYSCTL_FILE = "/etc/sysctl.d/99-inspectah-migrated.conf";
 
 /**
  * Where a shadowed config file's include decision actually lives.
@@ -38,15 +33,14 @@ export interface ShadowOwner {
 /**
  * Resolve the owner of a shadowed config entry.
  *
- * The join key is the path string itself: `service_dropins[].path` and
- * `sysctls[].source` are the same strings the shadow was computed from
- * in `shadow_matching_config_entries`, so no extra field is needed.
+ * The join key is the path string itself: `service_dropins[].path` is the
+ * same string the shadow was computed from in
+ * `shadow_matching_config_entries`, so no extra field is needed.
  * Returns null when the entry is not shadowed.
  */
 export function resolveShadowOwner(
   entry: ConfigFileEntry,
   dropins: DropInDecisionDto[],
-  sysctls: SysctlDecisionDto[],
 ): ShadowOwner | null {
   if (entry.shadowed_by === "services") {
     const owner = dropins.find((d) => d.path === entry.path);
@@ -67,28 +61,6 @@ export function resolveShadowOwner(
     };
   }
 
-  if (entry.shadowed_by === "sysctl") {
-    const keys = sysctls.filter((s) => s.source === entry.path);
-    const includedCount = keys.filter((s) => s.include).length;
-    return {
-      label: "Merged into sysctl settings",
-      state:
-        keys.length > 0
-          ? {
-              text: `${includedCount} of ${keys.length} keys included`,
-              included: includedCount > 0,
-            }
-          : null,
-      explanation:
-        `This file's keys are merged into ${SYNTHESIZED_SYSCTL_FILE}. ` +
-        "Decide them key by key under Kernel & Boot.",
-      target:
-        keys.length > 0
-          ? { sectionId: KERNEL_BOOT_SECTION_ID, itemId: keys[0].key }
-          : null,
-    };
-  }
-
   return null;
 }
 
@@ -96,11 +68,10 @@ export function resolveShadowOwner(
 export function buildShadowOwners(
   configs: RefinedConfig[],
   dropins: DropInDecisionDto[],
-  sysctls: SysctlDecisionDto[],
 ): Map<string, ShadowOwner> {
   const owners = new Map<string, ShadowOwner>();
   for (const cfg of configs) {
-    const owner = resolveShadowOwner(cfg.entry, dropins, sysctls);
+    const owner = resolveShadowOwner(cfg.entry, dropins);
     if (owner) owners.set(cfg.entry.path, owner);
   }
   return owners;

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SystemTuningSection } from "../SystemTuningSection";
 import type {
-  SysctlDecisionDto,
+  SysctlFileDto,
+  SysctlViewDto,
   TunedDecisionDto,
   TriageTag,
 } from "../../api/types";
@@ -19,34 +20,11 @@ afterEach(() => {
 
 // --- Test data helpers ---
 
-function makeSysctlTriage(): TriageTag {
-  return {
-    triage: { mode: "single_host" as const, site: null },
-    primary_reason:
-      "sysctl_file_backed_override" as TriageTag["primary_reason"],
-    annotations: [],
-  };
-}
-
 function makeTunedTriage(): TriageTag {
   return {
     triage: { mode: "single_host" as const, site: null },
     primary_reason: "tuned_non_default_profile" as TriageTag["primary_reason"],
     annotations: [],
-  };
-}
-
-function makeSysctl(
-  overrides: Partial<SysctlDecisionDto> = {},
-): SysctlDecisionDto {
-  return {
-    key: "net.ipv4.ip_forward",
-    runtime: "1",
-    default: "0",
-    source: "/etc/sysctl.d/99-custom.conf",
-    triage: makeSysctlTriage(),
-    include: true,
-    ...overrides,
   };
 }
 
@@ -62,60 +40,76 @@ function makeTuned(
   };
 }
 
+const FILE: SysctlFileDto = {
+  path: "/etc/sysctl.d/50-x.conf",
+  dir: "etc",
+  body: { kind: "mask" },
+  config_path: "/etc/sysctl.d/50-x.conf",
+};
+
+function hostView(files: SysctlFileDto[]): SysctlViewDto {
+  return {
+    state: "host",
+    explanation: { state: "resolved", settings: [], drift: [] },
+    vendor_replacements: [],
+    not_carried: [],
+    as_written: [],
+    files,
+    tuned_active: null,
+  };
+}
+
 const defaultProps = {
-  sysctls: [] as SysctlDecisionDto[],
+  sysctl: hostView([]),
   tuned: [] as TunedDecisionDto[],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };
 
+const EMPTY = "No system tuning detected.";
+
 // --- Tests ---
 
 describe("SystemTuningSection", () => {
-  it("renders empty state when no sysctls or tuned profiles", () => {
+  it("shows the empty state only with no tuned rows and no sysctl files", () => {
     render(<SystemTuningSection {...defaultProps} />);
     expect(screen.getByTestId("system-tuning-section")).toBeInTheDocument();
-    expect(screen.getByText(/no system tuning overrides/i)).toBeInTheDocument();
+    expect(screen.getByText(EMPTY)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Sysctl" })).toBeNull();
   });
 
-  it("renders both subsections when both have data", () => {
+  it("shows the sysctl panel for a host with files and no tuned rows", () => {
+    render(<SystemTuningSection {...defaultProps} sysctl={hostView([FILE])} />);
+    expect(screen.queryByText(EMPTY)).toBeNull();
+    expect(screen.getByRole("region", { name: "Sysctl" })).toBeInTheDocument();
+    expect(screen.queryByTestId("tuned-section")).toBeNull();
+  });
+
+  it("shows the tuned rows and the panel independently", () => {
     render(
       <SystemTuningSection
         {...defaultProps}
-        sysctls={[makeSysctl()]}
+        sysctl={hostView([FILE])}
         tuned={[makeTuned()]}
       />,
     );
-    expect(screen.getByTestId("system-tuning-section")).toBeInTheDocument();
-    // Subheadings
-    expect(screen.getByText("Sysctls")).toBeInTheDocument();
     expect(screen.getByText("Tuned Profiles")).toBeInTheDocument();
-    // Items
-    expect(screen.getByTestId("sysctl-section")).toBeInTheDocument();
     expect(screen.getByTestId("tuned-section")).toBeInTheDocument();
-    // Divider present
-    expect(
-      screen.getByTestId("system-tuning-section").querySelector("hr"),
-    ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Sysctl" })).toBeInTheDocument();
   });
 
-  it("renders only sysctls subsection when tuned is empty", () => {
-    render(<SystemTuningSection {...defaultProps} sysctls={[makeSysctl()]} />);
-    expect(screen.getByText("Sysctls")).toBeInTheDocument();
-    expect(screen.queryByText("Tuned Profiles")).not.toBeInTheDocument();
-    expect(screen.getByTestId("sysctl-section")).toBeInTheDocument();
-    expect(screen.queryByTestId("tuned-section")).not.toBeInTheDocument();
-    // No divider when only one subsection
-    expect(
-      screen.getByTestId("system-tuning-section").querySelector("hr"),
-    ).toBeFalsy();
-  });
-
-  it("renders only tuned subsection when sysctls is empty", () => {
+  it("shows tuned rows beside a host with no sysctl files, without the empty state", () => {
     render(<SystemTuningSection {...defaultProps} tuned={[makeTuned()]} />);
-    expect(screen.queryByText("Sysctls")).not.toBeInTheDocument();
-    expect(screen.getByText("Tuned Profiles")).toBeInTheDocument();
-    expect(screen.queryByTestId("sysctl-section")).not.toBeInTheDocument();
     expect(screen.getByTestId("tuned-section")).toBeInTheDocument();
+    expect(screen.queryByText(EMPTY)).toBeNull();
+  });
+
+  it.each<[string, SysctlViewDto]>([
+    ["unavailable", { state: "unavailable", reason: "degraded: sysctl -a failed" }],
+    ["aggregate", { state: "aggregate" }],
+  ])("always renders the %s line, even with nothing else", (_name, sysctl) => {
+    render(<SystemTuningSection {...defaultProps} sysctl={sysctl} />);
+    expect(screen.queryByText(EMPTY)).toBeNull();
+    expect(screen.getByRole("region", { name: "Sysctl" })).toBeInTheDocument();
   });
 });

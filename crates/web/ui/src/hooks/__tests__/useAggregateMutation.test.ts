@@ -17,6 +17,7 @@ const MOCK_AGGREGATE_VIEW: AggregateViewResponse = {
   sections: [],
   repo_groups: [],
   repo_conflict_count: 0,
+  sysctl: { state: "aggregate" },
 };
 
 const MOCK_AGGREGATE_VIEW_2: AggregateViewResponse = {

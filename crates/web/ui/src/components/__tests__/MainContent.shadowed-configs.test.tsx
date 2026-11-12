@@ -6,7 +6,6 @@ import type {
   ConfigShadow,
   DropInDecisionDto,
   RefinedConfig,
-  SysctlDecisionDto,
   TriageTag,
   ViewResponse,
 } from "../../api/types";
@@ -19,7 +18,6 @@ const TRIAGE: TriageTag = {
 };
 
 const DROPIN_PATH = "/etc/systemd/system/sshd.service.d/override.conf";
-const SYSCTL_PATH = "/etc/sysctl.d/90-network.conf";
 
 function shadowedConfig(path: string, shadow: ConfigShadow): RefinedConfig {
   return {
@@ -54,7 +52,7 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
     service_dropins: [],
     quadlets: [],
     flatpaks: [],
-    sysctls: [],
+    sysctl: { state: "unavailable", reason: "not collected" },
     tuned: [],
     users_groups_decisions: [],
     package_groups: [],
@@ -68,15 +66,6 @@ const DROPIN: DropInDecisionDto = {
   path: DROPIN_PATH,
   triage: TRIAGE,
   include: false,
-};
-
-const SYSCTL: SysctlDecisionDto = {
-  key: "net.ipv4.ip_forward",
-  runtime: "1",
-  default: "0",
-  source: SYSCTL_PATH,
-  triage: TRIAGE,
-  include: true,
 };
 
 const props = {
@@ -137,31 +126,6 @@ describe("shadowed config rows in the configs section", () => {
     );
     await userEvent.click(screen.getByTestId("shadow-owner-link"));
     expect(onNavigateToItem).toHaveBeenCalledWith("services", DROPIN_PATH);
-  });
-
-  it("names the sysctl owner and routes to the first absorbed key", async () => {
-    const onNavigateToItem = vi.fn();
-    render(
-      <MainContent
-        {...props}
-        viewData={view({
-          config_files: [shadowedConfig(SYSCTL_PATH, "sysctl")],
-          sysctls: [SYSCTL],
-        })}
-        onNavigateToItem={onNavigateToItem}
-      />,
-    );
-    expect(screen.getByTestId("shadow-owner-badge")).toHaveTextContent(
-      "Merged into sysctl settings",
-    );
-    expect(screen.getByTestId("shadow-owner-state")).toHaveTextContent(
-      "1 of 1 keys included",
-    );
-    await userEvent.click(screen.getByTestId("shadow-owner-link"));
-    expect(onNavigateToItem).toHaveBeenCalledWith(
-      "kernel_boot",
-      "net.ipv4.ip_forward",
-    );
   });
 
   it("leaves an unshadowed config row untouched", () => {

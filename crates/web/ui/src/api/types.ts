@@ -81,7 +81,7 @@ export type ConfigCategory =
  * Rust: ConfigShadow — #[serde(rename_all = "snake_case")]
  * Which other section's decision carries this file's content.
  */
-export type ConfigShadow = "sysctl" | "services";
+export type ConfigShadow = "services";
 
 export interface ConfigFileEntry {
   path: string;
@@ -175,8 +175,7 @@ export type Triage =
 export type TriageAnnotation =
   | "sensitive_path"
   | "first_boot_provisioned"
-  | { requires_projected_package: { name: string } }
-  | "runtime_only_observation";
+  | { requires_projected_package: { name: string } };
 
 /**
  * Rust: #[serde(rename_all = "snake_case")]
@@ -203,9 +202,6 @@ export type TriageReason =
   | "quadlet_present_in_base_image"
   | "flatpak_provisioned_on_first_boot"
   | "flatpak_incomplete_provenance"
-  | "sysctl_baseline_match"
-  | "sysctl_file_backed_override"
-  | "sysctl_no_baseline"
   | "tuned_baseline_match"
   | "tuned_non_default_profile"
   | "tuned_custom_profile"
@@ -484,18 +480,153 @@ export interface DropInDecisionDto {
   shadow_rationale?: string | null;
 }
 
-// --- Sysctl decision types (inspectah-web/src/handlers.rs) ---
+// --- Sysctl panel types (crates/web/src/web_types.rs) ---
+//
+// The read-only sysctl panel. Nothing here is a decision: no disposition,
+// no item id, nothing an op can target. Each `/etc` sysctl file is decided
+// by its Configuration Files row, which `config_path` names. Values are raw
+// host strings.
 
-/** A classified sysctl override, projected for the view response. */
-export interface SysctlDecisionDto {
-  key: string;
-  runtime: string;
-  default: string;
-  source: string;
-  triage: TriageTag;
-  include: boolean;
-  locked?: boolean;
+/** Rust: SysctlViewDto, tagged on `state`. */
+export type SysctlViewDto =
+  | ({ state: "host" } & SysctlHostView)
+  | { state: "aggregate" }
+  | { state: "unavailable"; reason: string };
+
+/** Rust: SysctlHostView. */
+export interface SysctlHostView {
+  explanation: SysctlExplanationDto;
+  vendor_replacements: VendorReplacementDto[];
+  not_carried: NotCarriedDto[];
+  as_written: AsWrittenLineDto[];
+  /** Every collected file, sorted by (name, dir). */
+  files: SysctlFileDto[];
+  tuned_active: string | null;
 }
+
+/** Rust: SysctlExplanationDto, tagged on `state`. */
+export type SysctlExplanationDto =
+  | {
+      state: "resolved";
+      settings: SysctlSettingDto[];
+      /** The `differs` rows of `settings`, in key order. */
+      drift: SysctlDriftDto[];
+    }
+  | { state: "unknown"; inputs: UnknownInputDto[] };
+
+/** Rust: SysctlLineRefDto. `path` is the directory joined with the name. */
+export interface SysctlLineRefDto {
+  path: string;
+  line: number;
+  /** Set when the file was read through a link. */
+  link_target: string | null;
+}
+
+/** Rust: SysctlSettingDto. */
+export interface SysctlSettingDto {
+  key: string;
+  outcome: SysctlOutcomeDto;
+  /** Earlier entries for this key, in apply order. */
+  overwritten: SysctlLineRefDto[];
+}
+
+/** Rust: SysctlOutcomeDto, tagged on `kind`. */
+export type SysctlOutcomeDto =
+  | {
+      kind: "writes";
+      value: string;
+      from: SysctlLineRefDto;
+      runtime: RuntimeDto;
+    }
+  | {
+      kind: "cancelled";
+      by: SysctlLineRefDto;
+      /** Null when the kernel did not list the key. */
+      runtime: string | null;
+    };
+
+/** Rust: RuntimeDto, tagged on `kind`. */
+export type RuntimeDto =
+  | { kind: "matches" }
+  | { kind: "differs"; runtime: string }
+  | { kind: "not_exposed" };
+
+/** Rust: SysctlDriftDto. */
+export interface SysctlDriftDto {
+  key: string;
+  file_value: string;
+  runtime: string;
+  from: SysctlLineRefDto;
+}
+
+/** Rust: UnknownInputDto, tagged on `kind`. */
+export type UnknownInputDto =
+  | { kind: "outside_link"; path: string; target: string }
+  | { kind: "redacted_file"; path: string }
+  | { kind: "redacted_runtime"; key: string };
+
+/** Rust: VendorReplacementDto. */
+export interface VendorReplacementDto {
+  action: ReplacementAction;
+  /** `/etc/sysctl.d/<name>`. */
+  path: string;
+  /** `/usr/lib/sysctl.d/<name>`. */
+  vendor_path: string;
+  carriage: CarriageDto;
+}
+
+/** Rust: ReplacementAction. */
+export type ReplacementAction = "shadows" | "masks";
+
+/** Rust: CarriageDto, tagged on `kind`. */
+export type CarriageDto =
+  | { kind: "carried"; config_path: string }
+  | { kind: "excluded"; config_path: string }
+  | { kind: "advisory"; config_path: string }
+  | { kind: "no_config_entry" };
+
+/** Rust: NotCarriedDto. */
+export interface NotCarriedDto {
+  path: string;
+  reason: NotCarriedReason;
+}
+
+/** Rust: NotCarriedReason, tagged on `kind`. */
+export type NotCarriedReason =
+  | { kind: "runtime_dir" }
+  | { kind: "usr_local_lib" }
+  | { kind: "excluded"; config_path: string }
+  | { kind: "advisory"; config_path: string }
+  | { kind: "no_config_entry" };
+
+/** Rust: AsWrittenLineDto, tagged on `kind`. */
+export type AsWrittenLineDto =
+  | {
+      kind: "glob_assign";
+      at: SysctlLineRefDto;
+      pattern: string;
+      value: string;
+    }
+  | { kind: "glob_exclude"; at: SysctlLineRefDto; pattern: string }
+  | { kind: "unparsed"; at: SysctlLineRefDto; text: string };
+
+/** Rust: inspectah_core SysctlDir. */
+export type SysctlDir = "etc" | "run" | "usr_local_lib" | "usr_lib";
+
+/** Rust: SysctlFileDto. */
+export interface SysctlFileDto {
+  path: string;
+  dir: SysctlDir;
+  body: SysctlFileBodyDto;
+  /** Set when `carriage()` names a config entry. */
+  config_path: string | null;
+}
+
+/** Rust: SysctlFileBodyDto, tagged on `kind`. */
+export type SysctlFileBodyDto =
+  | { kind: "read"; link_target: string | null }
+  | { kind: "mask" }
+  | { kind: "outside_link"; target: string };
 
 /** A classified tuned profile selection, projected for the view response. */
 export interface TunedDecisionDto {
@@ -570,7 +701,8 @@ export interface ViewResponse extends RefinedView {
   service_dropins: DropInDecisionDto[];
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
-  sysctls: SysctlDecisionDto[];
+  /** The read-only sysctl panel. Always present. */
+  sysctl: SysctlViewDto;
   tuned: TunedDecisionDto[];
   users_groups_decisions: UserDecision[];
   package_groups: GroupInfo[];
@@ -687,11 +819,6 @@ export interface ItemIdFirewallZone {
 export interface ItemIdKernelModule {
   kind: "KernelModule";
   key: { name: string };
-}
-
-export interface ItemIdSysctl {
-  kind: "Sysctl";
-  key: { key: string };
 }
 
 export interface ItemIdTunedSelection {
@@ -921,7 +1048,6 @@ export type ItemId =
   | ItemIdNMConnection
   | ItemIdFirewallZone
   | ItemIdKernelModule
-  | ItemIdSysctl
   | ItemIdTunedSelection
   | ItemIdCronJob
   | ItemIdSystemdTimer
@@ -1035,6 +1161,8 @@ export interface AggregateViewResponse {
   sections: AggregateSection[];
   repo_groups: RepoGroupInfo[];
   repo_conflict_count: number;
+  /** The read-only sysctl panel; always `aggregate` on a fleet. */
+  sysctl: SysctlViewDto;
 }
 
 export interface LineRange {

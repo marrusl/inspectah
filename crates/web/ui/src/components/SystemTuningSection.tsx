@@ -1,35 +1,44 @@
 import type {
-  SysctlDecisionDto,
+  SysctlViewDto,
   TunedDecisionDto,
   ViewResponse,
 } from "../api/types";
-import { SysctlSection } from "./SysctlSection";
+import { SysctlPanel } from "./SysctlPanel";
 import { TunedSection } from "./TunedSection";
 
 export interface SystemTuningSectionProps {
-  sysctls: SysctlDecisionDto[];
+  sysctl: SysctlViewDto;
   tuned: TunedDecisionDto[];
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
+  /** Opens the Configuration Files row for a sysctl file. */
+  onNavigateToConfig?: (configPath: string) => void;
 }
 
+/**
+ * The tuned decision rows and the read-only sysctl panel, each shown on
+ * its own data. The empty state appears only when there is neither a
+ * tuned row nor a sysctl file (spec § 5.6); an aggregate or unavailable
+ * sysctl view always shows its line.
+ */
 export function SystemTuningSection({
-  sysctls,
+  sysctl,
   tuned,
   onViewUpdate,
   onMutationError,
+  onNavigateToConfig,
 }: SystemTuningSectionProps) {
-  const hasSysctls = sysctls.length > 0;
   const hasTuned = tuned.length > 0;
+  const showPanel = sysctl.state !== "host" || sysctl.files.length > 0;
 
-  if (!hasSysctls && !hasTuned) {
+  if (!hasTuned && !showPanel) {
     return (
       <div
         className="inspectah-service-section"
         data-testid="system-tuning-section"
       >
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
-          No system tuning overrides detected.
+          No system tuning detected.
         </p>
       </div>
     );
@@ -37,37 +46,6 @@ export function SystemTuningSection({
 
   return (
     <div data-testid="system-tuning-section">
-      {hasSysctls && (
-        <>
-          <h3
-            style={{
-              fontSize: "var(--pf-t--global--font--size--sm)",
-              fontWeight: 600,
-              opacity: 0.7,
-              padding:
-                "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
-              margin: 0,
-            }}
-          >
-            Sysctls
-          </h3>
-          <SysctlSection
-            sysctls={sysctls}
-            onViewUpdate={onViewUpdate}
-            onMutationError={onMutationError}
-          />
-        </>
-      )}
-      {hasSysctls && hasTuned && (
-        <hr
-          style={{
-            border: "none",
-            borderTop: "1px solid var(--pf-t--global--border--color--default)",
-            margin:
-              "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
-          }}
-        />
-      )}
       {hasTuned && (
         <>
           <h3
@@ -88,6 +66,19 @@ export function SystemTuningSection({
             onMutationError={onMutationError}
           />
         </>
+      )}
+      {hasTuned && showPanel && (
+        <hr
+          style={{
+            border: "none",
+            borderTop: "1px solid var(--pf-t--global--border--color--default)",
+            margin:
+              "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
+          }}
+        />
+      )}
+      {showPanel && (
+        <SysctlPanel sysctl={sysctl} onNavigateToConfig={onNavigateToConfig} />
       )}
     </div>
   );

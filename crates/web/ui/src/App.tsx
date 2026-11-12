@@ -180,7 +180,7 @@ function SingleHostApp({
 
   // Redirect retired section IDs to first section (handles stale session state).
   useEffect(() => {
-    const RETIRED = ["system_tuning", "version_changes"];
+    const RETIRED = ["version_changes"];
     if (RETIRED.includes(activeSection)) {
       setActiveSection("packages");
     }

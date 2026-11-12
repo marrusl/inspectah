@@ -36,6 +36,7 @@ import { AggregateBanner } from "./aggregate/AggregateBanner";
 import { AggregateSectionContent } from "./aggregate/AggregateSection";
 import { itemDisplayName } from "./aggregate/AggregateItemRow";
 import { RepoBar } from "./RepoBar";
+import { SysctlPanel } from "./SysctlPanel";
 import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 
@@ -605,6 +606,7 @@ export function AggregateApp({
                       />
                     </>
                   ) : (
+                    <>
                     <AggregateSectionContent
                       section={activeAggregateSection}
                       filterText={filterText}
@@ -621,6 +623,10 @@ export function AggregateApp({
                       onSelectVariant={handleSelectVariant}
                       diffHook={diffHook}
                     />
+                    {activeSection === "system_tuning" && (
+                      <SysctlPanel sysctl={aggregateView.sysctl} />
+                    )}
+                    </>
                   )}
                 </div>
               </>

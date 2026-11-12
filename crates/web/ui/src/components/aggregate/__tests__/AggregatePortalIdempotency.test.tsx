@@ -164,6 +164,7 @@ function makeAggregateViewWithVariants(): AggregateViewResponse {
     ],
     repo_groups: [],
     repo_conflict_count: 0,
+    sysctl: { state: "aggregate" },
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import type {
@@ -124,7 +124,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
   service_dropins: [],
   quadlets: [],
   flatpaks: [],
-  sysctls: [],
+  sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],
   package_groups: [],
@@ -212,8 +212,46 @@ describe("Sidebar", () => {
     expect(screen.getByText("Subscription")).toBeInTheDocument();
   });
 
-  it("does not render retired sections (system_tuning, version_changes)", () => {
-    render(
+  it("lists System Tuning with a badge counting tuned rows only", () => {
+    const groups = MOCK_GROUPS.map((g) =>
+      g.slug === "system-config"
+        ? {
+            ...g,
+            sections: [
+              ...g.sections.slice(0, 2),
+              { id: "system_tuning", label: "System Tuning", is_triage: true },
+              ...g.sections.slice(2),
+            ],
+          }
+        : g,
+    );
+    const tuned = {
+      active_profile: "throughput-performance",
+      custom_profiles: [],
+      triage: {
+        triage: { mode: "single_host" as const, baseline: null },
+        primary_reason: "tuned_non_default_profile" as const,
+        annotations: [],
+      },
+      include: true,
+    };
+    const { rerender } = render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={{ ...MOCK_VIEW_DATA, tuned: [tuned] }}
+        groups={groups}
+      />,
+    );
+
+    const entry = screen.getByText("System Tuning").closest("a")!;
+    expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
+
+    // A host with sysctl files and no tuned selection is cleared at 0.
+    rerender(
       <Sidebar
         activeSection="packages"
         onSelect={vi.fn()}
@@ -221,11 +259,10 @@ describe("Sidebar", () => {
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
         viewData={MOCK_VIEW_DATA}
-        groups={MOCK_GROUPS}
+        groups={groups}
       />,
     );
-
-    expect(screen.queryByText("System Tuning")).not.toBeInTheDocument();
+    expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
     expect(screen.queryByText("Version Changes")).not.toBeInTheDocument();
   });
 

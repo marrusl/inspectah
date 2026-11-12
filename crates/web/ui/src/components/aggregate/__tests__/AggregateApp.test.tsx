@@ -119,6 +119,7 @@ function makeAggregateView(
       },
     ],
     repo_conflict_count: 0,
+    sysctl: { state: "aggregate" },
     ...overrides,
   };
 }

@@ -106,6 +106,7 @@ function makeAggregateViewWithDivergent(
     ],
     repo_groups: [],
     repo_conflict_count: 0,
+    sysctl: { state: "aggregate" },
   };
 }
 

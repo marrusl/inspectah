@@ -81,6 +81,11 @@ function decisionCount(
     if (!viewData) return "...";
     return String(viewData.service_states?.length ?? 0);
   }
+  // Tuned rows only: the sysctl panel holds no decisions.
+  if (id === "system_tuning") {
+    if (!viewData) return "...";
+    return String(viewData.tuned?.length ?? 0);
+  }
   if (id === "containers") {
     if (!viewData) return "...";
     return String(

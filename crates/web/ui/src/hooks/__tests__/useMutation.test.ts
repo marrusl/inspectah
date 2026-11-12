@@ -25,7 +25,7 @@ const MOCK_VIEW: ViewResponse = {
   service_dropins: [],
   quadlets: [],
   flatpaks: [],
-  sysctls: [],
+  sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],
   package_groups: [],

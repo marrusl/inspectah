@@ -32,6 +32,7 @@ import { PackageList } from "./PackageList";
 import type { PackageListPackage } from "./PackageList";
 import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
+import { SystemTuningSection } from "./SystemTuningSection";
 import { buildShadowOwners } from "./shadowOwner";
 import { Content } from "@patternfly/react-core";
 
@@ -48,6 +49,7 @@ const SECTION_LABELS: Record<string, string> = {
   scheduled_tasks: "Scheduled Tasks",
   non_rpm_software: "Non-RPM Software",
   kernel_boot: "Kernel & Boot",
+  system_tuning: "System Tuning",
   selinux: "Security & Access Control",
   language_packages: "Language Packages",
   unmanaged_files: "Unmanaged Files",
@@ -209,18 +211,14 @@ export function MainContent({
     [viewData],
   );
 
-  // A config entry whose path is also carried by Service Drop-ins or by a
-  // sysctl override is Inventory: the session refuses SetInclude on it.
-  // Resolving the owner here is what turns a dead "Inventory" badge into a
-  // pointer at the control that replaced it.
+  // A config entry whose path is also carried by Service Drop-ins is
+  // Inventory: the session refuses SetInclude on it. Resolving the owner
+  // here is what turns a dead "Inventory" badge into a pointer at the
+  // control that replaced it.
   const shadowOwners = useMemo(
     () =>
       viewData
-        ? buildShadowOwners(
-            viewData.config_files,
-            viewData.service_dropins,
-            viewData.sysctls,
-          )
+        ? buildShadowOwners(viewData.config_files, viewData.service_dropins)
         : new Map(),
     [viewData],
   );
@@ -607,6 +605,28 @@ export function MainContent({
           dropins={viewData?.service_dropins ?? []}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
+        />
+      </>
+    );
+  }
+
+  // System Tuning: the tuned decision rows and the read-only sysctl panel,
+  // whose file paths open their Configuration Files rows.
+  if (activeSection === "system_tuning") {
+    if (!viewData) return <p>Section data not available.</p>;
+    return (
+      <>
+        <Content>
+          <h2>{SECTION_LABELS.system_tuning}</h2>
+        </Content>
+        <SystemTuningSection
+          sysctl={viewData.sysctl}
+          tuned={viewData.tuned}
+          onViewUpdate={onViewUpdate}
+          onMutationError={onMutationError}
+          onNavigateToConfig={(configPath) =>
+            onNavigateToItem?.("config", `configs:${configPath}`)
+          }
         />
       </>
     );
