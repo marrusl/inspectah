@@ -9,6 +9,9 @@ pub struct MockExecutor {
     files: HashMap<String, String>,
     dirs: HashMap<String, Vec<String>>,
     links: HashMap<String, String>,
+    /// Link paths whose chain ends at a path that does not exist, so
+    /// `resolve_final_target` fails on them as `canonicalize` does.
+    dangling_links: HashSet<String>,
     /// Commands that simulate a timeout. When `run()` matches one of
     /// these keys, it returns a timeout error result instead of the
     /// normal command lookup. The Duration is recorded for diagnostics
@@ -37,6 +40,7 @@ impl MockExecutor {
             files: HashMap::new(),
             dirs: HashMap::new(),
             links: HashMap::new(),
+            dangling_links: HashSet::new(),
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
             file_errors: HashMap::new(),
@@ -73,6 +77,19 @@ impl MockExecutor {
 
     pub fn with_link(mut self, path: &str, target: &str) -> Self {
         self.links.insert(path.to_string(), target.to_string());
+        self
+    }
+
+    /// Register a symlink whose target does not exist. `read_link`
+    /// returns `target` and `resolve_final_target` fails with `NotFound`,
+    /// as `canonicalize` does on a real host. A plain [`with_link`] to an
+    /// unregistered path resolves, because the mock cannot tell a missing
+    /// target from one a test did not bother to register.
+    ///
+    /// [`with_link`]: MockExecutor::with_link
+    pub fn with_dangling_link(mut self, path: &str, target: &str) -> Self {
+        self.links.insert(path.to_string(), target.to_string());
+        self.dangling_links.insert(path.to_string());
         self
     }
 
@@ -219,6 +236,12 @@ impl Executor for MockExecutor {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("symlink loop detected at {}", current.display()),
+                ));
+            }
+            if self.dangling_links.contains(&key) {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("dangling symlink at {}", current.display()),
                 ));
             }
 
@@ -379,6 +402,21 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("loop"));
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_dangling() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/sysctl.d/a.conf", "/etc/sysctl.d/b.conf")
+            .with_dangling_link("/etc/sysctl.d/b.conf", "/etc/sysctl.d/gone.conf");
+        for path in ["/etc/sysctl.d/a.conf", "/etc/sysctl.d/b.conf"] {
+            let err = mock.resolve_final_target(Path::new(path)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotFound, "{path}");
+        }
+        assert_eq!(
+            mock.read_link(Path::new("/etc/sysctl.d/b.conf")).unwrap(),
+            "/etc/sysctl.d/gone.conf"
+        );
     }
 
     #[test]

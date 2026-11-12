@@ -27,7 +27,7 @@ use super::modernization;
 /// Maximum file size to read (256 KiB). A larger file is collected as a
 /// `ContentNotCaptured` advisory and marks the section degraded, to prevent
 /// memory bloat.
-const MAX_CONFIG_FILE_SIZE: usize = 256 * 1024;
+pub(crate) const MAX_CONFIG_FILE_SIZE: usize = 256 * 1024;
 
 /// Config inspector: RPM-owned modified, unowned /etc files, orphaned configs.
 ///

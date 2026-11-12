@@ -7,9 +7,17 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::kernelboot::{KernelBootSection, KernelModule, SysctlOverride};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
-use inspectah_core::types::sysctl::sysctl_values_equal;
-use std::collections::HashMap;
+use inspectah_core::types::sysctl::{
+    SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlLine, SysctlName, SysctlSection,
+    sysctl_values_equal,
+};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+
+use crate::inspectors::config::MAX_CONFIG_FILE_SIZE;
+
+/// The final target of a link that masks a sysctl file.
+const DEV_NULL: &str = "/dev/null";
 
 /// Secret-like patterns in the kernel cmdline.
 const CMDLINE_SECRET_PATTERNS: &[&str] = &["password=", "key=", "secret="];
@@ -46,7 +54,8 @@ impl Inspector for KernelbootInspector {
     ) -> Result<InspectorOutput, InspectorError> {
         let exec = ctx.executor;
         let mut redaction_hints = Vec::new();
-        let mut primary_failure: Option<String> = None;
+        // Every failed primary source, so one failure cannot hide another.
+        let mut primary_failures: Vec<String> = Vec::new();
 
         // 1. Read /proc/cmdline — PRIMARY source
         let cmdline = match exec.read_file(Path::new("/proc/cmdline")) {
@@ -69,7 +78,7 @@ impl Inspector for KernelbootInspector {
                 trimmed
             }
             Err(e) => {
-                primary_failure = Some(format!("/proc/cmdline unreadable: {e}"));
+                primary_failures.push(format!("/proc/cmdline unreadable: {e}"));
                 String::new()
             }
         };
@@ -78,7 +87,7 @@ impl Inspector for KernelbootInspector {
         let loaded_modules = match collect_lsmod(exec) {
             Ok(modules) => modules,
             Err(reason) => {
-                primary_failure = Some(reason);
+                primary_failures.push(reason);
                 Vec::new()
             }
         };
@@ -87,8 +96,19 @@ impl Inspector for KernelbootInspector {
         let sysctl_overrides = match collect_sysctl_overrides(exec) {
             Ok(overrides) => overrides,
             Err(reason) => {
-                primary_failure = Some(reason);
+                primary_failures.push(reason);
                 Vec::new()
+            }
+        };
+
+        // 3a. Sysctl search path and runtime values — PRIMARY source. No
+        // partial section is stored: one missing file or runtime value
+        // would make the explanation claim drift that is not there.
+        let sysctl = match collect_sysctl_section(exec) {
+            Ok(section) => Some(section),
+            Err(reason) => {
+                primary_failures.push(reason);
+                None
             }
         };
 
@@ -114,7 +134,7 @@ impl Inspector for KernelbootInspector {
             cmdline,
             grub_defaults: String::new(),
             sysctl_overrides,
-            sysctl: None,
+            sysctl,
             loaded_modules,
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
             tuned_active,
@@ -124,7 +144,8 @@ impl Inspector for KernelbootInspector {
         };
 
         // Check for primary failure → Degraded
-        if let Some(reason) = primary_failure {
+        if !primary_failures.is_empty() {
+            let reason = primary_failures.join("; ");
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::KernelBoot(section),
@@ -297,6 +318,125 @@ fn parse_sysctl_conf(content: &str) -> Vec<(String, String)> {
         }
     }
     pairs
+}
+
+/// Record the sysctl search path as it is on disk and the kernel's value of
+/// every key it names (`sysctl.d(5)`). Resolves nothing: the explanation is
+/// derived from the section by `inspectah-core`.
+///
+/// A directory that does not exist is normal. Any other failure to list a
+/// directory, to read an entry, or to run `sysctl -a` is an error naming
+/// the cause.
+fn collect_sysctl_section(exec: &dyn Executor) -> Result<SysctlSection, String> {
+    let mut files = Vec::new();
+    for dir in SysctlDir::ALL {
+        let entries = match exec.read_dir(Path::new(dir.path())) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("sysctl: cannot list {}: {e}", dir.path())),
+        };
+        for name in entries.into_iter().filter(|name| name.ends_with(".conf")) {
+            let path = format!("{}/{name}", dir.path());
+            let body = read_sysctl_entry(exec, &path)?;
+            files.push(SysctlFile { dir, name, body });
+        }
+    }
+    files.sort_by(|a, b| (&a.name, a.dir).cmp(&(&b.name, b.dir)));
+
+    let named: BTreeSet<SysctlKey> = files
+        .iter()
+        .flat_map(SysctlFile::lines)
+        .filter_map(|line| match line {
+            SysctlLine::Assign {
+                name: SysctlName::Key(key),
+                ..
+            }
+            | SysctlLine::Exclude {
+                name: SysctlName::Key(key),
+                ..
+            } => Some(key),
+            SysctlLine::Assign { .. }
+            | SysctlLine::Exclude { .. }
+            | SysctlLine::Unparsed { .. } => None,
+        })
+        .collect();
+
+    let mut runtime = BTreeMap::new();
+    if !named.is_empty() {
+        let result = exec.run("sysctl", &["-a"]);
+        if !result.success() {
+            return Err(format!(
+                "sysctl: sysctl -a failed with exit code {}",
+                result.exit_code
+            ));
+        }
+        // stderr carries per-key read errors (`stable_secret`) on a
+        // successful run; a key it names is simply absent from stdout.
+        for (name, value) in parse_sysctl_output(&result.stdout) {
+            let key = SysctlKey::normalize(name);
+            if named.contains(&key) {
+                runtime.insert(key, value.to_string());
+            }
+        }
+    }
+
+    Ok(SysctlSection {
+        files,
+        runtime,
+        redacted_runtime: Vec::new(),
+    })
+}
+
+/// What one `*.conf` entry is. A link is resolved to its final target: a
+/// mask is not read, a target under `/etc/` or a sysctl directory is read
+/// through `path`, and any other target is recorded and not read.
+fn read_sysctl_entry(exec: &dyn Executor, path: &str) -> Result<SysctlFileBody, String> {
+    let entry = Path::new(path);
+    if exec.read_link(entry).is_err() {
+        return Ok(SysctlFileBody::Read {
+            link_target: None,
+            content: read_sysctl_content(exec, path)?,
+            redacted: false,
+        });
+    }
+    let target = exec
+        .resolve_final_target(entry)
+        .map_err(|e| format!("sysctl: cannot read {path}: {e}"))?
+        .to_string_lossy()
+        .into_owned();
+    if target == DEV_NULL {
+        return Ok(SysctlFileBody::Mask);
+    }
+    if is_sysctl_read_through_target(&target) {
+        return Ok(SysctlFileBody::Read {
+            content: read_sysctl_content(exec, path)?,
+            link_target: Some(target),
+            redacted: false,
+        });
+    }
+    Ok(SysctlFileBody::OutsideLink { target })
+}
+
+/// Whether a link's final target is inside the configuration trees the
+/// sysctl section reads: `/etc/` or one of the sysctl directories.
+fn is_sysctl_read_through_target(target: &str) -> bool {
+    target.starts_with("/etc/")
+        || SysctlDir::ALL
+            .iter()
+            .any(|dir| target.starts_with(&format!("{}/", dir.path())))
+}
+
+/// Read an entry's content, held to the config inspector's size cap.
+fn read_sysctl_content(exec: &dyn Executor, path: &str) -> Result<String, String> {
+    let content = exec
+        .read_file(Path::new(path))
+        .map_err(|e| format!("sysctl: cannot read {path}: {e}"))?;
+    if content.len() > MAX_CONFIG_FILE_SIZE {
+        return Err(format!(
+            "sysctl: {path} is over {MAX_CONFIG_FILE_SIZE} bytes"
+        ));
+    }
+    Ok(content)
 }
 
 /// Parse `sysctl -a` output into key → value map.

@@ -29,7 +29,26 @@ expression: section
       "aggregate": null
     }
   ],
-  "sysctl": null,
+  "sysctl": {
+    "files": [
+      {
+        "dir": "etc",
+        "name": "99-custom.conf",
+        "body": {
+          "kind": "read",
+          "link_target": null,
+          "content": "kernel.sysrq = 1\nnet.ipv4.ip_forward = 1\nvm.swappiness = 10\n",
+          "redacted": false
+        }
+      }
+    ],
+    "runtime": {
+      "kernel.sysrq": "16",
+      "net.ipv4.ip_forward": "1",
+      "vm.swappiness": "30"
+    },
+    "redacted_runtime": []
+  },
   "loaded_modules": [
     {
       "name": "bridge",

@@ -44,6 +44,23 @@ matching uses `starts_with`, so shorter prefixes are greedier.
 register both `with_file("/etc/foo", "content")` and
 `with_file_error("/etc/foo", PermissionDenied)`, the error wins.
 
+**5. Links are not followed on reads.** `RealExecutor::read_file` and
+`file_exists` follow symlinks; `MockExecutor`'s do not, and
+`resolve_final_target` succeeds on a link to an unregistered path. A
+fixture that registers a link must also register, at the link's own
+path, the content a real read returns there (`""` for `/dev/null`), or
+the inspector sees a missing file where a real host has content. Use
+`with_dangling_link()` for a link whose target is missing: it makes
+`resolve_final_target` fail with `NotFound`, as `canonicalize` does. The
+sysctl harness (`crates/cli/tests/support/sysctl_hosts.rs`,
+`SysctlHost::link`) applies this rule for every link it is given.
+
+**6. The RPM ownership query key.** The RPM inspector lists owned paths
+with `rpm -qa --queryformat @@%{NAME}\n[%{FILENAMES}\n]` (the `\n` is
+the two characters backslash and `n`). A mock registering an older
+format gets exit 127, and the only symptom is the warning "rpm file
+ownership query returned no data", so every path looks unowned.
+
 ### Debugging Failed Lookups
 
 Use `command_log()` to see every command the inspector actually invoked:
