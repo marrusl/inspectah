@@ -171,6 +171,46 @@ directory. Getting it wrong in the narrow direction costs false findings;
 in the wide direction it leaks, so widen only with a table row in
 `test_non_hash_markers_exempt_only_where_they_are_comment_syntax`.
 
+## Content parsed after redaction is unknown when the pass changed it
+
+Some content is parsed *after* `redact()` has run: the sysctl
+explanation reads `kernel_boot.sysctl` files and runtime values to say
+what each key resolves to and whether it drifts. Parsing scrubbed text
+gives a confident wrong answer. A replacement token stands for a whole
+match, not for a value split off its key, so a match that spans a key,
+the `=` or several lines leaves text that parses as a different setting,
+or as none, and a token compared with a host value can read as equal or
+as drift.
+
+The rule: **when the pass changed a piece of content, what it says is
+unknown, and nothing is parsed from the scrubbed text.** The pass records
+the change on the object, and the consumer reads the record rather than
+the text:
+
+- `SysctlFileBody::Read.redacted` is set when the content changed.
+  While that file survives shadowing (no same-named file in a
+  higher-priority directory replaces it), `SysctlSection::effective()`
+  returns `Unknown` with an input naming the file. Its lines contribute
+  nothing to the as-written list either, because line numbers after a
+  multi-line replacement are not the host's.
+- A runtime value with any match is removed from `runtime` and its key
+  added to `redacted_runtime`. No scrubbed remainder is stored, because
+  nothing would read it, and the explanation names the key as unknown.
+- A link target is a path, not a line systemd-sysctl parses, so a change
+  there scrubs it without setting `redacted`.
+
+The cost is accepted: a host whose sysctl files hold a secret-bearing
+key gets no values or drift for any key (Mark, 2026-11-11). The
+alternative is an explanation built from text the host never had.
+
+The pass is the config pass reused, not a new scrubber
+(`redact_sysctl_section` in `redaction/engine.rs`): the same patterns,
+eligibility and comment exemptions under the field's path (runtime
+values under `/proc/sys`), the same whole-match replacement, the
+snapshot's one counter registry, and findings into `all_findings` like
+any other. A new consumer that parses content after redaction follows
+the same rule: give the pass a flag to set, and read the flag.
+
 ## Testing it
 
 Assert over the **whole export directory**, not over one named file:
@@ -195,6 +235,14 @@ Four fields had this gap, found one at a time:
 | `containers.quadlet_units[].content` | **the built image** | review of the first fix |
 | `scheduled_tasks.*.timer_content` | `config/etc/systemd/system/` | review of the first fix |
 | `scheduled_tasks.systemd_timers[].description` | the audit report | the sweep test below |
+
+The sysctl section (`kernel_boot.sysctl`) was classified when it was
+added, not found later: `SysctlSection.runtime` values,
+`SysctlFileBody::Read.content` and `link_target`, and
+`SysctlFileBody::OutsideLink.target` are scrubbed;
+`SysctlFile.dir` and `name`, `Read.redacted` and `redacted_runtime` are
+exempt. No sysctl type has a `Default`, so its patterns sit in
+never-called functions the compiler still checks for completeness.
 
 None of these was a parsing bug. Each was a content-bearing field nobody
 wired into `redact()`. The quadlet one is the sharpest: a

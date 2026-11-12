@@ -182,9 +182,11 @@ listed under "Modified RPM-Owned Files": files an installed package ships
 that you changed. The scan reported 62 modified configs in total; Step 4
 shows how refine sorts all 62.
 
-**Kernel and SELinux:** two sysctl overrides, SELinux in enforcing mode,
-and one custom file context rule that labels `/srv/www` as
-`httpd_sys_content_t`.
+**Kernel and SELinux:** a Sysctl section that lists each key the host's
+sysctl files set, with its running value and the file and line that set
+it, and any key whose running value differs from the files. SELinux is in
+enforcing mode, with one custom file context rule that labels `/srv/www`
+as `httpd_sys_content_t`.
 
 **Services:** `httpd` and `nginx` are enabled, and `bluetooth` and
 `kdump` are masked. The report flags three unit files in
@@ -254,13 +256,13 @@ Each item has a bucket and a disposition:
 
 For this host, the 25 packages are 24 Site packages and one Investigate
 package (`epel-release`, which has no repository source). All 25 are
-Actionable. Of the 62 configs, 55 are Actionable and 7 are not: 2
+Actionable. Of the 62 configs, 57 are Actionable and 5 are not: 2
 Advisory (`/etc/init.d/legacy-app`, a SysV init script that needs a
 `.service` unit in image mode, and `/etc/mydb/config.yaml`, a symlink that
-crosses from `/etc` into `/var`) and 5 Inventory (two sysctl drop-ins, two
-`httpd.service.d` drop-ins, and the `sshd.service` unit file, which the
-export carries through the merged sysctl drop-in and the service
-drop-ins). Eight of the Actionable configs
+crosses from `/etc` into `/var`) and 3 Inventory (two `httpd.service.d`
+drop-ins and the `sshd.service` unit file, which the export carries
+through the service drop-ins). The sysctl files under `/etc/sysctl.d/`
+are ordinary Actionable configs. Eight of the Actionable configs
 are RPM-owned files you modified; Step 5 covers them.
 
 See [Triage Classification](../reference/triage-classification.md) for
@@ -305,13 +307,17 @@ the image, which is how `htop` installs.
   `security/faillock.conf` are often rewritten by subscription-manager
   and authselect rather than by hand. This tutorial keeps all eight.
   Exclude any you do not want in the image.
-- **Nothing to decide:** `/etc/init.d/legacy-app` (Advisory) and
-  `/etc/sysctl.d/thp.conf` (Inventory) have no toggle. The advisory is
-  work you do outside refine: write a systemd unit for the init script.
+- **Nothing to decide:** `/etc/init.d/legacy-app` (Advisory) has no
+  toggle. The advisory is work you do outside refine: write a systemd
+  unit for the init script.
+- **Keep the sysctl files.** `/etc/sysctl.d/thp.conf` and the other
+  sysctl files are included, and each is copied into the image as it is.
+  The System Tuning section explains what they set and whether any key
+  runs at a different value on the host; it has nothing to decide.
 
 After these decisions the stats bar shows 18 packages included and 7
-excluded, and `Configs: 54 included / 1 excluded / 7 advisory`. The 7
-counts every config you cannot toggle: the 2 Advisory and the 5 Inventory.
+excluded, and `Configs: 56 included / 1 excluded / 5 advisory`. The 5
+counts every config you cannot toggle: the 2 Advisory and the 3 Inventory.
 
 The goal is not to migrate everything. The goal is to migrate what
 defines this workload and leave behind what was incidental to the
@@ -452,7 +458,7 @@ RUN systemctl mask \
     kdump.service
 ...
 # === Configuration Files ===
-# 54 config file(s) captured
+# 56 config file(s) captured
 
 COPY config/etc/ /etc/
 ```
@@ -462,8 +468,8 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
 - Packages: the scan tarball's Containerfile installs 24 packages. The
   export installs 18: the 24, less the six that dropped (`strace`,
   `tcpdump`, `tmux`, `bat`, `fd-find`, and `the_silver_searcher`).
-- Configs: the scan tarball's Containerfile captures 55 config files. The
-  export captures 54: the 55, less `/etc/nsswitch.conf.bak`.
+- Configs: the scan tarball's Containerfile captures 57 config files. The
+  export captures 56: the 57, less `/etc/nsswitch.conf.bak`.
 - Repositories: the scan tarball's Containerfile installs `epel-release`
   as a repo-enabling package. refine excludes it by default, so the export
   does not install it, and the EPEL repo files still ship.
@@ -472,7 +478,7 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
   it.
 
 The rest of the Containerfile covers the Python virtual environments, the npm application, the three
-Quadlet units, the Compose file as a reference, the sysctl drop-in, the
+Quadlet units, the Compose file as a reference, the
 tuned profile, and the SELinux file context and port rules.
 
 You can also build manually with `podman build`. See

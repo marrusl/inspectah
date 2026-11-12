@@ -10,9 +10,10 @@ inspectah sorts findings along two independent axes.
 
 - A **triage bucket** (Baseline, Site, or Investigate) signals how much human
   attention an item needs. Packages, configuration files, services and service
-  drop-ins, Quadlet units, Flatpaks, sysctl overrides, and the tuned profile
-  get a bucket. For packages and configuration files the bucket also sets the
-  default inclusion in the generated Containerfile.
+  drop-ins, Quadlet units, Flatpaks, and the tuned profile get a bucket.
+  Sysctl files are configuration files and are triaged as such. For
+  packages and configuration files the bucket also sets the default
+  inclusion in the generated Containerfile.
 - A **disposition** (Actionable, Advisory, or Inventory) says whether the user
   can decide the finding at all. Every finding carries one. See
   [Finding dispositions](#finding-dispositions).
@@ -75,7 +76,7 @@ When inspectah scans one host, every item receives one of three buckets:
 - Package installed by Anaconda that is platform plumbing, which is also locked (`PackagePlatformPlumbing`), or installer default with no active service or modified configuration (`PackageInstallerDefault`)
 - Config file content is identical to the RPM-shipped default (`ConfigDefault`, `ConfigBaselineMatch`)
 
-Services, sysctl overrides, and tuned profiles are never classified Baseline on
+Services and tuned profiles are never classified Baseline on
 a single host, because no baseline data exists for them.
 
 **Site** items show intentional customization:
@@ -89,7 +90,6 @@ a single host, because no baseline data exists for them.
 - Service has a drop-in override (`ServiceDropInPresent`)
 - Quadlet container unit deployed by the user (`QuadletUserDeployed`)
 - Flatpak with a remote and branch, provisioned at first boot (`FlatpakProvisionedOnFirstBoot`)
-- Sysctl override: every override is Site. A file-backed override (source under `/etc/sysctl.d/` or `/etc/sysctl.conf`) is `SysctlFileBackedOverride`; any other is `SysctlNoBaseline` and carries the `RuntimeOnlyObservation` annotation
 - Tuned profile is non-default (`TunedNonDefaultProfile`) or custom (`TunedCustomProfile`)
 - Anaconda-installed package promoted by an enabled service plus a modified config, or by a modified config in a short list of packages (`PackageInstallerPromotedService`, `PackageInstallerPromotedConfig`)
 - Package from the command line whose files are all captured as config files (`PackageConfigCaptured`), which is Site but excluded by default
@@ -115,7 +115,6 @@ Items may carry additional annotations alongside their bucket:
 | `SensitivePath` | Item lives in a security-sensitive directory (e.g., `/etc/ssh/`, `/etc/pki/`) |
 | `FirstBootProvisioned` | Item was provisioned during first boot (e.g., Flatpak from a manifest) |
 | `RequiresProjectedPackage` | Config file belongs to a package that must also be included |
-| `RuntimeOnlyObservation` | Item reflects runtime state, not a persistent configuration |
 
 Annotations do not change the bucket. They add context for review.
 
@@ -220,7 +219,7 @@ not listed have no triage bucket.
 | Config Files | Files under `/etc/` | RPM default, baseline match | Modified, unowned, orphaned |
 | Services | systemd units and drop-ins | (none, no baseline data) | Non-default state, drop-in present |
 | Containers | Quadlet units, Flatpaks | (none) | User-deployed, provisioned at first boot |
-| Kernel/Boot | sysctl overrides, tuned profile | (none, no baseline data) | Every sysctl override; non-default or custom tuned profile |
+| Kernel/Boot | tuned profile | (none, no baseline data) | Non-default or custom tuned profile |
 
 Loaded kernel modules, network findings, and the other reference sections
 carry a disposition but no bucket. Scheduled tasks and non-RPM software have no
@@ -242,7 +241,7 @@ attention does this need" but "can the user decide it, and if not, why not".
 | **Advisory** | `"kind": "advisory"` with an `advisory_type` and a `rationale` | The row shows an "Advisory" badge and the rationale beneath it. No control. The stats bar counts it, together with Inventory rows, as "N advisory", omitted at zero. | A configuration-file advisory (modernization, cross-tree symlink) is not copied into the image. The unbacked `/var` advisory is the exception: the export provisions those directories through `inspectah-var.conf`, or `RUN mkdir -p` when the mode was not recorded. Listed under "Advisories" in the audit report. |
 | **Inventory** | `"kind": "inventory"` | The row shows an "Inventory" badge, or a badge naming the row that owns the decision. No control. | Shown for reference only. Never produces a Containerfile line. |
 
-The field is named `disposition` on 27 types, and `tuned_disposition` on
+The field is named `disposition` on 26 types, and `tuned_disposition` on
 the kernel and boot section. No type carries a bare `include` flag any
 more: the flag lives inside the Actionable variant. An Advisory or Inventory finding is not toggleable. The refine session
 refuses a request to change one and the server answers HTTP 422 with a JSON
@@ -306,10 +305,13 @@ owner instead of a control:
 | Badge | When | Where the decision lives |
 |---|---|---|
 | Controlled in Service Drop-ins | The file's path is also a Service Drop-ins entry (a `*.service.d/*.conf` drop-in, or a full unit shadow). | The Service Drop-ins row for the same path. |
-| Merged into sysctl settings | The file is the `source` of one or more sysctl overrides. The included keys are written to one synthesized `99-inspectah-migrated.conf` drop-in. | The sysctl rows, key by key, under Kernel and Boot. |
 
 The badge links to the owning row. An advisory entry is never converted this
 way, so the warning is not lost.
+
+A sysctl file is not converted either. The sysctl panel under System Tuning
+explains what the files set but holds no decision, so each `/etc` sysctl
+file keeps its own Configuration Files row and control.
 
 ---
 
@@ -377,7 +379,7 @@ The Containerfile action depends on the item type:
 | Service enable/disable/mask | `RUN systemctl enable`, `disable`, or `mask` with the unit names |
 | Service drop-in or full unit shadow | `COPY drop-ins/etc/systemd/system/ /etc/systemd/system/` |
 | Quadlet unit | `COPY quadlet/ /etc/containers/systemd/` |
-| Sysctl override | The included keys are merged into one file: `COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/` |
+| Sysctl file (`/etc/sysctl.conf`, `/etc/sysctl.d/*.conf`) | A config file: carried unchanged by the `COPY config/etc/ /etc/` line |
 | Scheduled task (timer) | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable <name>.timer` |
 
 Advisory and Inventory findings produce no Containerfile line, apart from

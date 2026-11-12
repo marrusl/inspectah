@@ -47,7 +47,7 @@ expandable, and its sections are listed beneath it.
 | Group | Sections | What it contains |
 |-------|----------|------------------|
 | Packages | Packages | RPM packages, the Repositories bar, package groups, and a Version Changes panel |
-| System Configuration | Configuration Files, Kernel & Boot, Security & Access Control | Modified files under `/etc`, kernel and boot settings including sysctl overrides and the tuned profile, and SELinux |
+| System Configuration | Configuration Files, Kernel & Boot, System Tuning, Security & Access Control | Modified files under `/etc` (sysctl files among them), kernel and boot settings, the tuned profile and a read-only sysctl explanation, and SELinux |
 | Services & Scheduling | Services, Scheduled Tasks, Containers | systemd units and drop-ins, cron, at, and timer jobs, Quadlet units, and Flatpaks |
 | Users & Identity | Users & Groups | Local non-system user accounts |
 | Network | Network | Reference only |
@@ -124,12 +124,11 @@ model.
 | "Advisory: Modernization" or "Advisory: Cross-tree symlink", with a rationale beneath the row | Advisory. inspectah is reporting something, not asking for a decision. There is no checkbox. The finding is listed in the audit report, and its file is not copied into the image. |
 | "Inventory", or a badge naming the row that owns the decision | Inventory. The row is shown for reference. There is no checkbox. |
 
-A configuration file that a service drop-in or a sysctl override already
-carries is Inventory, so the decision is made once. Its badge reads
-"Controlled in Service Drop-ins" or "Merged into sysctl settings", with the
-owning row's state beside it and a "Go to owner" link. A unit at its preset
-state that has a drop-in is listed under "Other drop-in overrides" in
-Services.
+A configuration file that a service drop-in already carries is Inventory,
+so the decision is made once. Its badge reads "Controlled in Service
+Drop-ins", with the owning row's state beside it and a "Go to owner" link.
+A unit at its preset state that has a drop-in is listed under "Other
+drop-in overrides" in Services.
 
 If a request to change an Advisory or Inventory row does reach the server,
 the server refuses it with HTTP 422 and a message. The refine UI does not
@@ -219,6 +218,41 @@ To discard every include and exclude change, use Reset to defaults in the
 stats bar. It is available once you have made a change, and asks you to
 confirm.
 
+## Review sysctl settings
+
+Sysctl files are configuration files. Each file under `/etc/sysctl.d/`, and
+a modified `/etc/sysctl.conf`, is a row in Configuration Files, and that row
+alone decides whether the file goes into the image. A file that goes in is
+copied as the host had it, under its own name, so the image applies the
+same settings in the same order.
+
+The System Tuning section holds the tuned profile row, which you decide,
+and a read-only sysctl panel, which explains what the host's sysctl files
+do. It has no checkboxes. The panel shows:
+
+- The effective value of each key the files set, the running value beside
+  it ("same" when they match, "not exposed" when the kernel does not list
+  the key), and the file and line that set it.
+- Runtime drift: keys that run at a value other than the one the files
+  request. The image gets the files, not the running values, so a value
+  set by hand with `sysctl -w`, or by tuned or another service, is not
+  carried.
+- Vendor files an `/etc` file replaces or disables, and whether that file
+  is carried.
+- Files that are not carried, and why: files in `/run/sysctl.d/` are
+  generated at runtime, files in `/usr/local/lib/sysctl.d/` are carried
+  only as unmanaged files, and an `/etc` file you excluded stays behind.
+- Lines reported as written, such as globs, which inspectah does not
+  expand.
+
+Each file path in the panel opens its Configuration Files row.
+
+When inspectah does not know every input, the panel states no values or
+drift for the host and names the reason instead: a file it could not read,
+a link to a file outside `/etc/` and the sysctl directories, or a file or
+running value that redaction changed. The same explanation is in the audit
+report and the HTML report.
+
 ## Handle version changes
 
 When the scan detects that a package version differs from the base image,
@@ -287,9 +321,10 @@ based on your selections.
 
 Redaction runs during the scan, before the tarball is written. It covers
 file content in configuration, repo, drop-in, and unit files, the kernel
-command line, container environment variables, Quadlet unit text, compose
-files, cron, at, and timer commands and timer unit content, language-package
-manifests, and sudoers and shadow entries. The full list is in the
+command line, sysctl files and running values, container environment
+variables, Quadlet unit text, compose files, cron, at, and timer commands
+and timer unit content, language-package manifests, and sudoers and
+shadow entries. The full list is in the
 [Redaction engine](../reference/inspector-coverage.md#redaction-engine)
 reference.
 
@@ -365,6 +400,11 @@ For items with multiple variants, you can:
 
 Repository source conflicts are also surfaced when a package is sourced
 from different repositories on different hosts.
+
+Sysctl files merge like any configuration file, with a variant per
+differing content. The sysctl explanation is per host: in aggregate mode
+the System Tuning panel says so in one line, and each host's own scan has
+the full explanation.
 
 ## Manage your session
 

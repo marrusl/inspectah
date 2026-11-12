@@ -75,7 +75,7 @@ const stages = [
       { text: '/etc/yum.repos.d/', detail: 'Repository definitions and GPG keys for package sources' },
       { text: 'systemd unit files', detail: 'Service state, enablement, drop-in overrides from /etc/systemd and /usr/lib/systemd' },
       { text: '/etc/fstab + mounts', detail: 'Storage mounts, LVM, filesystem layout' },
-      { text: 'Kernel & boot params', detail: '/proc/cmdline, lsmod, sysctl overrides, GRUB config, tuned profile' },
+      { text: 'Kernel & boot params', detail: '/proc/cmdline, lsmod, sysctl.d files and sysctl -a, GRUB config, tuned profile' },
       { text: 'Network configuration', detail: 'Interfaces, routes, firewall rules, NetworkManager connections' },
       { text: 'Container runtime', detail: 'Podman/Docker containers, images, quadlet files, compose stacks' },
       { text: 'Cron & timers', detail: '/var/spool/cron, /etc/cron.d, at jobs, systemd timers' },

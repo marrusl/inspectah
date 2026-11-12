@@ -1,6 +1,6 @@
 ---
 name: instruction-line-values
-description: A snapshot value that reaches an instruction, directive, key or command line in any file the renderer emits is proved by a type or one validator before it is interpolated, or escaped by a real serializer where the format has one; a refused value gets a FIXME. An operand of a RUN command also may not start with `-` or `#`. Covers the Containerfile, the flatpak systemd unit, both kickstarts, the users blueprint TOML and the sysctl drop-in; sysctl values are trusted host configuration.
+description: A snapshot value that reaches an instruction, directive, key or command line in any file the renderer emits is proved by a type or one validator before it is interpolated, or escaped by a real serializer where the format has one; a refused value gets a FIXME. An operand of a RUN command also may not start with `-` or `#`. Covers the Containerfile, the flatpak systemd unit, both kickstarts and the users blueprint TOML; sysctl values are trusted host configuration and reach the image only inside verbatim copied files.
 ---
 
 # Snapshot Values on Instruction Lines
@@ -14,8 +14,8 @@ answer is decided before the renderer interpolates it.
 
 The threat is the same in every format: a line terminator in the value
 ends the line, and what follows is a line the snapshot chose. In the
-Containerfile it runs as root at build; in the flatpak unit, the sysctl
-drop-in and the kickstarts it runs or applies at boot or install. A
+Containerfile it runs as root at build; in the flatpak unit and the
+kickstarts it runs or applies at boot or install. A
 Linux file name can hold a newline, so a host scan alone can deliver one
 to a path site; an imported or edited snapshot can deliver one anywhere.
 
@@ -40,7 +40,6 @@ Which proof depends on how the format reads the value:
 | Users kickstart `sshkey "<key>"` | key | `double_quoted_word_refusal` | `render::users` |
 | Users blueprint TOML | group and user names, groups, home, shell, hash | the kickstart's proofs (`AccountName`, `useradd_refusal`, `CryptHash`), then `toml_string` | `render::users` |
 | Users blueprint TOML | SSH key | `toml_string` (escaped, not refused) | `render::users` |
-| sysctl drop-in `<key> = <value>` | key, value | `sysctl_refusal`: key `[A-Za-z0-9._/-]`, no leading `-` or `/`, no `..`; value no line break or control but tab | `render::configtree` |
 
 Every other Containerfile command site was already guarded against line
 terminators: `sanitize_shell_value` (repo ids, GPG key paths, and the
@@ -68,7 +67,7 @@ a leading `-` is legitimate.
 - **Refuse** where the format has no quoting the code can prove, or where
   quoting would depend on a parser's behavior the code cannot show:
   `COPY` arguments, `FROM`, systemd command lines, kickstart option
-  values, sysctl keys. Prove into an allowlist. This is why the flatpak
+  values. Prove into an allowlist. This is why the flatpak
   unit refuses rather than escaping `%` as `%%`: refusal needs no claim
   about how systemd unquotes.
 - **Quote** where the format has a quoting rule the code fully controls and
@@ -130,9 +129,12 @@ concern. The Markdown and HTML reports are display only.
 
 **Sysctl keys and values are trusted host configuration** (Mark,
 2026-11-11), the same trust boundary as the verbatim files above. They
-are applied as the source host had them. The renderer guarantees only
-that a value cannot add a line or a key; it does not judge what the
-value does. For example, a `kernel.core_pattern` value that starts with
+are applied as the source host had them. They now reach the image only
+inside verbatim copied files: each sysctl file is an ordinary
+Configuration Files entry, and inspectah writes no sysctl drop-in, so no
+sysctl key or value reaches an instruction line it builds. The renderer
+does not judge what a value does. For example, a `kernel.core_pattern`
+value that starts with
 `|` names a helper the kernel runs as root on a crash, and it is carried
 as it is: that is a legitimate host setting (systemd-coredump uses one),
 and a snapshot that sets one is trusted to mean it. Do not add a value

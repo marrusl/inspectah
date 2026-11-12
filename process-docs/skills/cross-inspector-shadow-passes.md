@@ -6,11 +6,16 @@ description: Where a file lands in two inventories with two dispositions, one of
 # Cross-Inspector Shadow Passes
 
 Several collectors write into overlapping path space. The `/etc` walk
-records a file into `config.files`; the services inspector records the
-same `*.service.d/*.conf` or full unit shadow into `services.drop_ins`;
-the kernel/boot inspector records a `/etc/sysctl.d/` file's keys into
-`kernel_boot.sysctl_overrides`. The double-listing is deliberate: each
-section needs the data.
+records a file into `config.files`, and the services inspector records
+the same `*.service.d/*.conf` or full unit shadow into
+`services.drop_ins`. The double-listing is deliberate: each section needs
+the data.
+
+The kernel/boot inspector also reads `/etc/sysctl.d/` files into
+`kernel_boot.sysctl`, but that section only explains: it owns no
+disposition and writes nothing to the export, so it needs no pass. A
+section that only records what the host had does not compete for a
+carriage decision.
 
 What is not safe is **two live dispositions over one carriage
 decision.** The renderer picks one writer per output path, so the other
@@ -44,23 +49,26 @@ unconditionally and holds no logic of its own:
 
 ```rust
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
-    shadow_sysctl_sources(snapshot);
     shadow_service_owned_paths(snapshot);
 }
 ```
 
-Each pass owns its own missing-section `return`s. The sysctl pass has
-three: absent `kernel_boot`, empty override list, absent `config`.
-Before this split the body of `finalize_cross_inspector` **was** the
-sysctl pass, so a second pass appended to that body would not run on any
-host that took one of those returns — a host with no sysctl overrides,
-which is most of them. Nothing would report it: the annotation's absence
-looks exactly like "no overlap on this host," no warning fires, and the
-export is merely wrong.
+One pass remains, `shadow_service_owned_paths`; a sysctl pass sat beside
+it until sysctl files became ordinary config entries. Each pass owns its
+own missing-section `return`s. The rule for adding a second pass still
+stands: give it its own function and call it from the dispatcher, never
+append it to an existing pass's body. When the body of
+`finalize_cross_inspector` **was** the old sysctl pass, a second pass
+appended to it would not have run on any host that took one of that
+pass's early returns, which was most of them. Nothing would report it:
+the annotation's absence looks exactly like "no overlap on this host,"
+no warning fires, and the export is merely wrong.
 
-Two unit tests in `collect::finalize_tests` pin this, one per direction:
-`the_service_pass_runs_where_the_sysctl_pass_returns_early` and
-`the_sysctl_pass_runs_where_the_service_pass_returns_early`.
+When a second pass is added, add one unit test per direction to
+`collect::finalize_tests`: each pass runs on a host where the other
+returns early. The sysctl and service passes had that pair
+(`the_service_pass_runs_where_the_sysctl_pass_returns_early` and its
+mirror); they went with the sysctl pass.
 
 ## Name the variant for the set, not the field
 
@@ -89,7 +97,7 @@ what was broken was that a second control was also accepted.
 
 Use collector-produced input: `MockExecutor` plus the real inspectors
 through `collect()`, as `crates/cli/tests/scan_service_shadow_test.rs`
-and `scan_shadow_test.rs` do. No JSON fixture in the repository had a
+does. No JSON fixture in the repository had a
 non-empty `services.drop_ins` before that test, which is why this
 survived a 26-task review cycle and two whole-branch reviews, and a
 hand-built fixture is free to encode a layout the collectors cannot
@@ -118,9 +126,8 @@ Two things are easy to get wrong here:
   is the common case, not an edge one. Before pointing an operator at an
   owner, check the owner is on screen.
 
-The join key needs no new field: `service_dropins[].path` and
-`sysctls[].source` are the same strings
-`shadow_matching_config_entries` matched on. `shadowed_by` is
+The join key needs no new field: `service_dropins[].path` is the same
+string `shadow_matching_config_entries` matched on. `shadowed_by` is
 `skip_serializing_if = "Option::is_none"`, so a TypeScript mirror
 declares it optional and never `null`.
 

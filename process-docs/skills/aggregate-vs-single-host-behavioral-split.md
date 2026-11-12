@@ -60,16 +60,28 @@ section afterwards. Three properties combine to break the invariant:
 - The other host's section entry survives in full alongside it, including
   fields the renderer keys off.
 
-Worked example: hosts A and B carry an identical `/etc/sysctl.d/foo.conf`.
-The sysctl collector records an override only where the runtime value differs
-from the file value (`crates/collect/src/inspectors/kernelboot.rs:280-296`),
-so if A's runtime matches and B's differs, only B gets an override and only
-B's config entry is shadowed to `Inventory`. If A sorts first, the merged
-snapshot carries A's **included** config entry **and** B's override naming the
-same path. Both `inspectah scan` and `inspectah aggregate` then render through
-the same `render_all`/`write_config_tree`
-(`crates/cli/src/commands/aggregate.rs:202`), so renderer logic that assumes
-the per-host invariant sees a state no single host could produce.
+Worked example: System Tuning, a section that exists in both modes with
+mode-specific content. The sysctl explanation (effective values, runtime
+drift, vendor files replaced) is true of one host's files and one host's
+kernel. An earlier per-key sysctl merge picked one host's view as the
+fleet's whole-struct winner, so the aggregate presented one host's
+explanation as the fleet's. Now `merge_kernelboot_sections` sets
+`kernel_boot.sysctl` to `None` (`crates/core/src/aggregate/merge.rs`),
+and `render::sysctl_report::sysctl_report` checks `aggregate_meta`
+**before** it looks at the section, returning `SysctlReport::Aggregate`.
+The audit, the HTML report and the refine `SysctlPanel` all format that
+one result, so on an aggregate each says the one fleet line
+(`AGGREGATE_LINE`) and never "unavailable". The section itself stays
+reachable in both modes: single-host refine renders the tuned rows and
+the panel through `SystemTuningSection`, aggregate refine renders the
+aggregate tuned rows and the same panel (`AggregateApp.tsx`). The sysctl
+files themselves need nothing from the kernel section to merge: they are
+config entries, merged by path with a variant per differing content.
+
+The pattern: when a section's content is a per-host fact, do not merge
+it into a winner. Drop it in the merge and branch on the mode once, in
+the model every surface reads, before testing the section for absence;
+otherwise an aggregate reads as a host whose collection failed.
 
 Before relying on a cross-section invariant in a renderer, ask whether it was
 established in `finalize_cross_inspector` (collection boundary, per host) or

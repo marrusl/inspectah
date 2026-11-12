@@ -48,8 +48,8 @@ join it with `render::comment::join_lines()`.** The join runs
 spaces and tabs is `#`, so a snapshot value in a comment line cannot end
 it, whichever site built the line and whether or not that site escaped.
 The Containerfile, the `/var` tmpfiles.d fragment, the kickstart
-suggestion, the users kickstart and blueprint fragments and the sysctl
-drop-in all join there. The `#`-comment files built with `push_str` in `configtree.rs`
+suggestion and the users kickstart and blueprint fragments all join
+there. The `#`-comment files built with `push_str` in `configtree.rs`
 do not; see the last item below.
 
 Per-site escaping was the rule until 2026-11-10 and it kept failing: a
@@ -79,8 +79,7 @@ What the join does not do:
   files in `configtree.rs` are assembled with `push_str`. The flatpak
   provisioning unit escapes its value-carrying comments (the unknown-URL
   remote and the refusal FIXMEs) at the site. The kernel arguments TOML
-  writes fixed comment text only. The sysctl drop-in is a line vector
-  joined here since its refusal FIXMEs carry the key. A new file builds a
+  writes fixed comment text only. A new file builds a
   line vector and joins it here, or it has no guard.
 - **It does nothing for an instruction line.** A value on a command,
   directive or key line is proved before it is interpolated; see

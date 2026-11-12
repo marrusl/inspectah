@@ -334,11 +334,9 @@ The kernel returns multi-value sysctls **tab**-separated; config files
 write them **space**-separated. Comparing raw strings reports
 `net.ipv4.ip_local_port_range` as drift on any host that sets it to its
 own configured value. Compare through `sysctl_values_equal` in
-`crates/collect/src/inspectors/kernelboot.rs`, which compares
-whitespace-split token sequences; keep the stored `runtime` and `default`
-strings raw, since they are the snapshot contract. Note also
-that `SysctlOverride.default` holds the *file* value, not the kernel
-default — the field name invites a wrong reading of the whole section.
+`crates/core/src/types/sysctl/parse.rs`, which compares
+whitespace-split token sequences; keep the stored runtime values and the
+file content raw, since they are the snapshot contract.
 
 ## Driving refine without a browser
 

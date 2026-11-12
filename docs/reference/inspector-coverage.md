@@ -86,7 +86,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | Path classification rules | Category assignment (network, security, auth, etc.) |
 | Modernization catalog | Advisory entries for legacy patterns (see [Advisory catalogs](#advisory-catalogs)) |
 
-**Which `/etc` files are Configuration Files entries.** This inspector owns every file under `/etc` that the export carries as configuration, including the ones other inspectors report on. PAM files (`/etc/pam.d/`), audit rules (`/etc/audit/rules.d/`), custom tuned profiles (`/etc/tuned/`), kernel module and modprobe files (`/etc/modules-load.d/`, `/etc/modprobe.d/`), dracut configuration (`/etc/dracut.conf.d/`) and sysctl files are Configuration Files entries with a category. The SELinux and Kernel/Boot inspectors do not read them. Loaded kernel modules (`lsmod`) are inventory in the Kernel/Boot section, not a decision.
+**Which `/etc` files are Configuration Files entries.** This inspector owns every file under `/etc` that the export carries as configuration, including the ones other inspectors report on. PAM files (`/etc/pam.d/`), audit rules (`/etc/audit/rules.d/`), custom tuned profiles (`/etc/tuned/`), kernel module and modprobe files (`/etc/modules-load.d/`, `/etc/modprobe.d/`), dracut configuration (`/etc/dracut.conf.d/`) and sysctl files (`/etc/sysctl.conf`, `/etc/sysctl.d/`) are Configuration Files entries with a category. The SELinux and Kernel/Boot inspectors do not decide them. The Kernel/Boot inspector reads the sysctl files to explain them, but each `/etc` sysctl file is carried, or not, by its Configuration Files row alone. Loaded kernel modules (`lsmod`) are inventory in the Kernel/Boot section, not a decision.
 
 **Skipped files.** Metadata-only changes to an RPM-owned file are skipped, as are system-generated files that are not RPM-owned (machine identity, `/etc/resolv.conf`, host keys, SELinux policy store files, and similar), and dev artifacts (`.git`, `node_modules`, and similar directories). A file whose content cannot be captured, because it is over 256 KiB, cannot be read, or is not text, is kept as a `content_not_captured` advisory with no content, so no export copies it into the image. An oversized or permission-denied file also marks the section degraded.
 
@@ -128,7 +128,7 @@ Both are Service Drop-ins entries. A full shadow is found whether or not the uni
 
 Full shadows that have no state change do not get a service row from the scan. When you open the snapshot in `refine`, the session adds a synthetic state change for each one whose enabled or disabled state is known, so the unit is a toggle target through classify, export and reload. A full shadow with no known state is not synthesized.
 
-**One decision per file.** The same path can appear in Configuration Files (from the `/etc` walk) and in Service Drop-ins. The Service Drop-ins row owns the decision. The Configuration Files entry for that path is marked Inventory with the note "controlled in Service Drop-ins", and `refine` refuses to toggle it. This avoids two checkboxes over one file, where one could be on and the other off. A sysctl file that the Kernel/Boot inspector merges into its own output is handled the same way.
+**One decision per file.** The same path can appear in Configuration Files (from the `/etc` walk) and in Service Drop-ins. The Service Drop-ins row owns the decision. The Configuration Files entry for that path is marked Inventory with the note "controlled in Service Drop-ins", and `refine` refuses to toggle it. This avoids two checkboxes over one file, where one could be on and the other off. Sysctl files need no such handling: the Kernel/Boot inspector records them for its explanation and offers no decision over them.
 
 **Drop-ins for units at their preset state.** A unit at its preset state has no state change, so it has no parent service row. In `refine`, its drop-ins appear in a separate group headed "Other drop-in overrides", with the note that the unit is at its preset state, so the drop-in is the whole decision.
 
@@ -338,12 +338,24 @@ Symlinks are detected without following and preserved as tar symlink entries. In
 |:------------|:--------|
 | `/proc/cmdline` | Kernel command line (scanned for secret-like parameters) |
 | `lsmod` | Currently loaded kernel modules (inventory) |
-| `/etc/sysctl.d/`, `/usr/lib/sysctl.d/`, `sysctl -a` | Sysctl overrides: a key is reported only where the file value differs from the runtime value |
+| `/etc/sysctl.d/`, `/run/sysctl.d/`, `/usr/local/lib/sysctl.d/`, `/usr/lib/sysctl.d/`, `sysctl -a` | The sysctl search path and the running value of every key the files set or exclude. See [Sysctl files](#sysctl-files). |
 | `/etc/locale.conf` | Locale |
 | `timedatectl show --property=Timezone` | Timezone configuration |
 | `tuned-adm active` | Active tuned profile |
 
 This inspector does not read `/etc/modprobe.d/`, `/etc/modules-load.d/`, `/etc/dracut.conf.d/` or `/etc/tuned/`. Those files are Configuration Files entries (see [ConfigInspector](#configinspector)).
+
+#### Sysctl files
+
+The inspector records what the sysctl search path held and what the kernel reports, and resolves the files the way systemd-sysctl does. It decides nothing: sysctl files reach the image only as Configuration Files entries, copied as the host had them.
+
+- **What it reads.** Every `*.conf` entry in the four directories, highest priority first. A file in a higher-priority directory replaces a file of the same name in a lower one. A link to `/dev/null` is a mask and is not read. A link whose final target is under `/etc/` or one of the four directories is read through, and its target is recorded (the link `/etc/sysctl.d/99-sysctl.conf` records `/etc/sysctl.conf`). A link to anywhere else is recorded and not read.
+- **How lines are resolved.** Lines follow `sysctl.d(5)`: a leading `-` on an assignment ignores a failure to set the key, and a line `-<key>` with no `=` excludes the key, so a later exclusion cancels an earlier assignment. `net.ipv4.ip_forward` and `net/ipv4/ip_forward` are one key. A glob is reported as written and not expanded.
+- **What it records.** The files and their content, and the running value of every key a file assigns or excludes, from `sysctl -a`. Multi-value settings are compared token by token, so a tab in the kernel's output and a space in a file do not count as a difference.
+- **When the explanation is unavailable.** A directory that cannot be listed, an entry that cannot be read (a dangling link included, or content over 256 KiB), or a failed `sysctl -a` leaves no sysctl section and marks the inspector degraded with the reason. The files are still carried as Configuration Files.
+- **When values are not stated.** A surviving link to a file outside `/etc/` and the sysctl directories, a file whose content redaction changed, or a running value redaction removed means inspectah does not know every input. The reports then name that file or key and state no values or drift for the host.
+
+The audit report, the HTML report and the System Tuning section in `refine` explain the result: values and their source lines, runtime drift, vendor files an `/etc` file replaces, files that are not carried, and lines reported as written.
 
 ---
 
@@ -461,7 +473,7 @@ If the path is already a Configuration Files entry, it becomes an advisory. Othe
 
 For each unowned symlink under `/etc`, the Config inspector resolves the final target. A link that crosses `/etc` to `/var` or `/etc` to `/usr` produces an advisory: a link into `/var` makes the configuration stateful through `/var` persistence, outside the `/etc` three-way merge, and a link into `/usr` points into the read-only `/usr` layer. A link that cannot be resolved produces a "Broken cross-tree symlink" advisory. These standard system links are allowlisted and produce nothing: `/etc/localtime` into `/usr/share/zoneinfo/`, `/etc/alternatives/` into `/usr/`, the CA bundle and `cert.pem` links into `/etc/pki/`, `/etc/crypto-policies/back-ends/` into `/usr/share/crypto-policies/`, and `/etc/resolv.conf` into `/run/`.
 
-An advisory entry is never written to the export. It also keeps its advisory status when a service drop-in or sysctl merge would otherwise shadow the same path.
+An advisory entry is never written to the export. It also keeps its advisory status when a service drop-in would otherwise shadow the same path.
 
 ### ifcfg deprecation banner
 
@@ -485,7 +497,7 @@ rendering. It is not an inspector but operates on inspector output.
 | RPM | Repo file content and GPG key content |
 | Services | Drop-in and full-shadow unit content |
 | Storage | Mount options (inline `password=` values) and credential references |
-| Kernel/Boot | The kernel command line |
+| Kernel/Boot | The kernel command line, and the sysctl section: file content, link targets and running values. A running value with a match is removed, not scrubbed, and a changed file or a removed value leaves the host's sysctl values and drift unstated. |
 | Network | Proxy URLs with embedded credentials (a dedicated masker) |
 | Containers | Container environment variables, Quadlet unit content, and compose file content |
 | Scheduled tasks | Cron, at and timer commands, and the generated `.service` and `.timer` unit content |

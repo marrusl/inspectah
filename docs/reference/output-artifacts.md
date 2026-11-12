@@ -54,7 +54,7 @@ system did not have the relevant configuration.
 
 | File / Directory | Condition | Description |
 |------------------|-----------|-------------|
-| `config/etc/` | Config files with `include: true` exist | Modified configs, repo files, GPG keys, firewall zones, audit rules, PAM configs, kernel modules, modprobe, dracut conf. |
+| `config/etc/` | Config files with `include: true` exist | Modified configs, repo files, GPG keys, firewall zones, audit rules, PAM configs, kernel modules, modprobe, dracut conf, sysctl files (`etc/sysctl.conf` and `etc/sysctl.d/*.conf`, copied as the host had them). |
 | `config/usr/lib/bootc/kargs.d/inspectah-migrated.toml` | Kernel cmdline has safe operator kargs | Kernel argument drop-in for bootc. |
 | `config/usr/lib/tmpfiles.d/inspectah-var.conf` | The storage inspector found `/var` directories the image must provision, and they carry an owner and mode | tmpfiles.d fragment that creates those directories. See [`/var` provisioning](#var-provisioning). |
 | `env-files/` | `non_rpm_software.env_files` has included entries | `.env` files, separated from `config/` because they are high-probability secret carriers. |
@@ -63,7 +63,6 @@ system did not have the relevant configuration.
 | `flatpak/flatpak-provision.service` | `containers.flatpak_apps` has included entries | Systemd service to provision Flatpak apps on first boot. |
 | `drop-ins/` | `services.drop_ins` has included entries | Systemd service drop-in overrides (e.g., `drop-ins/etc/systemd/system/<unit>.d/override.conf`). |
 | `tuned/` | `kernel_boot.tuned_include` is true and custom profiles exist | Custom tuned performance profiles. |
-| `sysctl/99-inspectah-migrated.conf` | `kernel_boot.sysctl_overrides` has included entries | Synthesized sysctl configuration from included overrides. |
 | `subscription/` | `--preserve subscription` used during scan | RHEL subscription material for non-RHEL builds. Contains `entitlement/` (cert/key pairs), `rhsm/ca/` (CA certs), `rhsm/rhsm.conf`, and `redhat.repo`. |
 | `inspectah-users.ks` | `users_groups` has included users or custom groups | Kickstart fragment for user/group provisioning. |
 | `inspectah-users.toml` | `users_groups` has included users or custom groups | Blueprint TOML fragment for bootc-image-builder user/group provisioning. |
@@ -179,7 +178,6 @@ Same conditions as scan, except for `compose/`, which only the export writes:
 | `flatpak/` | Included flatpak apps exist. |
 | `drop-ins/` | Included service drop-ins exist. |
 | `tuned/` | Tuned profiles included. |
-| `sysctl/` | Included sysctl overrides exist. |
 | `users/` | SSH keys exist for included users. |
 | `inspectah-users.ks` | Included users or custom groups exist. |
 | `inspectah-users.toml` | Included users or custom groups exist. |
@@ -197,6 +195,12 @@ owns it. A config file you did not change is left to the base image and
 dnf. The scan tarball's audit report lists the copied files under
 "Modified RPM-Owned Files", and an export with no decisions copies the
 same files as the scan, among them `ssh/sshd_config` on the sample host.
+
+An RPM-owned config symlink that was re-pointed to `/dev/null`, such as
+a package's `/etc/sysctl.d/99-sysctl.conf` link masked by an
+administrator, is treated the same way: it is copied as an empty file of
+the same name, which masks the file it names just as the link did. A
+package symlink re-pointed to any other file is not carried.
 
 `rpm -Va` reports that a file changed, not who changed it. Tools such as
 subscription-manager, authselect, or a realm join also rewrite RPM-owned
@@ -227,7 +231,11 @@ and verified by `export_contract_test.rs`.
 Each listing below is the output of `tar tzf` on a tarball from the
 sample host. Each is shortened: the entries under `config/etc/` are
 omitted (93 in the scan listing, 104 in the export, 106 in the aggregate).
-The entries that remain are printed unchanged.
+The entries that remain are printed unchanged, except that a `sysctl/`
+directory is removed from each: these tarballs come from an earlier
+release, which wrote one, and inspectah no longer does. Sysctl files now
+arrive under `config/etc/`, among the omitted entries, so on a current
+release those counts include them.
 
 ### Scan tarball
 
@@ -277,10 +285,6 @@ rhel9-20261104-223931/quadlet/myapp.network
 rhel9-20261104-223931/quadlet/redis.container
 rhel9-20261104-223931/quadlet/webapp.container
 rhel9-20261104-223931/secrets-review.md
-rhel9-20261104-223931/sysctl/
-rhel9-20261104-223931/sysctl/etc/
-rhel9-20261104-223931/sysctl/etc/sysctl.d/
-rhel9-20261104-223931/sysctl/etc/sysctl.d/99-inspectah-migrated.conf
 rhel9-20261104-223931/unmanaged/
 rhel9-20261104-223931/unmanaged/opt/
 rhel9-20261104-223931/unmanaged/opt/legacy-app/
@@ -359,10 +363,6 @@ inspectah-rhel9-refined/quadlet/redis.container
 inspectah-rhel9-refined/quadlet/webapp.container
 inspectah-rhel9-refined/schema/
 inspectah-rhel9-refined/schema/snapshot.schema.json
-inspectah-rhel9-refined/sysctl/
-inspectah-rhel9-refined/sysctl/etc/
-inspectah-rhel9-refined/sysctl/etc/sysctl.d/
-inspectah-rhel9-refined/sysctl/etc/sysctl.d/99-inspectah-migrated.conf
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `tar tzf
@@ -413,10 +413,6 @@ aggregate-scans-20261104-234031/quadlet/webapp.container
 aggregate-scans-20261104-234031/schema/
 aggregate-scans-20261104-234031/schema/snapshot.schema.json
 aggregate-scans-20261104-234031/secrets-review.md
-aggregate-scans-20261104-234031/sysctl/
-aggregate-scans-20261104-234031/sysctl/etc/
-aggregate-scans-20261104-234031/sysctl/etc/sysctl.d/
-aggregate-scans-20261104-234031/sysctl/etc/sysctl.d/99-inspectah-migrated.conf
 ```
 
 *Sample output from a RHEL 9.8 test host. Command: `tar tzf

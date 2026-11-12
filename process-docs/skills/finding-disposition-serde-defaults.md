@@ -37,7 +37,7 @@ pub tuned_disposition: FindingKind,
 ```
 
 Both helpers live in `crates/core/src/types/finding.rs`. Actionable
-findings (`PackageEntry`, `ConfigFileEntry`, `SysctlOverride`,
+findings (`PackageEntry`, `ConfigFileEntry`,
 `ServiceStateChange`, …) correctly keep bare `#[serde(default)]` — for
 those, included-by-default is the intended contract.
 

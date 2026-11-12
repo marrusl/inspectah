@@ -63,7 +63,7 @@ non-actionable variants renders with no control to offer.
 ## 2. The hand-built decision DTOs — still `include: bool`
 
 `ServiceDecisionDto`, `DropInDecisionDto`, `QuadletDecisionDto`,
-`FlatpakDecisionDto`, `SysctlDecisionDto`, `TunedDecisionDto`,
+`FlatpakDecisionDto`, `TunedDecisionDto`,
 `LanguagePackageEnvDto`, and `UnmanagedFileItemDto` collapse the
 disposition with `.is_included()`.
 
@@ -78,11 +78,12 @@ If you ever make one of those entry types advisory or inventory, the
 collapse becomes the same bug: convert the DTO to carry the disposition
 rather than teaching the frontend to guess.
 
-**`sysctls` and `tuned` stay on `ViewResponse` through phase 0 and phase
-1 of the refine UI fixup; they are retired in phase 3, not phase 0,** and
-removed together with their TypeScript types at that point. Phase 0 adds
-`decision` to the sysctl and tuned `ContextItem` rows (§ 1a) without
-touching these two arrays.
+**Sysctl is not a decision.** `ViewResponse.sysctl` is a
+`SysctlViewDto`, the read-only System Tuning panel built by
+`sysctl_view::project_sysctl`; it carries no `include` and no `ItemId`.
+Each `/etc` sysctl file is decided by its Configuration Files row, which
+the panel names by path. `tuned` stays on `ViewResponse` as decision
+rows.
 
 ## 3. The projection preserves finding semantics — `with_include`, not `from_bool`
 
@@ -156,9 +157,9 @@ advisories were mis-bucketed, and said nothing.
 
 **The Inventory caveat:** `FindingKind::Inventory` is counted in the
 `advisory` bucket, on the grounds that it is the other display-only
-disposition. That stopped being purely a network-findings caveat with
-phase 0: a config file whose keys are absorbed into the synthesized
-sysctl drop-in is given `shadowed_by: Some(ConfigShadow::Sysctl)` and
+disposition. It is not purely a network-findings caveat: a config file
+whose path is also a Service Drop-ins entry is given
+`shadowed_by: Some(ConfigShadow::Services)` and
 `disposition: FindingKind::Inventory` (`ConfigFileEntry`,
 `crates/core/src/types/config.rs`), and because it is still a member of
 `config.files`, it is counted into the Config section's `advisory`
@@ -177,7 +178,7 @@ kernel module, and the web adapter builds no `ContextItem` for
 data-model fact with no reachable view or toggle path, and it is not
 counted in any `SectionStats` bucket — `from_dispositions` is called
 only over `packages` and `config_files` today. So of the two, only the
-sysctl-shadowed config entries actually reach this `advisory` bucket and
+service-shadowed config entries actually reach this `advisory` bucket and
 the `InventoryNotToggleable` refusal; `loaded_modules` reaches neither.
 If that ever changes — a view renders loaded modules, or
 `SectionStats` gains a Kernel & Boot section — the bucket needs

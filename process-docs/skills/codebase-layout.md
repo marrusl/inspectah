@@ -57,6 +57,9 @@ Each module defines the data model for a snapshot section:
 - `services.rs` — systemd service types
 - `containers.rs` — Podman/Docker container types
 - `network.rs`, `storage.rs`, `kernelboot.rs`, `selinux.rs`, `scheduled.rs`, `nonrpm.rs`, `users.rs`
+- `sysctl/`: `KernelBootSection.sysctl`, the sysctl search path as collected (`SysctlSection`, `SysctlDir`, `SysctlKey`); records, decides nothing
+  - `parse.rs`: the one `sysctl.d(5)` line parser and `sysctl_values_equal`
+  - `resolve.rs`: precedence resolution the way systemd-sysctl applies it (`SysctlSection::effective()` gives `Resolved` or `Unknown`), vendor replacements and carriage read from the config entries
 - `aggregate.rs` — Aggregate-specific types (consensus items, variants)
 - `repo.rs` — Repository definitions
 - `subscription.rs` — RHSM entitlement types
@@ -106,6 +109,8 @@ Artifact generators invoked after triage decisions finalized:
 - `kickstart.rs` — Kickstart file for traditional installs
 - `report.rs`, `report_data.rs` — HTML migration report
 - `audit.rs` — Audit trail of decisions
+- `sysctl_report.rs`: the sysctl report model (`sysctl_report`) and its fixed copy; the audit, the HTML report and refine's sysctl panel all format it, so they cannot disagree
+- `md_literal.rs`: host values as literal Markdown text (`literal_text`, code spans, table-cell pipe escapes); the HTML report shares `literal_text`
 - `secrets.rs` — Redacted secrets summary
 - `tarball.rs` — Snapshot archive packaging
 - `users.rs` — User/group materialization (passwd/group entries)
@@ -142,6 +147,8 @@ React/TypeScript UI embedded into the Rust binary via `rust-embed`:
   - Single-host components at top level (DecisionList, PackageList, ContainerfilePanel, etc.)
   - `LanguagePackageList.tsx` — Language Packages decision section (pip/npm/gem environments)
   - `UnmanagedFileList.tsx` — Unmanaged Files decision section (directory grouping, provenance signals)
+  - `SystemTuningSection.tsx`: System Tuning section, the tuned decision rows and `SysctlPanel`
+  - `SysctlPanel.tsx`, `sysctlCopy.ts`: the read-only sysctl panel and its copy, which mirrors `render/sysctl_report.rs` character for character
   - `RpmUploadModal.tsx` — Single-RPM upload modal with NEVRA validation
   - `RpmBatchUploadModal.tsx` — Multi-RPM batch upload with auto-matching and conflicts view
 - `hooks/` — React hooks
@@ -156,6 +163,7 @@ Playwright end-to-end tests live beside `src/`, in `crates/web/ui/e2e/`.
 
 **Backend API:** `crates/web/src/` — axum handlers for REST endpoints
   - `upload.rs` — `POST /api/upload-rpm` for repo-less RPM uploads (500 MiB route-specific limit)
+  - `sysctl_view.rs`: `project_sysctl`, the sysctl panel DTOs projected from `sysctl_report` for single-host and aggregate views
 
 ## Refine logic
 
