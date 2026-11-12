@@ -17,11 +17,13 @@ pub mod comment;
 pub mod configtree;
 pub mod containerfile;
 pub mod kickstart;
+pub mod md_literal;
 pub mod readme;
 pub mod report;
 pub mod safety;
 pub mod secrets;
 pub mod selinux;
+pub mod sysctl_report;
 pub mod tarball;
 pub mod var_dirs;
 

@@ -72,6 +72,7 @@ pub struct SysctlHost {
     /// `(flags, path)` rows of `rpm -Va`.
     rpm_va: Vec<(String, String)>,
     sysctl_a: Option<ExecResult>,
+    tuned_active: Option<String>,
 }
 
 impl SysctlHost {
@@ -137,6 +138,12 @@ impl SysctlHost {
         self
     }
 
+    /// `tuned-adm active` reports `profile` as the active tuned profile.
+    pub fn tuned(mut self, profile: &str) -> Self {
+        self.tuned_active = Some(profile.into());
+        self
+    }
+
     /// Listing `dir` fails with `kind`.
     pub fn dir_error(mut self, dir: &str, kind: std::io::ErrorKind) -> Self {
         self.dir_errors.insert(dir.into(), kind);
@@ -165,6 +172,12 @@ impl SysctlHost {
             .with_command("lsmod", ok(LSMOD));
         if let Some(result) = self.sysctl_a {
             mock = mock.with_command("sysctl -a", result);
+        }
+        if let Some(profile) = &self.tuned_active {
+            mock = mock.with_command(
+                "tuned-adm active",
+                ok(&format!("Current active profile: {profile}\n")),
+            );
         }
         for (dir, entries) in &self.dirs {
             mock = mock.with_dir(dir, entries.iter().map(String::as_str).collect());

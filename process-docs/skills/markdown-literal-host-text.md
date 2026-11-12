@@ -1,0 +1,37 @@
+# Host text in Markdown reports goes through `md_literal`
+
+A host value interpolated into a Markdown report (a key, a value, a file
+name, a link target, an unparsed line, a degradation reason) is data, not
+Markdown. Printed bare, `<img src=x>` becomes an image, `[x](http://..)` a
+link, a `|` splits a table row, and a newline in a file name ends the list
+item or row it sits in.
+
+`crates/pipeline/src/render/md_literal.rs` renders a value as an inline code
+span nothing can reinterpret:
+
+- `md_code(value)` for running text, `md_code_cell(value)` inside a GFM table
+  cell. Never wrap a value in backticks by hand.
+- Control characters other than tab, and U+2028/U+2029, become `\u{..}`
+  escapes. Tab stays.
+- The fence is one backtick longer than the longest backtick run in the
+  value. The span is padded with one space at each end only when it has to
+  be: the value holds a backtick, or begins and ends with a space. CommonMark
+  strips exactly one space from each end of such a span, so padding keeps
+  the literal exact; an all-space value is never stripped and is not padded.
+- `md_code_cell` writes `|` as `\|`. GFM splits cells before inline parsing,
+  honors that escape inside a code span and removes the backslash. Do not
+  double backslashes anywhere: inside a code span one is already literal,
+  and doubling changes the value.
+- An empty value prints `(empty)`.
+
+Test it by parsing the rendered report with a GFM-conformant parser, not by
+string matching: `crates/cli/tests/sysctl_scan_test.rs`
+(`case_19_literal_rendering_audit`) parses the audit with `comrak` (a
+`crates/cli` dev-dependency, `default-features = false`, table extension on)
+and asserts each cell's code-node literal equals the value and the section
+holds no HTML, link or image node.
+
+The audit's `#### Sysctl` block uses it for every interpolation. Most other
+audit sections still print paths raw inside hand-written backticks (the
+Unowned Config Files list prints a file name holding a newline across two
+lines); that is pre-existing, not covered by this helper yet.

@@ -7,11 +7,20 @@ use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::selinux::FcontextSource;
+use inspectah_core::types::sysctl::{
+    RuntimeObservation, SysctlDir, SysctlExplanation, SysctlLineRef, SysctlOutcome, SysctlSetting,
+    UnknownInput, VendorReplacement,
+};
 use inspectah_core::types::users::UserGroupDecision;
 
 use super::baseline_fmt;
+use super::md_literal::{md_code, md_code_cell};
 use super::not_carried::{NOT_CARRIED_REASON, NotCarriedPackage, not_carried_packages};
 use super::selinux;
+use super::sysctl_report::{
+    AGGREGATE_LINE, AsWritten, CarriageState, DRIFT_INTRO, NotCarried, SysctlReport, TRUST_LINE,
+    UNAVAILABLE_TAIL, UNKNOWN_INTRO, VendorLine, line_link_target, sysctl_report,
+};
 use crate::section_group::SectionGroup;
 
 /// Advisory entry for the Advisories section within a group.
@@ -585,44 +594,19 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
         }
     }
 
-    // Kernel & Boot
-    if let Some(kb) = &snap.kernel_boot {
-        let has_content = !kb.cmdline.is_empty() || !kb.sysctl_overrides.is_empty();
-
-        if has_content {
-            lines.push("### Kernel & Boot".into());
-            lines.push(String::new());
-
-            if !kb.cmdline.is_empty() {
-                lines.push("#### Kernel Command Line".into());
-                lines.push(String::new());
-                lines.push(format!("`{}`", kb.cmdline));
-                lines.push(String::new());
-            }
-
-            let included_overrides: Vec<_> = kb
-                .sysctl_overrides
-                .iter()
-                .filter(|o| o.disposition.is_included())
-                .collect();
-            if !included_overrides.is_empty() {
-                lines.push(format!(
-                    "#### Sysctl Overrides ({})",
-                    included_overrides.len()
-                ));
-                lines.push(String::new());
-                lines.push("| Key | Runtime Value | Default Value | Source |".into());
-                lines.push("|-----|---------------|---------------|--------|".into());
-                for o in &included_overrides {
-                    lines.push(format!(
-                        "| {} | {} | {} | {} |",
-                        o.key, o.runtime, o.default, o.source
-                    ));
-                }
-                lines.push(String::new());
-            }
-        }
+    // Kernel & Boot: always present, because the sysctl explanation says
+    // why it is missing when it is.
+    lines.push("### Kernel & Boot".into());
+    lines.push(String::new());
+    if let Some(kb) = &snap.kernel_boot
+        && !kb.cmdline.is_empty()
+    {
+        lines.push("#### Kernel Command Line".into());
+        lines.push(String::new());
+        lines.push(format!("`{}`", kb.cmdline));
+        lines.push(String::new());
     }
+    render_sysctl_section(snap, lines);
 
     // SELinux
     if let Some(sel) = &snap.selinux {
@@ -676,6 +660,232 @@ fn render_system_config_sections(snap: &InspectionSnapshot, lines: &mut Vec<Stri
 }
 
 /// Where the collected rule order came from, and what that costs the reader.
+/// The `#### Sysctl` block (spec § 5.5): the aggregate line, the
+/// unavailable line, or the explanation's items 1 to 6. Every
+/// interpolated value is a literal code span; table cells escape `|`.
+fn render_sysctl_section(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
+    lines.push("#### Sysctl".into());
+    lines.push(String::new());
+    let report = match sysctl_report(snap) {
+        SysctlReport::Aggregate => {
+            lines.push(AGGREGATE_LINE.into());
+            lines.push(String::new());
+            return;
+        }
+        SysctlReport::Unavailable { reason } => {
+            lines.push(format!(
+                "Sysctl explanation unavailable: {}. {UNAVAILABLE_TAIL}",
+                md_code(&reason)
+            ));
+            lines.push(String::new());
+            return;
+        }
+        SysctlReport::Host(report) => report,
+    };
+
+    // Each item's lines are paragraphs of their own, so each starts a
+    // line in every Markdown reader.
+    let mut paragraph = |text: String| {
+        lines.push(text);
+        lines.push(String::new());
+    };
+    paragraph(TRUST_LINE.into());
+
+    match &report.explanation {
+        SysctlExplanation::Resolved(settings) => {
+            if !settings.is_empty() {
+                let mut table = vec![
+                    "| Key | File value | Runtime value | Source |".to_string(),
+                    "|-----|------------|---------------|--------|".to_string(),
+                ];
+                table.extend(settings.iter().map(|setting| sysctl_row(snap, setting)));
+                paragraph(table.join("\n"));
+            }
+            if !report.drift.is_empty() {
+                paragraph("**Runtime drift**".into());
+                let intro = match &report.tuned_active {
+                    Some(profile) => format!(
+                        "{DRIFT_INTRO} tuned profile {} is active on this host.",
+                        md_code(profile)
+                    ),
+                    None => DRIFT_INTRO.to_string(),
+                };
+                paragraph(intro);
+                for drift in &report.drift {
+                    paragraph(format!(
+                        "{} runs at {}; the files request {} ({}).",
+                        md_code(drift.key.as_str()),
+                        md_code(&drift.runtime),
+                        md_code(&drift.file_value),
+                        md_code(&line_ref_text(&drift.from)),
+                    ));
+                }
+            }
+        }
+        SysctlExplanation::Unknown(inputs) => {
+            paragraph(UNKNOWN_INTRO.into());
+            for input in inputs {
+                paragraph(match input {
+                    UnknownInput::OutsideLink { file, target } => format!(
+                        "{} links to {}, outside `/etc` and the sysctl directories, and inspectah did not read it.",
+                        md_code(&file.path()),
+                        md_code(target)
+                    ),
+                    UnknownInput::RedactedFile { file } => format!(
+                        "{} held text that redaction replaced, so what it sets is not known.",
+                        md_code(&file.path())
+                    ),
+                    UnknownInput::RedactedRuntime { key } => format!(
+                        "The running value of {} held text that redaction removed.",
+                        md_code(key.as_str())
+                    ),
+                });
+            }
+        }
+    }
+
+    if !report.vendor_replacements.is_empty() {
+        paragraph("**Vendor files replaced**".into());
+        for line in &report.vendor_replacements {
+            paragraph(vendor_line_text(line));
+        }
+    }
+
+    if !report.not_carried.is_empty() {
+        paragraph("**Not carried**".into());
+        for file in &report.not_carried {
+            paragraph(not_carried_text(file));
+        }
+    }
+
+    if !report.as_written.is_empty() {
+        paragraph("**As written**".into());
+        for line in &report.as_written {
+            paragraph(match line {
+                AsWritten::GlobAssign { at, pattern, value } => format!(
+                    "{}: glob {} set to {}, not expanded.",
+                    md_code(&line_ref_text(at)),
+                    md_code(pattern),
+                    md_code(value)
+                ),
+                AsWritten::GlobExclude { at, pattern } => format!(
+                    "{}: glob exclusion {}, not expanded.",
+                    md_code(&line_ref_text(at)),
+                    md_code(pattern)
+                ),
+                AsWritten::Unparsed { at, text } => format!(
+                    "{}: unparsed line {}.",
+                    md_code(&line_ref_text(at)),
+                    md_code(text)
+                ),
+            });
+        }
+    }
+}
+
+/// `<path>:<line>` of a sysctl line.
+fn line_ref_text(at: &SysctlLineRef) -> String {
+    format!("{}/{}:{}", at.dir.path(), at.name, at.line_no)
+}
+
+/// One row of the sysctl table: key, file value, runtime value, source.
+fn sysctl_row(snap: &InspectionSnapshot, setting: &SysctlSetting) -> String {
+    /// Runtime value cell when the kernel runs the value written.
+    const SAME: &str = "same";
+    /// Runtime value cell when `sysctl -a` did not list the key.
+    const NOT_EXPOSED: &str = "not exposed";
+    /// File value cell when the last entry for the key is an exclusion.
+    const NOT_WRITTEN: &str = "not written";
+
+    let (file_value, runtime, from) = match &setting.outcome {
+        SysctlOutcome::Writes {
+            value,
+            from,
+            runtime,
+        } => (
+            md_code_cell(value),
+            match runtime {
+                RuntimeObservation::Matches => SAME.to_string(),
+                RuntimeObservation::NotExposed => NOT_EXPOSED.to_string(),
+                RuntimeObservation::Differs { runtime } => md_code_cell(runtime),
+            },
+            from,
+        ),
+        SysctlOutcome::Cancelled { by, runtime } => (
+            NOT_WRITTEN.to_string(),
+            runtime
+                .as_deref()
+                .map_or_else(|| NOT_EXPOSED.to_string(), md_code_cell),
+            by,
+        ),
+    };
+    let mut source = md_code_cell(&line_ref_text(from));
+    if let Some(target) = line_link_target(snap, from) {
+        source.push_str(&format!(" (link to {})", md_code_cell(&target)));
+    }
+    format!(
+        "| {} | {file_value} | {runtime} | {source} |",
+        md_code_cell(setting.key.as_str())
+    )
+}
+
+/// Item 4: an `/etc` file that replaces or masks a vendor file, worded
+/// by how it reaches the image.
+fn vendor_line_text(line: &VendorLine) -> String {
+    let (verb, name) = match &line.action {
+        VendorReplacement::Shadows { name } => ("replaces", name),
+        VendorReplacement::Masks { name } => ("disables", name),
+    };
+    let admin = md_code(&format!("{}/{name}", SysctlDir::Etc.path()));
+    let vendor = md_code(&format!("{}/{name}", SysctlDir::UsrLib.path()));
+    match line.carriage {
+        CarriageState::Carried { .. } => format!(
+            "{admin} {verb} {vendor} entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy."
+        ),
+        CarriageState::Excluded { .. } | CarriageState::Advisory { .. } => format!(
+            "{admin} {verb} {vendor} on this host. It is not carried, so on the target the vendor file applies."
+        ),
+        CarriageState::NoConfigEntry => format!(
+            "{admin} {verb} {vendor} on this host. It has no Configuration Files row, so it reaches the target only if a package there ships it."
+        ),
+    }
+}
+
+/// Item 5: a file the image does not get, with the reason.
+fn not_carried_text(file: &NotCarried) -> String {
+    match file {
+        NotCarried::RuntimeDir { path } => format!("{}: generated at runtime.", md_code(path)),
+        NotCarried::UsrLocalLib { path } => format!(
+            "{}: carried only as unmanaged files under `--include-unmanaged`.",
+            md_code(path)
+        ),
+        NotCarried::Etc { path, carriage } => {
+            let row = |config_path: &str| {
+                if config_path == path {
+                    "its Configuration Files row".to_string()
+                } else {
+                    format!(
+                        "the Configuration Files row that carries it, {},",
+                        md_code(config_path)
+                    )
+                }
+            };
+            let reason = match carriage {
+                CarriageState::Excluded { config_path } => {
+                    format!("{} is excluded", row(config_path))
+                }
+                CarriageState::Advisory { config_path } => {
+                    format!("{} is an advisory", row(config_path))
+                }
+                CarriageState::NoConfigEntry | CarriageState::Carried { .. } => {
+                    "it has no Configuration Files row".to_string()
+                }
+            };
+            format!("{}: {reason}.", md_code(path))
+        }
+    }
+}
+
 fn fcontext_source_text(source: FcontextSource) -> &'static str {
     match source {
         FcontextSource::PolicyStore => "policy store, in insertion order",

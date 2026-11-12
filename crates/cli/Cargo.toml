@@ -38,6 +38,8 @@ flate2 = "1"
 insta.workspace = true
 assert_cmd = "2"
 predicates = "3"
+# The audit's literal-rendering case parses the report as GFM.
+comrak = { version = "0.59", default-features = false }
 
 [[bin]]
 name = "inspectah"

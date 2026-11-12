@@ -14,6 +14,14 @@ expression: md
 |------|---------|---------|------|------|
 | httpd |  |  |  |  |
 
+## System Configuration
+
+### Kernel & Boot
+
+#### Sysctl
+
+Sysctl explanation unavailable: (empty). Sysctl files are still carried as Configuration Files.
+
 ## Services & Scheduling
 
 ### Advisories

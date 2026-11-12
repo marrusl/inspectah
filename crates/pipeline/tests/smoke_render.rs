@@ -405,18 +405,19 @@ fn all_sections_in_audit_report() {
         "audit report must list credential path"
     );
 
-    // Kernel & Boot section appears with sysctl, modules, dracut
+    // Kernel & Boot section appears with the sysctl explanation; the
+    // legacy per-key overrides table is gone.
     assert!(
         md.contains("## Kernel & Boot"),
         "audit report must contain Kernel & Boot heading"
     );
     assert!(
-        md.contains("Sysctl Overrides"),
-        "audit report must contain Sysctl Overrides sub-heading"
+        md.contains("#### Sysctl\n"),
+        "audit report must contain the Sysctl sub-heading"
     );
     assert!(
-        md.contains("net.ipv4.ip_forward"),
-        "audit report must list the sysctl override key"
+        !md.contains("Sysctl Overrides") && !md.contains("net.ipv4.ip_forward"),
+        "the legacy sysctl overrides table is not rendered, got:\n{md}"
     );
     // The kernel config files are listed by the config section, under
     // the category the walker gave them, not by a second Kernel & Boot
