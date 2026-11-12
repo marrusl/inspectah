@@ -831,10 +831,12 @@ pub async fn batch_toggle_group(
                     });
                 }
             }
-            // System Tuning: the tuned row. Kernel & Boot holds no decision
-            // row (loaded modules are inventory and carry no op).
+            // System Tuning: the tuned row, which exists only when a profile
+            // is active. Kernel & Boot holds no decision row (loaded modules
+            // are inventory and carry no op).
             if include_tuning
                 && let Some(ref kernel) = snap.kernel_boot
+                && !kernel.tuned_active.is_empty()
                 && !kernel.tuned_disposition.is_advisory()
             {
                 ops.push(inspectah_refine::types::RefinementOp::SetInclude {

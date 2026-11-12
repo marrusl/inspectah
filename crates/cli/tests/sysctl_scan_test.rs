@@ -3019,3 +3019,68 @@ async fn case_21_aggregate() {
         "a two-host fleet lists items flat, and has none: {tuning}"
     );
 }
+
+// ── System Tuning batch toggle ───────────────────────────────────────
+
+/// The session's timeline, generation and redo state, as one value.
+fn history(state: &AppState) -> (serde_json::Value, u64, bool) {
+    let session = state.session.lock().unwrap();
+    (
+        serde_json::to_value(session.timeline_history()).expect("the timeline serializes"),
+        session.generation(),
+        session.can_redo(),
+    )
+}
+
+#[tokio::test]
+async fn system_tuning_toggle_without_a_tuned_profile_records_nothing_groups() {
+    const SYSCTL_FILE: &str = "/etc/sysctl.d/90-x.conf";
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(SYSCTL_FILE, "vm.swappiness = 10\n")
+            .sysctl_a("vm.swappiness = 10\n"),
+    ));
+    let kernel = snap.kernel_boot.as_ref().expect("kernel/boot is collected");
+    assert!(kernel.tuned_active.is_empty(), "no tuned selection");
+    assert!(
+        !kernel.tuned_disposition.is_advisory(),
+        "the collector leaves a non-advisory disposition, which is what made the empty op possible"
+    );
+
+    let mut held = session(&snap);
+    // A pending redo entry: one config decision, undone.
+    held.apply(RefinementOp::SetInclude {
+        item_id: ItemId::Config {
+            path: SYSCTL_FILE.into(),
+        },
+        include: false,
+    })
+    .expect("the config op applies");
+    held.undo().expect("the op undoes");
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(held)),
+    });
+    let before = history(&state);
+    assert!(before.2, "the setup leaves a pending redo");
+
+    for include in [true, false] {
+        let body = serde_json::to_vec(&serde_json::json!({ "include": include })).unwrap();
+        let response = inspectah_web::handlers::batch_toggle_group(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("system_tuning".to_string()),
+            body.into(),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "include {include}: the toggle is accepted"
+        );
+        assert_eq!(
+            history(&state),
+            before,
+            "include {include}: no tuned row, so no op, no generation step, and the redo survives"
+        );
+    }
+}
