@@ -205,13 +205,19 @@ pub struct RepoFile {
     /// [`RepoFile::is_key_named_by`], never by `path` alone.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub gpgkey_references: BTreeSet<String>,
-    /// For a GPG key the base image already ships: the base-image package
-    /// that owns the file, which `rpm -V` found unmodified on the source
-    /// host. The scan records such a key excluded, because the image has
-    /// the base image's own copy; copying the host's over it would replace
-    /// a newer major's key with an older one. `None` for a key the export
-    /// carries by default, for a repo file, and in snapshots collected
-    /// before the field existed.
+    /// For a GPG key the base image already ships: the package whose name
+    /// is in the baseline and which owns the path on the source host, where
+    /// `rpm -V` found the file unmodified. The scan records such a key
+    /// excluded, because the image has the base image's own copy; copying
+    /// the host's over it would replace a newer major's key with an older
+    /// one. `None` for a key the export carries by default, for a repo
+    /// file, and in snapshots collected before the field existed.
+    ///
+    /// The match is by package name only, so it assumes the base's package
+    /// of that name ships the same path, at whatever version the base has.
+    /// A base version that renamed or dropped the file would leave the
+    /// image without the key. Checking that needs the base image's file
+    /// lists, which the baseline does not carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shipped_by_base: Option<String>,
 }
