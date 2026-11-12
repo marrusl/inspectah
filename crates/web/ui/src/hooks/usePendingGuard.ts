@@ -6,7 +6,9 @@ export interface PendingGuard {
   /**
    * Starts `request` unless one for `key` is already in flight. The key is
    * held until the request settles, on success and on failure alike, so the
-   * caller's own `.then`/`.catch` belong inside `request`.
+   * caller's own `.then`/`.catch` belong inside `request`. If `request`
+   * throws instead of returning a promise, the key is released and the
+   * error rethrown.
    */
   runGuarded: (key: string, request: () => Promise<unknown>) => void;
 }
@@ -28,10 +30,18 @@ export function usePendingGuard(): PendingGuard {
       if (inFlight.current.has(key)) return;
       inFlight.current.add(key);
       setPendingKeys(new Set(inFlight.current));
-      request().finally(() => {
+      const release = () => {
         inFlight.current.delete(key);
         setPendingKeys(new Set(inFlight.current));
-      });
+      };
+      // A factory that throws before returning a promise never reaches
+      // `.finally`, so release here too or the key stays held for good.
+      try {
+        request().finally(release);
+      } catch (err) {
+        release();
+        throw err;
+      }
     },
     [],
   );

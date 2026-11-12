@@ -63,4 +63,22 @@ describe("usePendingGuard", () => {
 
     expect(result.current.pendingKeys.has("a")).toBe(false);
   });
+
+  it("releases the key when the request factory throws", () => {
+    const { result } = renderHook(() => usePendingGuard());
+    const failure = new Error("could not build the request");
+
+    act(() => {
+      expect(() =>
+        result.current.runGuarded("a", () => {
+          throw failure;
+        }),
+      ).toThrow(failure);
+    });
+
+    expect(result.current.pendingKeys.has("a")).toBe(false);
+    const request = vi.fn(() => new Promise<void>(() => {}));
+    act(() => result.current.runGuarded("a", request));
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 });
