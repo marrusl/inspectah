@@ -151,4 +151,8 @@ Real-host notes from before 2026-11-12 record `x-export-warnings: []` on
 stock exports. On a host with not-carried unit owners (`cronie`,
 `firewalld`, `rsyslog` on the RHEL validation hosts) an unchanged export
 now carries the not-carried notice, so `[]` is no longer the expected
-value there.
+value there. Those three are the drifted RHEL 10.2 host's owners. A
+stock host also lists `audit`, plus `audit-rules` on RHEL 10.2 and
+`insights-client` on RHEL 9.8, so its line names three and ends
+`and 2 more`: see
+[real-host-validation-runs](real-host-validation-runs.md).

@@ -945,6 +945,40 @@ ship `50-coredump.conf` and `50-pid-max.conf` in `/usr/lib/sysctl.d`, and
 - Two shell traps. zsh reads `$h:t15/...` as a history modifier, so write
   `"${h}:t15/..."`. podman refuses an upper-case image tag.
 
+### Measured, 2026-11-12: the scan's not-carried notice on stock hosts
+
+Run at `a4d93647` on RHEL 9.8 and RHEL 10.2, both aarch64, each reverted
+to its clean snapshot and scanned as root with **no drift**. Every check
+passed on both hosts: the `Notice:` line is the last stderr line in flat,
+pretty and `--quiet` modes, stdout is empty, `--inspect-only` prints no
+notice and valid JSON, and the exit status is 0.
+
+**A stock host lists five owners, not the three a drifted host lists.**
+
+| host | not carried | owners of an enabled unit |
+|---|---|---|
+| RHEL 9.8 | 51 | `audit`, `cronie`, `firewalld`, `insights-client`, `rsyslog` |
+| RHEL 10.2 | 35 | `audit`, `audit-rules`, `cronie`, `firewalld`, `rsyslog` |
+
+So the line names three and ends `and 2 more` on both. Nothing a stock
+host installs pulls `audit` in; on a drifted host the planted `cockpit`
+does (see the 2026-11-09 run). The owners lead the Containerfile block
+and the audit table in the same order, both lists are identical, and the
+count matches the rows with an enabled unit. An unchanged refine export
+of the RHEL 10.2 tarball sent the same text as its only
+`x-export-warnings` entry.
+
+**Capturing pretty mode without a local TTY.** An agent's shell has no
+terminal, so `ssh -t` allocates none. Run util-linux `script` on the
+guest instead, which gives the scan a pty there:
+
+```
+script -q -e -c 'sudo ./inspectah scan -y -o ~/tty.tar.gz' tty.typescript
+```
+
+Read the typescript with `cat -v`; the spinner frames come before the
+summary.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
@@ -976,6 +1010,14 @@ Produces a statically linked, stripped ARM64 ELF in ~15 s on an M-series
 Mac. Confirm the shipped binary is the commit under test with
 `inspectah version`, which prints the short commit — the cheapest guard
 against validating a stale binary.
+
+**Two builds at once break the UI step.** `crates/web/build.rs` runs
+`npm ci` and `npm run build` in `crates/web/ui` for every build, whatever
+the target directory. A second `cargo build` of the same checkout,
+running at the same time with another `--target-dir`, makes `npm ci` fail
+with `ENOTEMPTY` or `npm run build` fail partway. If `ui/dist` is already
+built from the commit under test, `INSPECTAH_SKIP_UI=1` skips the step
+and embeds the existing assets. Otherwise wait for the other build.
 
 `/usr/bin/time` is **not installed** on a minimal RHEL 9. Use
 `start=$(date +%s)` / `$((end-start))` for timings on the guest. An
