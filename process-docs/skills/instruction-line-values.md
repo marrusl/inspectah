@@ -111,7 +111,11 @@ refused file is never dropped without a FIXME: the config section names
 every kind but GPG keys, which the GPG section names itself so that no
 `rpm --import` line names a key that was not staged. The config section
 also asks `validate_path` when it derives roots from the snapshot, so it
-never names a directory nobody staged. `.env` files go to `env-files/`,
+never names a directory nobody staged. A report that says a file reaches
+the image asks it too: the sysctl report's carriage runs `validate_path`
+on an included entry and lists a refused one as not carried, so the
+audit, the HTML report and refine never say a file the export lacks
+replaces anything on the target. `.env` files go to `env-files/`,
 which no `COPY` names, and a refused one is skipped without a FIXME.
 
 **The unit of work is the emitted line.** A `COPY` of a directory names
