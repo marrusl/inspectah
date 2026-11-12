@@ -341,8 +341,6 @@ expression: stable
 </details>
 </div>
 
-      
-        
 
 
 <div class="report-section">
@@ -359,9 +357,11 @@ expression: stable
 
 
 
+
 <h4>Sysctl</h4>
 
 <p>Sysctl explanation unavailable: (empty). Sysctl files are still carried as Configuration Files.</p>
+
 
 
 
@@ -369,7 +369,6 @@ expression: stable
 </details>
 </div>
 
-      
       
         
 

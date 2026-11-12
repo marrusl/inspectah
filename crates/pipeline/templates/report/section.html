@@ -1,5 +1,8 @@
+{#- `failed_extra` is rendered markup that a failed section still shows
+    after the generic failed body, for text that does not depend on the
+    section's data. -#}
 {% macro section(id, title, count, state="normal",
-                 conflict_count=0, extra_badge="") %}
+                 conflict_count=0, extra_badge="", failed_extra="") %}
 <div class="report-section
   {%- if state == 'failed' %} report-section--failed
   {%- elif state == 'degraded' %} report-section--degraded
@@ -25,6 +28,7 @@
   {% if state == "failed" %}
     <p class="failed-body">Data collection failed for this section.
     See the completeness warning above for details.</p>
+    {{ failed_extra }}
   {% else %}
     {{ caller() }}
   {% endif %}

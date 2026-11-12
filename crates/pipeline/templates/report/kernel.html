@@ -5,13 +5,10 @@
     sysctl block is marked safe (spec § 5.5). -#}
 {% macro runs(rs) %}{% for r in rs %}{% if r.code %}<code>{{ r.text }}</code>{% else %}{{ r.text }}{% endif %}{% endfor %}{% endmacro %}
 
-{% call section("kernel-boot", "Kernel & Boot", count=kernelboot_count, state=kernelboot_state) %}
-
-{% if kernel_cmdline %}
-<h4>Kernel Command Line</h4>
-<pre><code>{{ kernel_cmdline }}</code></pre>
-{% endif %}
-
+{#- The sysctl block reads the shared sysctl model, not the section's
+    data, so it shows when the section is absent or failed too: the
+    unavailable reason or the aggregate line, as the audit states it. -#}
+{% macro sysctl_block() %}
 <h4>Sysctl</h4>
 {% if sysctl.kind != "host" %}
 <p>{{ runs(sysctl.line) }}</p>
@@ -72,5 +69,15 @@
 {% endfor %}
 {% endif %}
 {% endif %}
+{% endmacro %}
+
+{% call section("kernel-boot", "Kernel & Boot", count=kernelboot_count, state=kernelboot_state, failed_extra=sysctl_block()) %}
+
+{% if kernel_cmdline %}
+<h4>Kernel Command Line</h4>
+<pre><code>{{ kernel_cmdline }}</code></pre>
+{% endif %}
+
+{{ sysctl_block() }}
 
 {% endcall %}

@@ -38,9 +38,9 @@
 
     {% call group("system-config", "System Configuration", count=group_sysconfig_count, advisory_count=group_sysconfig_advisory) %}
       {% include "report/config.html" %}
-      {% if has_kernelboot or kernelboot_state == "failed" %}
-        {% include "report/kernel.html" %}
-      {% endif %}
+      {#- Always, as the audit prints it: with no kernel/boot data, the
+          sysctl block says why the explanation is missing. -#}
+      {% include "report/kernel.html" %}
       {% if has_security or security_state == "failed" %}
         {% include "report/security.html" %}
       {% endif %}

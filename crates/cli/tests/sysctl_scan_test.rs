@@ -35,7 +35,8 @@ use inspectah_web::adapter::build_web_view;
 use inspectah_web::aggregate_handlers::aggregate_view;
 use inspectah_web::handlers::{AppState, get_groups};
 use sysctl_hosts::{
-    SysctlHost, export_session, reload, render_export, scan, scan_without_config, session,
+    KERNEL_BOOT_FAILURE, SysctlHost, export_session, reload, render_export, scan,
+    scan_with_failed_kernel_boot, scan_without_config, scan_without_kernel_boot, session,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -3241,6 +3242,117 @@ async fn case_21_aggregate() {
         serde_json::json!([]),
         "a two-host fleet lists items flat, and has none: {tuning}"
     );
+}
+
+// ── The explanation without a kernel/boot section ───────────────────
+
+/// The audit's sysctl block as `html_text` reads the HTML one: heading
+/// left out, code spans as their text, paragraphs joined by one space.
+/// Only for a block whose host values hold no backtick.
+fn audit_sysctl_text(md: &str) -> String {
+    sysctl_block(md)[1..]
+        .iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.replace('`', ""))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The Kernel & Boot section of the HTML report, open tag to close tag.
+fn html_kernel_section(html: &str) -> &str {
+    html.split_once(r#"<details id="kernel-boot">"#)
+        .and_then(|(_, rest)| rest.split_once("</details>"))
+        .map(|(section, _)| section)
+        .expect("the HTML report has a Kernel & Boot section")
+}
+
+/// Asserts that the HTML report of `snap`, a host with no kernel/boot
+/// section, states the audit's unavailable line, and that the view's
+/// reason is the audit's; `failed` says whether the section failed, and
+/// so whether the generic failed body shows.
+fn assert_unavailable_without_kernel_section(snap: &InspectionSnapshot, failed: bool) {
+    assert!(snap.kernel_boot.is_none(), "no section");
+    let audit_text = audit_sysctl_text(&audit(snap));
+    assert!(
+        audit_text.starts_with("Sysctl explanation unavailable: ")
+            && audit_text.ends_with(UNAVAILABLE_TAIL),
+        "{audit_text}"
+    );
+
+    let report = html(snap);
+    assert_eq!(
+        html_text(html_sysctl_block(&report)),
+        audit_text,
+        "the HTML states what the audit states"
+    );
+    assert_eq!(
+        html_kernel_section(&report).contains("Data collection failed for this section."),
+        failed,
+        "the generic failed body shows only for a failed section"
+    );
+
+    let sysctl = sysctl_view(&session(snap));
+    assert_eq!(sysctl["state"], "unavailable");
+    let reason = sysctl["reason"].as_str().expect("a reason");
+    assert!(
+        audit_text.contains(&format!("unavailable: {}.", literal(reason))),
+        "the view's reason {reason:?} is the audit's: {audit_text}"
+    );
+}
+
+#[test]
+fn case_16_kernel_section_absent_html() {
+    assert_unavailable_without_kernel_section(
+        &reload(&scan_without_kernel_boot(failure_host())),
+        false,
+    );
+}
+
+#[test]
+fn case_16_kernel_section_failed_html() {
+    let snap = reload(&scan_with_failed_kernel_boot(failure_host()));
+    assert!(
+        audit_sysctl_text(&audit(&snap)).contains(KERNEL_BOOT_FAILURE),
+        "the audit names the failure"
+    );
+    assert_unavailable_without_kernel_section(&snap, true);
+}
+
+/// A host value as every surface prints it (`md_literal::literal_text`'s
+/// empty case; these reasons hold no control character).
+fn literal(value: &str) -> &str {
+    if value.is_empty() { "(empty)" } else { value }
+}
+
+#[tokio::test]
+async fn case_21_aggregate_without_kernel_section_html() {
+    let hosts = ["host-a", "host-b"].map(|hostname| {
+        reload(&scan_without_kernel_boot(
+            SysctlHost::new()
+                .file("/etc/hostname", &format!("{hostname}\n"))
+                .file(FLEET_FILE, &format!("# {hostname}\nvm.swappiness = 10\n")),
+        ))
+    });
+    let (merged, _warnings) =
+        merge_snapshots(hosts.into(), None, None).expect("the two hosts merge");
+    let merged = reload(&merged);
+    assert!(merged.aggregate_meta.is_some(), "an aggregate");
+    assert!(
+        merged.kernel_boot.is_none(),
+        "no input has a kernel/boot section"
+    );
+
+    assert_eq!(audit_sysctl_text(&audit(&merged)), AGGREGATE_LINE);
+    assert_eq!(
+        html_text(html_sysctl_block(&html(&merged))),
+        AGGREGATE_LINE,
+        "the HTML states the fleet line the audit states"
+    );
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(session(&merged))),
+    });
+    let view = handler_json(aggregate_view(axum::extract::State(state)).await).await;
+    assert_eq!(view["sysctl"], serde_json::json!({"state": "aggregate"}));
 }
 
 // ── System Tuning batch toggle ───────────────────────────────────────

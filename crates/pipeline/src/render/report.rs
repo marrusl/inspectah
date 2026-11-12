@@ -840,8 +840,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or(false);
     let ifcfg_note = inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 
-    // ── Kernel & Boot section data (conditional) ────────────────
-    let has_kernelboot = snap.kernel_boot.is_some();
+    // ── Kernel & Boot section data ─────────────────────────────
     let kernel_cmdline = snap
         .kernel_boot
         .as_ref()
@@ -1277,8 +1276,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         network_state => network_state_str,
         has_ifcfg,
         ifcfg_note,
-        // Kernel & Boot (conditional)
-        has_kernelboot,
+        // Kernel & Boot (always rendered)
         kernel_cmdline,
         sysctl,
         kernelboot_count,
@@ -2671,13 +2669,26 @@ mod tests {
         );
     }
 
+    /// Kernel & Boot renders with no kernel/boot data, as the audit's
+    /// does, because its sysctl block says why the explanation is missing.
     #[test]
-    fn test_report_absent_kernel_not_rendered() {
+    fn test_report_absent_kernel_states_why_sysctl_is_unavailable() {
         let snap = test_snapshot();
+        assert!(snap.kernel_boot.is_none());
         let html = render_report(&snap, &RenderContext { target: None });
+        let section = html
+            .split_once(r#"<details id="kernel-boot">"#)
+            .and_then(|(_, rest)| rest.split_once("</details>"))
+            .map(|(section, _)| section)
+            .expect("the Kernel & Boot section renders without kernel/boot data");
         assert!(
-            !html.contains(r#"id="kernel-boot""#),
-            "absent kernel section must not be rendered"
+            section.contains("Sysctl explanation unavailable: "),
+            "the sysctl block states why: {section}"
+        );
+        assert!(!section.contains("Kernel Command Line"), "{section}");
+        assert!(
+            !section.contains("failed-body"),
+            "not a failed section: {section}"
         );
     }
 
@@ -2819,6 +2830,19 @@ mod tests {
         assert!(
             html.contains("data unavailable"),
             "failed kernel section shows data unavailable"
+        );
+        let section = html
+            .split_once(r#"<details id="kernel-boot">"#)
+            .and_then(|(_, rest)| rest.split_once("</details>"))
+            .map(|(section, _)| section)
+            .expect("a Kernel & Boot section");
+        assert!(
+            section.contains("Data collection failed for this section."),
+            "the generic failed body stays: {section}"
+        );
+        assert!(
+            section.contains("Sysctl explanation unavailable: "),
+            "the sysctl block still states why: {section}"
         );
     }
 

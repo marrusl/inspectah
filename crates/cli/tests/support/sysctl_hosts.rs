@@ -25,9 +25,12 @@ use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::{ExecResult, Executor};
-use inspectah_core::traits::inspector::Inspector;
-use inspectah_core::traits::progress::NullProgress;
+use inspectah_core::traits::inspector::{
+    InspectionContext, Inspector, InspectorError, InspectorOutput,
+};
+use inspectah_core::traits::progress::{NullProgress, ProgressSink};
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::completeness::{InspectorId, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::build::extract::TarballExtractor;
@@ -325,6 +328,64 @@ pub fn scan_without_config(host: SysctlHost) -> InspectionSnapshot {
         vec![
             Box::new(RpmInspector::new()),
             Box::new(KernelbootInspector::new()),
+        ],
+    )
+}
+
+/// The scan path with the RPM and config inspectors only, so the
+/// snapshot's `kernel_boot` is `None`. The scan command always runs the
+/// kernel/boot inspector, and that inspector returns its section even when
+/// a source fails, so this is the only way a host reaches a snapshot with
+/// no kernel/boot section.
+pub fn scan_without_kernel_boot(host: SysctlHost) -> InspectionSnapshot {
+    scan_with(
+        host,
+        vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ConfigInspector::new()),
+        ],
+    )
+}
+
+/// Why [`FailedKernelBoot`] fails.
+pub const KERNEL_BOOT_FAILURE: &str = "kernel/boot collection failed";
+
+/// Stands in for the kernel/boot inspector and fails, as `collect()`
+/// records a failed or panicked inspector: no section, the id in
+/// `failed_sections`, and a warning under the inspector's name.
+/// `KernelbootInspector` itself never returns `Failed`; a panic is the
+/// only route to a failed kernel/boot section in a real scan.
+struct FailedKernelBoot;
+
+impl Inspector for FailedKernelBoot {
+    fn id(&self) -> InspectorId {
+        InspectorId::KernelBoot
+    }
+
+    fn applicable_to(&self) -> &[SourceSystemKind] {
+        &[SourceSystemKind::PackageBased]
+    }
+
+    fn inspect(
+        &self,
+        _ctx: &InspectionContext<'_>,
+        _progress: &dyn ProgressSink,
+    ) -> Result<InspectorOutput, InspectorError> {
+        Err(InspectorError::Failed {
+            reason: KERNEL_BOOT_FAILURE.into(),
+        })
+    }
+}
+
+/// The scan path with the RPM and config inspectors and a kernel/boot
+/// inspector that fails, so the kernel/boot section's state is `failed`.
+pub fn scan_with_failed_kernel_boot(host: SysctlHost) -> InspectionSnapshot {
+    scan_with(
+        host,
+        vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ConfigInspector::new()),
+            Box::new(FailedKernelBoot),
         ],
     )
 }
