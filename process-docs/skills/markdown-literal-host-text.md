@@ -39,3 +39,24 @@ The audit's `#### Sysctl` block uses it for every interpolation. Most other
 audit sections still print paths raw inside hand-written backticks (the
 Unowned Config Files list prints a file name holding a newline across two
 lines); that is pre-existing, not covered by this helper yet.
+
+## The HTML report is not Markdown
+
+The HTML report's sysctl block (`templates/report/kernel.html`) states
+the same sentences, but never through `md_code`: its backticks and
+`\u{..}` escapes would print as text. `report.rs` (`sysctl_runs`) turns
+each copy template into runs of text, where the copy's own backtick spans
+and every filled `{hole}` are `code` runs, and the template prints every
+run through MiniJinja's HTML autoescape, inside `<code>` for a code run.
+Nothing in the block is marked `|safe`; `sysctl_block_has_no_safe_filter`
+guards that.
+
+Two consequences for tests and readers:
+
+- MiniJinja's autoescape writes `/` as `&#x2f;` (and `'` as `&#x27;`), so
+  a raw `html.contains("/etc/sysctl.d/..")` never matches. Decode the
+  entities first, as `html_text` in `crates/cli/tests/sysctl_scan_test.rs`
+  does.
+- Control characters are not escaped in HTML: a newline in a file name
+  sits raw inside `<code>` and the browser shows it as a space; other
+  control characters pass through as they are.
