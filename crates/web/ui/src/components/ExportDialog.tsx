@@ -115,7 +115,7 @@ export function ExportDialog({
         variant={ModalVariant.small}
         isOpen={isOpen}
         onClose={handleClose}
-        aria-label="Export tarball"
+        aria-label="Export warnings"
       >
         <ModalHeader title="Downloaded, with warnings" />
         <ModalBody>

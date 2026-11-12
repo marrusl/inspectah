@@ -323,6 +323,61 @@ describe("ExportDialog", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
+    it("names the dialog after its state", async () => {
+      const user = userEvent.setup();
+      mockTarball({
+        "x-export-warnings": JSON.stringify([{ kind: "failure", text: FAILURE }]),
+      });
+      renderOpen();
+      expect(
+        screen.getByRole("dialog", { name: "Export tarball" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      expect(
+        await screen.findByRole("dialog", { name: "Export warnings" }),
+      ).toBeInTheDocument();
+    });
+
+    it("starts fresh when reopened after a download with warnings", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      const props = {
+        onClose,
+        stats: MOCK_STATS,
+        generation: 7,
+        sessionIsSensitive: false,
+        onViewUpdate: vi.fn(),
+      };
+      const { rerender } = render(<ExportDialog isOpen={true} {...props} />);
+
+      mockTarball({
+        "x-export-warnings": JSON.stringify([{ kind: "failure", text: FAILURE }]),
+      });
+      await user.click(screen.getByRole("button", { name: "Export" }));
+      await screen.findByText("Downloaded, with warnings");
+      const footerClose = screen
+        .getAllByRole("button", { name: "Close" })
+        .find((b) => b.textContent === "Close");
+      await user.click(footerClose!);
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      rerender(<ExportDialog isOpen={false} {...props} />);
+      rerender(<ExportDialog isOpen={true} {...props} />);
+
+      expect(
+        screen.queryByText("Downloaded, with warnings"),
+      ).not.toBeInTheDocument();
+      mockTarball({ "x-export-warnings": "[]" });
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(2));
+      expect(
+        screen.queryByText("Downloaded, with warnings"),
+      ).not.toBeInTheDocument();
+    });
+
     it("closes on success when the header is []", async () => {
       const user = userEvent.setup();
       mockTarball({ "x-export-warnings": "[]" });
