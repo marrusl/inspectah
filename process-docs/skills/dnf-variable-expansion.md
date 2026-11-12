@@ -157,10 +157,13 @@ base image lacks, and leaving it out breaks the EL10 EPEL build exactly as
 on 2026-11-09. No baseline, a host that is not package-based (no `rpm
 -Va`), an `rpm -Va` that failed, or an ownership query that failed all
 mean carry: a missing key fails the build, a redundant copy does not.
-`rpm -Va` exits 1 whenever it reports a modified file, so its exit code
-alone is not failure: the collector reads a non-zero exit with no output
-as failed (`SupplementaryData::rpm_va` is `None`), and an empty list as a
-clean verify.
+`rpm -Va` exits 1 whenever it reports a modified file, so a non-zero
+exit alone is not failure. The collector accepts output only with exit 0
+or 1, reads exit 0 with no output as a clean verify, and reads everything
+else as failed (`SupplementaryData::rpm_va` is `None`): exit 1 with no
+output, and any other exit code even with output, since a signal kill
+(exit -1 from the executor) can leave a partial report. A run that stops
+partway yet exits 1 looks like a full report and cannot be caught.
 
 Consumers ask `RepoFile::is_in_image` ("copied or shipped by the base"),
 not `disposition.is_included()`, when the question is whether dnf in the

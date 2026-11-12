@@ -45,6 +45,10 @@ const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
 /// ```
 const RPM_FILE_OWNERSHIP_FORMAT: &str = "@@%{NAME}\\n[%{FILENAMES}\\n]";
 
+/// The exit code `rpm -Va` gives when it reports at least one file that
+/// does not verify.
+const RPM_VA_DISCREPANCY_EXIT: i32 = 1;
+
 struct SupplementaryData {
     repo_files: Vec<inspectah_core::types::rpm::RepoFile>,
     gpg_keys: Vec<inspectah_core::types::rpm::RepoFile>,
@@ -228,15 +232,21 @@ impl RpmInspector {
         let module_streams = modules::parse_module_streams(exec);
         let version_locks = modules::parse_version_locks(exec);
 
-        // `rpm -Va` exits non-zero whenever it reports a modified file, so
-        // the exit code alone is not failure: failure is a non-zero exit
-        // with nothing reported.
+        // `rpm -Va` exits 0 when every file verifies and 1 when it reports
+        // a modified one, so a report is output with exit 0 or 1. A
+        // non-zero exit with nothing reported is failure, and so is any
+        // other exit code: a signal kill (-1 from the executor) can leave
+        // a partial report, which would read a modified file as clean. A
+        // run that stops partway yet exits 1 cannot be told apart from a
+        // full report.
         let rpm_va = if matches!(source, SourceSystem::PackageBased { .. }) {
             let va_result = exec.run("rpm", &["-Va"]);
-            if va_result.stdout.is_empty() {
-                va_result.success().then(Vec::new)
-            } else {
-                Some(modules::parse_rpm_va(&va_result.stdout))
+            match (va_result.exit_code, va_result.stdout.is_empty()) {
+                (0, true) => Some(Vec::new()),
+                (0 | RPM_VA_DISCREPANCY_EXIT, false) => {
+                    Some(modules::parse_rpm_va(&va_result.stdout))
+                }
+                _ => None,
             }
         } else {
             None
@@ -4600,6 +4610,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                              @@epel-release\n/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10\n";
         const UNOWNED: &str = "@@bash\n/usr/bin/bash\n";
         const STOCK_MODIFIED: &str = "S.5....T.    /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n";
+        const OTHER_MODIFIED: &str = "S.5....T.  c /etc/bashrc\n";
 
         struct Case {
             name: &'static str,
@@ -4666,6 +4677,32 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 va_exit: 1,
                 baseline: Some(EL10_AARCH64),
                 stock: None,
+            },
+            Case {
+                // The real executor reports a signal kill as exit -1, with
+                // whatever the child had printed: a partial report.
+                name: "rpm -Va killed after partial output",
+                owners: OWNED,
+                rpm_va: OTHER_MODIFIED,
+                va_exit: -1,
+                baseline: Some(EL10_AARCH64),
+                stock: None,
+            },
+            Case {
+                name: "rpm -Va exited 2 with output",
+                owners: OWNED,
+                rpm_va: OTHER_MODIFIED,
+                va_exit: 2,
+                baseline: Some(EL10_AARCH64),
+                stock: None,
+            },
+            Case {
+                name: "rpm -Va reported another file",
+                owners: OWNED,
+                rpm_va: OTHER_MODIFIED,
+                va_exit: 1,
+                baseline: Some(EL10_AARCH64),
+                stock: Some("redhat-release"),
             },
         ];
 
