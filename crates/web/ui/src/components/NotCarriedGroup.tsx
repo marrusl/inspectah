@@ -130,6 +130,7 @@ export function NotCarriedGroup({
                   )}
                 </div>
                 <Button
+                  className="inspectah-not-carried__include"
                   variant="secondary"
                   size="sm"
                   aria-label={`Include ${row.display_name}`}

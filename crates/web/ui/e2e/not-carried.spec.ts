@@ -254,4 +254,53 @@ test.describe("Not carried", () => {
     const dialog = await exportWith(page, [NOTICE_BOTH]);
     await expect(dialog).toBeHidden();
   });
+
+  test("long names, repos and units wrap clear of the Include button", async ({
+    page,
+  }) => {
+    // Host strings longer than the row. The package name and the repo's tail
+    // are unbroken tokens, with no hyphen for the browser to wrap at, so only
+    // an explicit breaking rule keeps them clear of the button.
+    const longName = "python3-" + "averyveryverylongpackagename".repeat(3);
+    const LONG = {
+      item_id: { kind: "Package", key: { name: longName, arch: "x86_64" } },
+      display_name: longName,
+      source_repo: "rhel-9-for-x86_64-appstream-eus-rpms-" + "mirror".repeat(8),
+      enabled_units: [
+        `${"long-running-agent-".repeat(4)}worker@primary.service`,
+      ],
+      owns_enabled_unit: true,
+    };
+    current = { ...current, not_carried_packages: [LONG, PYTHON3_FIREWALL] };
+    await page.setViewportSize({ width: 480, height: 900 });
+    await page.reload();
+    const group = page.getByTestId("not-carried-group");
+    await group.getByRole("button", { name: /not carried \(2\)/i }).click();
+
+    const row = group.getByTestId(`not-carried-row-${longName}.x86_64`);
+    const button = row.getByRole("button", { name: `Include ${longName}` });
+    await expect(button).toBeVisible();
+
+    const rowBox = (await row.boundingBox())!;
+    const buttonBox = (await button.boundingBox())!;
+    // The button keeps its natural width and stays inside the row.
+    expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(
+      rowBox.x + rowBox.width + 0.5,
+    );
+    expect(
+      await button.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    // No text box reaches into the button.
+    for (const text of [
+      row.locator(".inspectah-not-carried__name"),
+      row.locator(".inspectah-not-carried__repo"),
+      row.locator(".inspectah-not-carried__units code"),
+    ]) {
+      const box = (await text.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(buttonBox.x);
+    }
+    expect(await row.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+      true,
+    );
+  });
 });

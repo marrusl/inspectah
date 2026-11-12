@@ -1547,3 +1547,19 @@ body,
   gap: var(--pf-t--global--spacer--xs);
   font-size: var(--pf-t--global--font--size--body--sm);
 }
+
+/* Host strings (package, repo and unit names) can be one unbroken token
+   wider than the column; let them break anywhere rather than run under the
+   Include button. */
+.inspectah-not-carried__name,
+.inspectah-not-carried__repo,
+.inspectah-not-carried__units,
+.inspectah-not-carried__units code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.inspectah-not-carried__include {
+  flex-shrink: 0;
+}
