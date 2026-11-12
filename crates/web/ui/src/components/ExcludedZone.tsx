@@ -13,6 +13,8 @@ export interface ExcludedZoneProps {
   packages: ExcludedPackage[];
   hasEverToggled: boolean;
   onToggle: (name: string) => void;
+  /** Packages (by name) whose toggle request is in flight. */
+  pendingKeys?: ReadonlySet<string>;
   /** Per-package RPM upload row state, mirroring PackageRow's upload gate. */
   rpmRowStates?: Record<string, RpmUploadRowState>;
   /** Callback when the upload icon is clicked on a blocked row. */
@@ -25,6 +27,7 @@ export function ExcludedZone({
   packages,
   hasEverToggled,
   onToggle,
+  pendingKeys,
   rpmRowStates,
   onUploadClick,
 }: ExcludedZoneProps) {
@@ -136,6 +139,7 @@ export function ExcludedZone({
                   role="checkbox"
                   checked={pkg.include}
                   aria-label={pkg.name}
+                  disabled={pendingKeys?.has(pkg.name)}
                   onChange={() => onToggle(pkg.name)}
                 />
               )}

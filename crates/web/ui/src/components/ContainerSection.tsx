@@ -8,6 +8,7 @@ import type {
   TriageTag,
 } from "../api/types";
 import { applyOp } from "../api/client";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -43,13 +44,12 @@ export function ContainerSection({
   onViewUpdate,
   onMutationError,
 }: ContainerSectionProps) {
-  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const { pendingKeys: pendingIds, runGuarded } = usePendingGuard();
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
 
   const handleToggleQuadlet = useCallback(
     (path: string, currentInclude: boolean) => {
       const id = `quadlet:${path}`;
-      setPendingIds((prev) => new Set(prev).add(id));
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -57,25 +57,17 @@ export function ContainerSection({
           include: !currentInclude,
         },
       };
-      applyOp(op)
-        .then((updatedView) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onViewUpdate(updatedView);
-        })
-        .catch((err) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onMutationError(err instanceof Error ? err : new Error(String(err)));
-        });
+      runGuarded(id, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError],
   );
 
   const handleToggleFlatpak = useCallback(
@@ -86,7 +78,6 @@ export function ContainerSection({
       currentInclude: boolean,
     ) => {
       const id = `flatpak:${appId}`;
-      setPendingIds((prev) => new Set(prev).add(id));
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -94,25 +85,17 @@ export function ContainerSection({
           include: !currentInclude,
         },
       };
-      applyOp(op)
-        .then((updatedView) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onViewUpdate(updatedView);
-        })
-        .catch((err) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onMutationError(err instanceof Error ? err : new Error(String(err)));
-        });
+      runGuarded(id, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError],
   );
 
   const totalItems = quadlets.length + flatpaks.length;

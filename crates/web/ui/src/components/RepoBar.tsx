@@ -5,6 +5,8 @@ import type { RepoGroupInfo } from "../api/types";
 export interface RepoBarProps {
   repos: RepoGroupInfo[];
   onToggle: (sectionId: string, include: boolean) => void;
+  /** Repos (by `section_id`) whose toggle request is in flight. */
+  pendingKeys?: ReadonlySet<string>;
   conflictCount?: number;
   dismissedCount?: number;
   onRestoreDismissed?: () => void;
@@ -58,6 +60,7 @@ function repoCountText(repo: RepoGroupInfo): string {
 export function RepoBar({
   repos,
   onToggle,
+  pendingKeys,
   conflictCount,
   dismissedCount,
   onRestoreDismissed,
@@ -155,6 +158,7 @@ export function RepoBar({
               // otherwise announce identically when navigating by control.
               aria-label={`${repo.section_id}: ${countText}`}
               isChecked={isChecked}
+              isDisabled={pendingKeys?.has(repo.section_id)}
               onChange={() => onToggle(repo.section_id, !isChecked)}
               isReversed
             />

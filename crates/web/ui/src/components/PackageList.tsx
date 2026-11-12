@@ -44,6 +44,10 @@ export interface PackageListProps {
   onGroupToggle?: (groupName: string, include: boolean) => void;
   /** Called when a group is ungrouped (dissolved into individual packages). */
   onGroupUngroup?: (groupName: string) => void;
+  /** Packages (by name) whose toggle request is in flight. */
+  pendingKeys?: ReadonlySet<string>;
+  /** Groups (by name) whose request is in flight. */
+  pendingGroups?: ReadonlySet<string>;
   onDismissedCountChange?: (count: number) => void;
   /** When toggled from false to true, clears all dismissed conflicts. */
   onRestoreDismissed?: boolean;
@@ -96,6 +100,8 @@ export function PackageList({
   onRepoToggle: _onRepoToggle,
   onGroupToggle,
   onGroupUngroup,
+  pendingKeys,
+  pendingGroups,
   onDismissedCountChange,
   onRestoreDismissed,
   rpmRowStates,
@@ -512,6 +518,7 @@ export function PackageList({
               onExpandChange={handleGroupExpandChange}
               onToggle={handleGroupToggle}
               onUngroup={handleGroupUngroup}
+              isPending={pendingGroups?.has(group.name)}
             />
           ))}
         </div>
@@ -544,6 +551,7 @@ export function PackageList({
             dismissed={dismissedConflicts.has(pkg.name)}
             packageProvenances={packageProvenances}
             onToggle={onToggle}
+            isPending={pendingKeys?.has(pkg.name)}
             onDismiss={handleDismiss}
             rowState={rpmRowStates?.[pkg.name]}
             onUploadClick={onUploadClick}
@@ -556,6 +564,7 @@ export function PackageList({
         packages={excludedPackages}
         hasEverToggled={hasEverToggled}
         onToggle={onToggle}
+        pendingKeys={pendingKeys}
         rpmRowStates={rpmRowStates}
         onUploadClick={onUploadClick}
       />
@@ -572,6 +581,7 @@ interface PackageRowProps {
   dismissed: boolean;
   packageProvenances?: Record<string, PackageProvenance>;
   onToggle: (name: string) => void;
+  isPending?: boolean;
   onDismiss: (key: string) => void;
   rowState?: RpmUploadRowState;
   onUploadClick?: (packageName: string) => void;
@@ -585,6 +595,7 @@ function PackageRow({
   dismissed,
   packageProvenances,
   onToggle,
+  isPending = false,
   onDismiss,
   rowState,
   onUploadClick,
@@ -686,6 +697,7 @@ function PackageRow({
             role="checkbox"
             checked={pkg.include}
             aria-label={pkg.name}
+            disabled={isPending}
             onChange={() => onToggle(pkg.name)}
           />
         )}

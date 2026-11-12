@@ -21,6 +21,8 @@ export interface GroupRowProps {
   onExpandChange?: (groupName: string, expanded: boolean) => void;
   /** Announcement text for the aria-live region (toast feedback). */
   announcement?: string;
+  /** True while a request for this group is in flight. */
+  isPending?: boolean;
 }
 
 export function GroupRow({
@@ -33,6 +35,7 @@ export function GroupRow({
   defaultExpanded = false,
   onExpandChange,
   announcement,
+  isPending = false,
 }: GroupRowProps) {
   const [localExpanded, setLocalExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
@@ -161,7 +164,7 @@ export function GroupRow({
             size="sm"
             onClick={handleUngroup}
             aria-label={`Ungroup ${group.name}`}
-            isDisabled={isDegraded}
+            isDisabled={isDegraded || isPending}
           >
             ungroup
           </Button>

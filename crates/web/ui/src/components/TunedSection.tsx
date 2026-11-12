@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
   TunedDecisionDto,
@@ -7,6 +7,7 @@ import type {
   TriageTag,
 } from "../api/types";
 import { applyOp } from "../api/client";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -40,12 +41,11 @@ export function TunedSection({
   onViewUpdate,
   onMutationError,
 }: TunedSectionProps) {
-  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const { pendingKeys: pendingIds, runGuarded } = usePendingGuard();
 
   const handleToggle = useCallback(
     (profile: string, currentInclude: boolean) => {
       const id = `tuned:${profile}`;
-      setPendingIds((prev) => new Set(prev).add(id));
       const op: RefinementOp = {
         op: "SetInclude",
         target: {
@@ -53,25 +53,17 @@ export function TunedSection({
           include: !currentInclude,
         },
       };
-      applyOp(op)
-        .then((updatedView) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onViewUpdate(updatedView);
-        })
-        .catch((err) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onMutationError(err instanceof Error ? err : new Error(String(err)));
-        });
+      runGuarded(id, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError],
   );
 
   if (tuned.length === 0) {

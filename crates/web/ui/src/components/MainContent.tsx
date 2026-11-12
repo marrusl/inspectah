@@ -278,6 +278,16 @@ export function MainContent({
     });
   }, [configItems, filterText]);
 
+  // Requests in flight, by item: packages by "name.arch" (the package
+  // toggle and the Not carried Include act on the same item), repos by
+  // section id, groups by name.
+  const packageGuard = usePendingGuard();
+  const repoGuard = usePendingGuard();
+  const groupGuard = usePendingGuard();
+  const runPackage = packageGuard.runGuarded;
+  const runRepo = repoGuard.runGuarded;
+  const runGroup = groupGuard.runGuarded;
+
   // Package toggle: build SetInclude op from "name.arch" string
   const handlePackageToggle = useCallback(
     (nameArch: string) => {
@@ -295,24 +305,24 @@ export function MainContent({
           include: !isIncluded(pkg.entry.disposition),
         },
       };
-      applyOp(op)
-        .then((updatedView) => onViewUpdate(updatedView))
-        .catch((err) =>
-          onMutationError(err instanceof Error ? err : new Error(String(err))),
-        );
+      runPackage(nameArch, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [viewData, onViewUpdate, onMutationError],
+    [viewData, runPackage, onViewUpdate, onMutationError],
   );
-
-  // Not carried rows whose Include request is in flight, by row key.
-  const notCarriedGuard = usePendingGuard();
-  const runNotCarried = notCarriedGuard.runGuarded;
 
   // Not carried include: the ordinary package op, with the row's item_id
   // passed back verbatim (Refine projection contract).
   const handleNotCarriedInclude = useCallback(
     (row: NotCarriedRow) => {
-      runNotCarried(notCarriedRowKey(row), () =>
+      runPackage(notCarriedRowKey(row), () =>
         applyOp({
           op: "SetInclude",
           target: { item_id: row.item_id, include: true },
@@ -325,7 +335,7 @@ export function MainContent({
           ),
       );
     },
-    [runNotCarried, onViewUpdate, onMutationError],
+    [runPackage, onViewUpdate, onMutationError],
   );
 
   // Repo toggle: build SetInclude op for repos
@@ -342,13 +352,17 @@ export function MainContent({
           include,
         },
       };
-      applyOp(op)
-        .then((updatedView) => onViewUpdate(updatedView))
-        .catch((err) =>
-          onMutationError(err instanceof Error ? err : new Error(String(err))),
-        );
+      runRepo(sectionId, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [viewData, onViewUpdate, onMutationError],
+    [viewData, runRepo, onViewUpdate, onMutationError],
   );
 
   // Group toggle: SetInclude with ItemId::Group
@@ -361,13 +375,17 @@ export function MainContent({
           include,
         },
       };
-      applyOp(op)
-        .then((updatedView) => onViewUpdate(updatedView))
-        .catch((err) =>
-          onMutationError(err instanceof Error ? err : new Error(String(err))),
-        );
+      runGroup(groupName, () =>
+        applyOp(op)
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runGroup, onViewUpdate, onMutationError],
   );
 
   // Group ungroup: UngroupGroup directive
@@ -386,36 +404,40 @@ export function MainContent({
       // Set focus target for undo: the group row
       onSetUndoFocusTarget?.(`group-row-${groupName}`);
 
-      ungroupGroup(groupName)
-        .then((updatedView) => {
-          onViewUpdate(updatedView);
-          // Show success toast
-          const id = ++toastIdRef.current;
-          const message =
-            addedCount === 0
-              ? "Group ungrouped (all packages from base). Ctrl+Z to undo."
-              : `Group ungrouped into ${addedCount} package${addedCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
-          setToasts((prev) => [
-            ...prev,
-            { id, message, variant: AlertVariant.success },
-          ]);
-          // Auto-dismiss after 5 seconds
-          setTimeout(() => {
-            setToasts((prev) => prev.filter((t) => t.id !== id));
-          }, 5000);
+      runGroup(groupName, () =>
+        ungroupGroup(groupName)
+          .then((updatedView) => {
+            onViewUpdate(updatedView);
+            // Show success toast
+            const id = ++toastIdRef.current;
+            const message =
+              addedCount === 0
+                ? "Group ungrouped (all packages from base). Ctrl+Z to undo."
+                : `Group ungrouped into ${addedCount} package${addedCount !== 1 ? "s" : ""}. Ctrl+Z to undo.`;
+            setToasts((prev) => [
+              ...prev,
+              { id, message, variant: AlertVariant.success },
+            ]);
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+              setToasts((prev) => prev.filter((t) => t.id !== id));
+            }, 5000);
 
-          // Defer focus to post-render via useEffect — the DOM doesn't have
-          // the individual package rows yet until React re-renders with the
-          // updated viewData from the API response.
-          if (firstMemberName) {
-            setPendingFocusTarget(firstMemberName);
-          }
-        })
-        .catch((err) =>
-          onMutationError(err instanceof Error ? err : new Error(String(err))),
-        );
+            // Defer focus to post-render via useEffect — the DOM doesn't have
+            // the individual package rows yet until React re-renders with the
+            // updated viewData from the API response.
+            if (firstMemberName) {
+              setPendingFocusTarget(firstMemberName);
+            }
+          })
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [viewData, onViewUpdate, onMutationError, onSetUndoFocusTarget],
+    [viewData, runGroup, onViewUpdate, onMutationError, onSetUndoFocusTarget],
   );
 
   const handleArrowDown = useCallback(() => {
@@ -487,6 +509,7 @@ export function MainContent({
         <RepoBar
           repos={viewData?.repo_groups ?? []}
           onToggle={handleRepoToggle}
+          pendingKeys={repoGuard.pendingKeys}
         />
         <PackageList
           mode="single"
@@ -499,6 +522,8 @@ export function MainContent({
           onRepoToggle={handleRepoToggle}
           onGroupToggle={handleGroupToggle}
           onGroupUngroup={handleGroupUngroup}
+          pendingKeys={packageGuard.pendingKeys}
+          pendingGroups={groupGuard.pendingKeys}
           rpmRowStates={rpmRowStates}
           onUploadClick={onUploadClick}
           onRemoveRpmUpload={onRemoveRpmUpload}
@@ -507,7 +532,7 @@ export function MainContent({
           rows={viewData?.not_carried_packages ?? []}
           onInclude={handleNotCarriedInclude}
           isPending={isPending}
-          pendingKeys={notCarriedGuard.pendingKeys}
+          pendingKeys={packageGuard.pendingKeys}
           reveal={revealNotCarried}
           onRevealed={onNotCarriedRevealed}
         />
