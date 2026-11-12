@@ -89,6 +89,17 @@ enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-corp
 ";
 
+/// A repo file whose only section the host disabled, and the key it
+/// alone names.
+const DISABLED_REPO_PATH: &str = "/etc/yum.repos.d/corp-testing.repo";
+const DISABLED_ONLY_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-corp-testing";
+const DISABLED_REPO: &str = "\
+[corp-testing]
+baseurl=https://repo.example.com/testing
+enabled=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-corp-testing
+";
+
 /// A baseline without any of the fixture's packages, so refine's
 /// classifier keeps them included.
 fn baseline() -> BaselineData {
@@ -448,17 +459,30 @@ fn a_key_named_by_two_repos_stays_while_either_is_carried() {
 }
 
 /// With no operator decision, refine's projection is the scan's export:
-/// the rule only acts on an exclusion.
+/// the rule only acts on an exclusion. That includes a file whose
+/// sections the host all disabled and a key only that file names, which
+/// the rule alone would not count as carried.
 #[test]
 fn no_exclusion_changes_nothing() {
-    let snap = epel_host(STANDARD_KEY, "epel");
+    let mut snap = epel_host(STANDARD_KEY, "epel");
+    let rpm = snap.rpm.as_mut().expect("rpm section");
+    rpm.repo_files
+        .push(repo_file(DISABLED_REPO_PATH, DISABLED_REPO));
+    rpm.gpg_keys.push(key(DISABLED_ONLY_KEY));
     let scan_dir = tempfile::tempdir().expect("tempdir");
     render::render_all(&snap, &RenderContext { target: None }, scan_dir.path()).expect("render");
     let session = RefineSession::new(snap);
     let export = Export::of(&session);
     let scan = std::fs::read_to_string(scan_dir.path().join("Containerfile")).expect("read");
     assert_eq!(export.containerfile, scan);
-    for path in [EPEL_REPO_PATH, STANDARD_KEY, CORP_REPO_PATH, CORP_KEY] {
+    for path in [
+        EPEL_REPO_PATH,
+        STANDARD_KEY,
+        CORP_REPO_PATH,
+        CORP_KEY,
+        DISABLED_REPO_PATH,
+        DISABLED_ONLY_KEY,
+    ] {
         assert!(
             Path::new(
                 &scan_dir

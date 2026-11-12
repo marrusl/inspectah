@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::repo::RepoId;
@@ -401,4 +403,93 @@ fn validate_target_accepts_incomplete_and_refuses_the_rest() {
         })
         .unwrap_err();
     assert!(format!("{err}").contains("Unknown"));
+}
+
+/// Only host-enabled sections keep a repo file or a key carried. A file
+/// whose sections the host all disabled, and a key only such a file names,
+/// are not carried even with nothing excluded; the session applies this
+/// only when a repo exclusion reaches them, which is what keeps the scan's
+/// own export unchanged.
+#[test]
+fn only_host_enabled_sections_keep_a_file_or_key_carried() {
+    const ENABLED_FILE: &str = "/etc/yum.repos.d/site.repo";
+    const DISABLED_FILE: &str = "/etc/yum.repos.d/site-testing.repo";
+    const SHARED_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-site";
+    const DISABLED_ONLY_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-site-testing";
+
+    let repo = |path: &str, content: &str| RepoFile {
+        path: path.into(),
+        content: content.into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![
+            repo(
+                ENABLED_FILE,
+                "[site]\nbaseurl=http://example.invalid/site\n\
+                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-site\n\
+                 [site-source]\nbaseurl=http://example.invalid/site-source\nenabled=0\n\
+                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-site\n",
+            ),
+            repo(
+                DISABLED_FILE,
+                "[site-testing]\nbaseurl=http://example.invalid/testing\nenabled=0\n\
+                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-site-testing\n\
+                 [site-testing-source]\nbaseurl=http://example.invalid/testing-source\n\
+                 enabled=false\n\
+                 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-site\n",
+            ),
+        ],
+        gpg_keys: vec![
+            repo(SHARED_KEY, "key-data"),
+            repo(DISABLED_ONLY_KEY, "key-data"),
+        ],
+        ..Default::default()
+    });
+    let index = RepoIndex::build(&snap);
+    let none = HashSet::new();
+    let site = HashSet::from([RepoId::new("site")]);
+    let disabled = HashSet::from([
+        RepoId::new("site-testing"),
+        RepoId::new("site-testing-source"),
+        RepoId::new("site-source"),
+    ]);
+
+    // (what, carried with nothing excluded, with [site] excluded,
+    //  with every disabled section excluded)
+    let cases = [
+        (
+            ENABLED_FILE,
+            index.repo_file_carried(ENABLED_FILE, &none),
+            index.repo_file_carried(ENABLED_FILE, &site),
+            index.repo_file_carried(ENABLED_FILE, &disabled),
+            [true, false, true],
+        ),
+        (
+            DISABLED_FILE,
+            index.repo_file_carried(DISABLED_FILE, &none),
+            index.repo_file_carried(DISABLED_FILE, &site),
+            index.repo_file_carried(DISABLED_FILE, &disabled),
+            [false, false, false],
+        ),
+        (
+            SHARED_KEY,
+            index.gpg_key_carried(SHARED_KEY, &none),
+            index.gpg_key_carried(SHARED_KEY, &site),
+            index.gpg_key_carried(SHARED_KEY, &disabled),
+            [true, false, true],
+        ),
+        (
+            DISABLED_ONLY_KEY,
+            index.gpg_key_carried(DISABLED_ONLY_KEY, &none),
+            index.gpg_key_carried(DISABLED_ONLY_KEY, &site),
+            index.gpg_key_carried(DISABLED_ONLY_KEY, &disabled),
+            [false, false, false],
+        ),
+    ];
+    for (what, none, site, disabled, expected) in cases {
+        assert_eq!([none, site, disabled], expected, "{what}");
+    }
 }
