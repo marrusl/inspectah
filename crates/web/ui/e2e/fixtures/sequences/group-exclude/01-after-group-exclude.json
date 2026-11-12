@@ -220,49 +220,21 @@
   "sysctl": {
     "as_written": [],
     "explanation": {
-      "drift": [
-        {
-          "file_value": "10",
-          "from": {
-            "line": 1,
-            "link_target": null,
-            "path": "/etc/sysctl.d/90-tuning.conf"
-          },
-          "key": "vm.swappiness",
-          "runtime": "60"
-        }
-      ],
+      "drift": [],
       "settings": [
         {
-          "key": "net.ipv4.ip_forward",
+          "key": "net.core.somaxconn",
           "outcome": {
             "from": {
-              "line": 2,
+              "line": 1,
               "link_target": null,
-              "path": "/etc/sysctl.d/90-tuning.conf"
+              "path": "/etc/sysctl.d/99-custom.conf"
             },
             "kind": "writes",
             "runtime": {
               "kind": "matches"
             },
-            "value": "1"
-          },
-          "overwritten": []
-        },
-        {
-          "key": "vm.swappiness",
-          "outcome": {
-            "from": {
-              "line": 1,
-              "link_target": null,
-              "path": "/etc/sysctl.d/90-tuning.conf"
-            },
-            "kind": "writes",
-            "runtime": {
-              "kind": "differs",
-              "runtime": "60"
-            },
-            "value": "10"
+            "value": "4096"
           },
           "overwritten": []
         }
@@ -275,12 +247,20 @@
           "kind": "read",
           "link_target": null
         },
-        "config_path": "/etc/sysctl.d/90-tuning.conf",
+        "config_path": "/etc/sysctl.d/99-custom.conf",
         "dir": "etc",
-        "path": "/etc/sysctl.d/90-tuning.conf"
+        "path": "/etc/sysctl.d/99-custom.conf"
       }
     ],
-    "not_carried": [],
+    "not_carried": [
+      {
+        "path": "/etc/sysctl.d/99-custom.conf",
+        "reason": {
+          "config_path": "/etc/sysctl.d/99-custom.conf",
+          "kind": "excluded"
+        }
+      }
+    ],
     "state": "host",
     "tuned_active": null,
     "vendor_replacements": []

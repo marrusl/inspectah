@@ -128,12 +128,19 @@
           "kind": "read",
           "link_target": null
         },
-        "config_path": "/etc/sysctl.d/90-tuning.conf",
+        "config_path": null,
         "dir": "etc",
         "path": "/etc/sysctl.d/90-tuning.conf"
       }
     ],
-    "not_carried": [],
+    "not_carried": [
+      {
+        "path": "/etc/sysctl.d/90-tuning.conf",
+        "reason": {
+          "kind": "no_config_entry"
+        }
+      }
+    ],
     "state": "host",
     "tuned_active": null,
     "vendor_replacements": []
