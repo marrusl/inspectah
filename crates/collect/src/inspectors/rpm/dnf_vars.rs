@@ -66,8 +66,8 @@ const PACKAGE_MARKER: &str = "@@";
 const PROVIDES_QUERY_FORMAT: &str =
     "@@%{NAME}\t%{VERSION}\n[%{PROVIDENAME}\t%{PROVIDEFLAGS}\t%{PROVIDEVERSION}\n]";
 
-/// Present on a host with dnf5 installed. Only a fallback: EL9 can carry
-/// dnf5 beside the dnf4 that `dnf` runs.
+/// Present on a host with dnf5 installed. Only a fallback: a host can
+/// carry dnf5 beside the dnf4 that `dnf` runs.
 const DNF5_BINARY: &str = "/usr/bin/dnf5";
 const DNF4_VARS_DIRS: &[&str] = &["/etc/yum/vars", "/etc/dnf/vars"];
 const DNF5_VARS_DIRS: &[&str] = &["/usr/share/dnf5/vars.d", "/etc/dnf/vars"];
@@ -754,7 +754,7 @@ mod tests {
         };
         let cases = [
             (
-                "EL9 with dnf5 installed beside dnf4",
+                "dnf4 with dnf5 installed beside it",
                 host(
                     Some("4.14.0\n  Installed: dnf-0:4.14.0-9.el9.noarch\n"),
                     true,
@@ -763,7 +763,7 @@ mod tests {
                 "dnf4",
             ),
             (
-                "EL10",
+                "Fedora, dnf5",
                 host(
                     Some("dnf5 version 5.2.8.1\ndnf5 plugin API version 2.0\n"),
                     true,

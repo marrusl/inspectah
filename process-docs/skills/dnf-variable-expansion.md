@@ -46,11 +46,14 @@ Sources: dnf4 `dnf/cli/cli.py` (`_read_conf_file`), `dnf/rpm/__init__.py`
 libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 `conf/vars.cpp` and `include/libdnf5/conf/const.hpp`.
 
-- **Which dnf.** The collector runs `dnf --version`: dnf5 names itself on
-  the first line (`dnf5 version 5.2.8.1`), dnf4 prints a bare `4.x`
-  version. Only when `dnf` cannot be run does an installed
-  `/usr/bin/dnf5` decide. The binary alone is wrong on EL9, where dnf5 can
-  be installed beside the dnf4 that `dnf` runs.
+- **Which dnf.** RHEL 9 and RHEL 10 run dnf4 (measured: `4.14.0` on
+  RHEL 9.8, `4.20.0` on RHEL 10.2); Fedora runs dnf5. The dnf5 code paths
+  are for Fedora. The collector runs `dnf --version`: dnf5 names itself on
+  the first line (`dnf5 version 5.2.8.1`, not yet measured on a real
+  host), dnf4 prints a bare `4.x` version. Only when `dnf` cannot be run
+  does an installed `/usr/bin/dnf5` decide. The binary alone would be
+  wrong on a host carrying dnf5 beside the dnf4 that `dnf` runs (dnf5 is
+  not installable on RHEL 9.8 from BaseOS, AppStream or EPEL 9).
 - **Vars files.** A file in a vars directory defines a variable named after
   the file; its value is the first line. dnf4 reads `/etc/yum/vars` then
   `/etc/dnf/vars`. dnf5 reads `/usr/share/dnf5/vars.d` then
