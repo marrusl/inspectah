@@ -1055,6 +1055,48 @@ fn test_merge_rpm_sections_keeps_gpgkey_references() {
     );
 }
 
+/// A key is left to the base image in an aggregate only when every host
+/// that has it left it there. One host that carries it (modified, or its
+/// owner not in that host's base) makes the fleet carry it.
+#[test]
+fn test_merge_rpm_sections_leaves_a_key_to_the_base_only_when_every_host_does() {
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
+    let host = |shipped: bool| RpmSection {
+        gpg_keys: vec![RepoFile {
+            path: KEY.into(),
+            content: "-----BEGIN PGP PUBLIC KEY BLOCK-----\nrh\n".into(),
+            disposition: FindingKind::from_bool(!shipped),
+            shipped_by_base: shipped.then(|| "redhat-release".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["a".into(), "b".into()];
+    let cases = [
+        (
+            "both hosts leave it",
+            [true, true],
+            Some("redhat-release"),
+            false,
+        ),
+        ("one host carries it", [true, false], None, true),
+        ("both hosts carry it", [false, false], None, true),
+    ];
+    for (name, shipped, expect_shipped, expect_included) in cases {
+        let (result, _) = merge_rpm_sections(
+            shipped.iter().map(|&s| Some(host(s))).collect(),
+            2,
+            &hostnames,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.gpg_keys.len(), 1, "{name}");
+        let key = &result.gpg_keys[0];
+        assert_eq!(key.shipped_by_base.as_deref(), expect_shipped, "{name}");
+        assert_eq!(key.disposition.is_included(), expect_included, "{name}");
+    }
+}
+
 #[test]
 fn test_merge_rpm_sections_dedup_strings() {
     let s1 = RpmSection {

@@ -340,6 +340,7 @@ fn repo_file(path: &str, content: &str) -> RepoFile {
         locked: false,
         aggregate: None,
         gpgkey_references: Default::default(),
+        shipped_by_base: None,
     }
 }
 

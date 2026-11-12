@@ -78,6 +78,7 @@ fn snapshot(source_repo: &str, repo_file: Option<(&str, bool)>) -> InspectionSna
                     locked: false,
                     aggregate: None,
                     gpgkey_references: Default::default(),
+                    shipped_by_base: None,
                 }]
             })
             .unwrap_or_default(),

@@ -128,6 +128,36 @@ can be enabled in the image, and it ends with what to do.
 Remote references (any `scheme://` other than `file://`) are skipped
 without a warning: dnf fetches them at build time.
 
+## One entry per key path, and keys left to the base image
+
+Every section that names a key yields a key entry, and a RHEL host's
+`redhat.repo` names the stock key from hundreds of sections (209 on RHEL
+10.2, 500 on RHEL 9.8). `repos::record_each_key_once` collapses them per
+path and unions `gpgkey_references`. Snapshots from before still carry one
+entry per section, so consumers keep acting on **every** entry at a path
+(the refine cascade does), never on the first match only.
+
+A key whose path a **base-image** package owns (`file_ownership` against
+the baseline's package names) and which `rpm -Va` did not report
+(`rpm.rpm_va`) is the base image's own file. `leave_out_keys_the_base_ships`
+records it excluded with that package in `shipped_by_base`, so it is not
+copied over the base image's copy, which for a RHEL 9 host on a RHEL 10
+base would replace the EL10 key with the EL9 one. Being owned by *some*
+package is not enough: EPEL's key is owned by `epel-release`, which the
+base image lacks, and leaving it out breaks the EL10 EPEL build exactly as
+on 2026-11-09. No baseline, a host that is not package-based (no `rpm
+-Va`), or an ownership query that failed all mean carry: a missing key
+fails the build, a redundant copy does not.
+
+Consumers ask `RepoFile::is_in_image` ("copied or shipped by the base"),
+not `disposition.is_included()`, when the question is whether dnf in the
+image will find the key (`keys_included`, `dropped_owned_path`). The
+refine include cascade skips a `shipped_by_base` key, the aggregate keeps
+the field only when every host that has the key set it, and the one
+wording is `RepoFile::base_image_ships_reason`. Refine has no per-key
+toggle, so the operator sees the decision in the Containerfile comment
+and the audit table but cannot flip it there.
+
 ## Repo file syntax
 
 `extract_gpg_keys` reads `gpgkey=` the way libdnf's `IniParser` does: the

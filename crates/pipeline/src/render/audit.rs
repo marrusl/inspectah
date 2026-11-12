@@ -453,6 +453,24 @@ fn render_packages_section(
         lines.push(String::new());
     }
 
+    // GPG keys the scan left to the base image, once per path.
+    let base_shipped: std::collections::BTreeMap<&str, String> = rpm
+        .gpg_keys
+        .iter()
+        .filter(|k| !k.disposition.is_included())
+        .filter_map(|k| Some((k.path.as_str(), k.base_image_ships_reason()?)))
+        .collect();
+    if !base_shipped.is_empty() {
+        lines.push(format!("### GPG Keys Not Copied ({})", base_shipped.len()));
+        lines.push(String::new());
+        lines.push("| Key | Reason |".into());
+        lines.push("|-----|--------|".into());
+        for (path, reason) in &base_shipped {
+            lines.push(format!("| {} | {reason} |", path.replace('|', "\\|")));
+        }
+        lines.push(String::new());
+    }
+
     // Group overlap annotations
     if let Some(ref groups) = rpm.installed_groups {
         let overlaps = find_package_overlaps(groups);
@@ -1279,6 +1297,7 @@ mod tests {
             locked: false,
             aggregate: None,
             gpgkey_references: Default::default(),
+            shipped_by_base: None,
         };
         let snapshot_with = |included: bool| {
             let mut snap = InspectionSnapshot::new();

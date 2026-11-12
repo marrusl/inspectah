@@ -591,7 +591,15 @@ fn packages_section_lines(
         .iter()
         .filter(|k| k.disposition.is_included())
         .collect();
-    if !included_gpg.is_empty() {
+    // Keys left to the base image, named once each so the reader sees why
+    // a key the repos name is not copied.
+    let base_shipped: std::collections::BTreeMap<&str, String> = rpm
+        .gpg_keys
+        .iter()
+        .filter(|k| !k.disposition.is_included())
+        .filter_map(|k| Some((k.path.as_str(), k.base_image_ships_reason()?)))
+        .collect();
+    if !included_gpg.is_empty() || !base_shipped.is_empty() {
         let mut gpg_body: Vec<String> = Vec::new();
 
         const STANDARD_GPG_DIR: &str = "etc/pki/rpm-gpg";
@@ -687,6 +695,13 @@ fn packages_section_lines(
         // rpm --import only for non-standard keys (standard-dir keys are auto-imported)
         for key in &nonstandard_keys {
             gpg_body.push(format!("RUN rpm --import {}", key.path));
+        }
+        for (path, reason) in &base_shipped {
+            gpg_body.push(format!(
+                "# Not copied: {} ({})",
+                language_packages::sanitize_for_comment(path),
+                language_packages::sanitize_for_comment(reason)
+            ));
         }
         lines.extend(section(
             &format!("GPG Keys ({})", included_gpg.len()),
@@ -2609,6 +2624,7 @@ mod tests {
             locked: false,
             aggregate: None,
             gpgkey_references: Default::default(),
+            shipped_by_base: None,
         }
     }
 
