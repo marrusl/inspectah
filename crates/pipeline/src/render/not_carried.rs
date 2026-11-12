@@ -182,6 +182,13 @@ impl NotCarriedPackage {
             self.name.clone()
         }
     }
+
+    /// Whether this package owns a unit in `services.enabled_units`: the
+    /// one test every surface uses to put a package first and to name it
+    /// in [`not_carried_notice`].
+    pub fn owns_enabled_unit(&self) -> bool {
+        !self.enabled_units.is_empty()
+    }
 }
 
 /// Directory holding the vendor unit files packages ship.
@@ -340,9 +347,16 @@ fn not_carried_notice_for_owners(owners: &[String]) -> Option<ExportWarning> {
 /// units, so the notice names the same packages, in the same order, as
 /// the `# Not carried` block and the audit table rendered from `snap`.
 pub fn not_carried_notice(snap: &InspectionSnapshot) -> Option<ExportWarning> {
-    let owners: Vec<String> = not_carried_packages(snap)
+    not_carried_notice_for(&not_carried_packages(snap))
+}
+
+/// [`not_carried_notice`] for a list [`not_carried_packages`] already
+/// built, so a caller that shows the list and the notice derives both
+/// from one list and they cannot name different packages.
+pub fn not_carried_notice_for(list: &[NotCarriedPackage]) -> Option<ExportWarning> {
+    let owners: Vec<String> = list
         .iter()
-        .filter(|p| !p.enabled_units.is_empty())
+        .filter(|p| p.owns_enabled_unit())
         .map(NotCarriedPackage::display_name)
         .collect();
     not_carried_notice_for_owners(&owners)

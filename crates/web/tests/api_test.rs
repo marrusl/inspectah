@@ -341,6 +341,103 @@ async fn the_download_carries_the_operators_decision_not_just_the_leaf_set() {
     );
 }
 
+/// A host where the one leaf, `httpd`, needs nothing, so the auto package
+/// `firewalld`, which owns the enabled `firewalld.service`, is not
+/// carried.
+fn not_carried_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    let pkg = |name: &str, arch: &str, repo: &str| PackageEntry {
+        name: name.into(),
+        arch: arch.into(),
+        state: PackageState::Added,
+        source_repo: repo.into(),
+        ..Default::default()
+    };
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            pkg("httpd", "x86_64", "appstream"),
+            pkg("firewalld", "noarch", "baseos"),
+        ],
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["firewalld.noarch".into()]),
+        leaf_dep_tree: serde_json::json!({ "httpd.x86_64": [] }),
+        file_ownership: vec![inspectah_core::types::rpm::FileOwnershipEntry {
+            package_name: "firewalld".into(),
+            paths: vec!["/usr/lib/systemd/system/firewalld.service".into()],
+        }],
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        enabled_units: vec!["firewalld.service".into()],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// `POST /api/op` for a package `SetInclude`, as the packages view sends it.
+async fn set_package_include(app: &axum::Router, name: &str, arch: &str, include: bool) {
+    let (status, json) = post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {
+                "item_id": {"kind": "Package", "key": {"name": name, "arch": arch}},
+                "include": include
+            }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+}
+
+/// The view carries the not-carried rows and the notice the export's
+/// header will carry, and both follow an include and a re-exclude.
+#[tokio::test]
+async fn the_view_carries_the_not_carried_rows_and_notice() {
+    let app = app(not_carried_state());
+
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["not_carried_packages"],
+        serde_json::json!([{
+            "item_id": {"kind": "Package", "key": {"name": "firewalld", "arch": "noarch"}},
+            "display_name": "firewalld",
+            "source_repo": "baseos",
+            "enabled_units": ["firewalld.service"],
+            "owns_enabled_unit": true
+        }])
+    );
+    let notice = json["not_carried_notice"].clone();
+    assert_eq!(notice["kind"], "notice", "{notice}");
+    assert!(
+        notice["text"].as_str().unwrap().contains("firewalld"),
+        "{notice}"
+    );
+
+    // The view's notice is the header's notice, byte for byte, so the
+    // Export dialog can recognise the one it already showed.
+    let (status, headers, _) = post_tarball(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    let header: serde_json::Value =
+        serde_json::from_str(headers["x-export-warnings"].to_str().unwrap()).unwrap();
+    assert_eq!(header, serde_json::json!([notice.clone()]));
+
+    set_package_include(&app, "firewalld", "noarch", true).await;
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["not_carried_packages"], serde_json::json!([]));
+    assert_eq!(json["not_carried_notice"], serde_json::Value::Null);
+
+    set_package_include(&app, "firewalld", "noarch", false).await;
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["not_carried_packages"].as_array().unwrap().len(), 1);
+    assert_eq!(json["not_carried_notice"], notice);
+}
+
 async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()

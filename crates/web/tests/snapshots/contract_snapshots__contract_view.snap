@@ -101,6 +101,8 @@ expression: json
       "system_site_packages": false
     }
   ],
+  "not_carried_notice": null,
+  "not_carried_packages": [],
   "package_groups": [],
   "packages": [
     {

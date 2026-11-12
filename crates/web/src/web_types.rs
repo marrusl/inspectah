@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use inspectah_core::types::AdvisoryType;
 use inspectah_core::types::sysctl::SysctlDir;
 use inspectah_core::types::users::UserGroupDecision;
+use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
+use inspectah_refine::projection::NotCarriedRow;
 use inspectah_refine::types::{ItemId, RefinedView, RepoProvenance, RepoTier, TriageTag};
 use serde::Serialize;
 
@@ -543,6 +545,15 @@ pub struct ViewResponse {
     /// in the individual zone due to group rendering decisions.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub package_provenances: HashMap<String, PackageProvenance>,
+    /// Packages the export leaves out as not carried, in the order of its
+    /// `# Not carried` block: unit owners first, then by name and arch.
+    /// Always present; empty when nothing is listed or the snapshot cannot
+    /// support the judgement. Contract:
+    /// `process-docs/skills/not-carried-auto-packages.md`.
+    pub not_carried_packages: Vec<NotCarriedRow>,
+    /// The `notice` entry the export's `x-export-warnings` header will
+    /// carry for the rows with `owns_enabled_unit`, or `null`.
+    pub not_carried_notice: Option<ExportWarning>,
     pub session_is_sensitive: bool,
     /// Language package environments (Tier 1 non-RPM). Empty when absent.
     #[serde(skip_serializing_if = "Vec::is_empty")]

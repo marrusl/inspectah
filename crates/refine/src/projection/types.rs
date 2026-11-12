@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline_summary::BaselineSummary;
 use crate::types::{
-    RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState, RefinedTunedSelection,
-    RepoProvenance, RepoTier,
+    ItemId, RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState,
+    RefinedTunedSelection, RepoProvenance, RepoTier,
 };
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::ShadowType;
@@ -13,6 +13,7 @@ use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::users::UserGroupDecision;
+use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, OmissionReason};
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
@@ -30,6 +31,31 @@ pub struct DecisionProjection {
     pub users_groups: Vec<UserGroupDecision>,
     pub is_sensitive: bool,
     pub baseline_summary: Option<BaselineSummary>,
+    /// The packages the export leaves out as not carried, as its
+    /// `# Not carried` block lists them and in that order.
+    pub not_carried: Vec<NotCarriedRow>,
+    /// The notice the export sends for the rows that own an enabled unit.
+    pub not_carried_notice: Option<ExportWarning>,
+}
+
+/// One package the export leaves out as not carried: an auto package
+/// nothing the image installs needs (`not_carried_packages`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotCarriedRow {
+    /// The package's identity, as a `SetInclude` op names it. Including
+    /// it carries the package; excluding it again lists it here again.
+    pub item_id: ItemId,
+    /// The name the `# Not carried` block prints: `name`, or `name.arch`
+    /// when the list holds more than one arch of that name.
+    pub display_name: String,
+    /// Repository the package was installed from.
+    pub source_repo: String,
+    /// Units in `services.enabled_units` the package owns, sorted.
+    pub enabled_units: Vec<String>,
+    /// The package owns an enabled unit. Exactly these rows are the
+    /// packages `not_carried_notice` names, so a client reads this and
+    /// never decides it from `enabled_units` or the services view.
+    pub owns_enabled_unit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

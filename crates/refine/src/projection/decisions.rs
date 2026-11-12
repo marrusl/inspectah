@@ -7,8 +7,13 @@ use inspectah_core::types::users::UserGroupDecision;
 use crate::classify::{classify_containers, classify_services, classify_tuned};
 use crate::repo_index::RepoIndex;
 use crate::session::RefineSession;
+use crate::types::ItemId;
 
-use super::types::{DecisionProjection, RepoGroup};
+use inspectah_pipeline::render::not_carried::{
+    NotCarriedPackage, not_carried_notice_for, not_carried_packages,
+};
+
+use super::types::{DecisionProjection, NotCarriedRow, RepoGroup};
 
 /// Build a [`DecisionProjection`] from the current session state.
 ///
@@ -33,6 +38,13 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         .as_ref()
         .map(|r| r.version_changes.clone())
         .unwrap_or_default();
+
+    // The export's `# Not carried` list and notice, from the same
+    // projected snapshot it renders from and from one list, so the rows
+    // that own an enabled unit are the packages the notice names.
+    let not_carried_list = not_carried_packages(&snap);
+    let not_carried_notice = not_carried_notice_for(&not_carried_list);
+    let not_carried = not_carried_list.iter().map(not_carried_row).collect();
 
     // Users/groups from projected snapshot
     let users_groups: Vec<UserGroupDecision> = snap
@@ -61,6 +73,22 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         users_groups,
         is_sensitive,
         baseline_summary,
+        not_carried,
+        not_carried_notice,
+    }
+}
+
+/// One not-carried package as refine shows it.
+fn not_carried_row(pkg: &NotCarriedPackage) -> NotCarriedRow {
+    NotCarriedRow {
+        item_id: ItemId::Package {
+            name: pkg.name.clone(),
+            arch: pkg.arch.clone(),
+        },
+        display_name: pkg.display_name(),
+        source_repo: pkg.source_repo.clone(),
+        enabled_units: pkg.enabled_units.clone(),
+        owns_enabled_unit: pkg.owns_enabled_unit(),
     }
 }
 

@@ -21,6 +21,9 @@
 //!
 //! Two tests reuse the fixture for the refine export's not-carried
 //! notice, which names the not-carried unit owners and no pulled-in one.
+//! Three more check refine's not-carried rows against the export's block
+//! and notice, and that including a listed package carries it on every
+//! surface and excluding it again restores the list.
 //!
 //! The last tests reuse the fixture for safety checks rather than parity
 //! claims: a config whose content the collector could not capture is
@@ -871,6 +874,258 @@ fn the_notice_leads_a_failure_from_the_same_export() {
             format!("{REPOLESS_PACKAGE}.x86_64: staged RPM not verified, not exported"),
             "{label}"
         );
+    }
+}
+
+// ── Refine's not-carried rows and the include path ───────────────────
+
+/// What an export of `session` writes, with no operations beyond the
+/// session's own.
+fn surfaces_of(session: &RefineSession) -> Surfaces {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tarball = dir.path().join("export.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    Surfaces::read(&unpack(&tarball, dir.path()))
+}
+
+impl Surfaces {
+    /// The package names in the `# Not carried:` block, in its order.
+    fn not_carried_block_names(&self) -> Vec<&str> {
+        self.not_carried_block()
+            .into_iter()
+            .skip(1)
+            .filter_map(|l| l.strip_prefix("#   "))
+            .filter_map(|l| l.split(' ').next())
+            .collect()
+    }
+
+    /// The package names in the `### Not carried` table, in its order.
+    fn not_carried_table_names(&self) -> Vec<&str> {
+        self.not_carried_table()
+            .into_iter()
+            .skip(4)
+            .filter_map(|row| row.split('|').nth(1))
+            .map(str::trim)
+            .collect()
+    }
+}
+
+/// The display names of the session's not-carried rows, in order.
+fn projected_not_carried(session: &RefineSession) -> Vec<String> {
+    session
+        .decisions()
+        .not_carried
+        .iter()
+        .map(|row| row.display_name.clone())
+        .collect()
+}
+
+/// Include or exclude one package through refine's ordinary decision op,
+/// the one the packages view sends.
+fn set_package(session: &mut RefineSession, name: &str, arch: &str, include: bool) {
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Package {
+                name: name.into(),
+                arch: arch.into(),
+            },
+            include,
+        })
+        .unwrap_or_else(|e| panic!("set {name}.{arch} include={include}: {e}"));
+}
+
+/// The rows refine shows are the export's `# Not carried` block, in its
+/// order, each with the identity the include op takes.
+#[test]
+fn the_projection_lists_the_block_in_its_order() {
+    for (label, snapshot) in refine_snapshots() {
+        let session = RefineSession::new(snapshot);
+        let export = surfaces_of(&session);
+        assert_eq!(
+            projected_not_carried(&session),
+            export.not_carried_block_names(),
+            "{label}"
+        );
+        assert_eq!(
+            projected_not_carried(&session),
+            EXPECTED_NOT_CARRIED,
+            "{label}"
+        );
+        let firewalld = &session.decisions().not_carried[0];
+        assert_eq!(
+            firewalld.item_id,
+            ItemId::Package {
+                name: "firewalld".into(),
+                arch: "noarch".into()
+            },
+            "{label}"
+        );
+        assert_eq!(firewalld.source_repo, "baseos", "{label}");
+        assert_eq!(firewalld.enabled_units, ["firewalld.service"], "{label}");
+    }
+}
+
+/// The rows marked as owning an enabled unit are exactly the packages
+/// the not-carried notice names, and the view carries the notice the
+/// export sends. `python3-firewall` is listed but owns no unit;
+/// `httpd-core` owns one but is pulled in, so it has no row.
+#[test]
+fn the_projections_unit_owners_are_the_ones_the_notice_names() {
+    for (label, snapshot) in refine_snapshots() {
+        let session = RefineSession::new(snapshot);
+        let decisions = session.decisions();
+        let owners: Vec<&str> = decisions
+            .not_carried
+            .iter()
+            .filter(|row| row.owns_enabled_unit)
+            .map(|row| row.display_name.as_str())
+            .collect();
+        assert_eq!(owners, ["firewalld", "rhc"], "{label}");
+        for row in &decisions.not_carried {
+            assert_eq!(
+                row.owns_enabled_unit,
+                !row.enabled_units.is_empty(),
+                "{label}: {row:?}"
+            );
+        }
+
+        let notice = not_carried_notice(&session.snapshot_projected()).expect("a notice");
+        assert_eq!(
+            decisions.not_carried_notice.as_ref(),
+            Some(&notice),
+            "{label}"
+        );
+        assert!(
+            notice
+                .text()
+                .starts_with(&format!("{} packages", owners.len())),
+            "{label}: {notice:?}"
+        );
+        for owner in &owners {
+            assert!(notice.text().contains(owner), "{label}: {notice:?}");
+        }
+        assert_eq!(export_warnings(&session), vec![notice], "{label}");
+    }
+}
+
+/// Including a listed package carries it on every surface, and excluding
+/// it again puts back exactly what was there. `rhc` owns the user-enabled
+/// `rhcd.service`, whose `systemctl` line the export restores;
+/// `firewalld` owns `/var/lib/firewalld`, which stops being provisioned
+/// once the package that creates it is installed.
+///
+/// `python3-firewall` stays listed after `firewalld` is included: the
+/// dependency tree records leaf closures only, so the dependency of an
+/// included auto package is not credited as pulled in. That is the known
+/// limit, pinned here so a change to it is deliberate.
+#[test]
+fn including_a_listed_package_carries_it_and_excluding_it_restores_the_list() {
+    for (label, snapshot) in refine_snapshots() {
+        let mut session = RefineSession::new(snapshot);
+        let before = surfaces_of(&session);
+        let notice_before = session.decisions().not_carried_notice.clone();
+
+        for (name, arch) in [("rhc", "x86_64"), ("firewalld", "noarch")] {
+            set_package(&mut session, name, arch, true);
+            let after = surfaces_of(&session);
+            let ctx = format!("{label}, {name} included");
+
+            assert!(
+                after.install_names().iter().any(|n| n == name),
+                "{ctx}: install list {:?}\n{}",
+                after.install_names(),
+                after.containerfile
+            );
+            assert!(
+                !after.not_carried_block_names().contains(&name),
+                "{ctx}:\n{}",
+                after.containerfile
+            );
+            assert!(
+                !after.not_carried_table_names().contains(&name),
+                "{ctx}:\n{}",
+                after.audit
+            );
+            assert!(
+                !projected_not_carried(&session).iter().any(|n| n == name),
+                "{ctx}: {:?}",
+                projected_not_carried(&session)
+            );
+            assert!(
+                !session
+                    .decisions()
+                    .not_carried_notice
+                    .as_ref()
+                    .is_some_and(|n| n.text().contains(name)),
+                "{ctx}: {:?}",
+                session.decisions().not_carried_notice
+            );
+            assert!(
+                !export_warnings(&session)
+                    .iter()
+                    .any(|w| w.text().contains(name)),
+                "{ctx}"
+            );
+
+            match name {
+                "rhc" => {
+                    assert!(
+                        after
+                            .systemctl_lines()
+                            .iter()
+                            .any(|l| l.contains("rhcd.service")),
+                        "{ctx}: the unit is enabled again:\n{}",
+                        after.containerfile
+                    );
+                    assert!(
+                        !after
+                            .omitted_lines()
+                            .iter()
+                            .any(|l| l.contains("rhcd.service")),
+                        "{ctx}:\n{}",
+                        after.containerfile
+                    );
+                }
+                _ => {
+                    let var_conf = after.var_conf.as_deref().unwrap_or("");
+                    assert!(
+                        !var_conf.contains("/var/lib/firewalld"),
+                        "{ctx}: the installed package creates its own directory:\n{var_conf}"
+                    );
+                    assert!(
+                        projected_not_carried(&session)
+                            .iter()
+                            .any(|n| n == "python3-firewall"),
+                        "{ctx}: the known limit no longer holds; update the docs"
+                    );
+                }
+            }
+
+            set_package(&mut session, name, arch, false);
+            let again = surfaces_of(&session);
+            let ctx = format!("{label}, {name} excluded again");
+            assert_eq!(again.containerfile, before.containerfile, "{ctx}");
+            assert_eq!(
+                again.not_carried_table(),
+                before.not_carried_table(),
+                "{ctx}"
+            );
+            assert_eq!(again.var_conf, before.var_conf, "{ctx}");
+            assert_eq!(
+                projected_not_carried(&session),
+                EXPECTED_NOT_CARRIED,
+                "{ctx}"
+            );
+            assert_eq!(
+                session.decisions().not_carried_notice,
+                notice_before,
+                "{ctx}"
+            );
+        }
     }
 }
 

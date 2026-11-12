@@ -496,6 +496,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         users_groups_decisions: decisions.users_groups.clone(),
         package_groups,
         package_provenances,
+        not_carried_packages: decisions.not_carried.clone(),
+        not_carried_notice: decisions.not_carried_notice.clone(),
         session_is_sensitive: decisions.is_sensitive,
         language_packages,
         unmanaged_files,
