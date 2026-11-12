@@ -159,15 +159,13 @@ fn a_key_named_literally_and_with_a_variable_is_one_shared_key() {
     });
     let index = RepoIndex::build(&snap);
 
-    let sections = index.sections_by_gpg_key().get(KEY).expect("the key");
-    assert_eq!(
-        sections.iter().map(RepoId::as_str).collect::<Vec<_>>(),
-        ["epel", "mirror"]
-    );
-    assert_eq!(
-        index.gpg_keys_by_section().get(&RepoId::new("epel")),
-        Some(&vec![KEY.to_string()])
-    );
+    for id in ["epel", "mirror"] {
+        assert_eq!(
+            index.gpg_keys_by_section().get(&RepoId::new(id)),
+            Some(&vec![KEY.to_string()]),
+            "{id} names the key at its captured path"
+        );
+    }
     assert_eq!(
         index.provenance(&RepoId::new("epel")),
         RepoProvenance::Verified
@@ -183,12 +181,15 @@ fn a_key_named_literally_and_with_a_variable_is_one_shared_key() {
 fn test_repo_index_gpg_shared_key() {
     let snap = make_snap_with_repos();
     let index = RepoIndex::build(&snap);
-    let sections = index
-        .sections_by_gpg_key()
-        .get("/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial")
-        .unwrap();
-    assert!(sections.contains(&RepoId::new("baseos")));
-    assert!(sections.contains(&RepoId::new("appstream")));
+    for id in ["baseos", "appstream"] {
+        assert_eq!(
+            index.gpg_keys_by_section().get(&RepoId::new(id)),
+            Some(&vec![
+                "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".to_string()
+            ]),
+            "{id}"
+        );
+    }
 }
 
 #[test]

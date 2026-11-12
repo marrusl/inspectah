@@ -26,9 +26,6 @@ pub struct RepoIndex {
     /// captured key the section names, or the path as written when no
     /// captured key answers it.
     gpg_keys_by_section: BTreeMap<RepoId, Vec<String>>,
-    /// Reverse map: GPG key path (as in `gpg_keys_by_section`) -> set of
-    /// section IDs that reference it.
-    sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
     /// Repo file path -> the sections it defines that the host enabled.
     /// Only these keep the file carried ([`Self::repo_file_carried`]).
     enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>>,
@@ -68,7 +65,6 @@ impl RepoIndex {
                     packages_by_repo: BTreeMap::new(),
                     repo_file_by_section: BTreeMap::new(),
                     gpg_keys_by_section: BTreeMap::new(),
-                    sections_by_gpg_key: BTreeMap::new(),
                     enabled_sections_by_file: BTreeMap::new(),
                     enabled_sections_by_gpg_key: BTreeMap::new(),
                     provenance_map: BTreeMap::new(),
@@ -80,7 +76,6 @@ impl RepoIndex {
         // INI parser shared with collect (`inspectah_core::types::repo`).
         let mut repo_file_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut gpg_keys_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
-        let mut sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
         let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
         let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
         // Last section wins when the same id (folding case) appears more
@@ -115,14 +110,10 @@ impl RepoIndex {
 
                     if section.enabled {
                         enabled_sections_by_gpg_key
-                            .entry(key_path.clone())
+                            .entry(key_path)
                             .or_default()
                             .insert(section.id.clone());
                     }
-                    sections_by_gpg_key
-                        .entry(key_path)
-                        .or_default()
-                        .insert(section.id.clone());
                 }
 
                 section_defs.insert(section.id.clone(), section);
@@ -173,7 +164,6 @@ impl RepoIndex {
             packages_by_repo,
             repo_file_by_section,
             gpg_keys_by_section,
-            sections_by_gpg_key,
             enabled_sections_by_file,
             enabled_sections_by_gpg_key,
             provenance_map,
@@ -193,11 +183,6 @@ impl RepoIndex {
     /// GPG key paths referenced by each section ID.
     pub fn gpg_keys_by_section(&self) -> &BTreeMap<RepoId, Vec<String>> {
         &self.gpg_keys_by_section
-    }
-
-    /// Reverse map: GPG key path -> set of section IDs that reference it.
-    pub fn sections_by_gpg_key(&self) -> &BTreeMap<String, BTreeSet<RepoId>> {
-        &self.sections_by_gpg_key
     }
 
     /// Whether the repo file at `path` stays carried when the sections in

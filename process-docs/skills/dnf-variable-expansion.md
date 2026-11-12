@@ -32,7 +32,7 @@ Routed through it today: `render/repo_enabling.rs` `keys_included` (which
 `section_survives`, `repo_enabling_export`, the audit Carried column,
 `service_intent` and `repoless::disabled_repo_install` all use), and
 refine's `RepoIndex::build`, which resolves each section's key path to the
-captured key paths so `gpg_keys_by_section`, `sections_by_gpg_key` and the
+captured key paths so `gpg_keys_by_section`, the carry rule and the
 session's exclude/include cascade work on real key paths. The aggregate
 merge unions `gpgkey_references` per key path before it keeps one host's
 entry. The values themselves are not stored: they differ between an EL9
