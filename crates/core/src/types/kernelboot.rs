@@ -2,6 +2,7 @@ use super::FindingKind;
 use serde::{Deserialize, Serialize};
 
 use super::aggregate::AggregatePrevalence;
+use super::sysctl::SysctlSection;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysctlOverride {
@@ -56,6 +57,10 @@ pub struct KernelBootSection {
     pub grub_defaults: String,
     #[serde(default)]
     pub sysctl_overrides: Vec<SysctlOverride>,
+    /// The sysctl search path and runtime values, collected read-only.
+    /// `None` when collection failed and on an aggregate.
+    #[serde(default)]
+    pub sysctl: Option<SysctlSection>,
     #[serde(default)]
     pub loaded_modules: Vec<KernelModule>,
     #[serde(default)]
@@ -114,6 +119,7 @@ mod tests {
                 locked: false,
                 aggregate: None,
             }],
+            sysctl: None,
             loaded_modules: vec![],
             tuned_active: "virtual-guest".to_string(),
             tuned_disposition: FindingKind::included(),

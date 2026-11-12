@@ -78,6 +78,53 @@ fn schema_25_is_rejected() {
     }
 }
 
+/// A snapshot JSON whose sysctl section holds `runtime` and
+/// `redacted_runtime` as given, at the current schema version.
+fn snapshot_with_sysctl_runtime(runtime: &str, redacted_runtime: &str) -> String {
+    format!(
+        r#"{{"schema_version": {SCHEMA_VERSION}, "meta": {{}}, "system_type": "package-mode",
+        "preflight": {{"status": "ok"}}, "warnings": [], "redactions": [],
+        "kernel_boot": {{"sysctl": {{"files": [], "runtime": {runtime},
+            "redacted_runtime": {redacted_runtime}}}}}}}"#
+    )
+}
+
+/// `SysctlKey` is deserialized only in canonical (dotted, `sysctl -a`)
+/// form: another spelling of a key, or one key in both runtime fields,
+/// fails the load and the error names the key.
+#[test]
+fn sysctl_key_on_the_wire() {
+    let canonical = "net.ipv4.conf.enp3s0/200.forwarding";
+    let json = snapshot_with_sysctl_runtime(&format!(r#"{{"{canonical}": "1"}}"#), "[]");
+    let snap = InspectionSnapshot::load(&json).expect("canonical key loads");
+    let out: serde_json::Value = serde_json::to_value(&snap).unwrap();
+    let runtime = out["kernel_boot"]["sysctl"]["runtime"]
+        .as_object()
+        .expect("runtime serializes as an object");
+    assert_eq!(runtime.keys().collect::<Vec<_>>(), vec![canonical]);
+    assert_eq!(runtime[canonical], "1");
+
+    for spelling in ["net/ipv4/ip_forward", "net/ipv4/conf/enp3s0.200/forwarding"] {
+        let json = snapshot_with_sysctl_runtime(&format!(r#"{{"{spelling}": "1"}}"#), "[]");
+        let err = InspectionSnapshot::load(&json)
+            .expect_err("a non-canonical key must fail the load")
+            .to_string();
+        assert!(
+            err.contains(spelling),
+            "error must name `{spelling}`: {err}"
+        );
+    }
+
+    let json = snapshot_with_sysctl_runtime(r#"{"vm.swappiness": "10"}"#, r#"["vm.swappiness"]"#);
+    let err = InspectionSnapshot::load(&json)
+        .expect_err("a key in both runtime fields must fail the load")
+        .to_string();
+    assert!(
+        err.contains("vm.swappiness"),
+        "error must name the key: {err}"
+    );
+}
+
 #[test]
 fn schema_26_round_trips() {
     let snap = InspectionSnapshot {

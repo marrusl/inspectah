@@ -1963,6 +1963,9 @@ pub fn merge_kernelboot_sections(
         cmdline,
         grub_defaults,
         sysctl_overrides,
+        // The sysctl section explains one host's files; an aggregate has
+        // no host to explain.
+        sysctl: None,
         loaded_modules,
         tuned_disposition: FindingKind::from_bool(tuned_include),
         tuned_active,

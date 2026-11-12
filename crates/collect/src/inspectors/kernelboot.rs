@@ -7,6 +7,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::kernelboot::{KernelBootSection, KernelModule, SysctlOverride};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
+use inspectah_core::types::sysctl::sysctl_values_equal;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -113,6 +114,7 @@ impl Inspector for KernelbootInspector {
             cmdline,
             grub_defaults: String::new(),
             sysctl_overrides,
+            sysctl: None,
             loaded_modules,
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
             tuned_active,
@@ -244,24 +246,6 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
     overrides.sort_by(|a, b| a.key.cmp(&b.key));
 
     Ok(overrides)
-}
-
-/// Compare a sysctl.d file value with a runtime value as token sequences.
-///
-/// The kernel reports multi-value sysctls (`net.ipv4.ip_local_port_range`,
-/// `net.ipv4.tcp_rmem`, `kernel.printk`) tab-separated, while config files
-/// write them space-separated. Comparing raw strings would report every such
-/// key as drift even when the kernel runs exactly the configured value, so
-/// whitespace of any kind and amount counts as a single separator here.
-///
-/// This applies to every key, including string-valued ones such as
-/// `kernel.core_pattern` where internal spacing is part of the value, so a
-/// whitespace-only difference there also compares equal. Key-aware comparison
-/// was left out deliberately to keep a single rule for all keys.
-fn sysctl_values_equal(file_val: &str, runtime_val: &str) -> bool {
-    file_val
-        .split_whitespace()
-        .eq(runtime_val.split_whitespace())
 }
 
 /// Read sysctl config files from standard directories.

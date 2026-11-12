@@ -29,6 +29,7 @@ expression: section
       "aggregate": null
     }
   ],
+  "sysctl": null,
   "loaded_modules": [
     {
       "name": "bridge",
