@@ -9,7 +9,7 @@
  */
 import { useState } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import type {
@@ -105,7 +105,15 @@ function fakeServer() {
   return { fetchImpl, bodies };
 }
 
-function Harness({ initial }: { initial: ViewResponse }) {
+function Harness({
+  initial,
+  onMutationError = (err) => {
+    throw err;
+  },
+}: {
+  initial: ViewResponse;
+  onMutationError?: (err: Error) => void;
+}) {
   const [viewData, setViewData] = useState(initial);
   return (
     <MainContent
@@ -114,9 +122,7 @@ function Harness({ initial }: { initial: ViewResponse }) {
       viewData={viewData}
       sections={null}
       onViewUpdate={setViewData}
-      onMutationError={(err) => {
-        throw err;
-      }}
+      onMutationError={onMutationError}
       sectionSearchOpen={false}
       onSectionSearchClose={vi.fn()}
     />
@@ -210,5 +216,68 @@ describe("MainContent: the Not carried group", () => {
         within(group).getByTestId("not-carried-row-firewalld.noarch"),
       ).toBeInTheDocument(),
     );
+  });
+
+  it("sends one request for a double click and re-enables Include after a failure", async () => {
+    // Hold the request open so the second click lands while it is in flight.
+    const bodies: unknown[] = [];
+    let fail: (err: Error) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Promise<Response>((_resolve, reject) => {
+          fail = reject;
+        });
+      }),
+    );
+    const onMutationError = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Harness
+        initial={makeView(ORIGINAL_ROWS, [])}
+        onMutationError={onMutationError}
+      />,
+    );
+    await expandGroup(user);
+    const include = screen.getByRole("button", { name: "Include firewalld" });
+
+    await user.dblClick(include);
+
+    expect(bodies).toHaveLength(1);
+    expect(include).toBeDisabled();
+    // Only the row in flight is held; the others stay clickable.
+    expect(
+      screen.getByRole("button", { name: "Include python3-firewall" }),
+    ).toBeEnabled();
+
+    fail(new Error("connection reset"));
+
+    await waitFor(() => expect(include).toBeEnabled());
+    expect(onMutationError).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second click that lands before the button re-renders", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Promise<Response>(() => {});
+      }),
+    );
+    const user = userEvent.setup();
+    render(<Harness initial={makeView(ORIGINAL_ROWS, [])} />);
+    await expandGroup(user);
+    const include = screen.getByRole("button", { name: "Include firewalld" });
+
+    // Both clicks inside one act: React has not re-rendered, so the button is
+    // still enabled in the DOM when the second click arrives.
+    act(() => {
+      include.click();
+      include.click();
+    });
+
+    expect(bodies).toHaveLength(1);
   });
 });

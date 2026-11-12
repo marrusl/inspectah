@@ -11,13 +11,18 @@ export interface NotCarriedGroupProps {
   /** One-click include: the caller sends `SetInclude` with `row.item_id`. */
   onInclude: (row: NotCarriedRow) => void;
   isPending?: boolean;
+  /** Rows (by `notCarriedRowKey`) whose Include request is in flight. */
+  pendingKeys?: ReadonlySet<string>;
   /** When true, expand, scroll into view and focus the toggle, once. */
   reveal?: boolean;
   /** Called after a reveal was handled, so the caller can clear it. */
   onRevealed?: () => void;
 }
 
-function rowKey(row: NotCarriedRow): string {
+const NO_PENDING: ReadonlySet<string> = new Set();
+
+/** Stable row identity: `name.arch`, as in the package list. */
+export function notCarriedRowKey(row: NotCarriedRow): string {
   return `${row.item_id.key.name}.${row.item_id.key.arch}`;
 }
 
@@ -32,6 +37,7 @@ export function NotCarriedGroup({
   rows,
   onInclude,
   isPending = false,
+  pendingKeys = NO_PENDING,
   reveal = false,
   onRevealed,
 }: NotCarriedGroupProps) {
@@ -90,7 +96,7 @@ export function NotCarriedGroup({
         </p>
         <ul className="inspectah-not-carried__list">
           {rows.map((row) => {
-            const key = rowKey(row);
+            const key = notCarriedRowKey(row);
             return (
               <li
                 key={key}
@@ -127,7 +133,7 @@ export function NotCarriedGroup({
                   variant="secondary"
                   size="sm"
                   aria-label={`Include ${row.display_name}`}
-                  isDisabled={isPending}
+                  isDisabled={isPending || pendingKeys.has(key)}
                   onClick={() => onInclude(row)}
                 >
                   Include

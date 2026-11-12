@@ -34,7 +34,7 @@ import type { PackageListPackage } from "./PackageList";
 import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
 import { SystemTuningSection } from "./SystemTuningSection";
-import { NotCarriedGroup } from "./NotCarriedGroup";
+import { NotCarriedGroup, notCarriedRowKey } from "./NotCarriedGroup";
 import { buildShadowOwners } from "./shadowOwner";
 import { Content } from "@patternfly/react-core";
 
@@ -303,10 +303,22 @@ export function MainContent({
     [viewData, onViewUpdate, onMutationError],
   );
 
+  // Not carried rows whose Include request is in flight. The ref is the
+  // guard: it is set before the request leaves, so a second click that lands
+  // before React re-renders still sees it. The state copy disables the button.
+  const notCarriedInFlight = useRef(new Set<string>());
+  const [notCarriedPending, setNotCarriedPending] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+
   // Not carried include: the ordinary package op, with the row's item_id
   // passed back verbatim (Refine projection contract).
   const handleNotCarriedInclude = useCallback(
     (row: NotCarriedRow) => {
+      const key = notCarriedRowKey(row);
+      if (notCarriedInFlight.current.has(key)) return;
+      notCarriedInFlight.current.add(key);
+      setNotCarriedPending(new Set(notCarriedInFlight.current));
       applyOp({
         op: "SetInclude",
         target: { item_id: row.item_id, include: true },
@@ -314,7 +326,11 @@ export function MainContent({
         .then((updatedView) => onViewUpdate(updatedView))
         .catch((err) =>
           onMutationError(err instanceof Error ? err : new Error(String(err))),
-        );
+        )
+        .finally(() => {
+          notCarriedInFlight.current.delete(key);
+          setNotCarriedPending(new Set(notCarriedInFlight.current));
+        });
     },
     [onViewUpdate, onMutationError],
   );
@@ -498,6 +514,7 @@ export function MainContent({
           rows={viewData?.not_carried_packages ?? []}
           onInclude={handleNotCarriedInclude}
           isPending={isPending}
+          pendingKeys={notCarriedPending}
           reveal={revealNotCarried}
           onRevealed={onNotCarriedRevealed}
         />
