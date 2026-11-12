@@ -123,7 +123,10 @@ expands but cannot be read:
 - a file that holds PGP private or secret key armor (`BEGIN` or `END`
   line) anywhere, even above a valid public block. Accepting a header on
   any line would otherwise ingest it verbatim, and the redaction patterns
-  do not match PGP armor.
+  do not match PGP armor. It has its own reason,
+  `UnreadReason::PrivateKeyMaterial`, so the warning and the placeholder
+  say it held private key material rather than that it lacked a public
+  block, which would be false for this file.
 
 The warning is conditional ("If the image enables a repo from that file")
 rather than gated on an enabled section, since a repo disabled on the host

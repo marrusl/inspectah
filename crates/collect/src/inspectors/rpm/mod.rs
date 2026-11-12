@@ -4355,6 +4355,26 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 ),
             },
             GpgCase {
+                name: "a key file that also holds private key material",
+                repo: "[r]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-private\n",
+                host: |m| {
+                    m.with_file(
+                        "/etc/pki/rpm-gpg/RPM-GPG-KEY-private",
+                        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQdGB\n\
+                         -----END PGP PRIVATE KEY BLOCK-----\n\
+                         -----BEGIN PGP PUBLIC KEY BLOCK-----\nmQINB\n",
+                    )
+                },
+                // Refused like a non-key file, with the reason that is true
+                // of it and a remedy that names a public-only key file.
+                keys: &["/etc/pki/rpm-gpg/RPM-GPG-KEY-private"],
+                warning: Some(
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-private holds PGP private key material. \
+                     If the image enables a repo from that file, dnf cannot verify its \
+                     packages. To fix it, put a file holding only the repo's public key",
+                ),
+            },
+            GpgCase {
                 name: "https key is fetched by dnf, not collected or warned about",
                 repo: "[r]\ngpgkey=https://example.com/$nosuchvar.asc\n",
                 host: |m| m,
