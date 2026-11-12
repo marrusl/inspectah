@@ -46,11 +46,14 @@ Sources: dnf4 `dnf/cli/cli.py` (`_read_conf_file`), `dnf/rpm/__init__.py`
 libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 `conf/vars.cpp` and `include/libdnf5/conf/const.hpp`.
 
-- **Which dnf.** The collector runs `dnf --version`: dnf5 names itself on
-  the first line (`dnf5 version 5.2.8.1`), dnf4 prints a bare `4.x`
-  version. Only when `dnf` cannot be run does an installed
-  `/usr/bin/dnf5` decide. The binary alone is wrong on EL9, where dnf5 can
-  be installed beside the dnf4 that `dnf` runs.
+- **Which dnf.** RHEL 9 and RHEL 10 run dnf4 (measured: `4.14.0` on
+  RHEL 9.8, `4.20.0` on RHEL 10.2); Fedora runs dnf5. The dnf5 code paths
+  are for Fedora. The collector runs `dnf --version`: dnf5 names itself on
+  the first line (`dnf5 version 5.2.8.1`, not yet measured on a real
+  host), dnf4 prints a bare `4.x` version. Only when `dnf` cannot be run
+  does an installed `/usr/bin/dnf5` decide. The binary alone would be
+  wrong on a host carrying dnf5 beside the dnf4 that `dnf` runs (dnf5 is
+  not installable on RHEL 9.8 from BaseOS, AppStream or EPEL 9).
 - **Vars files.** A file in a vars directory defines a variable named after
   the file; its value is the first line. dnf4 reads `/etc/yum/vars` then
   `/etc/dnf/vars`. dnf5 reads `/usr/share/dnf5/vars.d` then
@@ -66,15 +69,19 @@ libdnf `conf/Const.hpp` and `conf/ConfigParser.cpp`; libdnf5
 - **`releasever_major` / `releasever_minor`.** Setting `releasever` sets
   both by splitting at the first `.` (`10.2` gives `10` and `2`). A
   `system-release(releasever_major)` or `(releasever_minor)` provide on the
-  release package overrides the split. A vars file naming either one wins
-  in dnf5. In dnf4 a detected provide beats a vars file for these two; the
-  collector follows dnf5, since EL10 is the host where the variable is used.
-  Current dnf5 (`main` after commit `f9bc2076a3`) sets `releasever_major`
-  to an empty string when the release package lacks the
+  release package overrides the split. A vars file naming either one
+  beats the split in both dnfs. Against the provide, the collector follows
+  the host's dnf (`DnfFlavor::release_part`): dnf4, so RHEL 9 and 10, sets
+  the detected provide after reading the vars files (`_read_conf_file`),
+  so the provide wins; dnf5, so Fedora, gives a vars file a higher
+  priority than detection (libdnf5 `Vars`), so the file wins. Current
+  dnf5 (`main` after commit `f9bc2076a3`) sets `releasever_major` to an
+  empty string when the release package lacks the
   `system-release(releasever_major)` provide, overwriting the split; the
   collector splits instead, because the empty value names
-  `RPM-GPG-KEY-EPEL-`, a key no image has, and the split is what dnf4,
-  older dnf5 and the measured RHEL 10.2 host give.
+  `RPM-GPG-KEY-EPEL-`, a key no image has, and the split is what dnf4 and
+  older dnf5 give. RHEL 9.8 and 10.2 both carry the provide, so the split
+  is not used there.
 - **`arch` / `basearch`.** The machine type and dnf's base architecture
   for it (`_BASEARCH_MAP` in `dnf/rpm/__init__.py`). The collector reads
   `uname -m` and maps the architectures EL and Fedora build for; an
@@ -106,8 +113,13 @@ expands but cannot be read:
   `${name:+word}`: unterminated, with no name, or with an unknown operator.
   dnf leaves those as written, but a key path holding a literal `${` is not
   one a repo means;
-- a file that is read but is not a PGP public key block. It is still
-  recorded, excluded and with its content replaced, so nothing ships it.
+- a file that is read but has no line beginning with
+  `-----BEGIN PGP PUBLIC KEY BLOCK-----` (spaces or tabs before it are
+  allowed; the header inside a line is not). It is still recorded,
+  excluded and with its content replaced, so nothing ships it. Text
+  before the header is fine: the stock `RPM-GPG-KEY-redhat-release`
+  opens with a paragraph of prose, and refusing it gave every RHEL host a
+  false warning.
 
 The warning is conditional ("If the image enables a repo from that file")
 rather than gated on an enabled section, since a repo disabled on the host

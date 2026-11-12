@@ -84,13 +84,20 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
     repo_files
 }
 
-/// PGP public key block header — content starting with this is a valid GPG key.
+/// PGP public key block header. A file with a line that begins with it is
+/// taken as a GPG key.
 const PGP_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
 
-/// Validate that file content looks like a GPG public key.
-/// Non-PGP content is rejected to prevent arbitrary file ingestion.
+/// Validate that file content looks like a GPG public key: some line
+/// begins with the armored header, after optional spaces or tabs. Text
+/// before it is allowed, since the stock `RPM-GPG-KEY-redhat-release`
+/// opens with prose. A header that only appears inside a line is not
+/// accepted. Non-PGP content is rejected to prevent arbitrary file
+/// ingestion.
 fn validate_gpg_content(content: &str) -> bool {
-    content.trim_start().starts_with(PGP_HEADER)
+    content
+        .lines()
+        .any(|line| line.trim_start_matches([' ', '\t']).starts_with(PGP_HEADER))
 }
 
 /// The `gpgkey=` values of a repo file, read the way dnf's ini parser
@@ -195,7 +202,7 @@ pub struct GpgKeyScan {
 /// variables expanded with the host's values, then are read and validated;
 /// the key is recorded at its expanded path, which is the path dnf in the
 /// image reads, with the literal path in `gpgkey_references` when the two
-/// differ. Content that does not start with a PGP public key header is
+/// differ. Content with no line that begins with a PGP public key header is
 /// replaced with a placeholder to prevent arbitrary host file ingestion.
 /// Remote references (`https://...`) are left for dnf to fetch. A local
 /// reference that yields no usable key is returned in `unread`.
@@ -284,6 +291,24 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
     }
 
     scan
+}
+
+/// Collapse keys recorded at the same path into one entry, in first-seen
+/// order, with the `gpgkey_references` of every entry at that path.
+///
+/// Every section that names a key yields an entry for it, and RHEL's
+/// `redhat.repo` names the stock key from hundreds of sections. Entries at
+/// one path were read from one file, so they differ only in the
+/// references that named them.
+pub fn record_each_key_once(keys: Vec<RepoFile>) -> Vec<RepoFile> {
+    let mut once: Vec<RepoFile> = Vec::new();
+    for key in keys {
+        match once.iter_mut().find(|k| k.path == key.path) {
+            Some(first) => first.gpgkey_references.extend(key.gpgkey_references),
+            None => once.push(key),
+        }
+    }
+    once
 }
 
 fn is_default_repo(path: &str) -> bool {
@@ -504,6 +529,73 @@ mod tests {
             !repo_paths.iter().any(|p| p.contains("inspectah")),
             "no repo with inspectah in path should be present"
         );
+    }
+
+    /// The text before the first armored header of the stock
+    /// `/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release`, copied from
+    /// `registry.redhat.io/rhel9/rhel-bootc:9.8` (header on line 10) and a
+    /// RHEL 10 bootc image (header on line 12). Byte sizes match the
+    /// scanned RHEL 9.8 and 10.2 hosts' files.
+    const EL9_REDHAT_RELEASE_PREAMBLE: &str = "\
+The following public key can be used to verify RPM packages built and
+signed by Red Hat, Inc.  This key is used for packages in Red Hat
+products shipped after November 2009, and for all updates to those
+products.
+
+Questions about this key should be sent to security@redhat.com.
+
+pub  4096R/FD431D51 2009-10-22 Red Hat, Inc. (release key 2) <security@redhat.com>
+
+";
+    const EL10_REDHAT_RELEASE_PREAMBLE: &str = "\
+The following public key can be used to verify RPM packages built and
+signed by Red Hat, Inc.  This key is used for packages in Red Hat
+products shipped after November 2009, and for all updates to those
+products.
+
+Questions about this key should be sent to security@redhat.com.
+
+pub   4096R/FD431D51 2009-10-22
+      Key fingerprint = 567E 347A D004 4ADE 55BA  8A5F 199E 2F91 FD43 1D51
+uid                  Red Hat, Inc. (release key 2) <security@redhat.com>
+
+";
+    const ARMORED_BLOCK: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmQINB...\n\
+                                 -----END PGP PUBLIC KEY BLOCK-----\n";
+
+    /// A key file whose armored header begins a line after leading text,
+    /// as every stock RHEL host's Red Hat key does, is collected included
+    /// and verbatim, with no warning. A header that only appears inside a
+    /// line is still refused.
+    #[test]
+    fn a_key_with_leading_text_is_collected_when_its_header_begins_a_line() {
+        const KEY_PATH: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
+        let repo = format!("[rhel-baseos]\ngpgkey=file://{KEY_PATH}\n");
+        let el9 = format!("{EL9_REDHAT_RELEASE_PREAMBLE}{ARMORED_BLOCK}");
+        let el10 = format!("{EL10_REDHAT_RELEASE_PREAMBLE}{ARMORED_BLOCK}");
+        let mid_line = format!("prose {ARMORED_BLOCK}");
+        let cases: [(&str, &str, bool); 3] = [
+            ("RHEL 9.8 stock key", &el9, true),
+            ("RHEL 10.2 stock key", &el10, true),
+            ("header inside a line", &mid_line, false),
+        ];
+        for (name, content, collected) in cases {
+            let mock = MockExecutor::new().with_file(KEY_PATH, content);
+            let scan = extract_gpg_keys(&repo, &mock, &DnfVars::from_host(&mock));
+            assert_eq!(scan.keys.len(), 1, "{name}");
+            assert_eq!(scan.keys[0].disposition.is_included(), collected, "{name}");
+            if collected {
+                assert_eq!(scan.keys[0].content, content, "{name}: content verbatim");
+                assert!(scan.unread.is_empty(), "{name}: {:?}", scan.unread);
+            } else {
+                assert!(scan.keys[0].content.contains("REDACTED"), "{name}");
+                assert_eq!(
+                    scan.unread[0].reason,
+                    UnreadReason::NotPgp(KEY_PATH.into()),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -205,6 +205,7 @@ impl RpmInspector {
             gpg_keys.extend(scan.keys);
             unread.extend(scan.unread.into_iter().map(|u| (repo.path.clone(), u)));
         }
+        let gpg_keys = repos::record_each_key_once(gpg_keys);
         let gpg_key_warnings = unread
             .into_iter()
             .map(|(repo_path, u)| Warning {
@@ -1366,6 +1367,7 @@ fn parse_dnf_deps(
 mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
+    use inspectah_core::baseline::BaselineData;
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::progress::{NullProgress, VecProgress};
     use inspectah_core::types::os::OsRelease;
@@ -4389,6 +4391,77 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             let (_, warnings) = inspect_with_epel_repo(case);
             assert_eq!(warnings, case.warning.as_slice(), "{}", case.name);
         }
+    }
+
+    /// Inspect the stock mock host with extra setup and an optional
+    /// baseline, returning the rpm section and its GPG key warnings.
+    fn inspect_gpg_host(
+        host: impl FnOnce(MockExecutor) -> MockExecutor,
+        baseline: Option<&BaselineData>,
+    ) -> (RpmSection, Vec<String>) {
+        let exec = host(with_el10_release(build_rpm_mock_executor()));
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: baseline,
+        };
+        let output = RpmInspector::new().inspect(&ctx, &NullProgress).unwrap();
+        let SectionData::Rpm(rpm) = output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+        let warnings = output
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("GPG key"))
+            .map(|w| w.message.clone())
+            .collect();
+        (rpm, warnings)
+    }
+
+    /// A key named by many sections, across repo files and in different
+    /// spellings, is recorded once, with every spelling that named it.
+    /// RHEL's `redhat.repo` names the stock key from hundreds of sections.
+    #[test]
+    fn a_key_named_by_several_sections_is_recorded_once() {
+        let (rpm, warnings) = inspect_gpg_host(
+            |m| {
+                m.with_file("/etc/yum.repos.d/epel.repo", EL10_EPEL_REPO)
+                    .with_file(
+                        "/etc/yum.repos.d/redhat.repo",
+                        "[a]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever_major}\n\
+                         [b]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10\n\
+                         [c]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10\n",
+                    )
+                    .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10", PGP_KEY)
+            },
+            None,
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let recorded: Vec<(&str, Vec<&str>)> = rpm
+            .gpg_keys
+            .iter()
+            .map(|k| {
+                (
+                    k.path.as_str(),
+                    k.gpgkey_references.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            recorded,
+            [(
+                "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10",
+                vec![
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major",
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-${releasever_major}",
+                ]
+            )]
+        );
+        assert!(rpm.gpg_keys[0].disposition.is_included());
     }
 
     /// The key records the `gpgkey=` path that named it when that differs

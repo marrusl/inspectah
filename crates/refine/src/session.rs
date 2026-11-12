@@ -2780,8 +2780,10 @@ impl RefineSession {
                                                     let all_excluded = referencing_sections
                                                         .iter()
                                                         .all(|sid| excluded_sections.contains(sid));
-                                                    // Every entry: each section
-                                                    // naming a key records it once.
+                                                    // Every entry at the path: a
+                                                    // snapshot from before keys
+                                                    // were recorded once per path
+                                                    // has one per naming section.
                                                     if all_excluded {
                                                         for k in rpm
                                                             .gpg_keys

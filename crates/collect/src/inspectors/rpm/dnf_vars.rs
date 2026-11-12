@@ -25,7 +25,9 @@
 //! - **`releasever_major` / `releasever_minor`**: the package's
 //!   `system-release(releasever_major)` / `(releasever_minor)` provide when
 //!   present, else `releasever` split at its first `.`. A variable file
-//!   naming either one wins over both.
+//!   naming either one beats the split. Against the provide it follows the
+//!   host's dnf: dnf4 (RHEL 9 and 10) lets the provide win, dnf5 (Fedora)
+//!   lets the file win.
 //! - **`arch` / `basearch`**: the host machine type and dnf's base
 //!   architecture for it.
 //!
@@ -64,8 +66,8 @@ const PACKAGE_MARKER: &str = "@@";
 const PROVIDES_QUERY_FORMAT: &str =
     "@@%{NAME}\t%{VERSION}\n[%{PROVIDENAME}\t%{PROVIDEFLAGS}\t%{PROVIDEVERSION}\n]";
 
-/// Present on a host with dnf5 installed. Only a fallback: EL9 can carry
-/// dnf5 beside the dnf4 that `dnf` runs.
+/// Present on a host with dnf5 installed. Only a fallback: a host can
+/// carry dnf5 beside the dnf4 that `dnf` runs.
 const DNF5_BINARY: &str = "/usr/bin/dnf5";
 const DNF4_VARS_DIRS: &[&str] = &["/etc/yum/vars", "/etc/dnf/vars"];
 const DNF5_VARS_DIRS: &[&str] = &["/usr/share/dnf5/vars.d", "/etc/dnf/vars"];
@@ -132,6 +134,19 @@ impl DnfFlavor {
         match self {
             Self::Dnf4 => true,
             Self::Dnf5 => next == '$' || next == '\\' || (next == '}' && depth > 0),
+        }
+    }
+
+    /// `releasever_major` or `releasever_minor` when `releasever` is
+    /// detected, from a vars file's value and the release package's
+    /// provide; `None` leaves the split of `releasever`. dnf4's
+    /// `_read_conf_file` sets the detected provide after reading the vars
+    /// files, so the provide wins. libdnf5's `Vars` gives a vars file a
+    /// higher priority than detection, so the file wins.
+    fn release_part(self, from_file: Option<String>, provided: Option<String>) -> Option<String> {
+        match self {
+            Self::Dnf4 => provided.or(from_file),
+            Self::Dnf5 => from_file.or(provided),
         }
     }
 }
@@ -364,10 +379,14 @@ fn detect_values(exec: &dyn Executor, flavor: DnfFlavor) -> HashMap<String, Stri
     if !vars.contains_key("releasever") {
         if let Some(release) = detect_release(exec) {
             let (major, minor) = split_releasever(&release.releasever);
-            vars.entry("releasever_major".into())
-                .or_insert_with(|| release.major.unwrap_or(major));
-            vars.entry("releasever_minor".into())
-                .or_insert_with(|| release.minor.unwrap_or(minor));
+            for (name, provided, split) in [
+                ("releasever_major", release.major, major),
+                ("releasever_minor", release.minor, minor),
+            ] {
+                let from_file = vars.remove(name);
+                let value = flavor.release_part(from_file, provided).unwrap_or(split);
+                vars.insert(name.into(), value);
+            }
             vars.insert("releasever".into(), release.releasever);
         }
     } else {
@@ -664,22 +683,55 @@ mod tests {
         );
     }
 
-    /// A vars-file `releasever_major` wins over the release package's
-    /// `system-release(releasever_major)` provide, as in dnf5.
+    /// When a vars file and the release package's provide disagree on
+    /// `releasever_major` or `releasever_minor`, the host's dnf decides.
+    /// dnf4 (RHEL 9 and 10) sets the detected provide after reading the
+    /// vars files, so the provide wins; dnf5 (Fedora) gives vars files a
+    /// higher priority than detection, so the file wins. Without a provide,
+    /// the file beats the split in both.
     #[test]
-    fn a_vars_file_major_beats_the_release_packages_provide() {
-        let mock = MockExecutor::new()
-            .with_dir("/etc/dnf/vars", vec!["releasever_major"])
-            .with_file("/etc/dnf/vars/releasever_major", "9\n")
-            .with_command(
-                &provides_key("system-release(releasever)"),
-                ok("@@redhat-release\t10.2\n\
-                    system-release(releasever)\t8\t10.2\n\
-                    system-release(releasever_major)\t8\t10\n"),
-            );
-        let values = detect(&mock).values;
-        assert_eq!(values["releasever"], "10.2");
-        assert_eq!(values["releasever_major"], "9");
+    fn major_and_minor_precedence_follows_the_hosts_dnf() {
+        let host = |dnf_version: &str, provides: &str| {
+            MockExecutor::new()
+                .with_command("dnf --version", ok(dnf_version))
+                .with_dir(
+                    "/etc/dnf/vars",
+                    vec!["releasever_major", "releasever_minor"],
+                )
+                .with_file("/etc/dnf/vars/releasever_major", "9\n")
+                .with_file("/etc/dnf/vars/releasever_minor", "7\n")
+                .with_command(&provides_key("system-release(releasever)"), ok(provides))
+        };
+        const DNF4: &str = "4.20.0\n  Installed: dnf-0:4.20.0-22.el10_2.noarch\n";
+        const DNF5: &str = "dnf5 version 5.2.8.1\ndnf5 plugin API version 2.0\n";
+        const WITH_PROVIDES: &str = "@@redhat-release\t10.2\n\
+                                     system-release(releasever)\t8\t10.2\n\
+                                     system-release(releasever_major)\t8\t10\n\
+                                     system-release(releasever_minor)\t8\t2\n";
+        const WITHOUT_PROVIDES: &str = "@@redhat-release\t10.2\n\
+                                        system-release(releasever)\t8\t10.2\n";
+        let cases = [
+            (
+                "dnf4, provide and file disagree",
+                DNF4,
+                WITH_PROVIDES,
+                ("10", "2"),
+            ),
+            (
+                "dnf5, provide and file disagree",
+                DNF5,
+                WITH_PROVIDES,
+                ("9", "7"),
+            ),
+            ("dnf4, no provide", DNF4, WITHOUT_PROVIDES, ("9", "7")),
+            ("dnf5, no provide", DNF5, WITHOUT_PROVIDES, ("9", "7")),
+        ];
+        for (name, version, provides, (major, minor)) in cases {
+            let values = detect(&host(version, provides)).values;
+            assert_eq!(values["releasever"], "10.2", "{name}");
+            assert_eq!(values["releasever_major"], major, "{name}");
+            assert_eq!(values["releasever_minor"], minor, "{name}");
+        }
     }
 
     /// The dnf `dnf` runs decides the vars directories, whatever else is
@@ -702,7 +754,7 @@ mod tests {
         };
         let cases = [
             (
-                "EL9 with dnf5 installed beside dnf4",
+                "dnf4 with dnf5 installed beside it",
                 host(
                     Some("4.14.0\n  Installed: dnf-0:4.14.0-9.el9.noarch\n"),
                     true,
@@ -711,7 +763,7 @@ mod tests {
                 "dnf4",
             ),
             (
-                "EL10",
+                "Fedora, dnf5",
                 host(
                     Some("dnf5 version 5.2.8.1\ndnf5 plugin API version 2.0\n"),
                     true,
