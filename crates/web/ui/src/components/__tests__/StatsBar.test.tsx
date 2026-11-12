@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StatsBar } from "../StatsBar";
 import { mockStats } from "../../test-utils/mockStats";
@@ -258,5 +258,70 @@ describe("StatsBar", () => {
     // The overwhelmingly common host has no advisories; a zero-valued
     // third bucket would be noise on every one of them.
     expect(screen.queryByText(/advisory/)).not.toBeInTheDocument();
+  });
+});
+
+/** A callback whose promise the test settles by hand. */
+function heldCallback() {
+  let settle: () => void = () => {};
+  const callback = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+  );
+  return { callback, settle: () => settle() };
+}
+
+/**
+ * Reset goes out directly, not through App's useMutation. The toolbar
+ * button stays disabled until the reset settles, and a repeat confirm is
+ * dropped.
+ */
+describe("StatsBar reset pending guard", () => {
+  function renderWithReset(onReset: () => Promise<void>) {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        onReset={onReset}
+        isPending={false}
+      />,
+    );
+  }
+
+  const resetButton = () => screen.getByTestId("reset-defaults-btn");
+  const openConfirm = () => fireEvent.click(resetButton());
+
+  it("sends one reset when confirmed twice", () => {
+    const { callback } = heldCallback();
+    renderWithReset(callback);
+    openConfirm();
+    const confirm = screen.getByTestId("reset-confirm-yes");
+
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(resetButton()).toBeDisabled();
+  });
+
+  it("re-enables reset once the request settles", async () => {
+    const { callback, settle } = heldCallback();
+    renderWithReset(callback);
+    openConfirm();
+    act(() => screen.getByTestId("reset-confirm-yes").click());
+    expect(resetButton()).toBeDisabled();
+
+    settle();
+    await waitFor(() => expect(resetButton()).toBeEnabled());
+
+    openConfirm();
+    act(() => screen.getByTestId("reset-confirm-yes").click());
+    expect(callback).toHaveBeenCalledTimes(2);
   });
 });

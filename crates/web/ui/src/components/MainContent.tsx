@@ -96,9 +96,9 @@ export interface MainContentProps {
   /** Called when user removes a previously uploaded RPM. */
   onRemoveRpmUpload?: (packageName: string) => void;
   /** Callback to pin/unpin a single language package. */
-  onSetPackagePin?: (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => void;
+  onSetPackagePin?: (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => Promise<unknown> | void;
   /** Callback to bulk pin/unpin all packages in a language environment. */
-  onSetBulkPackagePin?: (ecosystem: string, envPath: string, pinned: boolean) => void;
+  onSetBulkPackagePin?: (ecosystem: string, envPath: string, pinned: boolean) => Promise<unknown> | void;
   /** Expand and scroll to the Not carried group (the Export dialog's link). */
   revealNotCarried?: boolean;
   /** Called once the Not carried group has handled a reveal. */

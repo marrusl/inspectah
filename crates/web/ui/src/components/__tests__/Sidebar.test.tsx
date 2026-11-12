@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import type {
@@ -1431,5 +1438,67 @@ describe("Sidebar", () => {
 
       expect(onBatchToggle).toHaveBeenCalledWith("packages-group", true);
     });
+  });
+});
+
+/**
+ * A batch toggle goes out directly, not through App's useMutation. The
+ * Ctrl+Shift+A/X shortcut reaches it without the kebab, so disabling the
+ * kebab alone does not stop a repeat.
+ */
+describe("Sidebar batch toggle pending guard", () => {
+  function renderSidebar(onBatchToggle: (slug: string, include: boolean) => Promise<void>) {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        groups={MOCK_GROUPS}
+        onBatchToggle={onBatchToggle}
+      />,
+    );
+  }
+
+  const includeAll = () => {
+    const link = screen.getByText("Packages").closest("a")!;
+    link.focus();
+    fireEvent.keyDown(link, { key: "a", ctrlKey: true, shiftKey: true });
+  };
+
+  it("sends one batch toggle when triggered twice", () => {
+    const onBatchToggle = vi.fn(() => new Promise<void>(() => {}));
+    renderSidebar(onBatchToggle);
+
+    act(() => {
+      includeAll();
+      includeAll();
+    });
+
+    expect(onBatchToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("kebab-packages-group")).toBeDisabled();
+  });
+
+  it("re-enables the group after the batch toggle fails", async () => {
+    let fail: (err: Error) => void = () => {};
+    const onBatchToggle = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    renderSidebar(onBatchToggle);
+    const kebab = screen.getByTestId("kebab-packages-group");
+
+    act(() => includeAll());
+    expect(kebab).toBeDisabled();
+
+    fail(new Error("connection reset"));
+    await waitFor(() => expect(kebab).toBeEnabled());
+
+    act(() => includeAll());
+    expect(onBatchToggle).toHaveBeenCalledTimes(2);
   });
 });

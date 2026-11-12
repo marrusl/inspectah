@@ -116,7 +116,7 @@ describe("Type contracts", () => {
   });
 });
 
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { LanguagePackageList } from "../LanguagePackageList";
@@ -894,5 +894,112 @@ describe("LanguagePackageList package pin keyboard toggle", () => {
     expect(
       screen.getByTestId("lang-pkg-typescript").getAttribute("aria-keyshortcuts"),
     ).toBe("Enter Space");
+  });
+});
+
+/** A callback whose promise the test settles by hand. */
+function heldCallback() {
+  let settle: () => void = () => {};
+  const callback = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+  );
+  return { callback, settle: () => settle() };
+}
+
+/**
+ * Pin requests go out directly, not through App's useMutation, so each pin
+ * control holds a guard until its request settles. The row's Enter path
+ * reaches the same handler as the checkbox, which disabling does not stop.
+ */
+describe("LanguagePackageList pin pending guard", () => {
+  const env = makeLangEnv(
+    "npm",
+    "/usr/lib/node_modules",
+    [
+      { name: "typescript", detected_version: "5.4.0", pinned: false },
+      { name: "eslint", detected_version: "8.57.0", pinned: false },
+    ],
+    { method: "npm global" },
+  );
+
+  function renderPins(props: {
+    onSetPackagePin?: () => Promise<void>;
+    onSetBulkPackagePin?: () => Promise<void>;
+  }) {
+    render(
+      <LanguagePackageList
+        environments={[env]}
+        onToggle={vi.fn()}
+        isPending={false}
+        {...props}
+      />,
+    );
+    fireEvent.click(
+      screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+    );
+  }
+
+  const pressEnter = (testId: string) =>
+    fireEvent.keyDown(screen.getByTestId(testId), { key: "Enter" });
+
+  it("sends one package pin when triggered twice", () => {
+    const { callback } = heldCallback();
+    renderPins({ onSetPackagePin: callback });
+
+    act(() => {
+      pressEnter("lang-pkg-typescript");
+      pressEnter("lang-pkg-typescript");
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("lang-pkg-pin-typescript")).toBeDisabled();
+    expect(screen.getByTestId("lang-pkg-pin-eslint")).toBeEnabled();
+  });
+
+  it("re-enables the package pin once its request settles", async () => {
+    const { callback, settle } = heldCallback();
+    renderPins({ onSetPackagePin: callback });
+    const pin = screen.getByTestId("lang-pkg-pin-typescript");
+
+    act(() => pressEnter("lang-pkg-typescript"));
+    expect(pin).toBeDisabled();
+
+    settle();
+    await waitFor(() => expect(pin).toBeEnabled());
+
+    act(() => pressEnter("lang-pkg-typescript"));
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends one bulk pin when clicked twice", () => {
+    const { callback } = heldCallback();
+    renderPins({ onSetBulkPackagePin: callback });
+    const bulk = screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules");
+
+    act(() => {
+      bulk.click();
+      bulk.click();
+    });
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(bulk).toBeDisabled();
+  });
+
+  it("re-enables the bulk pin once its request settles", async () => {
+    const { callback, settle } = heldCallback();
+    renderPins({ onSetBulkPackagePin: callback });
+    const bulk = screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules");
+
+    act(() => bulk.click());
+    expect(bulk).toBeDisabled();
+
+    settle();
+    await waitFor(() => expect(bulk).toBeEnabled());
+
+    act(() => bulk.click());
+    expect(callback).toHaveBeenCalledTimes(2);
   });
 });

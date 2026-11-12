@@ -18,6 +18,7 @@ import {
 } from "@patternfly/react-core";
 import { EllipsisVIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
@@ -144,7 +145,9 @@ export function Sidebar({
 
   // --- Batch-toggle state ---
   const [openMenuSlug, setOpenMenuSlug] = useState<string | null>(null);
-  const [batchPending, setBatchPending] = useState<Record<string, boolean>>({});
+  // Batch toggles in flight, by the group or section slug the request
+  // sends. Not shared with the per-item toggles in the main view.
+  const { pendingKeys: batchPending, runGuarded: runBatch } = usePendingGuard();
   const [pkgConfirmSlug, setPkgConfirmSlug] = useState<string | null>(null);
   const [batchAnnouncement, setBatchAnnouncement] = useState("");
 
@@ -264,20 +267,18 @@ export function Sidebar({
 
   /** Execute a batch toggle and announce the result. */
   const executeBatchToggle = useCallback(
-    async (groupSlug: string, include: boolean, groupLabel: string) => {
+    (groupSlug: string, include: boolean, groupLabel: string) => {
       if (!onBatchToggle) return;
-      setBatchPending((prev) => ({ ...prev, [groupSlug]: true }));
-      try {
-        await onBatchToggle(groupSlug, include);
-        const verb = include ? "included in" : "excluded from";
-        setBatchAnnouncement(`All items ${verb} ${groupLabel}`);
-      } catch {
-        setBatchAnnouncement(`Failed to update ${groupLabel}`);
-      } finally {
-        setBatchPending((prev) => ({ ...prev, [groupSlug]: false }));
-      }
+      runBatch(groupSlug, () =>
+        onBatchToggle(groupSlug, include)
+          .then(() => {
+            const verb = include ? "included in" : "excluded from";
+            setBatchAnnouncement(`All items ${verb} ${groupLabel}`);
+          })
+          .catch(() => setBatchAnnouncement(`Failed to update ${groupLabel}`)),
+      );
     },
-    [onBatchToggle],
+    [onBatchToggle, runBatch],
   );
 
   /** Handle a batch-toggle menu action, gating Packages exclude behind confirmation. */
@@ -417,7 +418,7 @@ export function Sidebar({
     return groups.map((group) => {
       // Identity batch-toggle deferred — handler only covers groups, not individual users
       const hasKebab = group.has_actionable_sections && !!onBatchToggle && group.slug !== "identity";
-      const isPending = batchPending[group.slug] ?? false;
+      const isPending = batchPending.has(group.slug);
       const isMenuOpen = openMenuSlug === group.slug;
 
       /** Render the kebab action menu for a triage group. */
@@ -542,7 +543,7 @@ export function Sidebar({
       const sectionKebab = (sec: { id: string; label: string; is_triage: boolean }) => {
         if (!sec.is_triage || !onBatchToggle) return null;
         const secMenuOpen = openMenuSlug === sec.id;
-        const secPending = batchPending[sec.id] ?? false;
+        const secPending = batchPending.has(sec.id);
         return (
           <span
             className="inspectah-sidebar__kebab"

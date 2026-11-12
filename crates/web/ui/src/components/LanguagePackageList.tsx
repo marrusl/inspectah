@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Label, Content } from "@patternfly/react-core";
 import type { LanguagePackageEnv } from "../api/types";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 
 /** Confidence-to-PatternFly Label color mapping per Plan 1 gate. */
 const CONFIDENCE_COLOR: Record<string, "green" | "orange" | "grey"> = {
@@ -17,6 +18,18 @@ const MANIFEST_LABELS: Record<string, string> = {
   "Gemfile.lock": "from Gemfile.lock",
 };
 
+/**
+ * Guard keys, one per request kind, built from the fields the request
+ * sends to name its target, JSON-encoded so no field value can collide.
+ */
+function pinGuardKey(ecosystem: string, envPath: string, pkg: string): string {
+  return JSON.stringify(["pin", ecosystem, envPath, pkg]);
+}
+
+function bulkPinGuardKey(ecosystem: string, envPath: string): string {
+  return JSON.stringify(["bulk-pin", ecosystem, envPath]);
+}
+
 /** Method value that triggers expandable package sublists. */
 const EXPANDABLE_METHOD = "npm global";
 
@@ -27,19 +40,25 @@ export interface LanguagePackageListProps {
   isPending: boolean;
   /** Item to scroll into view (from global search). Format: "ecosystem:path". */
   revealItemId?: string;
-  /** Callback to pin/unpin a single package. */
+  /**
+   * Callback to pin/unpin a single package. The pin stays disabled until a
+   * returned promise settles.
+   */
   onSetPackagePin?: (
     ecosystem: string,
     envPath: string,
     pkg: string,
     pinned: boolean,
-  ) => void;
-  /** Callback to bulk pin/unpin all packages in an environment. */
+  ) => Promise<unknown> | void;
+  /**
+   * Callback to bulk pin/unpin all packages in an environment. The button
+   * stays disabled until a returned promise settles.
+   */
   onSetBulkPackagePin?: (
     ecosystem: string,
     envPath: string,
     pinned: boolean,
-  ) => void;
+  ) => Promise<unknown> | void;
   /** When non-empty, auto-expands environments with matching packages and highlights matches. */
   searchQuery?: string;
 }
@@ -55,6 +74,9 @@ export function LanguagePackageList({
 }: LanguagePackageListProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
+  // Pin requests in flight. A single pin and a bulk pin in one environment
+  // do not block each other: each sends explicit values.
+  const { pendingKeys: pinPending, runGuarded } = usePendingGuard();
   const expandBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const envRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -144,11 +166,13 @@ export function LanguagePackageList({
   /** Pin/unpin one package and announce the result. */
   const handlePackagePin = useCallback(
     (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => {
-      if (isPending) return;
-      onSetPackagePin?.(ecosystem, envPath, pkg, pinned);
+      if (isPending || !onSetPackagePin) return;
+      runGuarded(pinGuardKey(ecosystem, envPath, pkg), async () => {
+        await onSetPackagePin(ecosystem, envPath, pkg, pinned);
+      });
       setAnnouncement(`${pinned ? "Pinned" : "Unpinned"} ${pkg}`);
     },
-    [onSetPackagePin, isPending],
+    [onSetPackagePin, isPending, runGuarded],
   );
 
   /** Wrap bulk pin to fire aria-live announcement. */
@@ -159,13 +183,16 @@ export function LanguagePackageList({
       pinned: boolean,
       pkgCount: number,
     ) => {
-      onSetBulkPackagePin?.(ecosystem, envPath, pinned);
+      if (!onSetBulkPackagePin) return;
+      runGuarded(bulkPinGuardKey(ecosystem, envPath), async () => {
+        await onSetBulkPackagePin(ecosystem, envPath, pinned);
+      });
       const action = pinned ? "Pinned" : "Unpinned";
       setAnnouncement(
         `${action} ${pkgCount} packages in ${ecosystem} globals`,
       );
     },
-    [onSetBulkPackagePin],
+    [onSetBulkPackagePin, runGuarded],
   );
 
   if (environments.length === 0) {
@@ -298,7 +325,10 @@ export function LanguagePackageList({
                     <button
                       type="button"
                       className="inspectah-lang-pkg-sublist__bulk-btn"
-                      disabled={isPending}
+                      disabled={
+                        isPending ||
+                        pinPending.has(bulkPinGuardKey(env.ecosystem, env.path))
+                      }
                       aria-label={`${env.packages.every((p) => p.pinned) ? "Unpin" : "Pin"} all packages in ${env.ecosystem} globals ${env.path}`}
                       onClick={() => {
                         const allPinned = env.packages.every(
@@ -365,7 +395,12 @@ export function LanguagePackageList({
                         <input
                           type="checkbox"
                           checked={pkg.pinned}
-                          disabled={isPending}
+                          disabled={
+                            isPending ||
+                            pinPending.has(
+                              pinGuardKey(env.ecosystem, env.path, pkg.name),
+                            )
+                          }
                           aria-label={`Pin ${pkg.name} to version ${pkg.detected_version}`}
                           onChange={() =>
                             handlePackagePin(

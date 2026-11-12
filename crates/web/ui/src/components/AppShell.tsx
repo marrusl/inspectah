@@ -70,7 +70,7 @@ export interface AppShellProps {
   /** Redo callback. */
   onRedo: () => void;
   /** Reset to analysis defaults callback. */
-  onReset?: () => void;
+  onReset?: () => Promise<unknown> | void;
   /** Called after a successful export to refresh view. */
   onExportComplete: (view: import("../api/types").ViewResponse) => void;
   /** Whether a mutation is pending (disables undo/redo buttons). */

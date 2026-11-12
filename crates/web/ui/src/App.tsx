@@ -369,25 +369,25 @@ function SingleHostApp({
   }, [view.data?.unmanaged_files, mutation]);
 
   // --- Language package pin callbacks ---
+  // Each returns its request, so the pin control can hold its pending guard
+  // until the request settles.
   const handleSetPackagePin = useCallback(
-    (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => {
+    (ecosystem: string, envPath: string, pkg: string, pinned: boolean) =>
       setPackagePin(ecosystem, envPath, pkg, pinned)
         .then(() => view.invalidate())
         .catch((err: unknown) =>
           console.error("Failed to set package pin:", err),
-        );
-    },
+        ),
     [view.invalidate],
   );
 
   const handleSetBulkPackagePin = useCallback(
-    (ecosystem: string, envPath: string, pinned: boolean) => {
+    (ecosystem: string, envPath: string, pinned: boolean) =>
       setBulkPackagePin(ecosystem, envPath, pinned)
         .then(() => view.invalidate())
         .catch((err: unknown) =>
           console.error("Failed to set bulk package pin:", err),
-        );
-    },
+        ),
     [view.invalidate],
   );
 

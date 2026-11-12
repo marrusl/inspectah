@@ -22,6 +22,7 @@ import {
   CopyIcon,
 } from "@patternfly/react-icons";
 import type { RefineStats, SectionStats } from "../api/types";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 
 function ThemeToggle() {
   const [dark, setDark] = useState(() =>
@@ -121,13 +122,17 @@ export interface StatsBarProps {
   onUndo: () => void;
   onRedo: () => void;
   onExport: () => void;
-  onReset?: () => void;
+  /** The reset control stays disabled until a returned promise settles. */
+  onReset?: () => Promise<unknown> | void;
   isPending: boolean;
   /** Hamburger menu button rendered at < 1024px. */
   hamburger?: React.ReactNode;
   /** When set, render a aggregate-oriented one-line summary instead of single-host counters. */
   aggregateSummary?: AggregateSummary;
 }
+
+/** Reset is one action over the whole session, so it has one key. */
+const RESET_GUARD_KEY = "reset";
 
 function stat(value: number | null | undefined, fallback = "-"): string {
   return value != null ? String(value) : fallback;
@@ -168,6 +173,10 @@ export function StatsBar({
   aggregateSummary,
 }: StatsBarProps) {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  // Reset goes out directly, not through useMutation, so it holds its own
+  // guard: the toolbar could otherwise reopen the confirm while it runs.
+  const { pendingKeys, runGuarded } = usePendingGuard();
+  const resetPending = pendingKeys.has(RESET_GUARD_KEY);
   const hasOps = (stats?.ops_applied ?? 0) > 0;
 
   return (
@@ -232,7 +241,7 @@ export function StatsBar({
                 <ToolbarItem>
                   <Button
                     variant="link"
-                    isDisabled={!hasOps || isPending}
+                    isDisabled={!hasOps || isPending || resetPending}
                     onClick={() => setResetConfirmOpen(true)}
                     data-testid="reset-defaults-btn"
                   >
@@ -271,7 +280,10 @@ export function StatsBar({
               variant="primary"
               onClick={() => {
                 setResetConfirmOpen(false);
-                onReset?.();
+                if (!onReset) return;
+                runGuarded(RESET_GUARD_KEY, async () => {
+                  await onReset();
+                });
               }}
               data-testid="reset-confirm-yes"
             >
