@@ -193,8 +193,13 @@ dispositions, for their own reasons. The stager, the Containerfile
 (`Custom Repositories`, `GPG Keys`, `rpm --import`), `repo_enabling` and
 the audit read the projected result, so none of them re-derives the rule.
 The rule is reached only through a repo op the member-based no-op check
-accepts: a repo with no effective member, or whose members are all
-excluded already, cannot be excluded, so its file and key keep shipping.
+accepts. A repo with no effective member, or whose members are all
+excluded already, cannot be excluded, so the repo's own control cannot
+drop its file and key (Mark, 2026-11-12); a shared file or key can still
+go when another section that names it is excluded. Refine has no file- or
+key-level control yet: an unmodified `.repo` file is not in
+`config.files`, and excluding a modified one's Configuration row leaves
+its `rpm.repo_files` entry, and every key, as they were.
 
 The rule acts only on an exclusion that reaches a file (Mark,
 2026-11-12). With no repo op the projection keeps the scan's dispositions,
