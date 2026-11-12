@@ -1447,7 +1447,9 @@ describe("Sidebar", () => {
  * kebab alone does not stop a repeat.
  */
 describe("Sidebar batch toggle pending guard", () => {
-  function renderSidebar(onBatchToggle: (slug: string, include: boolean) => Promise<void>) {
+  function renderSidebar(
+    onBatchToggle: (slug: string, include: boolean) => Promise<void>,
+  ) {
     render(
       <Sidebar
         activeSection="packages"

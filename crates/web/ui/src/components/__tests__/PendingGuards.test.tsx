@@ -419,12 +419,16 @@ describe("pending guard: user set password", () => {
 
     // Still hashing: nothing sent, and the user's other control is held too.
     expect(mock).not.toHaveBeenCalled();
-    expect(screen.getByRole("checkbox", { name: "Include alice" })).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Include alice" }),
+    ).toBeDisabled();
 
     await act(async () => finishHash("$6$salt$hash"));
 
     expect(mock).toHaveBeenCalledTimes(1);
     expect(mock).toHaveBeenCalledWith("alice", "new", "$6$salt$hash");
-    expect(screen.getByRole("checkbox", { name: "Include alice" })).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Include alice" }),
+    ).toBeDisabled();
   });
 });

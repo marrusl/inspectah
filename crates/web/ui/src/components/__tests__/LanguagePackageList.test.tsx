@@ -116,7 +116,13 @@ describe("Type contracts", () => {
   });
 });
 
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  act,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { LanguagePackageList } from "../LanguagePackageList";
@@ -977,7 +983,9 @@ describe("LanguagePackageList pin pending guard", () => {
   it("sends one bulk pin when clicked twice", () => {
     const { callback } = heldCallback();
     renderPins({ onSetBulkPackagePin: callback });
-    const bulk = screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules");
+    const bulk = screen.getByTestId(
+      "lang-env-bulk-pin-npm:/usr/lib/node_modules",
+    );
 
     act(() => {
       bulk.click();
@@ -991,7 +999,9 @@ describe("LanguagePackageList pin pending guard", () => {
   it("re-enables the bulk pin once its request settles", async () => {
     const { callback, settle } = heldCallback();
     renderPins({ onSetBulkPackagePin: callback });
-    const bulk = screen.getByTestId("lang-env-bulk-pin-npm:/usr/lib/node_modules");
+    const bulk = screen.getByTestId(
+      "lang-env-bulk-pin-npm:/usr/lib/node_modules",
+    );
 
     act(() => bulk.click());
     expect(bulk).toBeDisabled();
