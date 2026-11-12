@@ -6,6 +6,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::users::UserContainerfileStrategy;
+use inspectah_refine::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{RefinementOp, RepoProvenance, TimelineEntry, UserPasswordOp};
@@ -24,6 +25,10 @@ pub const ACK_SENSITIVE_HEADER: &str = "x-ack-sensitive";
 /// produced it. That is why the CLI export not surfacing this
 /// header costs it nothing, and why truncating the list below loses a
 /// convenience rather than a fact.
+///
+/// The value is a JSON array of `{"kind": ..., "text": ...}` objects, the
+/// serialized [`ExportWarning`], with `kind` either `"failure"` or
+/// `"notice"`, so a client never infers severity from the text.
 ///
 /// The body of this route is the tarball itself, so the list travels as a
 /// JSON array in a header, and two layers make that safe for a string a
@@ -46,12 +51,26 @@ pub const EXPORT_WARNINGS_HEADER: &str = "x-export-warnings";
 const MAX_HEADER_WARNINGS: usize = 20;
 
 /// Render the export warnings as a JSON array small enough for a header.
-fn warnings_header_value(warnings: &[String]) -> String {
-    let shown: Vec<&String> = warnings.iter().take(MAX_HEADER_WARNINGS).collect();
-    let rest = warnings.len().saturating_sub(shown.len());
-    let mut values: Vec<String> = shown.into_iter().cloned().collect();
-    if rest > 0 {
-        values.push(format!("...and {rest} more"));
+///
+/// Past [`MAX_HEADER_WARNINGS`] the rest collapse into one `"...and N
+/// more"` entry. Its kind is the most serious kind it stands for: a
+/// failure when any dropped entry is one, else a notice, so a consumer
+/// that styles by kind never under-states what it cannot show.
+fn warnings_header_value(warnings: &[ExportWarning]) -> String {
+    let (shown, dropped) = warnings.split_at(warnings.len().min(MAX_HEADER_WARNINGS));
+    let mut values: Vec<ExportWarning> = shown.to_vec();
+    if !dropped.is_empty() {
+        let text = format!("...and {} more", dropped.len());
+        values.push(
+            if dropped
+                .iter()
+                .any(|w| w.kind() == ExportWarningKind::Failure)
+            {
+                ExportWarning::failure(text)
+            } else {
+                ExportWarning::notice(text)
+            },
+        );
     }
     serde_json::to_string(&values).unwrap_or_else(|_| "[]".into())
 }
@@ -434,7 +453,7 @@ pub async fn export_tarball(
     // Expensive render + tar work happens outside the lock via spawn_blocking.
     let dl_name = export_filename.clone();
     let (bytes, warnings) = tokio::task::spawn_blocking(
-        move || -> Result<(Vec<u8>, Vec<String>), inspectah_refine::types::RefineError> {
+        move || -> Result<(Vec<u8>, Vec<ExportWarning>), inspectah_refine::types::RefineError> {
             let tempdir = tempfile::tempdir()?;
             let tarball_path = tempdir.path().join(&dl_name);
             let warnings = plan.render(&tarball_path)?;
@@ -1544,44 +1563,95 @@ mod tests {
         );
     }
 
+    /// Parse a rendered header back into entries.
+    fn parse_header(rendered: &str) -> Vec<ExportWarning> {
+        serde_json::from_str(rendered).unwrap()
+    }
+
     /// The export warnings header stays inside what a browser or proxy
     /// will carry, however many packages a snapshot demotes.
     #[test]
     fn warnings_header_value_caps_an_attacker_sized_list() {
         assert_eq!(warnings_header_value(&[]), "[]");
         assert_eq!(
-            warnings_header_value(&["a.noarch: x".into()]),
-            r#"["a.noarch: x"]"#
+            warnings_header_value(&[ExportWarning::failure("a.noarch: x")]),
+            r#"[{"kind":"failure","text":"a.noarch: x"}]"#
         );
 
         // Exactly at the cap: no summary element.
-        let at_cap: Vec<String> = (0..MAX_HEADER_WARNINGS)
-            .map(|i| format!("p{i}.noarch"))
+        let at_cap: Vec<ExportWarning> = (0..MAX_HEADER_WARNINGS)
+            .map(|i| ExportWarning::failure(format!("p{i}.noarch")))
             .collect();
         let rendered = warnings_header_value(&at_cap);
         assert!(!rendered.contains("more"), "{rendered}");
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&rendered)
-                .unwrap()
-                .len(),
-            MAX_HEADER_WARNINGS
-        );
+        assert_eq!(parse_header(&rendered), at_cap);
 
         // One over, and a thousand over: the cap plus one summary either
         // way, and the summary counts what it dropped.
         for total in [MAX_HEADER_WARNINGS + 1, MAX_HEADER_WARNINGS + 1000] {
-            let many: Vec<String> = (0..total).map(|i| format!("p{i}.noarch")).collect();
+            let many: Vec<ExportWarning> = (0..total)
+                .map(|i| ExportWarning::failure(format!("p{i}.noarch")))
+                .collect();
             let rendered = warnings_header_value(&many);
-            let parsed: Vec<String> = serde_json::from_str(&rendered).unwrap();
+            let parsed = parse_header(&rendered);
             assert_eq!(parsed.len(), MAX_HEADER_WARNINGS + 1, "{total}");
             assert_eq!(
                 parsed.last().unwrap(),
-                &format!("...and {} more", total - MAX_HEADER_WARNINGS),
+                &ExportWarning::failure(format!("...and {} more", total - MAX_HEADER_WARNINGS)),
                 "{total}"
             );
             // Comfortably under the 8 KB a proxy may drop at.
             assert!(rendered.len() < 4096, "{total}: {} bytes", rendered.len());
         }
+    }
+
+    /// Serialize and parse back: both kinds, in order, and a tail whose
+    /// kind is the most serious kind among the entries it stands for.
+    #[test]
+    fn warnings_header_value_round_trips_both_kinds_and_the_tail() {
+        let notice = ExportWarning::notice("2 packages are not carried");
+        let mixed: Vec<ExportWarning> = std::iter::once(notice.clone())
+            .chain((0..MAX_HEADER_WARNINGS).map(|i| ExportWarning::failure(format!("p{i}"))))
+            .collect();
+        let rendered = warnings_header_value(&mixed);
+        assert!(
+            rendered.starts_with(r#"[{"kind":"notice","text":"2 packages are not carried"}"#),
+            "{rendered}"
+        );
+        let parsed = parse_header(&rendered);
+        assert_eq!(
+            &parsed[..MAX_HEADER_WARNINGS],
+            &mixed[..MAX_HEADER_WARNINGS]
+        );
+        assert_eq!(
+            parsed[MAX_HEADER_WARNINGS],
+            ExportWarning::failure("...and 1 more"),
+            "a dropped failure makes the tail a failure"
+        );
+
+        // Only notices dropped: the tail is a notice.
+        let notices: Vec<ExportWarning> = (0..MAX_HEADER_WARNINGS + 2)
+            .map(|i| ExportWarning::notice(format!("n{i}")))
+            .collect();
+        let parsed = parse_header(&warnings_header_value(&notices));
+        assert_eq!(
+            parsed.last().unwrap(),
+            &ExportWarning::notice("...and 2 more")
+        );
+
+        // A dropped failure behind dropped notices still makes it a failure.
+        let mut late_failure = notices.clone();
+        late_failure.push(ExportWarning::failure("late"));
+        let parsed = parse_header(&warnings_header_value(&late_failure));
+        assert_eq!(
+            parsed.last().unwrap(),
+            &ExportWarning::failure("...and 3 more")
+        );
+        assert!(
+            parsed[..MAX_HEADER_WARNINGS]
+                .iter()
+                .all(|w| w.kind() == ExportWarningKind::Notice)
+        );
     }
 
     /// Exactly which layer closes which byte.
@@ -1595,25 +1665,26 @@ mod tests {
     /// `HeaderValue` rejects both. So the sanitizer is load-bearing for
     /// those two, not merely a second layer. Pinned here because the
     /// division is the reason a snapshot-named string is allowed into a
-    /// header at all.
+    /// header at all. The kind is a fixed lowercase word and adds no
+    /// bytes of its own to either half.
     #[test]
     fn warnings_header_value_escapes_c0_and_leaves_the_rest_to_the_sanitizer() {
         // The half serde_json owns: header injection.
-        let rendered = warnings_header_value(&["a\r\nX-Evil: 1".into()]);
+        let rendered = warnings_header_value(&[ExportWarning::failure("a\r\nX-Evil: 1")]);
         assert!(
             !rendered.contains('\r') && !rendered.contains('\n'),
             "{rendered}"
         );
         assert!(rendered.contains("\\r\\n"), "{rendered}");
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&rendered).unwrap()[0],
-            "a\r\nX-Evil: 1"
-        );
+        assert_eq!(parse_header(&rendered)[0].text(), "a\r\nX-Evil: 1");
 
         // The half it does not own. If this ever starts failing,
         // serde_json got stricter and the note above needs revising --
         // it does not mean the sanitizer became unnecessary.
-        let raw = warnings_header_value(&["b\u{7f}c".into(), "d\u{20ac}e".into()]);
+        let raw = warnings_header_value(&[
+            ExportWarning::failure("b\u{7f}c"),
+            ExportWarning::notice("d\u{20ac}e"),
+        ]);
         assert!(raw.contains('\u{7f}'), "serde_json passes DEL through");
         assert!(
             raw.contains('\u{20ac}'),
@@ -1625,7 +1696,9 @@ mod tests {
         );
 
         // What the export actually produces, having been through it.
-        let real = warnings_header_value(&["epel-release.noarch: staged RPM not verified".into()]);
+        let real = warnings_header_value(&[ExportWarning::failure(
+            "epel-release.noarch: staged RPM not verified",
+        )]);
         assert!(axum::http::HeaderValue::from_str(&real).is_ok(), "{real}");
     }
 

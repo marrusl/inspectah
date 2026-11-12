@@ -2959,7 +2959,9 @@ async fn export_warns_when_a_staged_upload_cannot_be_verified() {
         headers
             .get("x-export-warnings")
             .and_then(|v| v.to_str().ok()),
-        Some(r#"["epel-release.noarch: staged RPM not verified, not exported"]"#)
+        Some(
+            r#"[{"kind":"failure","text":"epel-release.noarch: staged RPM not verified, not exported"}]"#
+        )
     );
     assert!(tarball_member(&body, &format!("repoless-packages/{name}")).is_none());
 

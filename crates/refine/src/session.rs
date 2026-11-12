@@ -19,6 +19,7 @@ use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
+use crate::export_warning::ExportWarning;
 use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
@@ -4080,11 +4081,11 @@ fn verify_staged_upload(
 
 /// The warning an export response carries for a package that claimed a
 /// staged upload the export could not prove.
-fn not_verified_warning(pkg: &PackageEntry) -> String {
-    format!(
+fn not_verified_warning(pkg: &PackageEntry) -> ExportWarning {
+    ExportWarning::failure(format!(
         "{}: staged RPM not verified, not exported",
         sanitize_package_id(&canonical_package_id(&pkg.name, &pkg.arch))
-    )
+    ))
 }
 
 /// Reduce a package id to the bytes a staged filename may carry, mapping
@@ -4119,7 +4120,7 @@ fn sanitize_package_id(id: &str) -> String {
 fn prove_staged_uploads(
     upload_dir_canon: Option<&Path>,
     snap: &InspectionSnapshot,
-) -> (Vec<ProvedUpload>, Vec<String>) {
+) -> (Vec<ProvedUpload>, Vec<ExportWarning>) {
     let mut proved = Vec::new();
     let mut warnings = Vec::new();
     let Some(rpm) = snap.rpm.as_ref() else {
@@ -4253,10 +4254,11 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// prepared, not a path that can still resolve somewhere else; `None`
 /// means no directory has been prepared and so nothing can be proved.
 ///
-/// Returns one warning per package that claimed a staged upload the export
-/// could not prove. Those packages are demoted, not fatal: the export
-/// succeeds, the Containerfile carries a FIXME instead of a `COPY`, and
-/// nothing is written for them under `repoless-packages/`.
+/// Returns one [`ExportWarning::failure`] per package that claimed a
+/// staged upload the export could not prove. Those packages are demoted,
+/// not fatal: the export succeeds, the Containerfile carries a FIXME
+/// instead of a `COPY`, and nothing is written for them under
+/// `repoless-packages/`.
 /// The arguments `render_refine_export` needs, captured from a session by
 /// [`RefineSession::export_plan`] so that every caller renders from the
 /// same assembly. Owned throughout, so the HTTP route can build it under
@@ -4293,9 +4295,9 @@ impl ExportPlan {
         &self.projected
     }
 
-    /// Render and write the export tarball. Returns one warning per
-    /// package that claimed a staged upload the export could not prove.
-    pub fn render(&self, tarball_path: &Path) -> Result<Vec<String>, RefineError> {
+    /// Render and write the export tarball. Returns the export's
+    /// warnings, each with its kind (see [`render_refine_export`]).
+    pub fn render(&self, tarball_path: &Path) -> Result<Vec<ExportWarning>, RefineError> {
         render_refine_export(
             &self.projected,
             tarball_path,
@@ -4314,7 +4316,7 @@ pub fn render_refine_export(
     render_ctx: Option<&RenderContext>,
     source_tarball: Option<&Path>,
     upload_dir_canon: Option<&Path>,
-) -> Result<Vec<String>, RefineError> {
+) -> Result<Vec<ExportWarning>, RefineError> {
     let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
 

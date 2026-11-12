@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_refine::export_warning::ExportWarning;
 use inspectah_refine::session::{
     RefineSession, RemovalOutcome, UploadMatchKind, render_refine_export,
 };
@@ -167,7 +168,7 @@ impl Harness {
     }
 
     /// Export, and return the tarball path with the warnings.
-    fn export(&self, source: Option<&Path>) -> (PathBuf, Vec<String>) {
+    fn export(&self, source: Option<&Path>) -> (PathBuf, Vec<ExportWarning>) {
         let out = self.tmp.path().join("export.tar.gz");
         let warnings = render_refine_export(
             &self.session.snapshot_projected(),
@@ -387,8 +388,8 @@ fn demotion_fixme() -> String {
 }
 
 /// The § 3.3 warning the export response carries for the same package.
-fn demotion_warning() -> String {
-    "epel-release.noarch: staged RPM not verified, not exported".into()
+fn demotion_warning() -> ExportWarning {
+    ExportWarning::failure("epel-release.noarch: staged RPM not verified, not exported")
 }
 
 /// Write `path` into a GNU header's 100-byte name field verbatim.
@@ -444,7 +445,7 @@ fn an_exact_nevra_upload_exports_and_names_itself() {
     h.include_all();
 
     let (out, warnings) = h.export(None);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert_eq!(
         repoless_active_lines(&containerfile(&out)),
         install_lines(EXACT_RPM)
@@ -538,7 +539,7 @@ fn a_placement_failure_after_staging_leaves_the_package_untouched() {
     assert_eq!(parts, Vec::<String>::new());
 
     let (out, warnings) = h.export(None);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert_eq!(
         repoless_active_lines(&containerfile(&out)),
         install_lines(EXACT_RPM)
@@ -589,7 +590,7 @@ fn an_excluded_package_exports_no_staged_upload() {
 
     let (out, warnings) = h.export(None);
     // Excluded is a decision, not a failure: nothing to warn about.
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert_eq!(repoless_members(&out), BTreeMap::new());
     assert_eq!(
         repoless_active_lines(&containerfile(&out)),
@@ -635,7 +636,7 @@ fn a_hostile_uploaded_version_in_the_snapshot_reaches_no_comment() {
 
     let (out, warnings) = h.export(None);
     let cf = containerfile(&out);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert_eq!(repoless_active_lines(&cf), install_lines(NEWER_RPM));
     assert!(!cf.contains("RUN id"), "{cf}");
     assert!(
@@ -812,7 +813,7 @@ fn an_upload_claimed_with_no_prepared_directory_is_demoted() {
     // the file, so the demotion above is about the missing directory and
     // not about the fixture.
     let (with_dir, warnings) = h.export(None);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert_eq!(
         repoless_members(&with_dir).keys().collect::<Vec<_>>(),
         vec![EXACT_RPM]
@@ -875,7 +876,7 @@ fn a_link_in_the_source_tarball_cannot_become_the_exported_member() {
         // The upload owns this path, so step 2e skips the entry whatever
         // type it is, and step 2f writes the staged bytes.
         let (out, warnings) = h.export(Some(&source));
-        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(warnings, Vec::<ExportWarning>::new());
         let exported = repoless_members(&out);
         assert_eq!(exported.keys().collect::<Vec<_>>(), vec![EXACT_RPM]);
         assert_eq!(exported[EXACT_RPM].entry_type, tar::EntryType::Regular);
@@ -1621,7 +1622,7 @@ fn an_upload_for_a_disabled_repo_package_exports_and_installs_from_the_upload() 
     let (out, warnings) = h.export(Some(&source));
     let file = containerfile(&out);
 
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert!(!file.contains("--enablerepo"), "{file}");
     assert!(
         !active_lines(&file).contains(&"    openh264 \\"),
@@ -1728,7 +1729,7 @@ fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
     );
     let (out, warnings) = h.export(None);
     let file = containerfile(&out);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert!(
         !file.contains(VENDOR_FIXME),
         "the upload settles it:\n{file}"
@@ -1743,7 +1744,7 @@ fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
     set_include_bootstrap(&mut h, true);
     let (served, warnings) = h.export(None);
     let file = containerfile(&served);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     assert!(
         active_lines(&file).contains(&"    vendor-release \\"),
         "served by its repo again, it installs by name:\n{file}"
@@ -1810,7 +1811,7 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
 
     let (out, warnings) = h.export(None);
     let file = containerfile(&out);
-    assert_eq!(warnings, Vec::<String>::new());
+    assert_eq!(warnings, Vec::<ExportWarning>::new());
     let at = |needle: &str| {
         file.lines()
             .position(|l| l == needle)
