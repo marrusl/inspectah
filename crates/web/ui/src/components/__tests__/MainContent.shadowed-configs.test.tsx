@@ -57,6 +57,8 @@ function view(overrides: Partial<ViewResponse> = {}): ViewResponse {
     users_groups_decisions: [],
     package_groups: [],
     session_is_sensitive: false,
+    not_carried_packages: [],
+    not_carried_notice: null,
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@ import {
   MAX_CLIENT_WARNINGS,
   parseExportWarnings,
   UNREADABLE_WARNINGS_TEXT,
+  withoutShownNotice,
 } from "../exportWarnings";
 
 // The header contract lives in process-docs/skills/refine-export-warnings-header.md.
@@ -93,5 +94,54 @@ describe("parseExportWarnings", () => {
       kind: "failure",
       text: "...and 10 more not shown",
     });
+  });
+});
+
+// The view's `not_carried_notice` is the header's notice entry byte for byte
+// (not-carried-auto-packages.md, Refine projection contract). The Export
+// dialog shows it before download, so the post-download list skips it.
+describe("withoutShownNotice", () => {
+  const NOTICE = {
+    kind: "notice" as const,
+    text: "1 package that owns a unit enabled on the source host is not carried: firewalld. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.",
+  };
+  const FAILURE = {
+    kind: "failure" as const,
+    text: "epel-release.noarch: staged RPM not verified, not exported",
+  };
+
+  it("skips the header entry equal to the notice already shown", () => {
+    const parsed = parseExportWarnings(JSON.stringify([NOTICE, FAILURE]));
+    expect(withoutShownNotice(parsed, NOTICE)).toEqual([FAILURE]);
+  });
+
+  it("leaves nothing when the notice was the only entry", () => {
+    const parsed = parseExportWarnings(JSON.stringify([NOTICE]));
+    expect(withoutShownNotice(parsed, NOTICE)).toEqual([]);
+  });
+
+  it("keeps a header notice that differs from the one shown", () => {
+    // Drift between the view and the export: the operator has not seen
+    // this text, so it stays.
+    const drifted = { kind: "notice" as const, text: NOTICE.text.replace("1 package", "2 packages") };
+    const parsed = parseExportWarnings(JSON.stringify([drifted, FAILURE]));
+    expect(withoutShownNotice(parsed, NOTICE)).toEqual([drifted, FAILURE]);
+  });
+
+  it("matches on kind as well as text", () => {
+    const sameTextFailure = { kind: "failure" as const, text: NOTICE.text };
+    expect(withoutShownNotice([sameTextFailure], NOTICE)).toEqual([
+      sameTextFailure,
+    ]);
+  });
+
+  it("does not match on a text pattern", () => {
+    const prefix = { kind: "notice" as const, text: NOTICE.text.slice(0, 40) };
+    expect(withoutShownNotice([prefix], NOTICE)).toEqual([prefix]);
+  });
+
+  it("returns the list unchanged when no notice was shown", () => {
+    const parsed = parseExportWarnings(JSON.stringify([NOTICE, FAILURE]));
+    expect(withoutShownNotice(parsed, null)).toEqual([NOTICE, FAILURE]);
   });
 });

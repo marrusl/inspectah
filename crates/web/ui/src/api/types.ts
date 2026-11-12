@@ -2,6 +2,8 @@
 // Source of truth: inspectah-refine/src/types.rs, inspectah-core/src/types/,
 // inspectah-web/src/handlers.rs
 
+import type { ExportWarning } from "./exportWarnings";
+
 // --- Finding disposition (inspectah-core/src/types/finding.rs) ---
 
 /** Rust: AdvisoryType — #[serde(rename_all = "snake_case")] */
@@ -716,6 +718,32 @@ export interface ViewResponse extends RefinedView {
   unmanaged_files?: UnmanagedFileGroup[];
   /** Whether --include-unmanaged was used at scan time. Drives discoverability hint. */
   has_unmanaged_scan?: boolean;
+  /**
+   * Auto packages the export leaves out, in the `# Not carried` block's
+   * order (unit owners first). `[]` both when nothing is listed and when
+   * the classifier fell back; the payload does not say which. Contract:
+   * process-docs/skills/not-carried-auto-packages.md, Refine projection
+   * contract.
+   */
+  not_carried_packages: NotCarriedRow[];
+  /**
+   * The notice the next export puts first in `x-export-warnings`, byte for
+   * byte, or null when no listed package owns an enabled unit.
+   */
+  not_carried_notice: ExportWarning | null;
+}
+
+/** One row of `not_carried_packages` (Rust: `NotCarriedRow`). */
+export interface NotCarriedRow {
+  /** The identity `SetInclude` takes. Pass it back verbatim. */
+  item_id: ItemIdPackage;
+  /** `name`, or `name.arch` when two arches of the name are listed. */
+  display_name: string;
+  source_repo: string;
+  /** Enabled units the package owns, sorted. Display only. */
+  enabled_units: string[];
+  /** The server's "owns an enabled unit". Never derive it on the client. */
+  owns_enabled_unit: boolean;
 }
 
 // --- User decision types (inspectah-core/src/types/users.rs) ---

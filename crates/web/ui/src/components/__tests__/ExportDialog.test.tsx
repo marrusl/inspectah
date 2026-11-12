@@ -44,6 +44,8 @@ const MOCK_VIEW: ViewResponse = {
   users_groups_decisions: [],
   package_groups: [],
   session_is_sensitive: false,
+  not_carried_packages: [],
+  not_carried_notice: null,
 };
 
 describe("ExportDialog", () => {
