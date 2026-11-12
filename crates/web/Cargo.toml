@@ -21,6 +21,9 @@ regex = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
+# The collector-driven sysctl hosts (`crates/cli/tests/support/sysctl_hosts.rs`)
+# build their executor from `MockExecutor`.
+inspectah-collect = { path = "../collect" }
 # Lazy request bodies for the upload tests: a 500 MiB body streamed a
 # chunk at a time, and one that stalls mid-transfer.
 futures-core = "0.3"

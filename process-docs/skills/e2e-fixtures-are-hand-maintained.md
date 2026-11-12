@@ -51,6 +51,25 @@ checks only the exit code. Read the `skipped` line in the output
 explicitly, every time, and report it separately from `passed`. Treat a 100%-skipped file as a different fact
 than a 100%-passed one, not as the same green.
 
+## The Recorded Alternative
+
+`crates/web/ui/src/__tests__/fixtures/system-tuning/` is the opposite
+kind: `crates/web/tests/system_tuning_fixtures_test.rs` builds each
+session with the collector-driven sysctl hosts, serves it through the
+real router, and fails when a committed `<session>.<endpoint>.json`
+differs from the body the handler returns. After a deliberate DTO
+change, re-record and review the diff:
+
+```bash
+UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test system_tuning_fixtures_test
+```
+
+Anything run-specific in a body has to be pinned at the input, not
+scrubbed from the output: the fleet merge writes the wall clock into
+`aggregate_meta.merged_at`, which `/api/health` reports, so the
+aggregate session sets it to a constant before the session opens.
+Prefer this pattern for any new fixture a frontend test loads.
+
 ## See Also
 
 - `process-docs/skills/full-workspace-verification-gates.md` — the

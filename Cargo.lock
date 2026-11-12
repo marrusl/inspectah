@@ -1185,6 +1185,7 @@ dependencies = [
  "flate2",
  "futures-core",
  "http-body-util",
+ "inspectah-collect",
  "inspectah-core",
  "inspectah-pipeline",
  "inspectah-refine",

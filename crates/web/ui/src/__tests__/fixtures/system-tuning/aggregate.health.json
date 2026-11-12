@@ -1,0 +1,35 @@
+{
+  "aggregate": {
+    "host_count": 2,
+    "hostnames": [
+      "host-a",
+      "host-b"
+    ],
+    "label": "aggregate",
+    "merged_at": "2026-11-11T00:00:00+00:00",
+    "variant_count": 1,
+    "zones_active": false
+  },
+  "completeness": "complete",
+  "host": {
+    "hostname": "host-a",
+    "os_id": "rhel",
+    "os_name": "Red Hat Enterprise Linux",
+    "os_version": "9.4",
+    "schema_version": 27,
+    "system_type": "package-mode"
+  },
+  "policy": {
+    "distro_repos": [
+      "baseos",
+      "appstream",
+      "fedora",
+      "updates",
+      "updates-testing",
+      "extras",
+      "anaconda"
+    ]
+  },
+  "session_is_sensitive": false,
+  "status": "ok"
+}

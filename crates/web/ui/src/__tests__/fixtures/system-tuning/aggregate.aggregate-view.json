@@ -1,0 +1,95 @@
+{
+  "can_redo": false,
+  "can_undo": false,
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# Leaf classification: 0/2 hosts (partial authority)\n\n\n# === Manual Follow-up Required ===\n# TODO: 'bash.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "generation": 0,
+  "repo_conflict_count": 0,
+  "repo_groups": [],
+  "sections": [
+    {
+      "display_name": "Packages",
+      "id": "packages",
+      "is_decision_section": true,
+      "items": []
+    },
+    {
+      "display_name": "Configuration Files",
+      "id": "configs",
+      "is_decision_section": true,
+      "items": [
+        {
+          "include": false,
+          "item_id": {
+            "key": {
+              "path": "/etc/sysctl.d/90-x.conf"
+            },
+            "kind": "Config"
+          },
+          "locked": false,
+          "prevalence": {
+            "count": 1,
+            "total": 2
+          },
+          "source_repo": "",
+          "triage": {
+            "bucket": "site",
+            "prevalence": 1,
+            "reason": "config_unowned",
+            "zone": "NearConsensus"
+          },
+          "variants": {
+            "count": 2,
+            "options": [
+              {
+                "hash": "9f58dc7dcb634c68befcffb11247bf8e2b8e1bd202acab2f3f1e95f19bea1d73",
+                "host_count": 1,
+                "hosts": [
+                  "host-b"
+                ],
+                "selected": true
+              },
+              {
+                "hash": "a7b7a3e68e1e38ef859c444a466276ae8859ec1aeba6c3f50faf2bbd37ca0e76",
+                "host_count": 1,
+                "hosts": [
+                  "host-a"
+                ],
+                "selected": false
+              }
+            ],
+            "selected": "9f58dc7dcb634c68befcffb11247bf8e2b8e1bd202acab2f3f1e95f19bea1d73"
+          }
+        }
+      ]
+    },
+    {
+      "display_name": "System Tuning",
+      "id": "system_tuning",
+      "is_decision_section": true,
+      "items": []
+    }
+  ],
+  "session_is_sensitive": false,
+  "summary": {
+    "actionable_variant_items": [
+      {
+        "item_id": {
+          "key": {
+            "path": "/etc/sysctl.d/90-x.conf"
+          },
+          "kind": "Config"
+        },
+        "max_host_spread": 1,
+        "section_id": "configs",
+        "variant_count": 2
+      }
+    ],
+    "host_count": 2,
+    "informational_variant_count": 0,
+    "leaf_authority_hosts": 0,
+    "leaf_total_hosts": 2
+  },
+  "sysctl": {
+    "state": "aggregate"
+  }
+}
