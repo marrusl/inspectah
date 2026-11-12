@@ -333,6 +333,7 @@ mod tests {
             locked: _,
             aggregate: _,
             gpgkey_references: _, // identifier: the literal spelling of `path`
+            shipped_by_base: _,   // identifier: an rpm package name
         } = RepoFile::default();
 
         // `services.drop_ins[]`.

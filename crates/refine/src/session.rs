@@ -2816,16 +2816,17 @@ impl RefineSession {
                                             }
                                         }
 
-                                        // 3. Re-enable GPG keys for this section
+                                        // 3. Re-enable GPG keys for this section,
+                                        // except one the base image ships: the
+                                        // repo exclude did not decide that one.
                                         if let Some(key_paths) =
                                             self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
-                                                for k in rpm
-                                                    .gpg_keys
-                                                    .iter_mut()
-                                                    .filter(|g| g.path == *key_path)
-                                                {
+                                                for k in rpm.gpg_keys.iter_mut().filter(|g| {
+                                                    g.path == *key_path
+                                                        && g.shipped_by_base.is_none()
+                                                }) {
                                                     k.disposition = FindingKind::included();
                                                 }
                                             }

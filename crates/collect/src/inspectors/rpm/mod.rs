@@ -441,6 +441,28 @@ impl Inspector for RpmInspector {
             outcome: StepOutcome::Complete,
         });
 
+        // 6. Keys the base image already ships stay out of the export. This
+        //    needs the baseline, file ownership and `rpm -Va`; without a
+        //    baseline, or on a host `rpm -Va` does not run on, every key is
+        //    carried, which is the safe answer: a missing key fails the
+        //    build, a redundant copy does not.
+        let mut gpg_keys = supp.gpg_keys;
+        if let Some(baseline) = ctx.baseline_data
+            && matches!(ctx.source_system, SourceSystem::PackageBased { .. })
+        {
+            let base_packages: HashSet<&str> = baseline
+                .packages
+                .values()
+                .map(|p| p.name.as_str())
+                .collect();
+            repos::leave_out_keys_the_base_ships(
+                &mut gpg_keys,
+                &file_ownership,
+                &supp.rpm_va,
+                &base_packages,
+            );
+        }
+
         // 7. Build baseline_package_names for downstream consumers
         let baseline_package_names = ctx.baseline_data.map(|b| {
             let mut names: Vec<String> = b
@@ -493,7 +515,7 @@ impl Inspector for RpmInspector {
             version_changes,
             rpm_va: supp.rpm_va,
             repo_files: supp.repo_files,
-            gpg_keys: supp.gpg_keys,
+            gpg_keys,
             module_streams: supp.module_streams,
             version_locks: supp.version_locks,
             file_ownership,
@@ -1367,7 +1389,7 @@ fn parse_dnf_deps(
 mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
-    use inspectah_core::baseline::BaselineData;
+    use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
     use inspectah_core::traits::executor::ExecResult;
     use inspectah_core::traits::progress::{NullProgress, VecProgress};
     use inspectah_core::types::os::OsRelease;
@@ -4462,6 +4484,159 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             )]
         );
         assert!(rpm.gpg_keys[0].disposition.is_included());
+    }
+
+    const STOCK_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
+    const EPEL_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10";
+
+    /// A base image that ships `redhat-release` and `bash`, not
+    /// `epel-release`.
+    fn base_with_redhat_release() -> BaselineData {
+        let entry = |name: &str| BaselinePackageEntry {
+            name: name.into(),
+            epoch: Some("0".into()),
+            version: "10.2".into(),
+            release: "21.el10".into(),
+            arch: "aarch64".into(),
+        };
+        BaselineData {
+            image_digest: "sha256:base".into(),
+            packages: ["redhat-release", "bash"]
+                .into_iter()
+                .map(|n| (format!("{n}.aarch64"), entry(n)))
+                .collect(),
+            extracted_at: "2026-11-11T00:00:00Z".into(),
+        }
+    }
+
+    /// A RHEL 10.2 host with `redhat.repo` naming the stock key from two
+    /// sections and `epel.repo` naming EPEL's. `owners` is the
+    /// file-ownership output and `rpm_va` the `rpm -Va` output.
+    fn host_with_stock_and_epel_keys(m: MockExecutor, owners: &str, rpm_va: &str) -> MockExecutor {
+        m.with_file(
+            "/etc/yum.repos.d/redhat.repo",
+            "[rhel-10-baseos]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n\
+             [rhel-10-appstream]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n",
+        )
+        .with_file("/etc/yum.repos.d/epel.repo", EL10_EPEL_REPO)
+        .with_file(
+            STOCK_KEY,
+            "The following public key ...\n\n-----BEGIN PGP PUBLIC KEY BLOCK-----\nrh\n",
+        )
+        .with_file(EPEL_KEY, PGP_KEY)
+        .with_command(
+            &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+            ExecResult {
+                stdout: owners.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "rpm -Va",
+            ExecResult {
+                stdout: rpm_va.into(),
+                exit_code: if rpm_va.is_empty() { 0 } else { 1 },
+                ..Default::default()
+            },
+        )
+    }
+
+    /// A key whose owning package the base image ships, and which `rpm -V`
+    /// reports unmodified, is the base image's own file: it is recorded
+    /// once, excluded with that reason, and raises no warning. A key owned
+    /// only by a package the base lacks (EPEL's), a modified one, and an
+    /// unowned one are carried, and so is every key when there is no
+    /// baseline.
+    #[test]
+    fn a_key_the_base_image_ships_unmodified_is_left_out() {
+        const OWNED: &str = "@@bash\n/usr/bin/bash\n\
+                             @@redhat-release\n/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n\
+                             @@epel-release\n/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10\n";
+        const UNOWNED: &str = "@@bash\n/usr/bin/bash\n";
+        const STOCK_MODIFIED: &str = "S.5....T.    /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n";
+
+        struct Case {
+            name: &'static str,
+            owners: &'static str,
+            rpm_va: &'static str,
+            baseline: bool,
+            /// `shipped_by_base` of the stock key; `None` means carried.
+            stock: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "stock key, base package, unmodified",
+                owners: OWNED,
+                rpm_va: "",
+                baseline: true,
+                stock: Some("redhat-release"),
+            },
+            Case {
+                name: "stock key modified on the host",
+                owners: OWNED,
+                rpm_va: STOCK_MODIFIED,
+                baseline: true,
+                stock: None,
+            },
+            Case {
+                name: "stock key owned by no package",
+                owners: UNOWNED,
+                rpm_va: "",
+                baseline: true,
+                stock: None,
+            },
+            Case {
+                name: "no baseline",
+                owners: OWNED,
+                rpm_va: "",
+                baseline: false,
+                stock: None,
+            },
+        ];
+
+        let base = base_with_redhat_release();
+        for case in &cases {
+            let (rpm, warnings) = inspect_gpg_host(
+                |m| host_with_stock_and_epel_keys(m, case.owners, case.rpm_va),
+                case.baseline.then_some(&base),
+            );
+            assert!(warnings.is_empty(), "{}: {warnings:?}", case.name);
+            let at = |path: &str| -> Vec<&inspectah_core::types::rpm::RepoFile> {
+                rpm.gpg_keys.iter().filter(|k| k.path == path).collect()
+            };
+
+            let stock = at(STOCK_KEY);
+            assert_eq!(stock.len(), 1, "{}: stock key recorded once", case.name);
+            assert_eq!(
+                stock[0].shipped_by_base.as_deref(),
+                case.stock,
+                "{}: stock key",
+                case.name
+            );
+            assert_eq!(
+                stock[0].disposition.is_included(),
+                case.stock.is_none(),
+                "{}: stock key carried",
+                case.name
+            );
+            if case.stock.is_some() {
+                assert_eq!(
+                    stock[0].base_image_ships_reason().as_deref(),
+                    Some("the base image ships it (redhat-release, unmodified on the source host)"),
+                    "{}",
+                    case.name
+                );
+            }
+
+            let epel = at(EPEL_KEY);
+            assert_eq!(epel.len(), 1, "{}: EPEL key recorded once", case.name);
+            assert!(
+                epel[0].disposition.is_included() && epel[0].shipped_by_base.is_none(),
+                "{}: EPEL's key is owned by epel-release, not in the base, and carried",
+                case.name
+            );
+        }
     }
 
     /// The key records the `gpgkey=` path that named it when that differs

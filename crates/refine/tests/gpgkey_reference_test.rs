@@ -255,3 +255,131 @@ fn refine_cascades_an_exclude_to_a_key_named_with_a_dnf_variable() {
         );
     }
 }
+
+const STOCK_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
+const STOCK_REASON: &str =
+    "the base image ships it (redhat-release, unmodified on the source host)";
+
+/// RHEL's `redhat.repo`: two enabled sections naming the stock key.
+const REDHAT_REPO: &str = "\
+[rhel-10-baseos]
+baseurl=https://cdn.redhat.com/content/dist/rhel10/10/aarch64/baseos/os
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+
+[rhel-10-appstream]
+baseurl=https://cdn.redhat.com/content/dist/rhel10/10/aarch64/appstream/os
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+";
+
+/// A site repo signed with the Red Hat key, which refine can toggle;
+/// distro repos it cannot.
+const CORP_REPO: &str = "\
+[corp-a]
+baseurl=https://repo.example.com/a
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+
+[corp-b]
+baseurl=https://repo.example.com/b
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+";
+
+/// The EPEL snapshot plus `redhat.repo`, a site repo and the stock key, which the
+/// scan left out because the base image ships it.
+fn snapshot_with_stock_key() -> InspectionSnapshot {
+    let mut snap = snapshot(EL10_EPEL_REPO, KeyEntries::OnePerPath);
+    let rpm = snap.rpm.as_mut().expect("rpm section");
+    rpm.repo_files.push(RepoFile {
+        path: "/etc/yum.repos.d/redhat.repo".into(),
+        content: REDHAT_REPO.into(),
+        is_default_repo: true,
+        disposition: FindingKind::excluded(),
+        ..Default::default()
+    });
+    for (name, repo) in [("corp-tool", "corp-a"), ("corp-agent", "corp-b")] {
+        rpm.packages_added.push(PackageEntry {
+            name: name.into(),
+            version: "1".into(),
+            release: "1".into(),
+            arch: "noarch".into(),
+            source_repo: repo.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    }
+    rpm.repo_files.push(RepoFile {
+        path: "/etc/yum.repos.d/corp.repo".into(),
+        content: CORP_REPO.into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    rpm.gpg_keys.push(RepoFile {
+        path: STOCK_KEY.into(),
+        content: "-----BEGIN PGP PUBLIC KEY BLOCK-----\nrh\n".into(),
+        disposition: FindingKind::excluded(),
+        shipped_by_base: Some("redhat-release".into()),
+        ..Default::default()
+    });
+    snap
+}
+
+fn stock_key(session: &RefineSession) -> RepoFile {
+    session
+        .snapshot_projected()
+        .rpm
+        .expect("rpm section")
+        .gpg_keys
+        .into_iter()
+        .find(|k| k.path == STOCK_KEY)
+        .expect("stock key recorded")
+}
+
+/// A key the base image ships is not copied, and every surface that shows
+/// keys says so and why. Including a repo that names it again does not
+/// copy it: the base image's own file is the one the image should keep.
+#[test]
+fn a_key_the_base_image_ships_is_shown_but_not_copied() {
+    let snap = snapshot_with_stock_key();
+
+    let containerfile = scan_containerfile(&snap);
+    assert!(
+        containerfile.contains("# === GPG Keys (1) ==="),
+        "only EPEL's key is copied:\n{containerfile}"
+    );
+    assert!(
+        containerfile
+            .lines()
+            .any(|l| l.starts_with('#') && l.contains(STOCK_KEY) && l.contains(STOCK_REASON)),
+        "the Containerfile names the key it leaves to the base image:\n{containerfile}"
+    );
+    assert!(
+        containerfile.contains("# === Repo-enabling packages (1) ==="),
+        "EPEL still carried:\n{containerfile}"
+    );
+
+    let audit = render::audit::render_audit(&snap);
+    assert!(
+        audit.contains(&format!("| {STOCK_KEY} | {STOCK_REASON} |")),
+        "the audit report names the key and the reason:\n{audit}"
+    );
+
+    let mut session = RefineSession::new(snap);
+    assert_eq!(
+        session
+            .repo_index()
+            .provenance(&RepoId::new("rhel-10-baseos")),
+        RepoProvenance::Verified,
+        "the stock key was captured"
+    );
+    exclude_repo(&mut session, "corp-a");
+    exclude_repo(&mut session, "corp-b");
+    include_repo(&mut session, "corp-a");
+    let key = stock_key(&session);
+    assert!(
+        !key.disposition.is_included() && key.shipped_by_base.as_deref() == Some("redhat-release"),
+        "re-including a repo leaves the base image's key alone: {key:?}"
+    );
+}

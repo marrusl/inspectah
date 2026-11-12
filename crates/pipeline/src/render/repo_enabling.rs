@@ -124,20 +124,22 @@ fn section_survives(rpm: &RpmSection, id: &RepoId) -> bool {
         })
 }
 
-/// Whether every `gpgkey=file://` path a section names is an included
-/// `gpg_keys` entry. A path written with dnf variables names the key the
-/// scan recorded at the expanded path ([`RepoFile::is_key_named_by`]).
+/// Whether every `gpgkey=file://` path a section names is a key the image
+/// will have: an included `gpg_keys` entry, or one the base image ships
+/// ([`RepoFile::is_in_image`]). A path written with dnf variables names the
+/// key the scan recorded at the expanded path ([`RepoFile::is_key_named_by`]).
 ///
 /// Shared with `repoless::disabled_repo_install`: a section dnf cannot
 /// verify packages from is no more installable from a disabled repo than
 /// from a repo-enabling one.
 ///
 /// [`RepoFile::is_key_named_by`]: inspectah_core::types::rpm::RepoFile::is_key_named_by
+/// [`RepoFile::is_in_image`]: inspectah_core::types::rpm::RepoFile::is_in_image
 pub(crate) fn keys_included(rpm: &RpmSection, paths: &[String]) -> bool {
     paths.iter().all(|path| {
         rpm.gpg_keys
             .iter()
-            .any(|k| k.disposition.is_included() && k.is_key_named_by(path))
+            .any(|k| k.is_in_image() && k.is_key_named_by(path))
     })
 }
 
@@ -156,7 +158,7 @@ fn dropped_owned_path<'a>(rpm: &'a RpmSection, pkg: &PackageEntry) -> Option<&'a
             !rpm.repo_files
                 .iter()
                 .chain(rpm.gpg_keys.iter())
-                .any(|f| f.path == **path && f.disposition.is_included())
+                .any(|f| f.path == **path && f.is_in_image())
         })
         .map(|path| path.as_str())
 }
@@ -209,5 +211,41 @@ pub fn demote_unserved_repo_enabling(snap: &mut InspectionSnapshot) {
     };
     for (i, annotation) in demoted {
         rpm.packages_added[i].repoless_annotation = annotation;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::FindingKind;
+    use inspectah_core::types::rpm::RepoFile;
+
+    /// A section's key counts as present when the export copies it or the
+    /// base image ships it; an excluded key with no such reason does not.
+    #[test]
+    fn a_key_the_base_image_ships_is_present_in_the_image() {
+        const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
+        let cases = [
+            ("copied", FindingKind::included(), None, true),
+            (
+                "left to the base image",
+                FindingKind::excluded(),
+                Some("redhat-release"),
+                true,
+            ),
+            ("excluded", FindingKind::excluded(), None, false),
+        ];
+        for (name, disposition, shipped_by_base, present) in cases {
+            let rpm = RpmSection {
+                gpg_keys: vec![RepoFile {
+                    path: KEY.into(),
+                    disposition,
+                    shipped_by_base: shipped_by_base.map(String::from),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            assert_eq!(keys_included(&rpm, &[KEY.to_string()]), present, "{name}");
+        }
     }
 }

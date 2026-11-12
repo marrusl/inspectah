@@ -1,8 +1,8 @@
 use super::dnf_vars::{DnfVars, ExpandError};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::rpm::RepoFile;
-use std::collections::BTreeSet;
+use inspectah_core::types::rpm::{FileOwnershipEntry, RepoFile, RpmVaEntry};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -78,6 +78,7 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
             locked: false,
             aggregate: None,
             gpgkey_references: Default::default(),
+            shipped_by_base: None,
         });
     }
 
@@ -262,6 +263,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     locked: false,
                     aggregate: None,
                     gpgkey_references,
+                    shipped_by_base: None,
                 });
             } else {
                 // Non-PGP content: include with placeholder to avoid
@@ -285,6 +287,7 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor, vars: &DnfVars)
                     locked: false,
                     aggregate: None,
                     gpgkey_references,
+                    shipped_by_base: None,
                 });
             }
         }
@@ -309,6 +312,40 @@ pub fn record_each_key_once(keys: Vec<RepoFile>) -> Vec<RepoFile> {
         }
     }
     once
+}
+
+/// Leave out of the export each key the base image already ships.
+///
+/// A key qualifies when the scan collected it as a valid key, a package in
+/// the base image owns its path (`file_ownership`), and `rpm -Va` did not
+/// report it (`rpm_va`). It is recorded excluded with that package in
+/// `shipped_by_base`. Any other key, including one owned only by a package
+/// the base image lacks (EPEL's key, owned by `epel-release`), is left as
+/// collected, and carried.
+pub fn leave_out_keys_the_base_ships(
+    keys: &mut [RepoFile],
+    file_ownership: &[FileOwnershipEntry],
+    rpm_va: &[RpmVaEntry],
+    base_packages: &HashSet<&str>,
+) {
+    let modified: HashSet<&str> = rpm_va.iter().map(|e| e.path.as_str()).collect();
+    for key in keys
+        .iter_mut()
+        .filter(|k| k.disposition.is_included() && !modified.contains(k.path.as_str()))
+    {
+        // The least name, so a file several base packages own gives one
+        // answer whatever order rpm listed them in.
+        let base_owner = file_ownership
+            .iter()
+            .filter(|e| base_packages.contains(e.package_name.as_str()))
+            .filter(|e| e.paths.contains(&key.path))
+            .map(|e| e.package_name.as_str())
+            .min();
+        if let Some(package) = base_owner {
+            key.shipped_by_base = Some(package.to_string());
+            key.disposition = FindingKind::excluded();
+        }
+    }
 }
 
 fn is_default_repo(path: &str) -> bool {

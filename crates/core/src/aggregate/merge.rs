@@ -932,6 +932,24 @@ fn union_gpgkey_references(mut items: Vec<(usize, RepoFile)>) -> Vec<(usize, Rep
     items
 }
 
+/// Keep `shipped_by_base` on a key only where every host that has the key
+/// left it to the base image; one host that carries it makes the fleet
+/// carry it, since that host's image needs the copy.
+fn keep_base_shipping_where_every_host_agrees(
+    mut items: Vec<(usize, RepoFile)>,
+) -> Vec<(usize, RepoFile)> {
+    let mut every_host: HashMap<String, bool> = HashMap::new();
+    for (_, key) in &items {
+        *every_host.entry(key.path.clone()).or_insert(true) &= key.shipped_by_base.is_some();
+    }
+    for (_, key) in &mut items {
+        if every_host.get(&key.path) == Some(&false) {
+            key.shipped_by_base = None;
+        }
+    }
+    items
+}
+
 /// Collect string lists from optional sections.
 fn collect_string_lists<S, F>(sections: &[Option<S>], extractor: F) -> Vec<Vec<String>>
 where
@@ -1091,11 +1109,19 @@ pub fn merge_rpm_sections(
         total_hosts,
         hostnames,
     );
-    let gpg_keys = merge_items(
-        union_gpgkey_references(collect_items(&sections, |s| &s.gpg_keys)),
+    let mut gpg_keys = merge_items(
+        keep_base_shipping_where_every_host_agrees(union_gpgkey_references(collect_items(
+            &sections,
+            |s| &s.gpg_keys,
+        ))),
         total_hosts,
         hostnames,
     );
+    // The merge includes every universal item; a key every host left to
+    // the base image stays out.
+    for key in gpg_keys.iter_mut().filter(|k| k.shipped_by_base.is_some()) {
+        key.disposition = FindingKind::excluded();
+    }
     let module_streams = merge_items(
         collect_items(&sections, |s| &s.module_streams),
         total_hosts,

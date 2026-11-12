@@ -1576,6 +1576,7 @@ fn disabled_repo_snapshot(cache_path: &Path) -> InspectionSnapshot {
             locked: false,
             aggregate: None,
             gpgkey_references: Default::default(),
+            shipped_by_base: None,
         }],
         ..Default::default()
     });
@@ -1684,6 +1685,7 @@ fn repo_enabling_snapshot() -> InspectionSnapshot {
             locked: false,
             aggregate: None,
             gpgkey_references: Default::default(),
+            shipped_by_base: None,
         }],
         ..Default::default()
     });

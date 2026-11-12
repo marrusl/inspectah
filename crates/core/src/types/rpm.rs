@@ -205,6 +205,15 @@ pub struct RepoFile {
     /// [`RepoFile::is_key_named_by`], never by `path` alone.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub gpgkey_references: BTreeSet<String>,
+    /// For a GPG key the base image already ships: the base-image package
+    /// that owns the file, which `rpm -V` found unmodified on the source
+    /// host. The scan records such a key excluded, because the image has
+    /// the base image's own copy; copying the host's over it would replace
+    /// a newer major's key with an older one. `None` for a key the export
+    /// carries by default, for a repo file, and in snapshots collected
+    /// before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shipped_by_base: Option<String>,
 }
 
 impl RepoFile {
@@ -218,6 +227,20 @@ impl RepoFile {
     /// them matches.
     pub fn is_key_named_by(&self, gpgkey_path: &str) -> bool {
         self.path == gpgkey_path || self.gpgkey_references.contains(gpgkey_path)
+    }
+
+    /// Why the scan leaves this key out of the export, when the reason is
+    /// that the base image ships it. The one wording every surface uses.
+    pub fn base_image_ships_reason(&self) -> Option<String> {
+        self.shipped_by_base.as_ref().map(|package| {
+            format!("the base image ships it ({package}, unmodified on the source host)")
+        })
+    }
+
+    /// Whether the built image has this file at its path: the export
+    /// copies it, or the base image already ships it.
+    pub fn is_in_image(&self) -> bool {
+        self.disposition.is_included() || self.shipped_by_base.is_some()
     }
 }
 
