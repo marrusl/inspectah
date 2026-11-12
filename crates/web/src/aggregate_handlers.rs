@@ -910,9 +910,15 @@ fn build_aggregate_sections(
             })
             .collect();
 
-        if !items.is_empty() {
-            sections.push(build_section("tuned", "Tuned Profiles", true, &items, ctx));
-        }
+        // Always present, so the System Tuning section and its sysctl
+        // panel are reachable on a fleet with no tuned selection.
+        sections.push(build_section(
+            "system_tuning",
+            "System Tuning",
+            true,
+            &items,
+            ctx,
+        ));
     }
 
     // --- Reference sections (read-only, no toggles) ---
@@ -2071,8 +2077,8 @@ mod tests {
 
         let tuned_section = sections
             .iter()
-            .find(|s| s.id == "tuned")
-            .expect("tuned section must exist");
+            .find(|s| s.id == "system_tuning")
+            .expect("system_tuning section must exist");
 
         let items = tuned_section
             .items
@@ -2103,8 +2109,8 @@ mod tests {
 
         let tuned_section_partial = sections_partial
             .iter()
-            .find(|s| s.id == "tuned")
-            .expect("tuned section must exist");
+            .find(|s| s.id == "system_tuning")
+            .expect("system_tuning section must exist");
 
         let items_partial = tuned_section_partial
             .items

@@ -10,7 +10,10 @@
 mod sysctl_hosts;
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
+use axum::response::IntoResponse;
+use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
@@ -21,12 +24,15 @@ use inspectah_core::types::sysctl::{
 };
 use inspectah_pipeline::render::audit::render_audit;
 use inspectah_pipeline::render::report::render_report;
+use inspectah_pipeline::render::sysctl_report::AGGREGATE_LINE;
 use inspectah_pipeline::render::sysctl_report::{
     DRIFT_INTRO, TRUST_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
 use inspectah_web::adapter::build_web_view;
+use inspectah_web::aggregate_handlers::aggregate_view;
+use inspectah_web::handlers::{AppState, get_groups};
 use sysctl_hosts::{
     SysctlHost, export_session, reload, render_export, scan, scan_without_config, session,
 };
@@ -2696,6 +2702,59 @@ fn case_15_mask_only_and_glob_only_view() {
     );
 }
 
+// ── Groups and the aggregate view ───────────────────────────────────
+
+/// The JSON body a handler returns.
+async fn handler_json(response: impl IntoResponse) -> serde_json::Value {
+    let body = axum::body::to_bytes(response.into_response().into_body(), usize::MAX)
+        .await
+        .expect("the handler body reads");
+    serde_json::from_slice(&body).expect("the handler returns JSON")
+}
+
+/// The section ids `/api/groups` lists under System Configuration.
+async fn system_config_section_ids() -> Vec<String> {
+    let groups = handler_json(get_groups().await).await;
+    let system_config = groups
+        .as_array()
+        .expect("groups array")
+        .iter()
+        .find(|g| g["slug"] == "system-config")
+        .unwrap_or_else(|| panic!("no System Configuration group in {groups}"));
+    system_config["sections"]
+        .as_array()
+        .expect("sections array")
+        .iter()
+        .map(|s| s["id"].as_str().expect("section id").to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn case_15_mask_only_and_glob_only_groups() {
+    let mask_only = session(&reload(&scan(
+        SysctlHost::new()
+            .file("/usr/lib/sysctl.d/50-x.conf", "vm.swappiness = 10\n")
+            .link("/etc/sysctl.d/50-x.conf", "/dev/null")
+            .sysctl_a("vm.swappiness = 60\n"),
+    )));
+    let glob_only = session(&reload(&scan(SysctlHost::new().file(
+        "/etc/sysctl.d/50-rp.conf",
+        "net.ipv4.conf.*.rp_filter = 2\n",
+    ))));
+
+    // `/api/groups` reads the registry, not the session, so it answers the
+    // same for both hosts; each session is opened to confirm the layout
+    // loads as a `host` view, the state the System Tuning panel renders.
+    for (layout, held) in [("mask only", mask_only), ("glob only", glob_only)] {
+        assert_eq!(sysctl_view(&held)["state"], "host", "{layout}");
+        let ids = system_config_section_ids().await;
+        assert!(
+            ids.iter().any(|id| id == "system_tuning"),
+            "{layout}: System Configuration lists system_tuning: {ids:?}"
+        );
+    }
+}
+
 #[test]
 fn case_16_collection_failures_view() {
     let hosts = [
@@ -2873,5 +2932,90 @@ fn no_sysctl_item_id_view() {
     assert!(
         refused.is_err(),
         "a sysctl op has no target, got {refused:?}"
+    );
+}
+
+// ── Case 21 ──────────────────────────────────────────────────────────
+
+/// The `/etc` sysctl file the two fleet hosts disagree on.
+const FLEET_FILE: &str = "/etc/sysctl.d/90-x.conf";
+
+/// A fleet host named `hostname` whose [`FLEET_FILE`] holds `content`.
+fn fleet_host(hostname: &str, content: &str) -> InspectionSnapshot {
+    reload(&scan(
+        SysctlHost::new()
+            .file("/etc/hostname", &format!("{hostname}\n"))
+            .file(FLEET_FILE, content)
+            .sysctl_a("vm.swappiness = 10\n"),
+    ))
+}
+
+#[tokio::test]
+async fn case_21_aggregate() {
+    let hosts = [
+        fleet_host("host-a", "vm.swappiness = 10\n"),
+        fleet_host("host-b", "vm.swappiness = 20\n"),
+    ];
+    for host in &hosts {
+        section(host);
+        assert!(
+            host.kernel_boot
+                .as_ref()
+                .is_some_and(|kb| kb.tuned_active.is_empty()),
+            "no tuned selection on either host"
+        );
+    }
+    let (merged, _warnings) =
+        merge_snapshots(hosts.into(), None, None).expect("the two hosts merge");
+    let merged = reload(&merged);
+
+    let variants = config_entries_at(&merged, FLEET_FILE);
+    let contents: std::collections::BTreeSet<&str> =
+        variants.iter().map(|e| e.content.as_str()).collect();
+    assert_eq!(
+        contents,
+        ["vm.swappiness = 10\n", "vm.swappiness = 20\n"].into(),
+        "one content variant per host"
+    );
+    assert_eq!(variants.len(), 2, "two config variants at {FLEET_FILE}");
+    assert_eq!(
+        merged
+            .kernel_boot
+            .as_ref()
+            .expect("kernel/boot merges")
+            .sysctl,
+        None,
+        "the fleet carries no sysctl explanation"
+    );
+
+    assert!(
+        audit(&merged).contains(AGGREGATE_LINE),
+        "the aggregate audit prints the fleet line"
+    );
+
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(session(&merged))),
+    });
+    let view = handler_json(aggregate_view(axum::extract::State(state)).await).await;
+    assert_eq!(view["sysctl"], serde_json::json!({"state": "aggregate"}));
+
+    let sections = view["sections"].as_array().expect("sections array");
+    let ids: Vec<&str> = sections
+        .iter()
+        .map(|s| s["id"].as_str().expect("section id"))
+        .collect();
+    assert!(
+        !ids.contains(&"sysctls") && !ids.contains(&"tuned"),
+        "no sysctls or tuned section: {ids:?}"
+    );
+    let tuning = sections
+        .iter()
+        .find(|s| s["id"] == "system_tuning")
+        .unwrap_or_else(|| panic!("no system_tuning section in {ids:?}"));
+    assert_eq!(tuning["is_decision_section"], true);
+    assert_eq!(
+        tuning["items"],
+        serde_json::json!([]),
+        "a two-host fleet lists items flat, and has none: {tuning}"
     );
 }

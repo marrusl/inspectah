@@ -15,7 +15,7 @@ pub struct SectionMeta {
 
 /// Section IDs that existed in prior sidebar versions but are no longer
 /// live. They are not routed to any group in the web UI.
-const RETIRED_SECTION_IDS: &[&str] = &["system_tuning", "version_changes"];
+const RETIRED_SECTION_IDS: &[&str] = &["version_changes"];
 
 /// Logical group that collects related report sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,7 +54,9 @@ impl SectionGroup {
     pub fn for_section(section_name: &str) -> Self {
         match section_name {
             "rpm" | "packages" => Self::Packages,
-            "config" | "configs" | "kernel_boot" | "selinux" => Self::SystemConfig,
+            "config" | "configs" | "kernel_boot" | "system_tuning" | "selinux" => {
+                Self::SystemConfig
+            }
             "services" | "scheduled_tasks" | "containers" | "compose" => Self::Services,
             "users_groups" => Self::Identity,
             "network" => Self::Network,
@@ -129,6 +131,11 @@ impl SectionGroup {
                 SectionMeta {
                     id: "kernel_boot",
                     label: "Kernel & Boot",
+                    is_triage: true,
+                },
+                SectionMeta {
+                    id: "system_tuning",
+                    label: "System Tuning",
                     is_triage: true,
                 },
                 SectionMeta {
@@ -313,8 +320,25 @@ mod tests {
 
     #[test]
     fn retired_ids_are_explicitly_retired() {
-        assert!(SectionGroup::is_retired("system_tuning"));
         assert!(SectionGroup::is_retired("version_changes"));
+    }
+
+    #[test]
+    fn system_tuning_is_a_live_triage_section_after_kernel_boot() {
+        assert!(!SectionGroup::is_retired("system_tuning"));
+        assert_eq!(
+            SectionGroup::for_section("system_tuning"),
+            SectionGroup::SystemConfig
+        );
+        let members = SectionGroup::SystemConfig.member_sections();
+        let kernel = members
+            .iter()
+            .position(|s| s.id == "kernel_boot")
+            .expect("kernel_boot is a member");
+        let tuning = &members[kernel + 1];
+        assert_eq!(tuning.id, "system_tuning");
+        assert_eq!(tuning.label, "System Tuning");
+        assert!(tuning.is_triage, "the tuned rows are decisions");
     }
 
     #[test]
@@ -323,6 +347,7 @@ mod tests {
             "packages",
             "configs",
             "kernel_boot",
+            "system_tuning",
             "selinux",
             "services",
             "containers",

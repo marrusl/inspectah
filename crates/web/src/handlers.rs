@@ -814,7 +814,7 @@ pub async fn batch_toggle_group(
             let include_config = section_only.is_none()
                 || section_only == Some("config")
                 || section_only == Some("configs");
-            let include_kernel = section_only.is_none() || section_only == Some("kernel_boot");
+            let include_tuning = section_only.is_none() || section_only == Some("system_tuning");
             let include_selinux = section_only.is_none() || section_only == Some("selinux");
 
             // Config files
@@ -831,18 +831,18 @@ pub async fn batch_toggle_group(
                     });
                 }
             }
-            // Kernel boot items
-            if include_kernel && let Some(ref kernel) = snap.kernel_boot {
-                // Loaded modules are inventory and carry no op.
-                // Tuned
-                if !kernel.tuned_disposition.is_advisory() {
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::TunedSelection {
-                            profile: kernel.tuned_active.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
+            // System Tuning: the tuned row. Kernel & Boot holds no decision
+            // row (loaded modules are inventory and carry no op).
+            if include_tuning
+                && let Some(ref kernel) = snap.kernel_boot
+                && !kernel.tuned_disposition.is_advisory()
+            {
+                ops.push(inspectah_refine::types::RefinementOp::SetInclude {
+                    item_id: inspectah_refine::types::ItemId::TunedSelection {
+                        profile: kernel.tuned_active.clone(),
+                    },
+                    include: payload.include,
+                });
             }
             // SELinux ports
             if include_selinux && let Some(ref selinux) = snap.selinux {
@@ -1830,12 +1830,7 @@ mod tests {
             session: Arc::new(Mutex::new(session)),
         });
 
-        let unknown_slugs = vec![
-            "foobar",
-            "system_tuning",
-            "version_changes",
-            "unknown-group",
-        ];
+        let unknown_slugs = vec!["foobar", "version_changes", "unknown-group"];
         let payload = serde_json::json!({ "include": true });
         let body = axum::body::Bytes::from(serde_json::to_vec(&payload).unwrap());
 

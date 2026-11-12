@@ -1139,3 +1139,90 @@ async fn aggregate_view_contains_leaf_authority_metadata() {
         "aggregate/view summary must include leaf_total_hosts"
     );
 }
+
+// ---------------------------------------------------------------------------
+// System Tuning section
+// ---------------------------------------------------------------------------
+
+/// Every item in `section`, flat or zone-grouped.
+fn section_items(section: &serde_json::Value) -> Vec<&serde_json::Value> {
+    if let Some(items) = section.get("items").and_then(|i| i.as_array()) {
+        return items.iter().collect();
+    }
+    section["zones"]
+        .as_object()
+        .expect("a section has items or zones")
+        .values()
+        .flat_map(|zone| zone["items"].as_array().expect("zone items").iter())
+        .collect()
+}
+
+fn section_ids(json: &serde_json::Value) -> Vec<&str> {
+    json["sections"]
+        .as_array()
+        .expect("sections array")
+        .iter()
+        .map(|s| s["id"].as_str().expect("section id"))
+        .collect()
+}
+
+fn system_tuning(json: &serde_json::Value) -> &serde_json::Value {
+    json["sections"]
+        .as_array()
+        .expect("sections array")
+        .iter()
+        .find(|s| s["id"] == "system_tuning")
+        .unwrap_or_else(|| panic!("no system_tuning section in {:?}", section_ids(json)))
+}
+
+#[tokio::test]
+async fn aggregate_without_tuned_selection_has_an_empty_system_tuning_section() {
+    let app = app(aggregate_state());
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let section = system_tuning(&json);
+    assert_eq!(section["display_name"], "System Tuning");
+    assert_eq!(section["is_decision_section"], true);
+    assert!(section_items(section).is_empty(), "{section}");
+
+    let ids = section_ids(&json);
+    assert!(
+        !ids.contains(&"tuned") && !ids.contains(&"sysctls"),
+        "no tuned or sysctls section: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn aggregate_tuned_selection_is_under_system_tuning() {
+    use inspectah_core::types::kernelboot::KernelBootSection;
+
+    let mut snap = InspectionSnapshot::new();
+    snap.aggregate_meta = Some(AggregateSnapshotMeta {
+        label: "small-aggregate".into(),
+        host_count: 2,
+        hostnames: vec!["host-01".into(), "host-02".into()],
+        merged_at: "2026-05-21T12:00:00Z".into(),
+        baseline_provisional: false,
+        section_host_counts: BTreeMap::from([("kernel_boot".into(), 2)]),
+    });
+    snap.kernel_boot = Some(KernelBootSection {
+        tuned_active: "site-throughput".into(),
+        tuned_disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+    let (status, json) = get_json(&app, "/api/aggregate/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let items = section_items(system_tuning(&json));
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["item_id"]["kind"], "TunedSelection");
+    assert_eq!(items[0]["item_id"]["key"]["profile"], "site-throughput");
+    assert!(
+        !section_ids(&json).contains(&"tuned"),
+        "the tuned row has one section"
+    );
+}

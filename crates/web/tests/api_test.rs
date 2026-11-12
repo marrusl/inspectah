@@ -3920,3 +3920,121 @@ async fn upload_directory_is_swept_of_dead_part_files_on_first_open() {
         "the part file a dead process left is gone, and this upload's is too"
     );
 }
+
+// -- System Tuning section --------------------------------------------------
+
+#[tokio::test]
+async fn groups_list_system_tuning_in_system_config_after_kernel_boot() {
+    let app = app(test_state());
+    let (status, groups) = get_json(&app, "/api/groups").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let system_config = groups
+        .as_array()
+        .expect("groups array")
+        .iter()
+        .find(|g| g["slug"] == "system-config")
+        .expect("the System Configuration group");
+    let ids: Vec<&str> = system_config["sections"]
+        .as_array()
+        .expect("sections array")
+        .iter()
+        .map(|s| s["id"].as_str().expect("id"))
+        .collect();
+    let kernel = ids
+        .iter()
+        .position(|id| *id == "kernel_boot")
+        .expect("kernel_boot is listed");
+    assert_eq!(ids.get(kernel + 1), Some(&"system_tuning"), "{ids:?}");
+
+    let tuning = &system_config["sections"][kernel + 1];
+    assert_eq!(tuning["label"], "System Tuning");
+    assert_eq!(tuning["is_triage"], true);
+}
+
+const TUNED_PROFILE: &str = "site-throughput";
+
+/// A host with one config file and an included custom tuned profile.
+fn tuned_state() -> Arc<AppState> {
+    let state = test_state();
+    let mut snap = state.session.lock().unwrap().snapshot().clone();
+    snap.kernel_boot = Some(KernelBootSection {
+        tuned_active: TUNED_PROFILE.into(),
+        tuned_disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The item of every op the session's timeline holds, in order.
+fn timeline_items(state: &AppState) -> Vec<inspectah_refine::types::ItemId> {
+    use inspectah_refine::types::{RefinementOp, TimelineEntry};
+    state
+        .session
+        .lock()
+        .unwrap()
+        .timeline_history()
+        .into_iter()
+        .map(|annotated| match annotated.entry {
+            TimelineEntry::Op(RefinementOp::SetInclude { item_id, .. }) => item_id,
+            other => panic!("a batch toggle records only SetInclude ops, got {other:?}"),
+        })
+        .collect()
+}
+
+fn tuned_item() -> inspectah_refine::types::ItemId {
+    inspectah_refine::types::ItemId::TunedSelection {
+        profile: TUNED_PROFILE.into(),
+    }
+}
+
+#[tokio::test]
+async fn batch_toggle_system_tuning_produces_exactly_the_tuned_op() {
+    let state = tuned_state();
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/system_tuning",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(timeline_items(&state), [tuned_item()]);
+}
+
+#[tokio::test]
+async fn batch_toggle_kernel_boot_no_longer_reaches_the_tuned_row() {
+    let state = tuned_state();
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/kernel_boot",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        !timeline_items(&state).contains(&tuned_item()),
+        "the tuned row belongs to system_tuning"
+    );
+}
+
+#[tokio::test]
+async fn batch_toggle_system_config_group_still_reaches_the_tuned_row() {
+    let state = tuned_state();
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/system-config",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = timeline_items(&state);
+    assert!(items.contains(&tuned_item()), "{items:?}");
+    assert!(
+        items.contains(&inspectah_refine::types::ItemId::Config {
+            path: "/etc/httpd/conf/httpd.conf".into()
+        }),
+        "the group toggle reaches the other sections too: {items:?}"
+    );
+}
