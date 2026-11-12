@@ -832,8 +832,41 @@ real key file holding several key blocks, and the base image ships a
 copy of the same size, so the builds were unaffected: each image lists
 the Red Hat release keys as imported `gpg-pubkey` packages. The
 collector now accepts a key file when any line begins with the header,
-so the stock key is collected, included and copied. That change has not
-been run scan to build on a real host yet.
+so the stock key is collected.
+
+**Rescan at `9974f5f9`: one entry per key, the stock key left to the
+base image.** Same hosts, reverted, standard drift, scanned as root. Each
+snapshot now holds two `gpg_keys` entries where the `403843fd` run held
+215 on RHEL 10.2 and 509 on RHEL 9.8. The stock key is recorded once,
+excluded, with `shipped_by_base: redhat-release` (`rpm -V redhat-release`
+exit 0 on both, `rpm -qf` names `redhat-release`), with its full content
+(20700 bytes on 10.2, 3682 on 9.8). EPEL's key is recorded once,
+included, owned by `epel-release`, which the base lacks; on 10.2 its
+`gpgkey_references` holds the `$releasever_major` literal. No GPG warning
+in the snapshot and no `RPM-GPG-KEY` line on stderr. Snapshot size went
+from 5,205,871 to 5,139,765 bytes on 10.2 and from 5,336,264 to
+5,138,878 on 9.8; the version between the two, which collected the stock
+key once per section with its content, was never run here. Both
+Containerfiles read `GPG Keys (1)`, the directory `COPY`, and
+`# Not copied: /etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release (the base image
+ships it (redhat-release, unmodified on the source host))`; the audit has
+a `GPG Keys Not Copied (1)` table with the same reason, and the staged
+`config/etc/pki/rpm-gpg/` holds only the EPEL key. The unchanged refine
+export carries the same section (HTTP 200, `x-export-warnings: []`).
+
+All four builds passed with the COPY-source check clean: RHEL 10.2 scan
+488 s and refine 373 s (lint `nonempty-boot`, `nonempty-run-tmp`,
+`var-tmpfiles`), RHEL 9.8 scan 644 s and refine 458 s (the last two).
+Every image imports the EPEL key (`0xE37ED158` on 10, `0x3228467C` on 9)
+and the Red Hat keys from the base image's file, and the image's
+`RPM-GPG-KEY-redhat-release` has the base image's sha256 (`d5ddf4a0...` on
+10.2, `0db3dc1b...` on 9.8, each also the host's). The scan images have
+`epel-release`; the refine images do not, as before.
+
+On RHEL 9.8 the drift run dropped the ssh session that started it
+(`Read from remote host ...: Operation timed out`) while driftify carried
+on. Start a drift-then-scan run on the guest with `ssh -n ... setsid
+nohup`, as for refine, and wait on a marker file, not on the session.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
