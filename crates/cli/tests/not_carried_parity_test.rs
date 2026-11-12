@@ -902,14 +902,26 @@ fn the_scan_prints_a_notice_for_not_carried_unit_owners() {
                 .to_string()
         ]
     );
-    // Both places the notice points at exist in the scan tarball.
+    // Both places the notice points at list the packages it names, first
+    // and in its order.
     let scan = Surfaces::read(dir.path());
-    assert!(!scan.not_carried_table().is_empty(), "{}", scan.audit);
-    assert!(
-        !scan.not_carried_block().is_empty(),
-        "{}",
-        scan.containerfile
-    );
+    let named = ["firewalld", "rhc"];
+    let block_names: Vec<&str> = scan
+        .not_carried_block()
+        .iter()
+        .skip(1)
+        .filter_map(|l| l.strip_prefix("#   "))
+        .filter_map(|l| l.split(' ').next())
+        .collect();
+    assert_eq!(block_names[..named.len()], named, "{}", scan.containerfile);
+    let table_names: Vec<&str> = scan
+        .not_carried_table()
+        .iter()
+        .skip(4)
+        .filter_map(|row| row.split('|').nth(1))
+        .map(str::trim)
+        .collect();
+    assert_eq!(table_names[..named.len()], named, "{}", scan.audit);
 }
 
 /// No enabled units, so no not-carried package owns one: the not-carried
