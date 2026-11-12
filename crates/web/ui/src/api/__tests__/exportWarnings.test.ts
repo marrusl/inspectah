@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_CLIENT_WARNINGS,
   parseExportWarnings,
   UNREADABLE_WARNINGS_TEXT,
 } from "../exportWarnings";
@@ -68,5 +69,29 @@ describe("parseExportWarnings", () => {
       { kind: "notice", text: "kept" },
       { kind: "failure", text: UNREADABLE_WARNINGS_TEXT },
     ]);
+  });
+
+  it("passes a list at the server's ceiling through unchanged", () => {
+    const entries = Array.from({ length: MAX_CLIENT_WARNINGS }, (_, i) => ({
+      kind: "failure",
+      text: `entry ${i}`,
+    }));
+    expect(parseExportWarnings(JSON.stringify(entries))).toEqual(entries);
+  });
+
+  it("caps a longer list and says how many entries were dropped", () => {
+    const entries = Array.from({ length: 30 }, (_, i) => ({
+      kind: "notice",
+      text: `entry ${i}`,
+    }));
+    const parsed = parseExportWarnings(JSON.stringify(entries));
+    expect(parsed).toHaveLength(MAX_CLIENT_WARNINGS);
+    expect(parsed.slice(0, MAX_CLIENT_WARNINGS - 1)).toEqual(
+      entries.slice(0, MAX_CLIENT_WARNINGS - 1),
+    );
+    expect(parsed[MAX_CLIENT_WARNINGS - 1]).toEqual({
+      kind: "failure",
+      text: "...and 10 more not shown",
+    });
   });
 });

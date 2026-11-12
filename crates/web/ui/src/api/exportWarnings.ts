@@ -21,6 +21,15 @@ export const UNREADABLE_WARNINGS_TEXT =
   "The server sent export warnings this page could not read. " +
   "Check the audit report and the Containerfile in the export.";
 
+/**
+ * The most entries a well-formed header can hold: `MAX_HEADER_WARNINGS`
+ * (20, in crates/web/src/handlers.rs) plus the server's "...and N more"
+ * tail. A longer list is not from that server, so the client keeps the
+ * first 20 and replaces the rest with one failure saying how many were
+ * dropped, rather than rendering an unbounded list.
+ */
+export const MAX_CLIENT_WARNINGS = 21;
+
 const UNREADABLE: ExportWarning = {
   kind: "failure",
   text: UNREADABLE_WARNINGS_TEXT,
@@ -56,5 +65,11 @@ export function parseExportWarnings(raw: string | null): ExportWarning[] {
     warnings.push({ kind: kind === "notice" ? "notice" : "failure", text });
   }
   if (unreadable) warnings.push(UNREADABLE);
+  if (warnings.length > MAX_CLIENT_WARNINGS) {
+    const kept = warnings.slice(0, MAX_CLIENT_WARNINGS - 1);
+    const dropped = warnings.length - kept.length;
+    kept.push({ kind: "failure", text: `...and ${dropped} more not shown` });
+    return kept;
+  }
   return warnings;
 }

@@ -60,9 +60,15 @@ and it never throws, because the tarball is already downloaded when it runs:
   are dropped and replaced by that same entry, once, at the end.
 - An unknown `kind` is shown as a `failure`, never hidden and never
   downgraded to a notice.
+- A list longer than `MAX_CLIENT_WARNINGS` (21: the server's
+  `MAX_HEADER_WARNINGS` of 20 plus its tail) keeps the first 20 and ends
+  with one `failure`, `"...and N more not shown"`. A well-formed header
+  never reaches this; it keeps the dialog bounded if one does. If the
+  server's cap changes, change this constant with it.
 
 `ExportDialog.tsx` closes on success when the list is empty. Otherwise it
-stays open as "Downloaded, with warnings" with one inline alert per entry:
+stays open as "Downloaded, with warnings", with the accessible name
+"Export warnings" in place of "Export tarball", and one inline alert per entry:
 `failure` as `warning` (the export itself succeeded; the dialog keeps
 `danger` for "Export failed"), `notice` as `info`. The text is the alert
 title as a React text node. Alerts are not individually dismissable;
