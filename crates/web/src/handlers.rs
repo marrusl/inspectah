@@ -6,7 +6,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::users::UserContainerfileStrategy;
-use inspectah_refine::export_warning::{ExportWarning, ExportWarningKind};
+use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{RefinementOp, RepoProvenance, TimelineEntry, UserPasswordOp};

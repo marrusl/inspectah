@@ -68,6 +68,7 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::collect::collect;
+use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_pipeline::redaction::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::not_carried::{
@@ -75,7 +76,6 @@ use inspectah_pipeline::render::not_carried::{
 };
 use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
-use inspectah_refine::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::{RefineSession, render_refine_export};
 use inspectah_refine::types::{ItemId, RefinementOp};

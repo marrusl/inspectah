@@ -11,16 +11,16 @@ use inspectah_pipeline::build::extract::{
     ArchiveViolation, BudgetReader, EntryKind, SeenPaths, confined_rel, create_confined_dir,
     is_single_normal_component,
 };
+use inspectah_pipeline::export_warning::{ExportWarning, sanitize_bounded};
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
-use inspectah_pipeline::render::not_carried::{NotCarriedPackage, not_carried_packages};
+use inspectah_pipeline::render::not_carried::not_carried_notice;
 use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
-use crate::export_warning::ExportWarning;
 use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
@@ -4099,86 +4099,6 @@ fn not_verified_warning(pkg: &PackageEntry) -> ExportWarning {
     ))
 }
 
-/// [`sanitize_package_id`], then cut to at most `max` bytes, ending in
-/// `...` when cut, for a snapshot-chosen name bound for the warnings
-/// header.
-fn sanitize_bounded(id: &str, max: usize) -> String {
-    const ELLIPSIS: &str = "...";
-    let mut id = sanitize_package_id(id);
-    if id.len() > max {
-        // Sanitized ids are ASCII, so any byte index is a char boundary.
-        id.truncate(max - ELLIPSIS.len());
-        id.push_str(ELLIPSIS);
-    }
-    id
-}
-
-/// How many package names the not-carried notice spells out before it
-/// counts the rest. Three keeps the notice to one line in the Export
-/// dialog and names every unit owner measured on the RHEL 10.2
-/// validation host (`cronie`, `firewalld`, `rsyslog`) and all but one of
-/// the four on RHEL 9.8.
-const NOT_CARRIED_NOTICE_NAMES: usize = 3;
-
-/// The most bytes one name in the not-carried notice may take, after
-/// sanitizing. The snapshot names these packages, so without a bound
-/// their length is the snapshot's choice, and the notice travels in a
-/// response header.
-const NOT_CARRIED_NOTICE_NAME_MAX: usize = 64;
-
-/// The one notice an export carries when it leaves out not-carried
-/// packages that own a unit enabled on the source host, or `None` when
-/// it leaves out none.
-///
-/// `owners` are those packages' display names, in the `# Not carried`
-/// block's order, which puts unit owners first. The first
-/// [`NOT_CARRIED_NOTICE_NAMES`] are named and the rest counted. Each name
-/// is sanitized like a package id in any other export warning, then
-/// bounded, so the whole entry is printable ASCII of bounded size.
-fn not_carried_notice(owners: &[String]) -> Option<ExportWarning> {
-    if owners.is_empty() {
-        return None;
-    }
-    let shown: Vec<String> = owners
-        .iter()
-        .take(NOT_CARRIED_NOTICE_NAMES)
-        .map(|name| sanitize_bounded(name, NOT_CARRIED_NOTICE_NAME_MAX))
-        .collect();
-    let rest = owners.len() - shown.len();
-    let names = if rest > 0 {
-        format!("{} and {rest} more", shown.join(", "))
-    } else {
-        shown.join(", ")
-    };
-    let lead = match owners.len() {
-        1 => "1 package that owns a unit enabled on the source host is not carried".to_string(),
-        n => format!("{n} packages that own a unit enabled on the source host are not carried"),
-    };
-    Some(ExportWarning::notice(format!(
-        "{lead}: {names}. See the Not carried table in audit-report.md \
-         and the # Not carried block in the Containerfile."
-    )))
-}
-
-/// Reduce a package id to the bytes a staged filename may carry, mapping
-/// everything else to `_`.
-///
-/// The id comes from a scanned snapshot and the warning built from it ends
-/// up in an HTTP response header, where a newline is header injection.
-/// Mapping every other byte makes the result printable ASCII by
-/// construction, rather than leaving the header boundary to check.
-fn sanitize_package_id(id: &str) -> String {
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '~' | '^' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
 /// Prove the staged upload of every included package that claims one.
 ///
 /// Returns the proved uploads and one warning per package that claimed an
@@ -4444,12 +4364,7 @@ pub fn render_refine_export(
     // `# Not carried` block and the audit table render, so all three name
     // the same packages. It leads the warnings: there is at most one, and
     // the header's cap then never drops it behind a run of failures.
-    let unit_owners: Vec<String> = not_carried_packages(snap)
-        .iter()
-        .filter(|p| !p.enabled_units.is_empty())
-        .map(NotCarriedPackage::display_name)
-        .collect();
-    if let Some(notice) = not_carried_notice(&unit_owners) {
+    if let Some(notice) = not_carried_notice(snap) {
         warnings.insert(0, notice);
     }
 
@@ -7788,40 +7703,6 @@ mod tests {
         }
     }
 
-    /// Every byte class the export's warnings can carry.
-    ///
-    /// The id comes from a scanned snapshot and the warning built from
-    /// it ends up in an HTTP response header.
-    #[test]
-    fn sanitize_package_id_table() {
-        let cases: &[(&str, &str)] = &[
-            ("epel-release.noarch", "epel-release.noarch"),
-            ("libstdc++-devel.x86_64", "libstdc++-devel.x86_64"),
-            ("foo~rc1^git1.noarch", "foo~rc1^git1.noarch"),
-            // The header-injection shape, and the two bytes that carry it.
-            ("evil\r\nX-Evil: 1.noarch", "evil__X-Evil__1.noarch"),
-            // DEL is the one `serde_json::to_string` does not escape on
-            // the way into the response header, so this row is not
-            // redundant with that layer -- it is the only thing keeping
-            // a byte `HeaderValue` rejects out of the value.
-            ("evil\u{7f}.noarch", "evil_.noarch"),
-            // Non-ASCII: serde_json emits these raw, and a header value
-            // may not hold them. One `_` per *char*, not per byte:
-            // '\u{20ac}' is three bytes and becomes one underscore.
-            // `validate_staged_name` next door scans bytes, so the two
-            // do not agree on granularity -- which does not matter for
-            // either one's purpose, but is worth a reader knowing before
-            // they assume it does.
-            ("\u{03c0}kg.noarch", "_kg.noarch"),
-            ("a\u{20ac}b.noarch", "a_b.noarch"),
-            ("evil$(id).noarch", "evil__id_.noarch"),
-            ("", ""),
-        ];
-        for (input, want) in cases {
-            assert_eq!(sanitize_package_id(input), *want, "{input:?}");
-        }
-    }
-
     /// A not-verified failure bounds a snapshot-chosen package id, and the
     /// worst a header can then carry, the notice plus nineteen such
     /// failures and the tail at the cap of twenty, stays under the 8 KB a
@@ -7856,7 +7737,9 @@ mod tests {
         );
 
         // The header at its worst, serialized as the route serializes it.
-        let notice = not_carried_notice(&vec![hostile; 10]).expect("owners give a notice");
+        use inspectah_pipeline::render::not_carried::not_carried_notice_for_owners;
+        let notice =
+            not_carried_notice_for_owners(&vec![hostile; 10]).expect("owners give a notice");
         let mut worst = vec![notice];
         worst.extend(std::iter::repeat_n(failure.clone(), 19));
         worst.push(ExportWarning::failure(format!(
@@ -7865,48 +7748,6 @@ mod tests {
         )));
         let header = serde_json::to_string(&worst).unwrap();
         assert!(header.len() < 8192, "{} bytes", header.len());
-    }
-
-    /// The not-carried notice: absent with no unit owners, singular for
-    /// one, three names and a count past three, and a hostile name
-    /// sanitized and bounded so the entry stays a valid header value.
-    #[test]
-    fn not_carried_notice_names_owners_and_bounds_its_text() {
-        use crate::export_warning::ExportWarningKind;
-        const TAIL: &str = ". See the Not carried table in audit-report.md \
-                            and the # Not carried block in the Containerfile.";
-        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-
-        assert_eq!(not_carried_notice(&[]), None);
-
-        let cases: &[(&[&str], &str)] = &[
-            (
-                &["firewalld"],
-                "1 package that owns a unit enabled on the source host is not carried: firewalld",
-            ),
-            (
-                &["cronie", "firewalld", "rsyslog"],
-                "3 packages that own a unit enabled on the source host are not carried: \
-                 cronie, firewalld, rsyslog",
-            ),
-            (
-                &["cronie", "firewalld", "insights-client", "rsyslog", "rhc"],
-                "5 packages that own a unit enabled on the source host are not carried: \
-                 cronie, firewalld, insights-client and 2 more",
-            ),
-        ];
-        for (owners, lead) in cases {
-            let notice = not_carried_notice(&names(owners)).expect("owners give a notice");
-            assert_eq!(notice.kind(), ExportWarningKind::Notice);
-            assert_eq!(notice.text(), format!("{lead}{TAIL}"), "{owners:?}");
-        }
-
-        let hostile = format!("evil\r\nX-Evil: 1\u{7f}\u{20ac}{}", "a".repeat(10_000));
-        let notice = not_carried_notice(&[hostile.clone(), hostile.clone(), hostile]).unwrap();
-        let text = notice.text();
-        assert!(text.contains("evil__X-Evil__1__aaa"), "{text}");
-        assert!(text.len() < 512, "{} bytes", text.len());
-        assert!(text.is_ascii() && !text.chars().any(|c| c.is_ascii_control()));
     }
 
     /// Each refusal [`verify_staged_upload`] can make, paired with an

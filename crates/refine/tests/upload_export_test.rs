@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_refine::export_warning::ExportWarning;
+use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::session::{
     RefineSession, RemovalOutcome, UploadMatchKind, render_refine_export,
 };
