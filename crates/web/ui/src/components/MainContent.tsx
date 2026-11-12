@@ -20,6 +20,7 @@ import type {
 } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
@@ -303,36 +304,28 @@ export function MainContent({
     [viewData, onViewUpdate, onMutationError],
   );
 
-  // Not carried rows whose Include request is in flight. The ref is the
-  // guard: it is set before the request leaves, so a second click that lands
-  // before React re-renders still sees it. The state copy disables the button.
-  const notCarriedInFlight = useRef(new Set<string>());
-  const [notCarriedPending, setNotCarriedPending] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  // Not carried rows whose Include request is in flight, by row key.
+  const notCarriedGuard = usePendingGuard();
+  const runNotCarried = notCarriedGuard.runGuarded;
 
   // Not carried include: the ordinary package op, with the row's item_id
   // passed back verbatim (Refine projection contract).
   const handleNotCarriedInclude = useCallback(
     (row: NotCarriedRow) => {
-      const key = notCarriedRowKey(row);
-      if (notCarriedInFlight.current.has(key)) return;
-      notCarriedInFlight.current.add(key);
-      setNotCarriedPending(new Set(notCarriedInFlight.current));
-      applyOp({
-        op: "SetInclude",
-        target: { item_id: row.item_id, include: true },
-      })
-        .then((updatedView) => onViewUpdate(updatedView))
-        .catch((err) =>
-          onMutationError(err instanceof Error ? err : new Error(String(err))),
-        )
-        .finally(() => {
-          notCarriedInFlight.current.delete(key);
-          setNotCarriedPending(new Set(notCarriedInFlight.current));
-        });
+      runNotCarried(notCarriedRowKey(row), () =>
+        applyOp({
+          op: "SetInclude",
+          target: { item_id: row.item_id, include: true },
+        })
+          .then((updatedView) => onViewUpdate(updatedView))
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runNotCarried, onViewUpdate, onMutationError],
   );
 
   // Repo toggle: build SetInclude op for repos
@@ -514,7 +507,7 @@ export function MainContent({
           rows={viewData?.not_carried_packages ?? []}
           onInclude={handleNotCarriedInclude}
           isPending={isPending}
-          pendingKeys={notCarriedPending}
+          pendingKeys={notCarriedGuard.pendingKeys}
           reveal={revealNotCarried}
           onRevealed={onNotCarriedRevealed}
         />
