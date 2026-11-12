@@ -396,17 +396,21 @@ fn case_03_same_name_shadow_each_adjacent_pair() {
 // ── Legacy capture ───────────────────────────────────────────────────
 
 #[test]
-fn legacy_sysctl_overrides_not_captured() {
+fn legacy_sysctl_overrides_absent_from_a_scan() {
+    // The case 11 host: a file sets a key the kernel reports differently.
     let snap = reload(&scan(
         SysctlHost::new()
             .file("/etc/sysctl.d/90-swap.conf", "vm.swappiness = 10\n")
             .sysctl_a("vm.swappiness = 60\n"),
     ));
     let written = json(&snap);
-    assert_eq!(
-        written["kernel_boot"]["sysctl_overrides"],
-        serde_json::json!([]),
-        "the legacy per-key capture no longer runs"
+    let kernel_boot = written["kernel_boot"]
+        .as_object()
+        .expect("kernel_boot is serialized");
+    assert!(
+        !kernel_boot.contains_key("sysctl_overrides"),
+        "the legacy per-key field is gone from the snapshot, got keys: {:?}",
+        kernel_boot.keys().collect::<Vec<_>>()
     );
     assert_eq!(runtime_keys(&snap), ["vm.swappiness"]);
 }

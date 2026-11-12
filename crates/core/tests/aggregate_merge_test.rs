@@ -8,9 +8,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
-use inspectah_core::types::kernelboot::{
-    AlternativeEntry, KernelBootSection, KernelModule, SysctlOverride,
-};
+use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, KernelModule};
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::rpm::{
@@ -309,15 +307,6 @@ fn test_kernel_module_identity_is_name() {
         ..Default::default()
     };
     assert_eq!(k.identity_key().as_ref(), "vfio_pci");
-}
-
-#[test]
-fn test_sysctl_override_identity_is_key() {
-    let s = SysctlOverride {
-        key: "net.ipv4.ip_forward".into(),
-        ..Default::default()
-    };
-    assert_eq!(s.identity_key().as_ref(), "net.ipv4.ip_forward");
 }
 
 #[test]
@@ -1924,11 +1913,6 @@ fn test_merge_kernelboot_sections_all_none() {
 fn test_merge_kernelboot_sections_modules_and_snippets() {
     let s1 = KernelBootSection {
         cmdline: "root=/dev/sda1 console=ttyS0".into(),
-        sysctl_overrides: vec![SysctlOverride {
-            key: "net.ipv4.ip_forward".into(),
-            runtime: "1".into(),
-            ..Default::default()
-        }],
         loaded_modules: vec![KernelModule {
             name: "vfio_pci".into(),
             ..Default::default()
@@ -1942,11 +1926,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
     };
     let s2 = KernelBootSection {
         cmdline: "root=/dev/sda1 console=ttyS0".into(),
-        sysctl_overrides: vec![SysctlOverride {
-            key: "net.ipv4.ip_forward".into(),
-            runtime: "1".into(),
-            ..Default::default()
-        }],
         loaded_modules: vec![
             KernelModule {
                 name: "vfio_pci".into(),
@@ -1966,13 +1945,6 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_kernelboot_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
-
-    // sysctl merged
-    assert_eq!(result.sysctl_overrides.len(), 1);
-    assert_eq!(
-        result.sysctl_overrides[0].aggregate.as_ref().unwrap().count,
-        2
-    );
 
     // loaded_modules merged
     assert_eq!(result.loaded_modules.len(), 2);

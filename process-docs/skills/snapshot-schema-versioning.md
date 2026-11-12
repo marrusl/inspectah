@@ -9,11 +9,11 @@ description: Snapshot JSON schema is version-gated by exact match (MIN_SCHEMA ==
 `schema_version` field. The loading contract is an exact match:
 
 ```rust
-pub const SCHEMA_VERSION: u32 = 26;
+pub const SCHEMA_VERSION: u32 = 27;
 
 // ...
 
-const MIN_SCHEMA: u32 = 26;
+const MIN_SCHEMA: u32 = 27;
 
 if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
     return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
@@ -22,17 +22,17 @@ if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSIO
 
 `MIN_SCHEMA` and `SCHEMA_VERSION` are independent constants, not tied
 together by the type system -- they just currently hold the same value
-(both 26). Only `schema_version == 26` loads; any other value is
+(both 27). Only `schema_version == 27` loads; any other value is
 rejected. Snapshots on an older schema must be re-scanned -- there is no
 migration path, and with the window closed to an exact match there is no
 longer even a one-release grace period for a prior version.
 
 **Raise `MIN_SCHEMA` with `SCHEMA_VERSION`, and decide it explicitly.**
-Bumping `SCHEMA_VERSION` alone widens the window: 26 with `MIN_SCHEMA`
-still 25 accepts both. Ask what the prior version *is* before leaving it
+Bumping `SCHEMA_VERSION` alone widens the window: 27 with `MIN_SCHEMA`
+still 26 accepts both. Ask what the prior version *is* before leaving it
 accepted, and derive the answer rather than reusing the last one.
 
-Three bumps, two different arguments, all landing on "reject":
+Four bumps, two different arguments, all landing on "reject":
 
 - 23 -> 24 added a cross-inspector annotation written once, at collect
   time, so a schema-23 snapshot is by definition one collected before
@@ -52,6 +52,20 @@ Three bumps, two different arguments, all landing on "reject":
   the real file. Nothing in the payload tells it from a file that is
   really empty. **Semantic staleness**, with a correctness cost: the
   stale snapshot is not just less informative, it exports a wrong file.
+- 26 -> 27 removed `kernel_boot.sysctl_overrides` (and the
+  `SysctlOverride` type) in favour of `kernel_boot.sysctl`, which holds
+  the files on systemd-sysctl's search path and the running values and
+  resolves them by its precedence. A schema-26 payload still parses:
+  serde drops the unknown key, so a removed field alone would not have
+  forced anything. It is refused because it predates the precedence
+  model. Its overrides were read per key with no notion of one file
+  shadowing another, so a source it names may be a file the host never
+  applied, and it carries none of the files the new section is built
+  from. **Semantic staleness**, the removed field being the visible
+  part. The refusal tests in all three loaders read one copy of that
+  payload, `testdata/fixtures/snapshot/schema-26-sysctl-overrides.json`,
+  so the next bump has a template for keeping the closed version's
+  payload out of the test bodies.
 
 The second argument does not follow from the first. A renamed field
 would force the bump even if the data were recoverable, and stale

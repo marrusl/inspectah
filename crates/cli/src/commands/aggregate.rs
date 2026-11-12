@@ -581,18 +581,37 @@ mod tests {
         );
     }
 
+    /// A schema-26 host tarball predates the sysctl precedence model: its
+    /// per-key sysctl overrides may name files the host shadowed. The
+    /// aggregate loader refuses it, and the merge never sees it.
+    #[test]
+    fn schema_26_snapshot_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let json: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../testdata/fixtures/snapshot/schema-26-sysctl-overrides.json"
+        ))
+        .unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &json);
+
+        let err = load_snapshot_from_tarball(&tarball).expect_err("schema 26 is refused");
+        assert!(
+            format!("{err:#}").contains("unsupported schema version: 26"),
+            "expected the schema refusal, got: {err:#}"
+        );
+    }
+
     /// Build two valid aggregate-ready tarballs in `dir`. Each snapshot has
     /// an `os_release` section so it passes the non-empty check, and uses
     /// distinct hostnames to avoid the duplicate-hostname error.
     fn make_aggregate_pair(dir: &Path) -> (PathBuf, PathBuf) {
         let json_a = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
         });
         let json_b = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
@@ -676,7 +695,7 @@ mod tests {
 
         // Create one normal snapshot and one sensitive snapshot
         let json_normal = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-normal.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -684,7 +703,7 @@ mod tests {
         });
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-sensitive.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -734,7 +753,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let json_sensitive = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-a.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},
@@ -745,7 +764,7 @@ mod tests {
         });
 
         let json_b = serde_json::json!({
-            "schema_version": 26,
+            "schema_version": 27,
             "meta": {"hostname": "host-b.example.com"},
             "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
             "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"},

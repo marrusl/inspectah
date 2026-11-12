@@ -1,0 +1,23 @@
+{
+  "schema_version": 26,
+  "meta": {"hostname": "host-a.example.com"},
+  "system_type": "package-mode",
+  "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+  "preflight": {"status": "ok"},
+  "warnings": [],
+  "redactions": [],
+  "redaction_state": {"state": "fully_redacted", "redacted_by": "t", "config_hash": "h"},
+  "kernel_boot": {
+    "cmdline": "quiet",
+    "sysctl_overrides": [
+      {
+        "key": "vm.swappiness",
+        "runtime": "60",
+        "default": "10",
+        "source": "/etc/sysctl.d/90-swap.conf",
+        "disposition": {"kind": "actionable", "include": true},
+        "aggregate": null
+      }
+    ]
+  }
+}

@@ -18,7 +18,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 26;
+pub const SCHEMA_VERSION: u32 = 27;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -104,17 +104,16 @@ impl InspectionSnapshot {
     /// Held equal to `SCHEMA_VERSION`: the loading contract is an exact
     /// match, not a rolling window.
     ///
-    /// Schema 26 adds the `content_not_captured` advisory: a config file
-    /// the collector found but could not read (over the size cap,
-    /// permission denied, not text) is recorded as that advisory instead
-    /// of as an included entry with empty content. A schema-25 payload
-    /// deserializes, which is why the window closes on it anyway. It was
-    /// collected before the collector told a failed read from an empty
-    /// file, so a failed read in it is an ordinary included entry with
-    /// empty content, and an export from it copies that empty file over
-    /// the real one. Nothing in the snapshot tells the two apart after
-    /// the fact: only a re-scan can.
-    const MIN_SCHEMA: u32 = 26;
+    /// Schema 27 replaces the per-key sysctl override list, which carried
+    /// a decision on each key, with `kernel_boot.sysctl`, the files
+    /// on systemd-sysctl's search path and the running values, resolved
+    /// by its precedence. A schema-26 payload deserializes (serde drops
+    /// the old key), which is why the window closes on it anyway. It was
+    /// collected before the collector followed that precedence: an
+    /// override in it may name a file another file shadowed on the host,
+    /// and the payload holds none of the files, so nothing at load time
+    /// can rebuild the explanation. Only a re-scan can.
+    const MIN_SCHEMA: u32 = 27;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_future_version_rejected() {
-        let json = r#"{"schema_version": 27, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let json = r#"{"schema_version": 28, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
         assert!(
             result.is_err(),

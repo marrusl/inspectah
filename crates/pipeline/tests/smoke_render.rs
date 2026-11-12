@@ -9,7 +9,7 @@ use inspectah_core::types::FindingKind;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::KernelBootSection;
 // redaction types used indirectly via the redaction engine in test 8
 use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
@@ -98,15 +98,6 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.kernel_boot = Some(KernelBootSection {
         cmdline: "quiet crashkernel=auto nosmt=force".into(),
-        sysctl_overrides: vec![SysctlOverride {
-            key: "net.ipv4.ip_forward".into(),
-            runtime: "1".into(),
-            default: "0".into(),
-            source: "/etc/sysctl.d/99-custom.conf".into(),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-        }],
         ..Default::default()
     });
     snap

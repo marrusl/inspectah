@@ -9,7 +9,7 @@ use inspectah_core::types::config::{
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
 };
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::network::{
     FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry,
 };
@@ -1002,13 +1002,6 @@ fn rich_snapshot() -> InspectionSnapshot {
 
     snap.kernel_boot = Some(KernelBootSection {
         cmdline: "quiet crashkernel=auto".into(),
-        sysctl_overrides: vec![SysctlOverride {
-            key: "kernel.sysrq".into(),
-            runtime: "16".into(),
-            default: "0".into(),
-            source: "/etc/sysctl.d/99-custom.conf".into(),
-            ..Default::default()
-        }],
         ..Default::default()
     });
 

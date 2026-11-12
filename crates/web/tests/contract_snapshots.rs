@@ -17,7 +17,7 @@ use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
 };
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit, RunningContainer};
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::network::{NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
@@ -242,13 +242,6 @@ fn contract_snapshot() -> InspectionSnapshot {
 
     snap.kernel_boot = Some(KernelBootSection {
         cmdline: "quiet crashkernel=auto rd.lvm.lv=rhel/root".into(),
-        sysctl_overrides: vec![SysctlOverride {
-            key: "net.ipv4.ip_forward".into(),
-            runtime: "1".into(),
-            default: "0".into(),
-            source: "/etc/sysctl.d/k8s.conf".into(),
-            ..Default::default()
-        }],
         ..Default::default()
     });
 

@@ -231,6 +231,26 @@ fn reject_schema_25_with_its_empty_failed_capture() {
     }
 }
 
+/// A schema-26 snapshot predates the sysctl precedence model: its
+/// per-key sysctl overrides may name files the host shadowed. Refine
+/// refuses to open it.
+#[test]
+fn schema_26_snapshot_is_refused() {
+    let dir = tempdir().unwrap();
+    let snap_json =
+        include_str!("../../../testdata/fixtures/snapshot/schema-26-sysctl-overrides.json");
+    let tarball = write_flat_tarball(dir.path(), snap_json);
+
+    match inspectah_refine::tarball::from_tarball(&tarball) {
+        Err(RefineError::SnapshotLoad(msg)) => assert!(
+            msg.contains("unsupported schema version: 26"),
+            "expected the schema refusal, got: {msg}"
+        ),
+        Err(other) => panic!("expected SnapshotLoad, got: {other:?}"),
+        Ok(_) => panic!("a schema-26 snapshot must not open in refine"),
+    }
+}
+
 #[test]
 fn reject_missing_snapshot_json() {
     let dir = tempdir().unwrap();

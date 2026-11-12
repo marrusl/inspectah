@@ -5,23 +5,6 @@ use super::aggregate::AggregatePrevalence;
 use super::sysctl::SysctlSection;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SysctlOverride {
-    #[serde(default)]
-    pub key: String,
-    #[serde(default)]
-    pub runtime: String,
-    #[serde(default)]
-    pub default: String,
-    #[serde(default)]
-    pub source: String,
-    #[serde(default)]
-    pub disposition: FindingKind,
-    #[serde(default, skip_serializing_if = "crate::is_false")]
-    pub locked: bool,
-    pub aggregate: Option<AggregatePrevalence>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelModule {
     #[serde(default)]
     pub name: String,
@@ -55,8 +38,6 @@ pub struct KernelBootSection {
     pub cmdline: String,
     #[serde(default)]
     pub grub_defaults: String,
-    #[serde(default)]
-    pub sysctl_overrides: Vec<SysctlOverride>,
     /// The sysctl search path and runtime values, collected read-only.
     /// `None` when collection failed and on an aggregate.
     #[serde(default)]
@@ -110,15 +91,6 @@ mod tests {
         let section = KernelBootSection {
             cmdline: "quiet crashkernel=auto".to_string(),
             grub_defaults: "GRUB_TIMEOUT=5".to_string(),
-            sysctl_overrides: vec![SysctlOverride {
-                key: "kernel.sysrq".to_string(),
-                runtime: "16".to_string(),
-                default: "0".to_string(),
-                source: "/etc/sysctl.d/99-custom.conf".to_string(),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-            }],
             sysctl: None,
             loaded_modules: vec![],
             tuned_active: "virtual-guest".to_string(),
@@ -143,15 +115,5 @@ mod tests {
              undecided profile would be baked into the Containerfile"
         );
         assert_eq!(section.tuned_disposition, FindingKind::excluded());
-    }
-
-    #[test]
-    fn sysctl_override_without_include_deserializes_as_true() {
-        let json = r#"{"key":"kernel.sysrq","runtime":"16","default":"0","source":"/etc/sysctl.d/99-custom.conf"}"#;
-        let so: SysctlOverride = serde_json::from_str(json).unwrap();
-        assert!(
-            so.disposition.is_included(),
-            "missing include field should deserialize as true"
-        );
     }
 }

@@ -124,9 +124,6 @@ impl Inspector for KernelbootInspector {
         let section = KernelBootSection {
             cmdline,
             grub_defaults: String::new(),
-            // The legacy per-key capture is retired; the field stays,
-            // always empty, until the schema bump removes it.
-            sysctl_overrides: Vec::new(),
             sysctl,
             loaded_modules,
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),

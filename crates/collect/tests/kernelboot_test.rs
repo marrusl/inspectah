@@ -357,7 +357,6 @@ fn empty_system() {
         other => panic!("expected SectionData::KernelBoot, got {:?}", other),
     };
 
-    assert!(section.sysctl_overrides.is_empty());
     assert!(section.loaded_modules.is_empty());
     assert!(section.tuned_active.is_empty());
     assert!(output.redaction_hints.is_empty());

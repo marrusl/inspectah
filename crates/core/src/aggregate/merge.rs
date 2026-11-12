@@ -315,25 +315,11 @@ impl AggregateMergeable for SelinuxPortLabel {
 // Kernel/boot types
 // ---------------------------------------------------------------------------
 
-use crate::types::kernelboot::{KernelModule, SysctlOverride};
+use crate::types::kernelboot::KernelModule;
 
 impl AggregateMergeable for KernelModule {
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.name)
-    }
-
-    fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
-        &mut self.aggregate
-    }
-
-    fn set_include(&mut self, val: bool) {
-        self.disposition = self.disposition.with_include(val);
-    }
-}
-
-impl AggregateMergeable for SysctlOverride {
-    fn identity_key(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.key)
     }
 
     fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
@@ -1915,11 +1901,6 @@ pub fn merge_kernelboot_sections(
         return None;
     }
 
-    let sysctl_overrides = merge_items(
-        collect_items(&sections, |s| &s.sysctl_overrides),
-        total_hosts,
-        hostnames,
-    );
     let loaded_modules = merge_items(
         collect_items(&sections, |s| &s.loaded_modules),
         total_hosts,
@@ -1962,7 +1943,6 @@ pub fn merge_kernelboot_sections(
     Some(KernelBootSection {
         cmdline,
         grub_defaults,
-        sysctl_overrides,
         // The sysctl section explains one host's files; an aggregate has
         // no host to explain.
         sysctl: None,
