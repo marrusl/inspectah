@@ -208,7 +208,12 @@ The pass is the config pass reused, not a new scrubber
 eligibility and comment exemptions under the field's path (runtime
 values under `/proc/sys`), the same whole-match replacement, the
 snapshot's one counter registry, and findings into `all_findings` like
-any other. A new consumer that parses content after redaction follows
+any other, one per match per path. An `/etc` sysctl file that is also a
+config entry is scrubbed in both copies, but the config pass has already
+recorded its matches, so the sysctl pass drops a content finding equal
+to one already recorded at that path. Recording both listed the file
+twice in `secrets-review.md` and counted each match twice wherever
+`redactions` is counted. A new consumer that parses content after redaction follows
 the same rule: give the pass a flag to set, and read the flag.
 
 ## Testing it

@@ -771,6 +771,10 @@ const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
 /// - A read file's `content` is scanned and replaced under the file's own
 ///   path; `redacted` records whether anything in it changed, which is
 ///   what makes `SysctlSection::effective()` report the file as unknown.
+///   A content finding equal to one in `recorded` is not returned: an
+///   `/etc` file with a config entry holds the same text there, and the
+///   config pass has already recorded that match at that path. The
+///   content is scrubbed either way; only the second record goes.
 /// - `link_target` and `OutsideLink.target` are scanned as one line under
 ///   the entry's path. A path is not a line systemd-sysctl parses, so a
 ///   change there does not set `redacted`.
@@ -784,6 +788,7 @@ const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
 fn redact_sysctl_section(
     section: &mut SysctlSection,
     registry: &mut CounterRegistry,
+    recorded: &[RedactionFinding],
 ) -> Vec<RedactionFinding> {
     let mut findings = Vec::new();
     for file in &mut section.files {
@@ -802,8 +807,21 @@ fn redact_sysctl_section(
                     findings.extend(scan_and_redact_field(target, &path, registry));
                 }
                 let before = content.clone();
-                findings.extend(scan_and_redact_field(content, &path, registry));
+                let content_findings = scan_and_redact_field(content, &path, registry);
                 *redacted = *content != before;
+                // One finding per match per path: each recorded finding
+                // at this path stands for one of ours, at most once.
+                let mut unmatched: Vec<&RedactionFinding> =
+                    recorded.iter().filter(|f| f.path == path).collect();
+                findings.extend(content_findings.into_iter().filter(|finding| {
+                    match unmatched.iter().position(|r| *r == finding) {
+                        Some(i) => {
+                            unmatched.swap_remove(i);
+                            false
+                        }
+                        None => true,
+                    }
+                }));
             }
         }
     }
@@ -1008,7 +1026,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         // The sysctl section: vendor, runtime and link-read files and
         // kernel values that no other pass sees.
         if let Some(ref mut sysctl) = kernelboot.sysctl {
-            all_findings.extend(redact_sysctl_section(sysctl, &mut registry));
+            let sysctl_findings = redact_sysctl_section(sysctl, &mut registry, &all_findings);
+            all_findings.extend(sysctl_findings);
         }
 
         // The dracut, modprobe, modules-load and tuned files are

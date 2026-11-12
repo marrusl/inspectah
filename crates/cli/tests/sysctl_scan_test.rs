@@ -25,6 +25,7 @@ use inspectah_core::types::sysctl::{
 use inspectah_pipeline::render::audit::render_audit;
 use inspectah_pipeline::render::configtree::PathError;
 use inspectah_pipeline::render::report::render_report;
+use inspectah_pipeline::render::secrets::render_secrets_review;
 use inspectah_pipeline::render::sysctl_report::AGGREGATE_LINE;
 use inspectah_pipeline::render::sysctl_report::{
     DRIFT_INTRO, TRUST_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
@@ -1287,9 +1288,9 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
             file: file_ref(SysctlDir::Etc, "80-app.conf"),
         }])
     );
-    // The config pass records one finding at the path and the sysctl
-    // pass records its own.
-    assert_eq!(findings_at(&secret_in_file, APP_CONF), 2);
+    // The config pass records the finding at the path; the sysctl pass
+    // scrubs its own copy without recording the same match again.
+    assert_eq!(findings_at(&secret_in_file, APP_CONF), 1);
 
     // Its twin has no sysctl section to redact; config carriage is the
     // same byte for byte.
@@ -1357,7 +1358,7 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
         }])
     );
     assert!(section(&file_only).redacted_runtime.is_empty());
-    assert_eq!(findings_at(&file_only, CORE_CONF), 2);
+    assert_eq!(findings_at(&file_only, CORE_CONF), 1);
     assert_eq!(findings_at(&file_only, PROC_SYS), 0);
 
     // One-line PEM through an allowed link.
@@ -1376,7 +1377,8 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
         }])
     );
     // The config walker reads the link through as well, so its entry
-    // records one finding at the link's path and the sysctl pass another.
+    // records the finding at the link's path, and the sysctl pass does
+    // not record it again.
     assert!(
         config_entry(&pem, pem_link)
             .content
@@ -1384,7 +1386,7 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
         "{:?}",
         config_entry(&pem, pem_link).content
     );
-    assert_eq!(findings_at(&pem, pem_link), 2);
+    assert_eq!(findings_at(&pem, pem_link), 1);
 
     // Equal values under different keys: the canary is the pairing.
     let equal = scan_without_canary(
@@ -1422,7 +1424,7 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
             "{copy}: the token occurs only on the password line"
         );
     }
-    assert_eq!(findings_at(&equal, APP_CONF), 2);
+    assert_eq!(findings_at(&equal, APP_CONF), 1);
 
     // Shadowed redacted file: it does not survive, so nothing is unknown.
     let vendor = "/usr/lib/sysctl.d/50-x.conf";
@@ -1447,6 +1449,53 @@ fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
         }]
     );
     assert_eq!(findings_at(&shadowed, vendor), 1);
+}
+
+/// The `secrets-review.md` rows that name `path`.
+fn review_rows(snap: &InspectionSnapshot, path: &str) -> Vec<String> {
+    let cell = format!("| {path} |");
+    render_secrets_review(snap)
+        .lines()
+        .filter(|l| l.starts_with(&cell))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn case_18_a_sysctl_file_with_a_config_entry_is_one_finding() {
+    // Observed on real RHEL 9.8 and 10.2 hosts: an `/etc/sysctl.d` file
+    // with a password line was listed twice in secrets-review.md, once by
+    // the config pass and once by the sysctl pass, for the same match.
+    let snap = scan_without_canary(
+        "secret in an /etc file with a config entry",
+        SysctlHost::new()
+            .file(APP_CONF, "db_password = canary-realhost\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+        "canary-realhost",
+    );
+    assert!(config_entry(&snap, APP_CONF).content.contains("REDACTED_"));
+    assert!(read_content(section(&snap), APP_CONF).contains("REDACTED_"));
+    let rows = review_rows(&snap, APP_CONF);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(findings_at(&snap, APP_CONF), 1, "{:?}", snap.redactions);
+}
+
+#[test]
+fn case_18_a_sysctl_only_file_keeps_its_finding() {
+    let vendor = "/usr/lib/sysctl.d/60-vendor.conf";
+    let snap = scan_without_canary(
+        "secret in a /usr/lib file with no config entry",
+        SysctlHost::new()
+            .file(vendor, "db_password = canary-vendor\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+        "canary-vendor",
+    );
+    assert!(
+        config_entries_at(&snap, vendor).is_empty(),
+        "a vendor file has no config entry"
+    );
+    assert_eq!(findings_at(&snap, vendor), 1, "{:?}", snap.redactions);
+    assert_eq!(review_rows(&snap, vendor).len(), 1);
 }
 
 // ── Case 20 ──────────────────────────────────────────────────────────
