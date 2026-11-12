@@ -7737,10 +7737,12 @@ mod tests {
         );
 
         // The header at its worst, serialized as the route serializes it.
-        use inspectah_pipeline::render::not_carried::not_carried_notice_for_owners;
-        let notice =
-            not_carried_notice_for_owners(&vec![hostile; 10]).expect("owners give a notice");
-        let mut worst = vec![notice];
+        // The notice stands in at 512 bytes, the bound the pipeline's
+        // `not_carried_notice_names_owners_and_bounds_its_text` holds the
+        // real notice under for hostile names, so this is no smaller than
+        // any notice an export can send.
+        const NOTICE_TEXT_MAX: usize = 512;
+        let mut worst = vec![ExportWarning::notice("n".repeat(NOTICE_TEXT_MAX))];
         worst.extend(std::iter::repeat_n(failure.clone(), 19));
         worst.push(ExportWarning::failure(format!(
             "...and {} more",

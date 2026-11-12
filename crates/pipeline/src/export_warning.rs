@@ -28,7 +28,7 @@ impl ExportWarningKind {
     /// The label the CLI prints before an entry's text: `Failure` or
     /// `Notice`, capitalized like the `Warning:` and `Error:` lines it
     /// prints on the same stream.
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             Self::Failure => "Failure",
             Self::Notice => "Notice",
@@ -86,7 +86,7 @@ impl std::fmt::Display for ExportWarning {
 /// up in an HTTP response header, where a newline is header injection.
 /// Mapping every other byte makes the result printable ASCII by
 /// construction, rather than leaving the header boundary to check.
-pub fn sanitize_package_id(id: &str) -> String {
+fn sanitize_package_id(id: &str) -> String {
     id.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '~' | '^' | '-') {

@@ -300,16 +300,14 @@ const NOT_CARRIED_NOTICE_NAMES: usize = 3;
 const NOT_CARRIED_NOTICE_NAME_MAX: usize = 64;
 
 /// The not-carried notice for these unit owners, or `None` when there
-/// are none. [`not_carried_notice`] is the export-facing entry point;
-/// this is it with the owners already chosen, which is what a test that
-/// bounds the notice's size needs.
+/// are none: [`not_carried_notice`] with the owners already chosen.
 ///
 /// `owners` are those packages' display names, in the `# Not carried`
 /// block's order, which puts unit owners first. The first
 /// [`NOT_CARRIED_NOTICE_NAMES`] are named and the rest counted. Each name
 /// is sanitized like a package id in any other export warning, then
 /// bounded, so the whole entry is printable ASCII of bounded size.
-pub fn not_carried_notice_for_owners(owners: &[String]) -> Option<ExportWarning> {
+fn not_carried_notice_for_owners(owners: &[String]) -> Option<ExportWarning> {
     if owners.is_empty() {
         return None;
     }
