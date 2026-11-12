@@ -11,8 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod parse;
+pub mod resolve;
 
 pub use parse::{parse_sysctl_lines, sysctl_values_equal};
+pub use resolve::{
+    RuntimeObservation, SYSCTL_CONF, SYSCTL_CONF_LINK, SysctlCarriage, SysctlExplanation,
+    SysctlOutcome, SysctlSetting, UnknownInput, VendorReplacement,
+};
 
 /// Where systemd-sysctl reads. Declared highest priority first, so the
 /// smallest variant wins a same-name selection: `Etc` replaces a file of
