@@ -2,8 +2,8 @@
 //!
 //! **Every renderer that builds its file as a vector of lines joins it with
 //! [`join_lines`].** Those files are the Containerfile, the `/var`
-//! tmpfiles.d fragment, the kickstart suggestion, the users kickstart
-//! and blueprint fragments, and the synthesized sysctl drop-in. The join escapes [`escape_comment_text`]'s
+//! tmpfiles.d fragment, the kickstart suggestion, and the users kickstart
+//! and blueprint fragments. The join escapes [`escape_comment_text`]'s
 //! characters in every comment line, so a snapshot value interpolated into
 //! a comment cannot end it early, wherever the line was built and whether
 //! or not its site remembered to escape. A site that escapes its own value

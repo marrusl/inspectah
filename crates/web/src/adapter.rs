@@ -1021,9 +1021,9 @@ pub fn web_kernel_boot_section(data: &RefKernelBoot) -> ReferenceSection {
             subtitle: Some(config_ref_summary(entry)),
             detail: None,
             searchable_text: entry.path.clone(),
-            // A shadowed entry is `Inventory` (§ 3.5): its content
-            // reaches the image through the keys that absorbed it, so
-            // the row explains where the decision went and offers none.
+            // Only an Actionable entry gets a control here; an advisory or
+            // shadowed entry gets none, and the subtitle names where the
+            // file is decided.
             decision: context_decision(
                 ItemId::Config {
                     path: entry.path.clone(),

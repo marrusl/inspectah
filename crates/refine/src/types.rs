@@ -497,7 +497,6 @@ pub enum SectionKind {
     Service,
     Quadlet,
     Flatpak,
-    Sysctl,
     Tuned,
     ComposeContext,
 }
