@@ -12,12 +12,28 @@ use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::finding::ShadowType;
+use inspectah_core::types::sysctl::{
+    RuntimeObservation, SysctlDir, SysctlExplanation, SysctlLineRef, SysctlOutcome, UnknownInput,
+    VendorReplacement,
+};
 use inspectah_core::types::users::UserGroupDecision;
 use minijinja::{Environment, Value, context};
 
 use super::advisory::{advisory_type_str, config_advisories};
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
 use super::selinux;
+use super::sysctl_report::{
+    AGGREGATE_LINE, AS_WRITTEN_GLOB_ASSIGN_LINE, AS_WRITTEN_GLOB_EXCLUDE_LINE, AS_WRITTEN_LABEL,
+    AS_WRITTEN_UNPARSED_LINE, AsWritten, CarriageState, DRIFT_INTRO, DRIFT_LABEL, DRIFT_LINE,
+    FILE_NOT_WRITTEN, LINK_NOTE, NOT_CARRIED_ADVISORY_LINE, NOT_CARRIED_ADVISORY_VIA_LINE,
+    NOT_CARRIED_EXCLUDED_LINE, NOT_CARRIED_EXCLUDED_VIA_LINE, NOT_CARRIED_LABEL,
+    NOT_CARRIED_NO_CONFIG_ENTRY_LINE, NOT_CARRIED_RUNTIME_DIR_LINE, NOT_CARRIED_USR_LOCAL_LIB_LINE,
+    NotCarried, OUTSIDE_LINK_LINE, REDACTED_FILE_LINE, REDACTED_RUNTIME_LINE, RUNTIME_NOT_EXPOSED,
+    RUNTIME_SAME, SysctlHostReport, SysctlReport, TRUST_LINE, TUNED_ACTIVE_LINE, UNAVAILABLE_LINE,
+    UNAVAILABLE_TAIL, UNKNOWN_INTRO, VENDOR_CARRIED_LINE, VENDOR_LABEL,
+    VENDOR_NO_CONFIG_ENTRY_LINE, VENDOR_NOT_CARRIED_LINE, VENDOR_VERB_DISABLES,
+    VENDOR_VERB_REPLACES, line_link_target, sysctl_report,
+};
 
 /// Advisory discriminant for synthesized orphan full-shadow entries. Not an
 /// `AdvisoryType` variant — the finding lives on the drop-in's `shadow_type`,
@@ -235,9 +251,10 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 InspectorId::Config => snap.config.as_ref().map(|c| c.files.len()),
                 InspectorId::Services => snap.services.as_ref().map(|s| s.state_changes.len()),
                 InspectorId::Storage => snap.storage.as_ref().map(|s| s.fstab_entries.len()),
-                InspectorId::KernelBoot => {
-                    snap.kernel_boot.as_ref().map(|k| k.sysctl_overrides.len())
-                }
+                InspectorId::KernelBoot => snap
+                    .kernel_boot
+                    .as_ref()
+                    .map(|_| resolved_sysctl_count(&sysctl_report(snap))),
                 InspectorId::ScheduledTasks => snap.scheduled_tasks.as_ref().map(|s| {
                     s.cron_jobs.len()
                         + s.systemd_timers.len()
@@ -829,24 +846,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .as_ref()
         .map(|k| k.cmdline.clone())
         .unwrap_or_default();
-    let sysctl_overrides: Vec<Value> = snap
-        .kernel_boot
-        .as_ref()
-        .map(|k| {
-            k.sysctl_overrides
-                .iter()
-                .map(|s| {
-                    Value::from_serialize(serde_json::json!({
-                        "key": s.key,
-                        "runtime": s.runtime,
-                        "default": s.default,
-                        "source": s.source,
-                    }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let kernelboot_count = sysctl_overrides.len();
+    let sysctl_model = sysctl_report(snap);
+    let kernelboot_count = resolved_sysctl_count(&sysctl_model);
+    let sysctl = sysctl_context(snap, &sysctl_model);
     let kernelboot_state = section_state(InspectorId::KernelBoot, &snap.completeness);
     let kernelboot_state_str = match kernelboot_state {
         SectionState::Normal => "normal",
@@ -1193,7 +1195,6 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     let services_val = Value::from(services);
     let storage_items_val = Value::from(storage_items);
     let unbacked_var_dirs_val = Value::from(unbacked_var_dirs);
-    let sysctl_overrides_val = Value::from(sysctl_overrides);
     let selinux_modules_val = Value::from(selinux_modules);
     let selinux_booleans_val = Value::from(selinux_booleans);
     let selinux_fcontexts_val = Value::from(selinux_fcontexts);
@@ -1278,7 +1279,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         // Kernel & Boot (conditional)
         has_kernelboot,
         kernel_cmdline,
-        sysctl_overrides => sysctl_overrides_val,
+        sysctl,
         kernelboot_count,
         kernelboot_state => kernelboot_state_str,
         // Security & Access Control (conditional)
@@ -1330,6 +1331,304 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         filter_data_json => safe_json,
     })
     .unwrap_or_else(|e| format!("<!-- Template error: {e} -->"))
+}
+
+// ── Sysctl block (spec § 5.5) ────────────────────────────────────────
+//
+// `kernel.html` states what the audit's `#### Sysctl` block states, from
+// the same `sysctl_report` and the same copy. Each sentence reaches the
+// template as runs of text, and the template prints every run through
+// MiniJinja's HTML autoescape, never marked safe: a run is either copy or
+// a host value, and `code` runs print inside `<code>`.
+
+/// What fills a `{hole}` of a sysctl copy template.
+enum Hole<'a> {
+    /// A host value: a code run, escaped by the template.
+    Value(&'a str),
+    /// Fixed copy, such as the vendor line's verb.
+    Copy(&'a str),
+}
+
+/// One run of sysctl text for the template.
+fn sysctl_run(text: &str, code: bool) -> serde_json::Value {
+    serde_json::json!({ "text": text, "code": code })
+}
+
+/// Copy text as runs: the copy's Markdown code spans (`` `x` ``) become
+/// code runs, the rest plain runs.
+fn push_copy_runs(runs: &mut Vec<serde_json::Value>, copy: &str) {
+    for (i, part) in copy.split('`').enumerate() {
+        if !part.is_empty() {
+            runs.push(sysctl_run(part, i % 2 == 1));
+        }
+    }
+}
+
+/// A copy template with its `{hole}`s filled, as runs: the HTML
+/// counterpart of [`super::sysctl_report::fill`], which fills in one pass
+/// and refuses an unfilled or unclosed hole the same way.
+fn sysctl_runs(template: &str, holes: &[(&str, Hole<'_>)]) -> Vec<serde_json::Value> {
+    let mut runs = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        push_copy_runs(&mut runs, &rest[..open]);
+        let after = &rest[open + 1..];
+        let close = after
+            .find('}')
+            .expect("every hole in a sysctl copy template is closed");
+        let name = &after[..close];
+        match holes
+            .iter()
+            .find(|(hole, _)| *hole == name)
+            .map(|(_, fill)| fill)
+            .unwrap_or_else(|| panic!("sysctl copy template hole `{name}` has no value"))
+        {
+            Hole::Value(value) => runs.push(sysctl_run(value, true)),
+            Hole::Copy(copy) => push_copy_runs(&mut runs, copy),
+        }
+        rest = &after[close + 1..];
+    }
+    push_copy_runs(&mut runs, rest);
+    runs
+}
+
+/// `<path>:<line>` of a sysctl line, as the audit writes it.
+fn sysctl_line_ref_text(at: &SysctlLineRef) -> String {
+    format!("{}/{}:{}", at.dir.path(), at.name, at.line_no)
+}
+
+/// The Kernel & Boot count: the `Resolved` settings, 0 for an `Unknown`
+/// explanation, an unavailable one or an aggregate (spec § 5.5).
+fn resolved_sysctl_count(report: &SysctlReport) -> usize {
+    match report {
+        SysctlReport::Host(host) => match &host.explanation {
+            SysctlExplanation::Resolved(settings) => settings.len(),
+            SysctlExplanation::Unknown(_) => 0,
+        },
+        SysctlReport::Aggregate | SysctlReport::Unavailable { .. } => 0,
+    }
+}
+
+/// The `sysctl` context of `kernel.html`.
+fn sysctl_context(snap: &InspectionSnapshot, report: &SysctlReport) -> Value {
+    let json = match report {
+        SysctlReport::Aggregate => serde_json::json!({
+            "kind": "aggregate",
+            "line": sysctl_runs(AGGREGATE_LINE, &[]),
+        }),
+        SysctlReport::Unavailable { reason } => serde_json::json!({
+            "kind": "unavailable",
+            "line": sysctl_runs(
+                &format!("{UNAVAILABLE_LINE} {UNAVAILABLE_TAIL}"),
+                &[("reason", Hole::Value(reason))],
+            ),
+        }),
+        SysctlReport::Host(host) => sysctl_host_context(snap, host),
+    };
+    Value::from_serialize(json)
+}
+
+/// Items 1 to 6 of a host's explanation.
+fn sysctl_host_context(snap: &InspectionSnapshot, host: &SysctlHostReport) -> serde_json::Value {
+    let (settings, unknown_lines) = match &host.explanation {
+        SysctlExplanation::Resolved(settings) => (
+            settings
+                .iter()
+                .map(|setting| sysctl_row(snap, setting))
+                .collect(),
+            Vec::new(),
+        ),
+        SysctlExplanation::Unknown(inputs) => (
+            Vec::new(),
+            inputs.iter().map(unknown_input_runs).collect::<Vec<_>>(),
+        ),
+    };
+    let resolved = matches!(host.explanation, SysctlExplanation::Resolved(_));
+
+    let mut drift_intro = sysctl_runs(DRIFT_INTRO, &[]);
+    if let Some(profile) = &host.tuned_active {
+        push_copy_runs(&mut drift_intro, " ");
+        drift_intro.extend(sysctl_runs(
+            TUNED_ACTIVE_LINE,
+            &[("profile", Hole::Value(profile))],
+        ));
+    }
+    let drift_lines: Vec<Vec<serde_json::Value>> = host
+        .drift
+        .iter()
+        .map(|drift| {
+            sysctl_runs(
+                DRIFT_LINE,
+                &[
+                    ("key", Hole::Value(drift.key.as_str())),
+                    ("runtime", Hole::Value(&drift.runtime)),
+                    ("file_value", Hole::Value(&drift.file_value)),
+                    ("source", Hole::Value(&sysctl_line_ref_text(&drift.from))),
+                ],
+            )
+        })
+        .collect();
+
+    let as_written_lines: Vec<Vec<serde_json::Value>> = host
+        .as_written
+        .iter()
+        .map(|line| match line {
+            AsWritten::GlobAssign { at, pattern, value } => sysctl_runs(
+                AS_WRITTEN_GLOB_ASSIGN_LINE,
+                &[
+                    ("at", Hole::Value(&sysctl_line_ref_text(at))),
+                    ("pattern", Hole::Value(pattern)),
+                    ("value", Hole::Value(value)),
+                ],
+            ),
+            AsWritten::GlobExclude { at, pattern } => sysctl_runs(
+                AS_WRITTEN_GLOB_EXCLUDE_LINE,
+                &[
+                    ("at", Hole::Value(&sysctl_line_ref_text(at))),
+                    ("pattern", Hole::Value(pattern)),
+                ],
+            ),
+            AsWritten::Unparsed { at, text } => sysctl_runs(
+                AS_WRITTEN_UNPARSED_LINE,
+                &[
+                    ("at", Hole::Value(&sysctl_line_ref_text(at))),
+                    ("text", Hole::Value(text)),
+                ],
+            ),
+        })
+        .collect();
+
+    serde_json::json!({
+        "kind": "host",
+        "trust_line": sysctl_runs(TRUST_LINE, &[]),
+        "resolved": resolved,
+        "settings": settings,
+        "unknown_intro": sysctl_runs(UNKNOWN_INTRO, &[]),
+        "unknown_lines": unknown_lines,
+        "drift_label": DRIFT_LABEL,
+        "drift_intro": drift_intro,
+        "drift_lines": drift_lines,
+        "vendor_label": VENDOR_LABEL,
+        "vendor_lines": host.vendor_replacements.iter().map(|line| {
+            let (verb, name) = match &line.action {
+                VendorReplacement::Shadows { name } => (VENDOR_VERB_REPLACES, name),
+                VendorReplacement::Masks { name } => (VENDOR_VERB_DISABLES, name),
+            };
+            let template = match line.carriage {
+                CarriageState::Carried { .. } => VENDOR_CARRIED_LINE,
+                CarriageState::Excluded { .. } | CarriageState::Advisory { .. } => {
+                    VENDOR_NOT_CARRIED_LINE
+                }
+                CarriageState::NoConfigEntry => VENDOR_NO_CONFIG_ENTRY_LINE,
+            };
+            sysctl_runs(
+                template,
+                &[
+                    ("admin", Hole::Value(&format!("{}/{name}", SysctlDir::Etc.path()))),
+                    ("verb", Hole::Copy(verb)),
+                    ("vendor", Hole::Value(&format!("{}/{name}", SysctlDir::UsrLib.path()))),
+                ],
+            )
+        }).collect::<Vec<_>>(),
+        "not_carried_label": NOT_CARRIED_LABEL,
+        "not_carried_lines": host.not_carried.iter().map(not_carried_runs).collect::<Vec<_>>(),
+        "as_written_label": AS_WRITTEN_LABEL,
+        "as_written_lines": as_written_lines,
+    })
+}
+
+/// One row of the settings table: key, file value, runtime value and
+/// source, each as runs.
+fn sysctl_row(
+    snap: &InspectionSnapshot,
+    setting: &inspectah_core::types::sysctl::SysctlSetting,
+) -> serde_json::Value {
+    let (file_value, runtime, from) = match &setting.outcome {
+        SysctlOutcome::Writes {
+            value,
+            from,
+            runtime,
+        } => (
+            vec![sysctl_run(value, true)],
+            match runtime {
+                RuntimeObservation::Matches => vec![sysctl_run(RUNTIME_SAME, false)],
+                RuntimeObservation::NotExposed => vec![sysctl_run(RUNTIME_NOT_EXPOSED, false)],
+                RuntimeObservation::Differs { runtime } => vec![sysctl_run(runtime, true)],
+            },
+            from,
+        ),
+        SysctlOutcome::Cancelled { by, runtime } => (
+            vec![sysctl_run(FILE_NOT_WRITTEN, false)],
+            match runtime {
+                Some(runtime) => vec![sysctl_run(runtime, true)],
+                None => vec![sysctl_run(RUNTIME_NOT_EXPOSED, false)],
+            },
+            by,
+        ),
+    };
+    let mut source = vec![sysctl_run(&sysctl_line_ref_text(from), true)];
+    if let Some(target) = line_link_target(snap, from) {
+        push_copy_runs(&mut source, " ");
+        source.extend(sysctl_runs(LINK_NOTE, &[("target", Hole::Value(&target))]));
+    }
+    serde_json::json!({
+        "key": [sysctl_run(setting.key.as_str(), true)],
+        "file_value": file_value,
+        "runtime": runtime,
+        "source": source,
+    })
+}
+
+/// Item 2, `Unknown`: one line per input inspectah does not know.
+fn unknown_input_runs(input: &UnknownInput) -> Vec<serde_json::Value> {
+    match input {
+        UnknownInput::OutsideLink { file, target } => sysctl_runs(
+            OUTSIDE_LINK_LINE,
+            &[
+                ("path", Hole::Value(&file.path())),
+                ("target", Hole::Value(target)),
+            ],
+        ),
+        UnknownInput::RedactedFile { file } => {
+            sysctl_runs(REDACTED_FILE_LINE, &[("path", Hole::Value(&file.path()))])
+        }
+        UnknownInput::RedactedRuntime { key } => {
+            sysctl_runs(REDACTED_RUNTIME_LINE, &[("key", Hole::Value(key.as_str()))])
+        }
+    }
+}
+
+/// Item 5: a file the image does not get, with the reason, worded as the
+/// audit words it.
+fn not_carried_runs(file: &NotCarried) -> Vec<serde_json::Value> {
+    let (template, path, config_path) = match file {
+        NotCarried::RuntimeDir { path } => (NOT_CARRIED_RUNTIME_DIR_LINE, path, None),
+        NotCarried::UsrLocalLib { path } => (NOT_CARRIED_USR_LOCAL_LIB_LINE, path, None),
+        NotCarried::Etc { path, carriage } => match carriage {
+            CarriageState::Excluded { config_path } if config_path == path => {
+                (NOT_CARRIED_EXCLUDED_LINE, path, None)
+            }
+            CarriageState::Excluded { config_path } => {
+                (NOT_CARRIED_EXCLUDED_VIA_LINE, path, Some(config_path))
+            }
+            CarriageState::Advisory { config_path } if config_path == path => {
+                (NOT_CARRIED_ADVISORY_LINE, path, None)
+            }
+            CarriageState::Advisory { config_path } => {
+                (NOT_CARRIED_ADVISORY_VIA_LINE, path, Some(config_path))
+            }
+            // `NotCarried::Etc` never holds `Carried`; the model leaves a
+            // carried file out of the list.
+            CarriageState::NoConfigEntry | CarriageState::Carried { .. } => {
+                (NOT_CARRIED_NO_CONFIG_ENTRY_LINE, path, None)
+            }
+        },
+    };
+    let mut holes = vec![("path", Hole::Value(path))];
+    if let Some(config_path) = config_path {
+        holes.push(("config_path", Hole::Value(config_path)));
+    }
+    sysctl_runs(template, &holes)
 }
 
 #[cfg(test)]
@@ -2272,15 +2571,6 @@ mod tests {
         let mut snap = test_snapshot();
         snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
             cmdline: "quiet crashkernel=auto".into(),
-            sysctl_overrides: vec![inspectah_core::types::kernelboot::SysctlOverride {
-                key: "kernel.sysrq".into(),
-                runtime: "16".into(),
-                default: "0".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-            }],
             ..Default::default()
         });
         let html = render_report(&snap, &RenderContext { target: None });
@@ -2292,43 +2582,67 @@ mod tests {
             html.contains("quiet crashkernel=auto"),
             "kernel section must show cmdline"
         );
-        assert!(
-            html.contains("kernel.sysrq"),
-            "kernel section must show sysctl key"
+    }
+
+    /// A sysctl sentence as runs: copy code spans and host values are code
+    /// runs, a value is one run whatever it holds, and a copy hole (the
+    /// vendor verb) is plain text.
+    #[test]
+    fn sysctl_runs_split_copy_and_values() {
+        let run = |text: &str, code: bool| serde_json::json!({ "text": text, "code": code });
+        assert_eq!(
+            sysctl_runs(
+                "{path} links to {target}, outside `/etc`.",
+                &[
+                    ("path", Hole::Value("a`{target}`")),
+                    ("target", Hole::Value("<b>")),
+                ],
+            ),
+            [
+                run("a`{target}`", true),
+                run(" links to ", false),
+                run("<b>", true),
+                run(", outside ", false),
+                run("/etc", true),
+                run(".", false),
+            ]
+        );
+        assert_eq!(
+            sysctl_runs(
+                "{admin} {verb} it",
+                &[
+                    ("admin", Hole::Value("x")),
+                    ("verb", Hole::Copy("replaces"))
+                ]
+            ),
+            [
+                run("x", true),
+                run(" ", false),
+                run("replaces", false),
+                run(" it", false),
+            ]
         );
     }
 
+    /// Spec § 5.5: every sysctl field reaches the HTML through MiniJinja's
+    /// autoescape, so the template never marks one safe. The whole kernel
+    /// template is checked: the `runs` macro the sysctl block prints
+    /// through sits above the block's heading.
     #[test]
-    fn test_report_kernel_sysctl_table_columns() {
-        let mut snap = test_snapshot();
-        snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
-            sysctl_overrides: vec![inspectah_core::types::kernelboot::SysctlOverride {
-                key: "net.ipv4.ip_forward".into(),
-                runtime: "1".into(),
-                default: "0".into(),
-                source: "/etc/sysctl.d/10-forwarding.conf".into(),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-            }],
-            ..Default::default()
-        });
-        let html = render_report(&snap, &RenderContext { target: None });
+    fn sysctl_block_has_no_safe_filter() {
+        let template = TEMPLATES
+            .iter()
+            .find(|(name, _)| *name == "report/kernel.html")
+            .map(|(_, source)| *source)
+            .expect("the kernel template is embedded");
         assert!(
-            html.contains("<th>Key</th>"),
-            "sysctl table must have Key column"
+            template.contains("<h4>Sysctl</h4>"),
+            "the kernel template has a sysctl block"
         );
+        let compact: String = template.split_whitespace().collect();
         assert!(
-            html.contains("<th>Runtime</th>"),
-            "sysctl table must have Runtime column"
-        );
-        assert!(
-            html.contains("<th>Default</th>"),
-            "sysctl table must have Default column"
-        );
-        assert!(
-            html.contains("<th>Source</th>"),
-            "sysctl table must have Source column"
+            !compact.contains("|safe"),
+            "the kernel template marks a field safe: {template}"
         );
     }
 
@@ -3096,7 +3410,7 @@ mod tests {
     /// Build a snapshot with every section populated so all sections render.
     fn fully_populated_snapshot() -> InspectionSnapshot {
         use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
-        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+        use inspectah_core::types::kernelboot::KernelBootSection;
         use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
         use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
         use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
@@ -3158,17 +3472,7 @@ mod tests {
             ..Default::default()
         });
 
-        snap.kernel_boot = Some(KernelBootSection {
-            sysctl_overrides: vec![SysctlOverride {
-                key: "net.ipv4.ip_forward".into(),
-                runtime: "1".into(),
-                default: "0".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
+        snap.kernel_boot = Some(KernelBootSection::default());
 
         snap.selinux = Some(SelinuxSection {
             mode: "enforcing".into(),

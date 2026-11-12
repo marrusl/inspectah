@@ -1,5 +1,10 @@
 {% from "report/section.html" import section %}
 
+{#- Sysctl text arrives as runs: copy or a host value. Every run prints
+    through autoescape; `code` runs print inside <code>. Nothing in the
+    sysctl block is marked safe (spec § 5.5). -#}
+{% macro runs(rs) %}{% for r in rs %}{% if r.code %}<code>{{ r.text }}</code>{% else %}{{ r.text }}{% endif %}{% endfor %}{% endmacro %}
+
 {% call section("kernel-boot", "Kernel & Boot", count=kernelboot_count, state=kernelboot_state) %}
 
 {% if kernel_cmdline %}
@@ -7,32 +12,65 @@
 <pre><code>{{ kernel_cmdline }}</code></pre>
 {% endif %}
 
-{% if sysctl_overrides | length > 0 %}
-<h4>Sysctl Overrides</h4>
+<h4>Sysctl</h4>
+{% if sysctl.kind != "host" %}
+<p>{{ runs(sysctl.line) }}</p>
+{% else %}
+<p>{{ runs(sysctl.trust_line) }}</p>
+{% if sysctl.resolved %}
+{% if sysctl.settings | length > 0 %}
 <table class="report-table">
   <thead>
     <tr>
       <th>Key</th>
-      <th>Runtime</th>
-      <th>Default</th>
+      <th>File value</th>
+      <th>Runtime value</th>
       <th>Source</th>
     </tr>
   </thead>
   <tbody>
-    {% for s in sysctl_overrides %}
+    {% for s in sysctl.settings %}
     <tr>
-      <td><code>{{ s.key }}</code></td>
-      <td>{{ s.runtime }}</td>
-      <td>{{ s.default }}</td>
-      <td><code>{{ s.source }}</code></td>
+      <td>{{ runs(s.key) }}</td>
+      <td>{{ runs(s.file_value) }}</td>
+      <td>{{ runs(s.runtime) }}</td>
+      <td>{{ runs(s.source) }}</td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
 {% endif %}
-
-{% if kernelboot_count == 0 and not kernel_cmdline %}
-<p class="empty-state">No kernel or boot customizations detected</p>
+{% if sysctl.drift_lines | length > 0 %}
+<p><strong>{{ sysctl.drift_label }}</strong></p>
+<p>{{ runs(sysctl.drift_intro) }}</p>
+{% for line in sysctl.drift_lines %}
+<p>{{ runs(line) }}</p>
+{% endfor %}
+{% endif %}
+{% else %}
+<p>{{ runs(sysctl.unknown_intro) }}</p>
+{% for line in sysctl.unknown_lines %}
+<p>{{ runs(line) }}</p>
+{% endfor %}
+{% endif %}
+{% if sysctl.vendor_lines | length > 0 %}
+<p><strong>{{ sysctl.vendor_label }}</strong></p>
+{% for line in sysctl.vendor_lines %}
+<p>{{ runs(line) }}</p>
+{% endfor %}
+{% endif %}
+{% if sysctl.not_carried_lines | length > 0 %}
+<p><strong>{{ sysctl.not_carried_label }}</strong></p>
+{% for line in sysctl.not_carried_lines %}
+<p>{{ runs(line) }}</p>
+{% endfor %}
+{% endif %}
+{% if sysctl.as_written_lines | length > 0 %}
+<p><strong>{{ sysctl.as_written_label }}</strong></p>
+{% for line in sysctl.as_written_lines %}
+<p>{{ runs(line) }}</p>
+{% endfor %}
+{% endif %}
 {% endif %}
 
 {% endcall %}

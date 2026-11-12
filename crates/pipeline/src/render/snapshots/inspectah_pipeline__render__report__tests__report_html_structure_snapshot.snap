@@ -72,7 +72,7 @@ expression: stable
   <dl>
     <dt><a href="#kernel-boot">Kernel &amp; Boot</a></dt>
     <dd class="">
-      1
+      0
     </dd>
   </dl>
   
@@ -135,7 +135,7 @@ expression: stable
   
   <a href="#kernel-boot">
     Kernel &amp; Boot
-    <span class="badge">1</span>
+    <span class="badge">0</span>
   </a>
   
   
@@ -284,11 +284,11 @@ expression: stable
           aria-label="System Configuration">
     <span class="section-group__toggle-icon" aria-hidden="true"></span>
     <span class="section-group__label">System Configuration</span>
-    <span class="badge">2</span>
+    <span class="badge">1</span>
   </button>
   <span class="section-group__collapsed-summary" hidden>
     
-      [2 items]
+      [1 items]
     
   </span>
   <div class="section-group__content" id="group-system-config-content">
@@ -350,7 +350,7 @@ expression: stable
   <summary>
     Kernel &amp; Boot
     
-      <span class="badge">(1)</span>
+      <span class="badge">(0)</span>
     
     
   </summary>
@@ -359,30 +359,9 @@ expression: stable
 
 
 
+<h4>Sysctl</h4>
 
-<h4>Sysctl Overrides</h4>
-<table class="report-table">
-  <thead>
-    <tr>
-      <th>Key</th>
-      <th>Runtime</th>
-      <th>Default</th>
-      <th>Source</th>
-    </tr>
-  </thead>
-  <tbody>
-    
-    <tr>
-      <td><code>net.ipv4.ip_forward</code></td>
-      <td>1</td>
-      <td>0</td>
-      <td><code>&#x2f;etc&#x2f;sysctl.d&#x2f;99-custom.conf</code></td>
-    </tr>
-    
-  </tbody>
-</table>
-
-
+<p>Sysctl explanation unavailable: <code></code>. Sysctl files are still carried as Configuration Files.</p>
 
 
 

@@ -12,6 +12,7 @@ mod sysctl_hosts;
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::sysctl::{
     RuntimeObservation, SysctlCarriage, SysctlDir, SysctlExplanation, SysctlFileBody,
@@ -19,6 +20,7 @@ use inspectah_core::types::sysctl::{
     SysctlSetting, UnknownInput, VendorReplacement,
 };
 use inspectah_pipeline::render::audit::render_audit;
+use inspectah_pipeline::render::report::render_report;
 use inspectah_pipeline::render::sysctl_report::{
     DRIFT_INTRO, TRUST_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
 };
@@ -2180,5 +2182,261 @@ fn case_19_literal_rendering_backslash_before_pipe_audit() {
             ]],
             "{backslashes} backslash(es) before a pipe"
         );
+    }
+}
+
+// ── HTML report ──────────────────────────────────────────────────────
+
+/// The HTML report of `snap`, as the scan writes it.
+fn html(snap: &InspectionSnapshot) -> String {
+    render_report(snap, &RenderContext { target: None })
+}
+
+/// The Kernel & Boot count the HTML report shows: its summary card and
+/// its section badge, which must agree.
+fn kernel_boot_count(html: &str) -> usize {
+    let card = html
+        .split_once(r##"<dt><a href="#kernel-boot">Kernel &amp; Boot</a></dt>"##)
+        .and_then(|(_, rest)| rest.split_once("</dd>"))
+        .and_then(|(dd, _)| dd.rsplit_once('>'))
+        .map(|(_, count)| count.trim())
+        .expect("a Kernel & Boot summary card");
+    let badge = html
+        .split_once(r#"<details id="kernel-boot">"#)
+        .and_then(|(_, rest)| rest.split_once(r#"<span class="badge">("#))
+        .and_then(|(_, rest)| rest.split_once(")</span>"))
+        .map(|(count, _)| count)
+        .expect("a Kernel & Boot section badge");
+    assert_eq!(card, badge, "the summary card and the section badge agree");
+    card.parse().expect("a numeric count")
+}
+
+/// The sysctl block of the HTML report: its heading up to the end of the
+/// Kernel & Boot section.
+fn html_sysctl_block(html: &str) -> &str {
+    html.split_once(r#"<details id="kernel-boot">"#)
+        .and_then(|(_, rest)| rest.split_once("<h4>Sysctl</h4>"))
+        .and_then(|(_, rest)| rest.split_once("</details>"))
+        .map(|(block, _)| block)
+        .expect("the Kernel & Boot section has a sysctl block")
+}
+
+/// The text of an HTML fragment: inline tags (`code`, `strong`) removed,
+/// every other tag a space, runs of whitespace made one space, and the
+/// entities MiniJinja's autoescape writes decoded.
+fn html_text(fragment: &str) -> String {
+    const INLINE_TAGS: [&str; 4] = ["<code>", "</code>", "<strong>", "</strong>"];
+    let mut text = String::with_capacity(fragment.len());
+    let mut tag: Option<String> = None;
+    for c in fragment.chars() {
+        match (&mut tag, c) {
+            (None, '<') => tag = Some(String::from('<')),
+            (Some(open), '>') => {
+                open.push('>');
+                if !INLINE_TAGS.contains(&open.as_str()) {
+                    text.push(' ');
+                }
+                tag = None;
+            }
+            (Some(open), _) => open.push(c),
+            (None, _) => text.push(c),
+        }
+    }
+    let decoded = text
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#x2f;", "/")
+        .replace("&amp;", "&");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn case_12_one_drifted_key_does_not_drop_the_file_html() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/etc/sysctl.d/90-tuning.conf",
+                "# site tuning\n\
+                 vm.swappiness = 10\n\
+                 vm.dirty_ratio = 20\n\
+                 vm.dirty_background_ratio = 5\n\
+                 kernel.sysrq = 0\n\
+                 net.ipv4.ip_forward = 1\n\
+                 net.core.somaxconn = 4096\n\
+                 fs.file-max = 2097152\n",
+            )
+            .sysctl_a(
+                "fs.file-max = 2097152\n\
+                 kernel.sysrq = 0\n\
+                 net.core.somaxconn = 4096\n\
+                 net.ipv4.ip_forward = 1\n\
+                 vm.dirty_background_ratio = 5\n\
+                 vm.dirty_ratio = 20\n\
+                 vm.swappiness = 60\n",
+            ),
+    ));
+    let report = html(&snap);
+    assert_eq!(kernel_boot_count(&report), 7);
+    let text = html_text(html_sysctl_block(&report));
+    assert!(text.contains(TRUST_LINE), "{text}");
+    assert_eq!(text.matches(" runs at ").count(), 1, "{text}");
+    assert!(
+        text.contains(
+            "vm.swappiness runs at 60; the files request 10 (/etc/sysctl.d/90-tuning.conf:2)."
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn case_17_outside_links_html() {
+    for (layout, outside) in [
+        ("overlapping assignment", "vm.swappiness = 60\n"),
+        ("overlapping exclusion", "-vm.swappiness\n"),
+    ] {
+        let report = html(&reload(&scan(overlapping_host(outside))));
+        assert_eq!(kernel_boot_count(&report), 0, "{layout}");
+        let block = html_sysctl_block(&report);
+        let text = html_text(block);
+        assert!(text.contains(UNKNOWN_INTRO), "{layout}: {text}");
+        assert!(
+            text.contains(
+                "/etc/sysctl.d/90-site.conf links to /usr/share/site/tuning.conf, \
+                 outside /etc and the sysctl directories, and inspectah did not read it."
+            ),
+            "{layout}: {text}"
+        );
+        assert!(!block.contains("<table"), "{layout}: no settings table");
+        assert!(!text.contains(" runs at "), "{layout}: no drift line");
+    }
+
+    let canary = html(&reload(&scan(
+        SysctlHost::new()
+            .link("/etc/sysctl.d/90-app.conf", "/var/lib/app/credentials")
+            .file("/var/lib/app/credentials", "password: canary-outside\n"),
+    )));
+    assert!(!canary.contains("canary-outside"));
+
+    let shadowed = html(&reload(&scan(
+        SysctlHost::new()
+            .link("/run/sysctl.d/90-site.conf", SITE_TARGET)
+            .file(SITE_TARGET, "vm.swappiness = 10\n")
+            .file(SITE_LINK, "vm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    )));
+    assert_eq!(kernel_boot_count(&shadowed), 1, "shadowed link");
+    assert!(!html_text(html_sysctl_block(&shadowed)).contains(UNKNOWN_INTRO));
+}
+
+#[test]
+fn case_18_redaction_makes_the_explanation_unknown_html() {
+    let unknown_layouts = [
+        (
+            "secret in a file",
+            secret_in_a_file_host().sysctl_a("vm.dirty_ratio = 30\nvm.swappiness = 60\n"),
+            "canary-inside",
+        ),
+        (
+            "secret only at runtime",
+            SysctlHost::new()
+                .file(CORE_CONF, "kernel.core_pattern = REDACTED_PASSWORD_1\n")
+                .sysctl_a("kernel.core_pattern = password=canary-runtime\n"),
+            "canary-runtime",
+        ),
+        (
+            "secret only in the file",
+            SysctlHost::new()
+                .file(CORE_CONF, "kernel.core_pattern = password=canary-file\n")
+                .sysctl_a("kernel.core_pattern = REDACTED_PASSWORD_1\n"),
+            "canary-file",
+        ),
+        (
+            "one-line PEM through an allowed link",
+            SysctlHost::new()
+                .link("/etc/sysctl.d/90-app.conf", "/etc/app/credentials.json")
+                .file("/etc/app/credentials.json", ONE_LINE_PEM),
+            "U0VDUkVUX0NBTkFSWQ",
+        ),
+        (
+            "equal values under different keys",
+            SysctlHost::new()
+                .file(APP_CONF, "db_password = 60\nvm.swappiness = 60\n")
+                .sysctl_a("vm.swappiness = 60\n"),
+            "db_password = 60",
+        ),
+    ];
+    for (layout, host, canary) in unknown_layouts {
+        let snap = reload(&scan(host));
+        let report = html(&snap);
+        assert_eq!(kernel_boot_count(&report), 0, "{layout}");
+        let block = html_sysctl_block(&report);
+        assert!(
+            html_text(block).contains(UNKNOWN_INTRO),
+            "{layout}: {block}"
+        );
+        assert!(!block.contains("<table"), "{layout}: no settings table");
+        assert!(
+            !html_text(&report).contains(canary),
+            "{layout}: `{canary}` is in the HTML report"
+        );
+
+        if layout == "equal values under different keys" {
+            let content = &config_entry(&snap, APP_CONF).content;
+            let token = content.lines().next().expect("the password line");
+            assert!(token.starts_with("REDACTED_"), "{content:?}");
+            assert!(
+                !html_text(&report).contains(token),
+                "{layout}: `{token}` is in the HTML report"
+            );
+        }
+    }
+
+    let shadowed = html(&reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/usr/lib/sysctl.d/50-x.conf",
+                "db_password = canary-shadowed\n",
+            )
+            .file("/etc/sysctl.d/50-x.conf", "vm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    )));
+    assert_eq!(kernel_boot_count(&shadowed), 1, "shadowed redacted file");
+    assert!(!html_text(&shadowed).contains("canary-shadowed"));
+}
+
+#[test]
+fn case_19_literal_rendering_html() {
+    let report = html(&reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/etc/sysctl.d/50-core.conf",
+                &format!("kernel.core_pattern = {CORE_PATTERN}\n"),
+            )
+            .file(
+                "/etc/sysctl.d/60-odd.conf",
+                "<img src=x>\n[link](http://example.com)\n```\n",
+            )
+            .file(
+                &format!("/etc/sysctl.d/{NEWLINE_NAME}"),
+                "vm.swappiness = 10\n",
+            )
+            .sysctl_a(&format!(
+                "kernel.core_pattern = {CORE_PATTERN}\nvm.swappiness = 60\n"
+            )),
+    )));
+    let block = html_sysctl_block(&report);
+    assert!(block.contains("&lt;img src=x&gt;"), "{block}");
+    assert!(!block.contains("<img"), "no `<img` element: {block}");
+    assert!(!block.contains("<a "), "no link element: {block}");
+    let text = html_text(block);
+    for value in [
+        "[link](http://example.com)",
+        "```",
+        CORE_PATTERN,
+        "/etc/sysctl.d/50-core.conf:1",
+    ] {
+        assert!(text.contains(value), "`{value}` is in the text: {text}");
     }
 }
