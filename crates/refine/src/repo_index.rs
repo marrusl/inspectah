@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::repo::{self, RepoId, RepoSectionDef};
@@ -29,6 +29,13 @@ pub struct RepoIndex {
     /// Reverse map: GPG key path (as in `gpg_keys_by_section`) -> set of
     /// section IDs that reference it.
     sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
+    /// Repo file path -> the sections it defines that the host enabled.
+    /// Only these keep the file carried ([`Self::repo_file_carried`]).
+    enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>>,
+    /// GPG key path (as in `gpg_keys_by_section`) -> the host-enabled
+    /// sections that name it. Only these keep the key carried
+    /// ([`Self::gpg_key_carried`]).
+    enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>>,
     /// Computed provenance per section ID.
     provenance_map: BTreeMap<RepoId, RepoProvenance>,
 }
@@ -62,6 +69,8 @@ impl RepoIndex {
                     repo_file_by_section: BTreeMap::new(),
                     gpg_keys_by_section: BTreeMap::new(),
                     sections_by_gpg_key: BTreeMap::new(),
+                    enabled_sections_by_file: BTreeMap::new(),
+                    enabled_sections_by_gpg_key: BTreeMap::new(),
                     provenance_map: BTreeMap::new(),
                 };
             }
@@ -72,6 +81,8 @@ impl RepoIndex {
         let mut repo_file_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut gpg_keys_by_section: BTreeMap<RepoId, Vec<String>> = BTreeMap::new();
         let mut sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
+        let mut enabled_sections_by_file: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
+        let mut enabled_sections_by_gpg_key: BTreeMap<String, BTreeSet<RepoId>> = BTreeMap::new();
         // Last section wins when the same id (folding case) appears more
         // than once; file/key associations above accumulate across all
         // occurrences regardless.
@@ -83,6 +94,14 @@ impl RepoIndex {
                     .entry(section.id.clone())
                     .or_default()
                     .push(repo_file.path.clone());
+                // Recorded per file, not per id: the same id can be enabled
+                // in one file and disabled in another.
+                if section.enabled {
+                    enabled_sections_by_file
+                        .entry(repo_file.path.clone())
+                        .or_default()
+                        .insert(section.id.clone());
+                }
 
                 for key_path in section
                     .gpg_key_paths
@@ -94,6 +113,12 @@ impl RepoIndex {
                         .or_default()
                         .push(key_path.clone());
 
+                    if section.enabled {
+                        enabled_sections_by_gpg_key
+                            .entry(key_path.clone())
+                            .or_default()
+                            .insert(section.id.clone());
+                    }
                     sections_by_gpg_key
                         .entry(key_path)
                         .or_default()
@@ -149,6 +174,8 @@ impl RepoIndex {
             repo_file_by_section,
             gpg_keys_by_section,
             sections_by_gpg_key,
+            enabled_sections_by_file,
+            enabled_sections_by_gpg_key,
             provenance_map,
         }
     }
@@ -171,6 +198,34 @@ impl RepoIndex {
     /// Reverse map: GPG key path -> set of section IDs that reference it.
     pub fn sections_by_gpg_key(&self) -> &BTreeMap<String, BTreeSet<RepoId>> {
         &self.sections_by_gpg_key
+    }
+
+    /// Whether the repo file at `path` stays carried when the sections in
+    /// `excluded` are excluded: at least one section the host enabled in it
+    /// is not excluded.
+    ///
+    /// A section the host disabled does not count. The image never uses
+    /// it, so it cannot be what keeps the file: EPEL's `epel.repo` holds
+    /// `[epel]` beside the host-disabled `[epel-debuginfo]` and
+    /// `[epel-source]`, and excluding `[epel]` has to drop the file. A file
+    /// with no host-enabled section at all is therefore not carried once a
+    /// repo exclusion reaches it.
+    pub fn repo_file_carried(&self, path: &str, excluded: &HashSet<RepoId>) -> bool {
+        self.enabled_sections_by_file
+            .get(path)
+            .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))
+    }
+
+    /// Whether the GPG key at `key_path` (a path as in
+    /// [`Self::gpg_keys_by_section`]) stays carried when the sections in
+    /// `excluded` are excluded: a section the host enabled names it and is
+    /// not excluded, so the file holding that section is itself carried
+    /// ([`Self::repo_file_carried`]). Sections the host disabled do not
+    /// count, for the same reason they do not keep a file.
+    pub fn gpg_key_carried(&self, key_path: &str, excluded: &HashSet<RepoId>) -> bool {
+        self.enabled_sections_by_gpg_key
+            .get(key_path)
+            .is_some_and(|ids| ids.iter().any(|id| !excluded.contains(id)))
     }
 
     /// Look up the provenance of a repo section ID.

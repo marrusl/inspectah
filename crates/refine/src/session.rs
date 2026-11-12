@@ -2741,58 +2741,47 @@ impl RefineSession {
                                         // skipping locked members (§ 3.2).
                                         cascade_repo_packages(rpm, section_id, false);
 
-                                        // 2. For repo files: exclude only if ALL sections
-                                        // defined in that file are now excluded
+                                        // 2. and 3. The repo files defining this
+                                        // section and the keys it names, each
+                                        // excluded once no host-enabled section
+                                        // keeps it (`RepoIndex::repo_file_carried`,
+                                        // `RepoIndex::gpg_key_carried`).
                                         if let Some(file_paths) =
                                             self.repo_index.repo_file_by_section().get(&id)
                                         {
                                             for file_path in file_paths {
-                                                let all_sections_excluded = self
-                                                    .repo_index
-                                                    .repo_file_by_section()
-                                                    .iter()
-                                                    .filter(|(_, paths)| paths.contains(file_path))
-                                                    .all(|(sid, _)| {
-                                                        excluded_sections.contains(sid)
-                                                    });
-                                                if all_sections_excluded
-                                                    && let Some(rf) = rpm
-                                                        .repo_files
-                                                        .iter_mut()
-                                                        .find(|r| r.path == *file_path)
+                                                if !self.repo_index.repo_file_carried(
+                                                    file_path,
+                                                    &excluded_sections,
+                                                ) && let Some(rf) = rpm
+                                                    .repo_files
+                                                    .iter_mut()
+                                                    .find(|r| r.path == *file_path)
                                                 {
                                                     rf.disposition = FindingKind::excluded();
                                                 }
                                             }
                                         }
-
-                                        // 3. For GPG keys: exclude only if ALL sections
-                                        // that reference this key are excluded
                                         if let Some(key_paths) =
                                             self.repo_index.gpg_keys_by_section().get(&id)
                                         {
                                             for key_path in key_paths {
-                                                if let Some(referencing_sections) = self
+                                                if self
                                                     .repo_index
-                                                    .sections_by_gpg_key()
-                                                    .get(key_path)
+                                                    .gpg_key_carried(key_path, &excluded_sections)
                                                 {
-                                                    let all_excluded = referencing_sections
-                                                        .iter()
-                                                        .all(|sid| excluded_sections.contains(sid));
-                                                    // Every entry at the path: a
-                                                    // snapshot from before keys
-                                                    // were recorded once per path
-                                                    // has one per naming section.
-                                                    if all_excluded {
-                                                        for k in rpm
-                                                            .gpg_keys
-                                                            .iter_mut()
-                                                            .filter(|g| g.path == *key_path)
-                                                        {
-                                                            k.disposition = FindingKind::excluded();
-                                                        }
-                                                    }
+                                                    continue;
+                                                }
+                                                // Every entry at the path: a
+                                                // snapshot from before keys
+                                                // were recorded once per path
+                                                // has one per naming section.
+                                                for k in rpm
+                                                    .gpg_keys
+                                                    .iter_mut()
+                                                    .filter(|g| g.path == *key_path)
+                                                {
+                                                    k.disposition = FindingKind::excluded();
                                                 }
                                             }
                                         }

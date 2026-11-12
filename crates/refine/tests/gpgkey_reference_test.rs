@@ -48,9 +48,9 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major
 ";
 
 /// Two enabled sections naming the key with a variable. The cascade
-/// leaves a key alone while any section naming it is still in, and a
-/// section disabled on the host is never excluded, so this is the layout
-/// in which excluding repos reaches the key.
+/// leaves a key alone while any host-enabled section naming it is still
+/// in, so this layout shows the key staying after the first exclude and
+/// going with the second.
 const TWO_ENABLED_SECTIONS: &str = "\
 [epel]
 metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-$releasever_major&arch=$basearch
