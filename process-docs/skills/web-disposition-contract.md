@@ -122,6 +122,16 @@ and once as a config row.
 `normalize.rs` guarantees non-actionable dispositions survive
 normalization, so the original is safe to read.
 
+**Config locks use `with_include(false)` too, never `excluded()`.** That
+covers the merge-hostile lock (`normalize_merge_hostile_configs`), the
+inspectah COPR repo lock (`normalize_config_defaults`) and the config arm
+of `clamp_locked_items`. A lock is about inclusion, not content: rewriting
+a `content_not_captured` advisory as an ordinary exclusion makes the refine
+export carry empty content as if it were the file's, and `inspectah
+aggregate` over two such exports included it and staged an empty
+`/etc/crypttab`. `a_locked_uncaptured_config_survives_refine_export_and_aggregation`
+in `crates/cli/tests/not_carried_parity_test.rs` holds this.
+
 ## 4. `SectionStats` — three buckets, and `excluded` means a decision
 
 `stats.sections[]` carries `total`, `included`, `excluded`, and

@@ -384,10 +384,13 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
             }
         }
     }
+    // `with_include` keeps a config advisory: a locked `ContentNotCaptured`
+    // entry rewritten as an ordinary exclusion would claim its empty
+    // content is the file's once a later aggregate merges this export.
     if let Some(ref mut config) = snapshot.config {
         for f in &mut config.files {
             if f.locked {
-                f.disposition = FindingKind::excluded();
+                f.disposition = f.disposition.with_include(false);
             }
         }
     }
@@ -6283,6 +6286,43 @@ mod tests {
             sshd.disposition.is_included(),
             "clamp must not affect unlocked items"
         );
+    }
+
+    /// The clamp holds a locked config out of the image without rewriting
+    /// a disposition that is not actionable: a locked capture failure
+    /// stays one, so a later merge never counts its empty content as the
+    /// file's. A locked actionable config is still forced excluded.
+    #[test]
+    fn export_clamp_keeps_a_locked_config_capture_failure() {
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+
+        let failure = FindingKind::advisory(AdvisoryType::ContentNotCaptured, "permission denied");
+        let mut snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    ConfigFileEntry {
+                        path: "/etc/crypttab".into(),
+                        disposition: failure.clone(),
+                        locked: true,
+                        ..Default::default()
+                    },
+                    ConfigFileEntry {
+                        path: "/etc/fstab".into(),
+                        disposition: FindingKind::included(),
+                        locked: true,
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        clamp_locked_items(&mut snap);
+
+        let files = &snap.config.as_ref().unwrap().files;
+        assert_eq!(files[0].disposition, failure);
+        assert_eq!(files[1].disposition, FindingKind::excluded());
     }
 
     /// Review round 1, item 1: the `ItemId::Repo` cascade matched packages

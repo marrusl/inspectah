@@ -22,7 +22,8 @@
 //! The last tests reuse the fixture for safety checks rather than parity
 //! claims: a config whose content the collector could not capture is
 //! staged by neither path, nor by `inspectah aggregate` or a refine export
-//! of the aggregate when only some hosts of a fleet could read it.
+//! of the aggregate when only some hosts of a fleet could read it, nor
+//! after refine locks it and the locked exports are aggregated.
 //!
 //! **Scope.** Parity is claimed only for a classified, baseline-backed
 //! snapshot: one with leaf data from the collector and a base image, so
@@ -958,11 +959,17 @@ fn fleet_run(hosts: &[(&str, FleetCopy)]) -> FleetRun {
         create_tarball(&out, &tarball, hostname).expect("the scan tarball packs");
         tarballs.push(tarball);
     }
+    aggregate_and_refine(dir, &tarballs)
+}
 
+/// Runs the `inspectah aggregate` binary over `tarballs`, then exports the
+/// aggregate tarball from a refine session with no operations. Everything
+/// is written under `dir`.
+fn aggregate_and_refine(dir: tempfile::TempDir, tarballs: &[PathBuf]) -> FleetRun {
     let aggregate = dir.path().join("aggregate.tar.gz");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_inspectah"))
         .arg("aggregate")
-        .args(&tarballs)
+        .args(tarballs)
         .arg("--output-file")
         .arg(&aggregate)
         .stdin(std::process::Stdio::null())
@@ -1011,31 +1018,45 @@ impl FleetRun {
     /// Neither export stages [`FLEET_CONFIG`] or keeps an empty variant of
     /// it, and both still stage the config every host could read.
     fn assert_fleet_config_not_staged(&self, label: &str) {
-        let staged = FLEET_CONFIG.trim_start_matches('/');
+        self.assert_not_staged(label, &[FLEET_CONFIG]);
+    }
+
+    /// Neither export stages any of `paths` or keeps a variant of one, and
+    /// both still stage the config every host could read.
+    fn assert_not_staged(&self, label: &str, paths: &[&str]) {
         for (export, root) in &self.roots {
-            let surfaces = Surfaces::read(root);
-            assert!(
-                !surfaces.etc_files.iter().any(|f| f == staged),
-                "{label}, {export}: {FLEET_CONFIG} is staged: {:?}",
-                surfaces.etc_files
-            );
-            assert!(
-                surfaces
-                    .etc_files
-                    .iter()
-                    .any(|f| f == MODIFIED_CONFIG.trim_start_matches('/')),
-                "{label}, {export}: the config every host read is still staged"
-            );
-            let variants = root.join("aggregate/variants").join(staged);
-            let kept: Vec<_> = std::fs::read_dir(&variants)
-                .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-                .unwrap_or_default();
-            assert!(
-                kept.is_empty(),
-                "{label}, {export}: no host's content is unknown-as-empty: {kept:?}"
-            );
+            assert_not_staged(&format!("{label}, {export}"), root, paths);
         }
     }
+}
+
+/// The export at `root` stages none of `paths` and keeps no variant of
+/// one, and still stages the config every host could read.
+fn assert_not_staged(label: &str, root: &Path, paths: &[&str]) {
+    let surfaces = Surfaces::read(root);
+    for path in paths {
+        let staged = path.trim_start_matches('/');
+        assert!(
+            !surfaces.etc_files.iter().any(|f| f == staged),
+            "{label}: {path} is staged: {:?}",
+            surfaces.etc_files
+        );
+        let variants = root.join("aggregate/variants").join(staged);
+        let kept: Vec<_> = std::fs::read_dir(&variants)
+            .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            kept.is_empty(),
+            "{label}: no host's content of {path} is unknown-as-empty: {kept:?}"
+        );
+    }
+    assert!(
+        surfaces
+            .etc_files
+            .iter()
+            .any(|f| f == MODIFIED_CONFIG.trim_start_matches('/')),
+        "{label}: the config every host read is still staged"
+    );
 }
 
 /// The disposition of an entry the collector could not capture, if it is
@@ -1128,4 +1149,168 @@ fn a_fleet_config_no_host_could_read_is_one_advisory() {
     assert_eq!((prevalence.count, prevalence.total), (2, 2));
 
     run.assert_fleet_config_not_staged("unreadable on both hosts");
+}
+
+// ── Configs refine locks, which the collector could not capture ──────
+
+/// A merge-hostile config: refine locks it out of the image on load.
+const CRYPTTAB: &str = "/etc/crypttab";
+/// inspectah's own COPR repo file: refine locks it out of the image when
+/// it sets its config defaults.
+const INSPECTAH_COPR_REPO: &str =
+    "/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:example:inspectah.repo";
+/// Both of the above. Each is locked by a different refine pass, and both
+/// meet the final locked-item clamp every projection runs.
+const LOCKED_CONFIGS: &[&str] = &[CRYPTTAB, INSPECTAH_COPR_REPO];
+
+/// The host from [`host_mock`], named `hostname`, with unowned copies of
+/// [`LOCKED_CONFIGS`] the collector reads only when `captured` is set.
+fn locked_config_host_mock(hostname: &str, captured: bool) -> MockExecutor {
+    let (repo_dir, repo_file) = INSPECTAH_COPR_REPO
+        .rsplit_once('/')
+        .expect("an absolute path");
+    let mut mock = host_mock()
+        .with_file("/etc/hostname", &format!("{hostname}\n"))
+        .with_dir("/etc", vec!["httpd", "crypttab", "yum.repos.d"])
+        .with_dir(repo_dir, vec![repo_file])
+        .with_file(CRYPTTAB, "luks-0000 UUID=0000 none discard\n")
+        .with_file(
+            INSPECTAH_COPR_REPO,
+            "[copr:copr.fedorainfracloud.org:example:inspectah]\nbaseurl=https://example.invalid/\n",
+        );
+    if !captured {
+        for path in LOCKED_CONFIGS {
+            mock = mock.with_file_error(path, std::io::ErrorKind::PermissionDenied);
+        }
+    }
+    mock
+}
+
+/// Scans the host [`locked_config_host_mock`] builds and packs its scan
+/// tarball under `dir`. Returns the tarball.
+fn locked_config_scan(dir: &Path, hostname: &str, captured: bool) -> PathBuf {
+    let out = dir.join(hostname);
+    scan_export(
+        collected(&locked_config_host_mock(hostname, captured)),
+        &out,
+    );
+    let tarball = dir.join(format!("{hostname}.tar.gz"));
+    create_tarball(&out, &tarball, hostname).expect("the scan tarball packs");
+    tarball
+}
+
+/// The snapshot the export at `root` carries.
+fn exported_snapshot(root: &Path) -> InspectionSnapshot {
+    let json = std::fs::read_to_string(root.join("inspection-snapshot.json"))
+        .expect("the export carries its snapshot");
+    InspectionSnapshot::load(&json).expect("the exported snapshot loads")
+}
+
+/// Every entry for `path` in `snapshot`'s config section.
+fn config_entries<'a>(snapshot: &'a InspectionSnapshot, path: &str) -> Vec<&'a ConfigFileEntry> {
+    snapshot
+        .config
+        .as_ref()
+        .expect("config section")
+        .files
+        .iter()
+        .filter(|f| f.path == path)
+        .collect()
+}
+
+/// Refine locks [`LOCKED_CONFIGS`], and the lock keeps a capture failure:
+/// it holds the file out of the image without claiming the file's
+/// content is known. A refine export that rewrote the failure as an
+/// ordinary exclusion would carry an empty entry indistinguishable from
+/// an empty file, and aggregating two such exports would include it and
+/// stage an empty file over a config no host could read.
+#[test]
+fn a_locked_uncaptured_config_survives_refine_export_and_aggregation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut exports = Vec::new();
+    for hostname in ["host-a", "host-b"] {
+        let scan = locked_config_scan(dir.path(), hostname, false);
+        let refine_dir = dir.path().join(format!("{hostname}-refine"));
+        std::fs::create_dir_all(&refine_dir).expect("mkdir");
+        let session =
+            inspectah_refine::tarball::from_tarball(&scan).expect("refine opens the scan");
+        let root = export_session(session, &refine_dir);
+
+        let exported = exported_snapshot(&root);
+        for path in LOCKED_CONFIGS {
+            let entries = config_entries(&exported, path);
+            assert_eq!(entries.len(), 1, "{hostname}: {entries:?}");
+            let entry = entries[0];
+            assert!(entry.locked, "{hostname}: refine locks {path}");
+            let reason = capture_failure(entry).unwrap_or_else(|| {
+                panic!(
+                    "{hostname}: {path} is still content_not_captured in the refine export: {:?}",
+                    entry.disposition
+                )
+            });
+            assert!(reason.contains("permission denied"), "{hostname}: {reason}");
+        }
+        assert_not_staged(&format!("{hostname}, refine export"), &root, LOCKED_CONFIGS);
+        exports.push(refine_dir.join("export.tar.gz"));
+    }
+
+    let run = aggregate_and_refine(dir, &exports);
+    for path in LOCKED_CONFIGS {
+        let entries = run.entries(path);
+        assert_eq!(entries.len(), 1, "{path}: {entries:?}");
+        let entry = entries[0];
+        assert!(
+            capture_failure(entry).is_some(),
+            "{path} is still content_not_captured after the merge: {:?}",
+            entry.disposition
+        );
+        assert!(!entry.disposition.is_included(), "{path}: {entry:?}");
+        let prevalence = entry.aggregate.as_ref().expect("prevalence");
+        assert_eq!((prevalence.count, prevalence.total), (2, 2), "{path}");
+    }
+    run.assert_not_staged("refined exports of two hosts", LOCKED_CONFIGS);
+}
+
+/// When one host read [`LOCKED_CONFIGS`] and another could not, refine of
+/// the aggregate locks both entries on load. The lock keeps the refused
+/// read a capture failure, so the export writes no empty `.content` file
+/// for it. Run with the hosts swapped, since the first host of a variant
+/// is the one its merged entry is built from.
+#[test]
+fn a_locked_config_one_host_could_not_read_leaves_no_empty_variant() {
+    for (captured_host, unreadable_host) in [("host-a", "host-b"), ("host-b", "host-a")] {
+        let label = format!("read on {captured_host}, unreadable on {unreadable_host}");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tarballs = vec![
+            locked_config_scan(dir.path(), captured_host, true),
+            locked_config_scan(dir.path(), unreadable_host, false),
+        ];
+        let run = aggregate_and_refine(dir, &tarballs);
+
+        let refined = exported_snapshot(&run.roots[1].1);
+        for path in LOCKED_CONFIGS {
+            let entries = config_entries(&refined, path);
+            assert_eq!(entries.len(), 2, "{label}: {entries:?}");
+            assert!(
+                entries
+                    .iter()
+                    .all(|e| e.locked && !e.disposition.is_included()),
+                "{label}: refine locks both entries for {path}: {entries:?}"
+            );
+            let uncaptured = entries
+                .iter()
+                .find(|e| capture_failure(e).is_some())
+                .unwrap_or_else(|| {
+                    panic!("{label}: the refused read of {path} survives the lock: {entries:?}")
+                });
+            assert_eq!(uncaptured.variant_selection, VariantSelection::Alternative);
+            let prevalence = uncaptured.aggregate.as_ref().expect("prevalence");
+            assert_eq!(
+                prevalence.hosts,
+                vec![unreadable_host.to_string()],
+                "{label}"
+            );
+        }
+        run.assert_not_staged(&label, LOCKED_CONFIGS);
+    }
 }

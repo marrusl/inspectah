@@ -357,6 +357,11 @@ Locked items are set during classification and normalization, before refine
 opens the snapshot. They represent non-negotiable decisions: items where
 toggling would produce an invalid or broken Containerfile.
 
+A lock on a config file keeps it out of the image and leaves an Advisory or
+Inventory disposition as it is. A locked config file whose content the scan
+could not capture stays a `content_not_captured` advisory, in a refine export too, so an
+aggregate of such exports never treats its empty content as the file's.
+
 Users can override any **unlocked** Actionable item's include/exclude state in
 the refine UI. The Containerfile is regenerated from the current include
 states when exported.

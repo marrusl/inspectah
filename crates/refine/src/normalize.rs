@@ -217,11 +217,15 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
             entry.attention_reason = Some("host state — not image-portable".into());
         }
     }
-    // Lock /etc/crypttab (and any future merge-hostile paths) in config files
+    // Lock /etc/crypttab (and any future merge-hostile paths) in config
+    // files. `with_include`, not `excluded()`: a lock holds the file out of
+    // the image but says nothing about its content, and rewriting a
+    // `ContentNotCaptured` advisory as an ordinary exclusion would let a
+    // later aggregate of this export count the empty content as the file's.
     if let Some(ref mut config) = snapshot.config {
         for file in &mut config.files {
             if MERGE_HOSTILE_PATHS.contains(&file.path.as_str()) {
-                file.disposition = FindingKind::excluded();
+                file.disposition = file.disposition.with_include(false);
                 file.locked = true;
                 file.attention_reason =
                     Some("merge-hostile — fights bootc /etc 3-way merge".into());
@@ -348,8 +352,9 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 
         // Exclude inspectah's own COPR repo definition — the migration
         // tool should never carry its own repo into the target image.
+        // `with_include` keeps an advisory, as the merge-hostile lock does.
         if is_inspectah_repo_file(&config.files[i].path) {
-            config.files[i].disposition = FindingKind::excluded();
+            config.files[i].disposition = config.files[i].disposition.with_include(false);
             config.files[i].locked = true;
             continue;
         }
@@ -896,6 +901,54 @@ mod tests {
         assert!(!file.disposition.is_included());
         assert!(file.locked);
         assert!(file.attention_reason.is_some());
+    }
+
+    /// A lock holds a file out of the image; it says nothing about the
+    /// file's content. Each config lock keeps a disposition that is not
+    /// actionable, so a capture failure stays one and nothing downstream
+    /// reads the empty content as the file's. The lock and its reason are
+    /// set beside it.
+    #[test]
+    fn config_locks_keep_a_non_actionable_disposition() {
+        use crate::classify::classify_configs;
+        use inspectah_core::types::AdvisoryType;
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
+
+        let copr = "/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:example:inspectah.repo";
+        let dispositions = [
+            FindingKind::advisory(AdvisoryType::ContentNotCaptured, "permission denied"),
+            FindingKind::advisory(AdvisoryType::Modernization, "port it"),
+            FindingKind::inventory(),
+        ];
+        for disposition in dispositions {
+            let mut snap = snap_with_configs(vec![
+                ConfigFileEntry {
+                    path: "/etc/crypttab".into(),
+                    kind: ConfigFileKind::Unowned,
+                    disposition: disposition.clone(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: copr.into(),
+                    kind: ConfigFileKind::Unowned,
+                    disposition: disposition.clone(),
+                    ..Default::default()
+                },
+            ]);
+            normalize_merge_hostile_configs(&mut snap);
+            let configs = classify_configs(&snap);
+            normalize_config_defaults(&mut snap, &configs);
+
+            let files = &snap.config.as_ref().unwrap().files;
+            for file in files {
+                assert_eq!(file.disposition, disposition, "{}", file.path);
+                assert!(file.locked, "{} is locked", file.path);
+            }
+            assert!(
+                files[0].attention_reason.is_some(),
+                "the merge-hostile lock gives its reason"
+            );
+        }
     }
 
     #[test]
