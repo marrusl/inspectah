@@ -1487,3 +1487,63 @@ body,
 .pf-v6-theme-dark .inspectah-unmanaged-row__var-warning {
   color: var(--pf-t--global--color--status--warning--default);
 }
+
+/* --- Not carried group (packages view) --- */
+
+.inspectah-not-carried {
+  margin-top: var(--pf-t--global--spacer--lg);
+  scroll-margin-top: var(--pf-t--global--spacer--lg);
+}
+
+.inspectah-not-carried__help {
+  margin: 0 0 var(--pf-t--global--spacer--sm);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-not-carried__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.inspectah-not-carried__row {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  border-left: 3px solid transparent;
+}
+
+/* Unit owners are the rows that matter: a running service leaves the image. */
+.inspectah-not-carried__row--owner {
+  border-left-color: var(--pf-t--global--color--status--warning--default);
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-not-carried__main {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm);
+  min-width: 0;
+}
+
+.inspectah-not-carried__row--owner .inspectah-not-carried__name {
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-not-carried__repo {
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--subtle);
+}
+
+.inspectah-not-carried__units {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}

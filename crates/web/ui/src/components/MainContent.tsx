@@ -16,6 +16,7 @@ import type {
   RefinedConfig,
   RefinementOp,
   ReferenceSection,
+  NotCarriedRow,
 } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
@@ -33,6 +34,7 @@ import type { PackageListPackage } from "./PackageList";
 import { LanguagePackageList } from "./LanguagePackageList";
 import { UnmanagedFileList } from "./UnmanagedFileList";
 import { SystemTuningSection } from "./SystemTuningSection";
+import { NotCarriedGroup } from "./NotCarriedGroup";
 import { buildShadowOwners } from "./shadowOwner";
 import { Content } from "@patternfly/react-core";
 
@@ -96,6 +98,10 @@ export interface MainContentProps {
   onSetPackagePin?: (ecosystem: string, envPath: string, pkg: string, pinned: boolean) => void;
   /** Callback to bulk pin/unpin all packages in a language environment. */
   onSetBulkPackagePin?: (ecosystem: string, envPath: string, pinned: boolean) => void;
+  /** Expand and scroll to the Not carried group (the Export dialog's link). */
+  revealNotCarried?: boolean;
+  /** Called once the Not carried group has handled a reveal. */
+  onNotCarriedRevealed?: () => void;
 }
 
 interface ToastEntry {
@@ -146,6 +152,8 @@ export function MainContent({
   hasUnmanagedScan = false,
   onSetPackagePin,
   onSetBulkPackagePin,
+  revealNotCarried = false,
+  onNotCarriedRevealed,
 }: MainContentProps) {
   const [filterText, setFilterText] = useState("");
   const toastIdRef = useRef(0);
@@ -293,6 +301,22 @@ export function MainContent({
         );
     },
     [viewData, onViewUpdate, onMutationError],
+  );
+
+  // Not carried include: the ordinary package op, with the row's item_id
+  // passed back verbatim (Refine projection contract).
+  const handleNotCarriedInclude = useCallback(
+    (row: NotCarriedRow) => {
+      applyOp({
+        op: "SetInclude",
+        target: { item_id: row.item_id, include: true },
+      })
+        .then((updatedView) => onViewUpdate(updatedView))
+        .catch((err) =>
+          onMutationError(err instanceof Error ? err : new Error(String(err))),
+        );
+    },
+    [onViewUpdate, onMutationError],
   );
 
   // Repo toggle: build SetInclude op for repos
@@ -469,6 +493,13 @@ export function MainContent({
           rpmRowStates={rpmRowStates}
           onUploadClick={onUploadClick}
           onRemoveRpmUpload={onRemoveRpmUpload}
+        />
+        <NotCarriedGroup
+          rows={viewData?.not_carried_packages ?? []}
+          onInclude={handleNotCarriedInclude}
+          isPending={isPending}
+          reveal={revealNotCarried}
+          onRevealed={onNotCarriedRevealed}
         />
         <div style={{ marginTop: "var(--pf-t--global--spacer--lg)" }}>
           <ExpandableSection
