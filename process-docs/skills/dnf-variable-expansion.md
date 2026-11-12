@@ -174,6 +174,27 @@ wording is `RepoFile::base_image_ships_reason`. Refine has no per-key
 toggle, so the operator sees the decision in the Containerfile comment
 and the audit table but cannot flip it there.
 
+## What a repo exclusion drops
+
+In refine, `RepoIndex::repo_file_carried` and `RepoIndex::gpg_key_carried`
+are the one rule for what an exclusion leaves: a `.repo` file stays carried
+while at least one section the host **enabled** in it is not excluded, and
+a key stays while a host-enabled, not-excluded section names it (resolved
+through `is_key_named_by` when the index is built). Host-disabled sections
+never count. EPEL's `epel.repo` holds `[epel-debuginfo]` and
+`[epel-source]` at `enabled=0`, and counting them kept the file and the
+key after `epel` was excluded. The session's exclude cascade is the only
+writer of those dispositions; the stager, the Containerfile (`Custom
+Repositories`, `GPG Keys`, `rpm --import`), `repo_enabling` and the audit
+read them from the projection, so none of them re-derives the rule.
+
+The rule acts only on an exclusion. With no repo op the projection keeps
+the scan's dispositions, including a file whose sections are all disabled
+and a key only disabled sections name. A `shipped_by_base` key is never
+re-included. A `.repo` file the host modified is also in `config.files`,
+and either inclusion stages it (an open defect), so for a modified file
+the repo exclusion alone does not stop it shipping.
+
 ## Repo file syntax
 
 `extract_gpg_keys` reads `gpgkey=` the way libdnf's `IniParser` does: the
