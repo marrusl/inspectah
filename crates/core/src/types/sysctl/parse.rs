@@ -16,7 +16,8 @@ const GLOB_CHARS: [char; 3] = ['*', '?', '['];
 /// `ignore_failure`. A line without `=` that starts with `-` excludes the
 /// name after the `-`. A name holding `*`, `?` or `[` is a glob, any other
 /// a key, normalized. Every other line, including one whose name is empty
-/// or holds whitespace (no `/proc/sys` entry can match it), is unparsed.
+/// or is a non-glob name holding whitespace (no `/proc/sys` entry can
+/// match it), is unparsed.
 /// Line numbers are 1-based physical lines.
 pub fn parse_sysctl_lines(content: &str) -> Vec<SysctlLine> {
     content
@@ -57,15 +58,20 @@ fn parse_line(line: &str, line_no: u32) -> Option<SysctlLine> {
 }
 
 /// Classify a trimmed name, or `None` when it cannot name a sysctl.
+///
+/// Globs are classified before the whitespace check: a bracket expression
+/// such as `[! ]` may hold a space and is still a valid glob.
 fn parse_name(name: &str) -> Option<SysctlName> {
-    if name.is_empty() || name.contains(char::is_whitespace) {
+    if name.is_empty() {
         return None;
     }
     if name.contains(GLOB_CHARS) {
-        Some(SysctlName::Glob(name.to_string()))
-    } else {
-        Some(SysctlName::Key(SysctlKey::normalize(name)))
+        return Some(SysctlName::Glob(name.to_string()));
     }
+    if name.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(SysctlName::Key(SysctlKey::normalize(name)))
 }
 
 /// Compare a sysctl.d file value with a runtime value as token sequences.
@@ -163,6 +169,22 @@ mod tests {
                 vec![SysctlLine::Exclude {
                     line_no: 1,
                     name: SysctlName::Glob("net.*.x".into()),
+                }],
+            ),
+            (
+                "net.ipv4.conf.[! ]*.rp_filter = 2",
+                vec![SysctlLine::Assign {
+                    line_no: 1,
+                    name: SysctlName::Glob("net.ipv4.conf.[! ]*.rp_filter".into()),
+                    value: "2".into(),
+                    ignore_failure: false,
+                }],
+            ),
+            (
+                "-net.ipv4.conf.[! ]*.rp_filter",
+                vec![SysctlLine::Exclude {
+                    line_no: 1,
+                    name: SysctlName::Glob("net.ipv4.conf.[! ]*.rp_filter".into()),
                 }],
             ),
             (
