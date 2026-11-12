@@ -12,6 +12,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::AdvisoryType;
 use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
 };
@@ -29,7 +30,6 @@ use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
 use inspectah_core::types::storage::{FstabEntry, StorageSection, VarDirBacking, VarDirectory};
-use inspectah_core::types::{AdvisoryType, config::ConfigShadow};
 use inspectah_refine::projection::project_reference;
 use inspectah_refine::session::RefineSession;
 use inspectah_web::adapter::{VAR_SUMMARY_ID, build_web_sections};
@@ -423,25 +423,11 @@ async fn grouped_view_contract() {
     insta::assert_json_snapshot!("grouped_view", json);
 }
 
-// -- The two assertions Tasks 19 and 21 deferred to this one ---------------
+// -- The assertion Task 19 deferred to this one -----------------------------
 //
-// Both are function-level: `build_web_sections` is the unit that gained
+// It is function-level: `build_web_sections` is the unit that gained
 // the fields. The same transition over the live endpoint, through the
 // session and the export, is `decision_surface_test.rs` (§ 3.9).
-
-/// The Kernel & Boot section of a snapshot's reference projection.
-fn kernel_boot_customizations(snap: &InspectionSnapshot) -> Vec<ContextItem> {
-    let sections = build_web_sections(&project_reference(snap));
-    let kb = sections
-        .iter()
-        .find(|s| s.id == "kernel_boot")
-        .expect("kernel_boot section");
-    kb.subsections
-        .iter()
-        .find(|s| s.id == "customizations")
-        .map(|s| s.items.clone())
-        .unwrap_or_default()
-}
 
 /// The Storage section's items for a snapshot's reference projection.
 fn storage_items(snap: &InspectionSnapshot) -> Vec<ContextItem> {
@@ -450,130 +436,6 @@ fn storage_items(snap: &InspectionSnapshot) -> Vec<ContextItem> {
         .find(|s| s.id == "storage")
         .expect("storage section")
         .items
-}
-
-/// § 8.10, deferred from Task 21. On the degraded-but-shadowing fixture
-/// each shadowed key decides on its own row, and the file whose keys
-/// they are decides nowhere: Task 21 made that entry `Inventory`, and a
-/// row that cannot be toggled must not offer a toggle.
-///
-/// `/etc/modprobe.d/driftify.conf` is the same-path positive control.
-/// Without it the `decision.is_none()` assertion below would hold just
-/// as well if config-backed rows never decided at all, and the only
-/// positive cases in this test reach `ContextDecision` by the sysctl
-/// route rather than this one.
-#[test]
-fn shadowed_sysctl_keys_decide_and_the_shadowing_file_does_not() {
-    let mut snap = InspectionSnapshot::new();
-    snap.config = Some(ConfigSection {
-        files: vec![
-            ConfigFileEntry {
-                path: "/etc/sysctl.d/99-driftify.conf".into(),
-                kind: ConfigFileKind::Unowned,
-                category: ConfigCategory::Sysctl,
-                content: "vm.swappiness = 10\nnet.ipv4.ip_forward = 1".into(),
-                disposition: FindingKind::inventory(),
-                shadowed_by: Some(ConfigShadow::Sysctl),
-                ..Default::default()
-            },
-            ConfigFileEntry {
-                path: "/etc/modprobe.d/driftify.conf".into(),
-                kind: ConfigFileKind::Unowned,
-                category: ConfigCategory::KernelModule,
-                content: "blacklist nouveau".into(),
-                disposition: FindingKind::excluded(),
-                locked: true,
-                ..Default::default()
-            },
-        ],
-    });
-    snap.kernel_boot = Some(KernelBootSection {
-        sysctl_overrides: vec![
-            SysctlOverride {
-                key: "vm.swappiness".into(),
-                runtime: "10".into(),
-                default: "60".into(),
-                source: "/etc/sysctl.d/99-driftify.conf".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            },
-            SysctlOverride {
-                key: "net.ipv4.ip_forward".into(),
-                runtime: "1".into(),
-                default: "0".into(),
-                source: "/etc/sysctl.d/99-driftify.conf".into(),
-                disposition: FindingKind::excluded(),
-                locked: true,
-                ..Default::default()
-            },
-        ],
-        ..Default::default()
-    });
-
-    let items = kernel_boot_customizations(&snap);
-
-    let swappiness = items
-        .iter()
-        .find(|i| i.id == "vm.swappiness")
-        .expect("a row for each shadowed key");
-    let decision = swappiness.decision.as_ref().expect("vm.swappiness decides");
-    assert_eq!(
-        serde_json::to_value(&decision.item_id).unwrap(),
-        serde_json::json!({"kind": "Sysctl", "key": {"key": "vm.swappiness"}})
-    );
-    assert!(decision.include);
-    assert!(!decision.locked);
-
-    let forward = items
-        .iter()
-        .find(|i| i.id == "net.ipv4.ip_forward")
-        .expect("a row for each shadowed key");
-    let decision = forward
-        .decision
-        .as_ref()
-        .expect("net.ipv4.ip_forward decides");
-    assert_eq!(
-        serde_json::to_value(&decision.item_id).unwrap(),
-        serde_json::json!({"kind": "Sysctl", "key": {"key": "net.ipv4.ip_forward"}})
-    );
-    assert!(!decision.include);
-    assert!(decision.locked);
-
-    let shadowing = items
-        .iter()
-        .find(|i| i.id == "/etc/sysctl.d/99-driftify.conf")
-        .expect("the shadowing file keeps its pointer row");
-    assert!(
-        shadowing.decision.is_none(),
-        "the shadowed entry is Inventory and decides nowhere, got {:?}",
-        shadowing.decision
-    );
-    assert_eq!(
-        shadowing.subtitle.as_deref(),
-        Some("merged into 99-inspectah-migrated.conf")
-    );
-
-    // The positive control on the same path: an actionable, locked,
-    // excluded config entry decides on its pointer row, through
-    // `ItemId::Config` and carrying the entry's real lock state.
-    let modprobe = items
-        .iter()
-        .find(|i| i.id == "/etc/modprobe.d/driftify.conf")
-        .expect("an unshadowed config entry keeps its pointer row");
-    let decision = modprobe
-        .decision
-        .as_ref()
-        .expect("a config-backed row decides under ItemId::Config");
-    assert_eq!(
-        serde_json::to_value(&decision.item_id).unwrap(),
-        serde_json::json!({"kind": "Config", "key": {"path": "/etc/modprobe.d/driftify.conf"}})
-    );
-    assert!(!decision.include);
-    assert!(
-        decision.locked,
-        "a locked Config target is refused as a silent no-op, so the row \
-         must not report an enabled control"
-    );
 }
 
 /// § 3.4 View, deferred from Task 19. The Storage rows follow the

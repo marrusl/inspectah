@@ -145,8 +145,8 @@ fn happy_path() {
         bridge.disposition
     );
 
-    // sysctl overrides detected (only where file != runtime)
-    assert!(!section.sysctl_overrides.is_empty());
+    // sysctl search path collected
+    assert!(section.sysctl.is_some());
 
     // locale
     assert_eq!(section.locale, Some("en_US.UTF-8".to_string()));
@@ -156,56 +156,6 @@ fn happy_path() {
 
     // tuned profile
     assert_eq!(section.tuned_active, "virtual-guest");
-}
-
-// ── Test 2: Sysctl three-way diff ────────────────────────────────────
-
-#[test]
-fn sysctl_three_way_diff() {
-    let exec = full_mock();
-    let source = pkg_source();
-    let ctx = InspectionContext {
-        source_system: &source,
-        executor: &exec,
-        rpm_state: None,
-        baseline_data: None,
-    };
-
-    let output = KernelbootInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
-    let section = match &output.section {
-        SectionData::KernelBoot(s) => s,
-        other => panic!("expected SectionData::KernelBoot, got {:?}", other),
-    };
-
-    // vm.swappiness: file=10, runtime=30 → override detected
-    let swappiness = section
-        .sysctl_overrides
-        .iter()
-        .find(|o| o.key == "vm.swappiness")
-        .expect("swappiness override should exist");
-    assert_eq!(swappiness.default, "10"); // file-defined value
-    assert_eq!(swappiness.runtime, "30"); // runtime value
-    assert!(swappiness.disposition.is_included());
-
-    // kernel.sysrq: file=1, runtime=16 → override detected
-    let sysrq = section
-        .sysctl_overrides
-        .iter()
-        .find(|o| o.key == "kernel.sysrq")
-        .expect("sysrq override should exist");
-    assert_eq!(sysrq.default, "1");
-    assert_eq!(sysrq.runtime, "16");
-
-    // net.ipv4.ip_forward: file=1, runtime=1 → NOT an override
-    assert!(
-        section
-            .sysctl_overrides
-            .iter()
-            .all(|o| o.key != "net.ipv4.ip_forward"),
-        "ip_forward matches, should not be an override"
-    );
 }
 
 // ── Test 3: lsmod failure → Degraded ─────────────────────────────────

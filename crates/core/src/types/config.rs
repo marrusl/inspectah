@@ -41,12 +41,6 @@ pub enum ConfigCategory {
     Other,
 }
 
-/// The single `/etc/sysctl.d/` drop-in the export synthesizes from the
-/// included sysctl overrides. The files whose keys it absorbs are
-/// `ConfigShadow::Sysctl` entries, and every surface that explains where
-/// their content went names this file.
-pub const SYNTHESIZED_SYSCTL_FILE: &str = "99-inspectah-migrated.conf";
-
 /// The decision a config file's content travels under when it is not the
 /// file's own. A shadowed entry is inventory: its content reaches the
 /// image through the shadowing decision and never through a copy of the
@@ -54,9 +48,6 @@ pub const SYNTHESIZED_SYSCTL_FILE: &str = "99-inspectah-migrated.conf";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigShadow {
-    /// The file's keys appear in `kernel_boot.sysctl_overrides`, which
-    /// synthesizes a single drop-in from the included ones.
-    Sysctl,
     /// The file's path appears in `services.drop_ins`, which materializes
     /// it under `drop-ins/` on that entry's own decision.
     ///

@@ -22,7 +22,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::configtree::write_config_tree;
 use tempfile::TempDir;
@@ -63,17 +63,6 @@ fn snapshot_with(disposition: FindingKind, content: &str) -> InspectionSnapshot 
         // nothing and no kargs drop-in lands under `config/usr/`. That keeps
         // the materialized root list a statement about the config loop alone.
         cmdline: "ro quiet root=/dev/mapper/rhel-root".to_string(),
-        // The synthesized sysctl file is written under `sysctl/`, not
-        // `config/`, and its source path is not the snippet path, so it
-        // neither adds a root nor collides with the entry under test.
-        sysctl_overrides: vec![SysctlOverride {
-            key: "net.ipv4.ip_forward".to_string(),
-            runtime: "1".to_string(),
-            default: "0".to_string(),
-            source: "/etc/sysctl.d/99-custom.conf".to_string(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }],
         tuned_active: "throughput-performance".to_string(),
         ..Default::default()
     });

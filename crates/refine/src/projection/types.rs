@@ -7,7 +7,7 @@ use crate::types::{
 };
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::ShadowType;
-use inspectah_core::types::config::{ConfigCategory, ConfigShadow, SYNTHESIZED_SYSCTL_FILE};
+use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
@@ -247,9 +247,6 @@ pub struct RefConfigRef {
 /// Every surface that renders one reads this, so they cannot diverge.
 pub fn config_ref_summary(entry: &RefConfigRef) -> String {
     match entry.shadowed_by {
-        Some(ConfigShadow::Sysctl) => {
-            format!("merged into {SYNTHESIZED_SYSCTL_FILE}")
-        }
         Some(ConfigShadow::Services) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
         None => DECIDED_UNDER_CONFIG_FILES.to_string(),
     }

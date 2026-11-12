@@ -9,12 +9,16 @@
 #[path = "support/sysctl_hosts.rs"]
 mod sysctl_hosts;
 
+use std::path::Path;
+
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::sysctl::{
     RuntimeObservation, SysctlCarriage, SysctlDir, SysctlExplanation, SysctlFileBody,
     SysctlFileRef, SysctlKey, SysctlLine, SysctlLineRef, SysctlName, SysctlOutcome, SysctlSection,
     SysctlSetting, UnknownInput, VendorReplacement,
 };
+use inspectah_refine::types::{ItemId, RefinementOp};
 use sysctl_hosts::{
     SysctlHost, export_session, reload, render_export, scan, scan_without_config, session,
 };
@@ -88,6 +92,72 @@ fn runtime_keys(snap: &InspectionSnapshot) -> Vec<String> {
         .keys()
         .cloned()
         .collect()
+}
+
+/// The config entry at `path`; panics when absent.
+fn config_entry<'a>(snap: &'a InspectionSnapshot, path: &str) -> &'a ConfigFileEntry {
+    snap.config
+        .as_ref()
+        .expect("the config section is present")
+        .files
+        .iter()
+        .find(|entry| entry.path == path)
+        .unwrap_or_else(|| panic!("no config entry at {path}"))
+}
+
+/// The config entries at `path`.
+fn config_entries_at<'a>(snap: &'a InspectionSnapshot, path: &str) -> Vec<&'a ConfigFileEntry> {
+    snap.config
+        .as_ref()
+        .expect("the config section is present")
+        .files
+        .iter()
+        .filter(|entry| entry.path == path)
+        .collect()
+}
+
+/// How `carriage()` carries the `/etc` file `name`.
+fn carriage_of<'a>(
+    section: &SysctlSection,
+    snap: &'a InspectionSnapshot,
+    name: &str,
+) -> SysctlCarriage<'a> {
+    section
+        .carriage(snap.config.as_ref())
+        .into_iter()
+        .find(|(file, _)| *file == file_ref(SysctlDir::Etc, name))
+        .map(|(_, carriage)| carriage)
+        .unwrap_or_else(|| panic!("no carriage row for {name}"))
+}
+
+/// Every path in `root`, relative to it, files and directories alike.
+fn tree_paths(root: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("the export directory reads") {
+            let path = entry.expect("the directory entry reads").path();
+            found.push(
+                path.strip_prefix(root)
+                    .expect("under the root")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The export's `path` is an empty regular file, not a link.
+fn assert_empty_regular_file(tree: &Path, path: &str) {
+    let meta = std::fs::symlink_metadata(tree.join(path))
+        .unwrap_or_else(|e| panic!("the export lacks {path}: {e}"));
+    assert!(meta.is_file(), "{path} is a regular file: {meta:?}");
+    assert_eq!(meta.len(), 0, "{path} is empty");
 }
 
 /// The `degraded:` warnings the kernel/boot inspector left.
@@ -307,6 +377,298 @@ fn case_03_same_name_shadow_each_adjacent_pair() {
             "{higher:?} over {lower:?}"
         );
     }
+}
+
+// ── Legacy capture ───────────────────────────────────────────────────
+
+#[test]
+fn legacy_sysctl_overrides_not_captured() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file("/etc/sysctl.d/90-swap.conf", "vm.swappiness = 10\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    ));
+    let written = json(&snap);
+    assert_eq!(
+        written["kernel_boot"]["sysctl_overrides"],
+        serde_json::json!([]),
+        "the legacy per-key capture no longer runs"
+    );
+    assert_eq!(runtime_keys(&snap), ["vm.swappiness"]);
+}
+
+// ── Case 4 ───────────────────────────────────────────────────────────
+
+#[test]
+fn case_04_unowned_mask() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(
+                "/usr/lib/sysctl.d/50-coredump.conf",
+                "kernel.core_pattern = |/usr/lib/systemd/systemd-coredump %P\n",
+            )
+            .link("/etc/sysctl.d/50-coredump.conf", "/dev/null")
+            .sysctl_a("kernel.core_pattern = core\n"),
+    ));
+    let section = section(&snap);
+    assert_eq!(resolved(section), [], "no key from the masked vendor file");
+    assert_eq!(
+        section.vendor_replacements(),
+        [VendorReplacement::Masks {
+            name: "50-coredump.conf".into()
+        }]
+    );
+
+    let tree = render_export(&snap);
+    assert_empty_regular_file(tree.path(), "config/etc/sysctl.d/50-coredump.conf");
+}
+
+// ── Case 5 ───────────────────────────────────────────────────────────
+
+const RPM_MASK: &str = "/etc/sysctl.d/99-sysctl.conf";
+const SYSCTL_CONF: &str = "/etc/sysctl.conf";
+
+#[test]
+fn case_05_rpm_owned_mask() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(SYSCTL_CONF, "vm.swappiness = 10\n")
+            .link(RPM_MASK, "/dev/null")
+            .rpm_owned(SYSCTL_CONF, "procps-ng")
+            .rpm_owned(RPM_MASK, "procps-ng")
+            .rpm_va("....L....", RPM_MASK)
+            .sysctl_a("vm.swappiness = 60\n"),
+    ));
+
+    let entries = config_entries_at(&snap, RPM_MASK);
+    assert_eq!(entries.len(), 1, "one entry at the link path: {entries:?}");
+    let entry = entries[0];
+    assert_eq!(entry.kind, ConfigFileKind::RpmOwnedModified);
+    assert!(entry.disposition.is_included(), "{:?}", entry.disposition);
+    assert_eq!(entry.content, "");
+    assert_eq!(entry.rpm_va_flags.as_deref(), Some("....L...."));
+
+    let section = section(&snap);
+    let mask = section
+        .files
+        .iter()
+        .find(|f| f.dir == SysctlDir::Etc && f.name == "99-sysctl.conf")
+        .expect("the mask is collected");
+    assert_eq!(mask.body, SysctlFileBody::Mask);
+    assert_eq!(
+        resolved(section),
+        [],
+        "the mask hides /etc/sysctl.conf, so its key is not effective"
+    );
+    assert_eq!(
+        section.vendor_replacements(),
+        [],
+        "no /usr/lib/sysctl.d/99-sysctl.conf exists, so the mask replaces no vendor file"
+    );
+
+    let tree = render_export(&snap);
+    assert_empty_regular_file(tree.path(), "config/etc/sysctl.d/99-sysctl.conf");
+}
+
+#[test]
+fn case_05_rpm_owned_link_to_another_file() {
+    let site = "/etc/sysctl-site.conf";
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(site, "vm.swappiness = 10\n")
+            .link(RPM_MASK, site)
+            .rpm_owned(RPM_MASK, "procps-ng")
+            .rpm_va("....L....", RPM_MASK)
+            .sysctl_a("vm.swappiness = 10\n"),
+    ));
+    assert_eq!(
+        config_entries_at(&snap, RPM_MASK),
+        Vec::<&ConfigFileEntry>::new(),
+        "a link re-pointed to a real file has no config entry"
+    );
+    assert_eq!(
+        carriage_of(section(&snap), &snap, "99-sysctl.conf"),
+        SysctlCarriage::NoConfigEntry
+    );
+}
+
+// ── Case 6 ───────────────────────────────────────────────────────────
+
+#[test]
+fn case_06_sysctl_conf_through_the_symlink() {
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file(SYSCTL_CONF, "vm.swappiness = 10\n")
+            .link(RPM_MASK, "../sysctl.conf")
+            .rpm_owned(SYSCTL_CONF, "procps-ng")
+            .rpm_owned(RPM_MASK, "procps-ng")
+            .rpm_va("S.5....T.", SYSCTL_CONF)
+            .sysctl_a("vm.swappiness = 10\n"),
+    ));
+    let section = section(&snap);
+
+    let link = section
+        .files
+        .iter()
+        .find(|f| f.dir == SysctlDir::Etc && f.name == "99-sysctl.conf")
+        .expect("the link is collected");
+    assert!(
+        matches!(
+            &link.body,
+            SysctlFileBody::Read { link_target: Some(target), .. } if target == SYSCTL_CONF
+        ),
+        "{:?}",
+        link.body
+    );
+    assert_eq!(
+        resolved(section),
+        [SysctlSetting {
+            key: SysctlKey::normalize("vm.swappiness"),
+            outcome: writes(
+                "10",
+                line(SysctlDir::Etc, "99-sysctl.conf", 1),
+                RuntimeObservation::Matches
+            ),
+            overwritten: Vec::new(),
+        }]
+    );
+
+    let carrier = config_entry(&snap, SYSCTL_CONF);
+    assert_eq!(
+        carriage_of(section, &snap, "99-sysctl.conf"),
+        SysctlCarriage::Config(carrier)
+    );
+    assert!(
+        carrier.disposition.is_included(),
+        "{:?}",
+        carrier.disposition
+    );
+
+    let exported = "config/etc/sysctl.conf";
+    let tree = render_export(&snap);
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join(exported))
+            .unwrap_or_else(|e| panic!("the export lacks {exported}: {e}")),
+        "vm.swappiness = 10\n"
+    );
+
+    let mut refined = session(&snap);
+    refined
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config {
+                path: SYSCTL_CONF.into(),
+            },
+            include: false,
+        })
+        .expect("the exclusion applies");
+    let refined_tree = export_session(&refined);
+    assert!(
+        !refined_tree.path().join(exported).exists(),
+        "an excluded /etc/sysctl.conf is not exported"
+    );
+}
+
+// ── Case 11 ──────────────────────────────────────────────────────────
+
+#[test]
+fn case_11_drifted_key_export() {
+    /// The drop-in the removed per-key route synthesized.
+    const LEGACY_DROP_IN: &str = "99-inspectah-migrated.conf";
+
+    let snap = reload(&scan(
+        SysctlHost::new()
+            .file("/etc/sysctl.d/90-swap.conf", "vm.swappiness = 10\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+    ));
+    let tree = render_export(&snap);
+    let paths = tree_paths(tree.path());
+
+    assert!(
+        !tree.path().join("sysctl").exists(),
+        "no sysctl/ directory: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.ends_with(LEGACY_DROP_IN)),
+        "no {LEGACY_DROP_IN} anywhere: {paths:?}"
+    );
+    let containerfile =
+        std::fs::read_to_string(tree.path().join("Containerfile")).expect("Containerfile");
+    assert!(
+        !containerfile.contains(LEGACY_DROP_IN) && !containerfile.contains("sysctl/"),
+        "the Containerfile names neither, got:\n{containerfile}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("config/etc/sysctl.d/90-swap.conf"))
+            .expect("the file is carried by the config tree"),
+        "vm.swappiness = 10\n"
+    );
+}
+
+// ── Case 12 ──────────────────────────────────────────────────────────
+
+#[test]
+fn case_12_one_drifted_key_does_not_drop_the_file() {
+    const TUNING: &str = "/etc/sysctl.d/90-tuning.conf";
+    const CONTENT: &str = "# site tuning\n\
+        vm.swappiness = 10\n\
+        vm.dirty_ratio = 20\n\
+        vm.dirty_background_ratio = 5\n\
+        kernel.sysrq = 0\n\
+        net.ipv4.ip_forward = 1\n\
+        net.core.somaxconn = 4096\n\
+        fs.file-max = 2097152\n";
+    let snap = reload(&scan(SysctlHost::new().file(TUNING, CONTENT).sysctl_a(
+        "fs.file-max = 2097152\n\
+             kernel.sysrq = 0\n\
+             net.core.somaxconn = 4096\n\
+             net.ipv4.ip_forward = 1\n\
+             vm.dirty_background_ratio = 5\n\
+             vm.dirty_ratio = 20\n\
+             vm.swappiness = 60\n",
+    )));
+
+    let entry = config_entry(&snap, TUNING);
+    assert!(entry.disposition.is_included(), "{:?}", entry.disposition);
+    assert_eq!(entry.shadowed_by, None);
+    assert_eq!(
+        json(&snap)["config"]["files"]
+            .as_array()
+            .expect("config files")
+            .iter()
+            .find(|e| e["path"] == TUNING)
+            .expect("serialized entry")["disposition"]["kind"],
+        "actionable"
+    );
+
+    let section = section(&snap);
+    assert_eq!(
+        carriage_of(section, &snap, "90-tuning.conf"),
+        SysctlCarriage::Config(entry)
+    );
+    let settings = resolved(section);
+    assert_eq!(settings.len(), 7, "{settings:?}");
+    let drifted: Vec<&str> = settings
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.outcome,
+                SysctlOutcome::Writes {
+                    runtime: RuntimeObservation::Differs { .. },
+                    ..
+                }
+            )
+        })
+        .map(|s| s.key.as_str())
+        .collect();
+    assert_eq!(drifted, ["vm.swappiness"], "exactly one Differs row");
+
+    let tree = render_export(&snap);
+    assert_eq!(
+        std::fs::read(tree.path().join("config/etc/sysctl.d/90-tuning.conf"))
+            .expect("the file is exported"),
+        CONTENT.as_bytes(),
+        "byte-identical to the host file"
+    );
 }
 
 // ── Case 7 ───────────────────────────────────────────────────────────

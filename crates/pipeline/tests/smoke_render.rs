@@ -247,13 +247,14 @@ fn storage_not_in_containerfile() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: kernelboot_sysctl_in_containerfile
-// Kernelboot sysctl overrides produce comments referencing sysctl in
-// the Containerfile.
+// Test 5: kernelboot_containerfile_names_no_sysctl
+// The kernel/boot section renders, and no sysctl key, value or file
+// reaches the Containerfile: sysctl files are carried verbatim by the
+// config tree, so a sysctl override in the snapshot writes no line.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn kernelboot_sysctl_in_containerfile() {
+fn kernelboot_containerfile_names_no_sysctl() {
     let snap = snapshot_with_kernelboot();
     let output = containerfile::render_containerfile(&snap, None, None);
 
@@ -261,10 +262,9 @@ fn kernelboot_sysctl_in_containerfile() {
         output.contains("Kernel and Boot Configuration") || output.contains("Kernel Arguments"),
         "Containerfile must contain a kernel/boot section heading"
     );
-    // sysctl overrides produce a comment reference
     assert!(
-        output.contains("sysctl"),
-        "Containerfile must reference sysctl overrides"
+        !output.contains("sysctl") && !output.contains("net.ipv4.ip_forward"),
+        "no sysctl key or file reaches the Containerfile, got:\n{output}"
     );
 }
 

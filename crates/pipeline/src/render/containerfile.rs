@@ -9,7 +9,7 @@
 //! 6. Non-RPM software
 //! 7. Containers (quadlet COPYs)
 //! 8. Users
-//! 9. Kernel/boot (kargs.d, sysctl, tuned activation)
+//! 9. Kernel/boot (kargs.d, tuned activation)
 //! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
@@ -18,7 +18,6 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
-use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use inspectah_core::types::group_render::RenderContext;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
@@ -1857,22 +1856,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/"
                 .into(),
         );
-    }
-
-    // Sysctl overrides — synthesized into a single drop-in
-    let included_sysctl: usize = kb
-        .sysctl_overrides
-        .iter()
-        .filter(|s| s.disposition.is_included())
-        .count();
-    if included_sysctl > 0 {
-        body.push(format!(
-            "# {} sysctl override(s) — merged into single drop-in",
-            included_sysctl
-        ));
-        body.push(format!(
-            "COPY sysctl/etc/sysctl.d/{SYNTHESIZED_SYSCTL_FILE} /etc/sysctl.d/"
-        ));
     }
 
     // Tuned — gated on include flag (set by collectors / aggregate merge).
@@ -5140,64 +5123,6 @@ RUN dnf install -y \
         assert!(
             output.contains("systemctl disable \\\n    avahi-daemon.service"),
             "disabled service must produce systemctl disable with continuation"
-        );
-    }
-
-    #[test]
-    fn test_containerfile_sysctl_copy_synthesized_file() {
-        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            sysctl_overrides: vec![
-                SysctlOverride {
-                    key: "net.ipv4.ip_forward".into(),
-                    runtime: "1".into(),
-                    source: "/etc/sysctl.d/99-custom.conf".into(),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    ..Default::default()
-                },
-                SysctlOverride {
-                    key: "vm.swappiness".into(),
-                    runtime: "10".into(),
-                    source: "/etc/sysctl.d/99-custom.conf".into(),
-                    disposition: FindingKind::excluded(),
-                    locked: false,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-        let output = render_containerfile(&snap, None, None);
-        assert!(
-            output.contains("COPY sysctl/etc/sysctl.d/99-inspectah-migrated.conf /etc/sysctl.d/"),
-            "included sysctls must produce COPY for synthesized file, got:\n{output}"
-        );
-        assert!(
-            output.contains("1 sysctl override(s)"),
-            "count must reflect only included overrides"
-        );
-    }
-
-    #[test]
-    fn test_containerfile_sysctl_excluded_no_copy() {
-        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
-        let mut snap = InspectionSnapshot::new();
-        snap.kernel_boot = Some(KernelBootSection {
-            sysctl_overrides: vec![SysctlOverride {
-                key: "vm.swappiness".into(),
-                runtime: "10".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::excluded(),
-                locked: false,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        let output = render_containerfile(&snap, None, None);
-        assert!(
-            !output.contains("sysctl"),
-            "all-excluded sysctls must produce no sysctl output, got:\n{output}"
         );
     }
 

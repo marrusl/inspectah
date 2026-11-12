@@ -1607,7 +1607,6 @@ mod tests {
 
     // ── project_ref_kernel_boot tests ───────────────────────────────
 
-    use inspectah_core::types::config::ConfigShadow;
     use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, SysctlOverride};
 
     #[test]
@@ -1811,37 +1810,6 @@ mod tests {
             !paths.contains(&"/etc/modprobe.d/not-ours.conf"),
             "right prefix, wrong category: re-asking the path would \
              overrule the walker, which is the classification's owner"
-        );
-    }
-
-    /// A shadowed entry carries the shadow onto the pointer row, so the
-    /// row can say where the content went instead of offering a second
-    /// decision on it.
-    #[test]
-    fn test_shadowed_entry_is_carried_onto_the_pointer_row() {
-        let snap = InspectionSnapshot {
-            kernel_boot: Some(KernelBootSection::default()),
-            config: Some(ConfigSection {
-                files: vec![ConfigFileEntry {
-                    path: "/etc/sysctl.d/99-driftify.conf".into(),
-                    category: ConfigCategory::Sysctl,
-                    disposition: FindingKind::inventory(),
-                    shadowed_by: Some(ConfigShadow::Sysctl),
-                    ..Default::default()
-                }],
-            }),
-            ..Default::default()
-        };
-
-        let result = project_ref_kernel_boot(&snap);
-
-        assert_eq!(result.customizations_from_config.len(), 1);
-        let row = &result.customizations_from_config[0];
-        assert_eq!(row.shadowed_by, Some(ConfigShadow::Sysctl));
-        assert!(row.disposition.is_inventory());
-        assert_eq!(
-            super::super::types::config_ref_summary(row),
-            "merged into 99-inspectah-migrated.conf"
         );
     }
 

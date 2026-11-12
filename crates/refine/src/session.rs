@@ -2060,8 +2060,8 @@ impl RefineSession {
                             return Err(RefineError::AdvisoryNotToggleable(path.clone()));
                         }
                         // A shadowed entry's content travels under another
-                        // section's decision (a sysctl source file reaches
-                        // the image through its keys). `with_include()`
+                        // section's decision (a service drop-in reaches the
+                        // image through its Service Drop-ins row). `with_include()`
                         // discards the flag for Inventory, so accepting the
                         // op would report success and change nothing.
                         if entry.disposition.is_inventory() {
@@ -4465,7 +4465,6 @@ pub fn render_refine_export(
         "drop-ins",
         "quadlet",
         "flatpak",
-        "sysctl",
         "tuned",
         "env-files",
         "aggregate",
@@ -5818,7 +5817,7 @@ mod tests {
     #[test]
     fn export_includes_promoted_roots() {
         use inspectah_core::types::containers::{ContainerSection, FlatpakApp, QuadletUnit};
-        use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+        use inspectah_core::types::kernelboot::KernelBootSection;
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 
         let mut snap = test_snapshot();
@@ -5858,16 +5857,8 @@ mod tests {
             ..Default::default()
         });
 
-        // Sysctl → sysctl/ root
+        // Tuned activation
         snap.kernel_boot = Some(KernelBootSection {
-            sysctl_overrides: vec![SysctlOverride {
-                key: "net.ipv4.ip_forward".into(),
-                runtime: "1".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                locked: false,
-                ..Default::default()
-            }],
             tuned_disposition: FindingKind::included(),
             tuned_active: "my-profile".into(),
             ..Default::default()
@@ -5914,10 +5905,6 @@ mod tests {
             entries.iter().any(|e| e.starts_with("export/flatpak/")),
             "tarball must contain flatpak/ root. entries: {entries:?}"
         );
-        assert!(
-            entries.iter().any(|e| e.starts_with("export/sysctl/")),
-            "tarball must contain sysctl/ root. entries: {entries:?}"
-        );
         // The tuned/ promoted root is gone (§ 3.5). The earlier form of
         // this test asserted both its presence and the absence of
         // config/etc/tuned/, which was item 1.7's defect: a file the
@@ -5933,12 +5920,6 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("httpd.service.d/limits.conf")),
             "drop-in content must be present. entries: {entries:?}"
-        );
-        assert!(
-            entries
-                .iter()
-                .any(|e| e.contains("99-inspectah-migrated.conf")),
-            "synthesized sysctl file must be present. entries: {entries:?}"
         );
         assert!(
             entries.iter().any(|e| e.contains("flatpak-install.json")),

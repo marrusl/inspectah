@@ -18,11 +18,9 @@ use std::collections::HashMap;
 use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::config::SYNTHESIZED_SYSCTL_FILE;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
 use inspectah_core::types::group_render::{GroupRenderState, RenderContext};
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection};
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
 use inspectah_core::types::rpm::{
@@ -1327,102 +1325,6 @@ fn users_blueprint_renders_benign_values() {
     ] {
         assert!(out.lines().any(|l| l == line), "missing {line:?}\n{out}");
     }
-}
-
-// ---------------------------------------------------------------------------
-// Synthesized sysctl drop-in (`key = value`, applied at boot)
-// ---------------------------------------------------------------------------
-
-fn sysctl_dropin(key: &str, runtime: &str) -> String {
-    let mut snap = InspectionSnapshot::new();
-    snap.kernel_boot = Some(KernelBootSection {
-        sysctl_overrides: vec![SysctlOverride {
-            key: key.into(),
-            runtime: runtime.into(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    let dir = tempfile::tempdir().expect("tempdir");
-    write_config_tree(&snap, dir.path()).expect("write config tree");
-    std::fs::read_to_string(
-        dir.path()
-            .join("sysctl/etc/sysctl.d")
-            .join(SYNTHESIZED_SYSCTL_FILE),
-    )
-    .expect("drop-in written")
-}
-
-const SYSCTL_KEY_ROWS: &[Row] = &[Row {
-    field: "sysctl key",
-    render: |v| sysctl_dropin(&format!("net.ipv4.{v}"), "1"),
-    reached: Reached::Fixme("# FIXME: sysctl"),
-}];
-
-/// The FIXME names the key, not the refused value.
-const SYSCTL_VALUE_ROWS: &[Row] = &[Row {
-    field: "sysctl value",
-    render: |v| sysctl_dropin("net.ipv4.ip_forward", v),
-    reached: Reached::Refused("# FIXME: sysctl"),
-}];
-
-#[test]
-fn sysctl_dropin_refuses_every_hostile_key_and_value() {
-    let mut key_seps = terminators();
-    key_seps.extend([" ", "=", "#", ";"].iter().map(|s| s.to_string()));
-    check_rows(SYSCTL_KEY_ROWS, &key_seps);
-    check_rows(SYSCTL_VALUE_ROWS, &terminators());
-}
-
-/// No sysctl key starts with `/` or holds `..`, so neither is carried,
-/// whatever a reader would make of it.
-#[test]
-fn sysctl_dropin_refuses_absolute_and_climbing_keys() {
-    for key in [
-        "../../etc/passwd",
-        "net/../../etc/passwd",
-        "net.ipv4..conf",
-        "/proc/sys/kernel/x",
-        "/etc/passwd",
-    ] {
-        let out = sysctl_dropin(key, "1");
-        assert!(
-            out.lines().all(|l| l.starts_with('#') || !l.contains(key)),
-            "{key}: {out:?}"
-        );
-        assert!(
-            out.lines()
-                .any(|l| l.starts_with("# FIXME: sysctl") && l.contains(key)),
-            "{key}: {out:?}"
-        );
-    }
-}
-
-#[test]
-fn sysctl_dropin_renders_benign_values() {
-    let out = sysctl_dropin("net.ipv4.ip_local_port_range", "32768\t60999");
-    assert!(
-        out.lines()
-            .any(|l| l == "net.ipv4.ip_local_port_range = 32768\t60999"),
-        "{out:?}"
-    );
-    let out = sysctl_dropin("net/ipv4/conf/eth0.100/rp_filter", "2");
-    assert!(
-        out.lines()
-            .any(|l| l == "net/ipv4/conf/eth0.100/rp_filter = 2"),
-        "{out:?}"
-    );
-    // Sysctl values are trusted host configuration: the renderer keeps
-    // them on their line and does not judge them, so a pipe core_pattern
-    // is carried as the host had it.
-    let pattern = "|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h";
-    let out = sysctl_dropin("kernel.core_pattern", pattern);
-    assert!(
-        out.lines()
-            .any(|l| l == format!("kernel.core_pattern = {pattern}")),
-        "{out:?}"
-    );
 }
 
 /// A GPG key path is the operand of `rpm --import`, so a relative path

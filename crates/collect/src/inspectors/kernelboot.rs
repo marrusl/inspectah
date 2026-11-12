@@ -5,11 +5,10 @@ use inspectah_core::traits::inspector::{
 use inspectah_core::traits::progress::ProgressSink;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::kernelboot::{KernelBootSection, KernelModule, SysctlOverride};
+use inspectah_core::types::kernelboot::{KernelBootSection, KernelModule};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::sysctl::{
     SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlLine, SysctlName, SysctlSection,
-    sysctl_values_equal,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -22,8 +21,9 @@ const DEV_NULL: &str = "/dev/null";
 /// Secret-like patterns in the kernel cmdline.
 const CMDLINE_SECRET_PATTERNS: &[&str] = &["password=", "key=", "secret="];
 
-/// Inspects kernel boot configuration: cmdline, loaded modules, sysctl
-/// overrides, locale, timezone, and the active tuned profile.
+/// Inspects kernel boot configuration: cmdline, loaded modules, the sysctl
+/// search path and runtime values, locale, timezone, and the active tuned
+/// profile.
 pub struct KernelbootInspector;
 
 impl KernelbootInspector {
@@ -92,16 +92,7 @@ impl Inspector for KernelbootInspector {
             }
         };
 
-        // 3. Sysctl overrides — PRIMARY source (sysctl.d files + sysctl -a runtime)
-        let sysctl_overrides = match collect_sysctl_overrides(exec) {
-            Ok(overrides) => overrides,
-            Err(reason) => {
-                primary_failures.push(reason);
-                Vec::new()
-            }
-        };
-
-        // 3a. Sysctl search path and runtime values — PRIMARY source. No
+        // 3. Sysctl search path and runtime values — PRIMARY source. No
         // partial section is stored: one missing file or runtime value
         // would make the explanation claim drift that is not there.
         let sysctl = match collect_sysctl_section(exec) {
@@ -133,7 +124,9 @@ impl Inspector for KernelbootInspector {
         let section = KernelBootSection {
             cmdline,
             grub_defaults: String::new(),
-            sysctl_overrides,
+            // The legacy per-key capture is retired; the field stays,
+            // always empty, until the schema bump removes it.
+            sysctl_overrides: Vec::new(),
             sysctl,
             loaded_modules,
             tuned_disposition: FindingKind::from_bool(!tuned_active.is_empty()),
@@ -209,115 +202,6 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
         }
     }
     modules
-}
-
-/// Collect sysctl overrides by comparing file-defined values with runtime values.
-///
-/// Three-way diff:
-/// - Read sysctl config files from /etc/sysctl.d/ and /usr/lib/sysctl.d/
-/// - Run `sysctl -a` for runtime values
-/// - Where file-defined != runtime → record as override
-fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, String> {
-    // Read config files
-    let (file_values, sysctl_read_failures) = read_sysctl_files(exec);
-
-    // Sysctl config file read failures are correctness-bearing — missing
-    // overrides make the snapshot look like defaults when they're not.
-    if !sysctl_read_failures.is_empty() {
-        return Err(format!(
-            "sysctl config read failures: {}",
-            sysctl_read_failures.join("; ")
-        ));
-    }
-
-    if file_values.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Get runtime values
-    let runtime_result = exec.run("sysctl", &["-a"]);
-    if !runtime_result.success() {
-        return Err(format!(
-            "sysctl -a failed with exit code {}",
-            runtime_result.exit_code
-        ));
-    }
-
-    let runtime_values = parse_sysctl_output(&runtime_result.stdout);
-
-    // Three-way diff: only report where file value != runtime value
-    let mut overrides = Vec::new();
-    for (key, (file_val, source)) in &file_values {
-        if let Some(runtime_val) = runtime_values.get(key.as_str())
-            && !sysctl_values_equal(file_val, runtime_val)
-        {
-            overrides.push(SysctlOverride {
-                key: key.clone(),
-                runtime: runtime_val.to_string(),
-                default: file_val.clone(),
-                source: source.clone(),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-            });
-        }
-    }
-
-    // Sort for deterministic output
-    overrides.sort_by(|a, b| a.key.cmp(&b.key));
-
-    Ok(overrides)
-}
-
-/// Read sysctl config files from standard directories.
-/// Returns (map of key → (file_value, source_path), read_failures).
-/// Read failures on individual sysctl config files are correctness-bearing.
-fn read_sysctl_files(exec: &dyn Executor) -> (HashMap<String, (String, String)>, Vec<String>) {
-    let mut values = HashMap::new();
-    let mut read_failures = Vec::new();
-
-    for dir_path in &["/etc/sysctl.d", "/usr/lib/sysctl.d"] {
-        let dir = Path::new(dir_path);
-        if let Ok(entries) = exec.read_dir(dir) {
-            let mut sorted_entries = entries;
-            sorted_entries.sort();
-
-            for entry in &sorted_entries {
-                if !entry.ends_with(".conf") {
-                    continue;
-                }
-                let file_path = dir.join(entry);
-                match exec.read_file(&file_path) {
-                    Ok(content) => {
-                        let source = file_path.to_string_lossy().to_string();
-                        for (key, val) in parse_sysctl_conf(&content) {
-                            values.insert(key, (val, source.clone()));
-                        }
-                    }
-                    Err(e) => {
-                        read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
-                    }
-                }
-            }
-        }
-    }
-
-    (values, read_failures)
-}
-
-/// Parse a sysctl.d config file into key-value pairs.
-fn parse_sysctl_conf(content: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if let Some((key, val)) = line.split_once('=') {
-            pairs.push((key.trim().to_string(), val.trim().to_string()));
-        }
-    }
-    pairs
 }
 
 /// Record the sysctl search path as it is on disk and the kernel's value of
@@ -517,14 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_sysctl_conf() {
-        let input = "# comment\nkernel.sysrq = 1\nnet.ipv4.ip_forward = 1\n";
-        let pairs = parse_sysctl_conf(input);
-        assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0], ("kernel.sysrq".to_string(), "1".to_string()));
-    }
-
-    #[test]
     fn test_parse_locale() {
         assert_eq!(
             parse_locale("LANG=en_US.UTF-8\n"),
@@ -616,77 +492,6 @@ mod tests {
                 );
             }
             other => panic!("expected Degraded for unreadable sysctl config, got {other:?}"),
-        }
-    }
-
-    /// The kernel prints multi-value sysctls tab-separated while sysctl.d
-    /// files write them space-separated; only a token difference is drift.
-    #[test]
-    fn test_sysctl_override_ignores_whitespace_differences() {
-        // (key, file value, runtime value, expect override)
-        let cases: &[(&str, &str, &str, bool)] = &[
-            (
-                "net.ipv4.ip_local_port_range",
-                "1024 65535",
-                "1024\t65535",
-                false,
-            ),
-            (
-                "net.ipv4.tcp_rmem",
-                "4096 87380 6291456",
-                "4096\t87380\t6291456",
-                false,
-            ),
-            (
-                "net.ipv4.ip_local_port_range",
-                "1024 65535",
-                "1024\t65536",
-                true,
-            ),
-            (
-                "net.ipv4.ip_local_port_range",
-                "1024 65535",
-                "1024 65536",
-                true,
-            ),
-            (
-                "net.ipv4.ip_local_port_range",
-                "1024  65535",
-                "1024\t65535",
-                false,
-            ),
-            // Guards the parsers' trimming of surrounding whitespace, not the comparator.
-            ("kernel.sysrq", "1", "1 ", false),
-            ("kernel.sysrq", "1", "0", true),
-        ];
-        for &(key, file_val, runtime_val, expect_override) in cases {
-            let exec = MockExecutor::new()
-                .with_dir("/etc/sysctl.d", vec!["99-test.conf"])
-                .with_file(
-                    "/etc/sysctl.d/99-test.conf",
-                    &format!("{key} = {file_val}\n"),
-                )
-                .with_dir("/usr/lib/sysctl.d", vec![])
-                .with_command(
-                    "sysctl -a",
-                    ExecResult {
-                        stdout: format!("{key} = {runtime_val}\n"),
-                        exit_code: 0,
-                        ..Default::default()
-                    },
-                );
-            let overrides = collect_sysctl_overrides(&exec).expect("sysctl collection succeeds");
-            assert_eq!(
-                !overrides.is_empty(),
-                expect_override,
-                "{key}: file {file_val:?} vs runtime {runtime_val:?}"
-            );
-            if expect_override {
-                // Stored strings stay raw so the snapshot contract is unchanged.
-                assert_eq!(overrides.len(), 1);
-                assert_eq!(overrides[0].default, file_val);
-                assert_eq!(overrides[0].runtime, runtime_val);
-            }
         }
     }
 

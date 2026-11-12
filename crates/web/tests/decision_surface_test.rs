@@ -50,7 +50,7 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{
     ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection,
 };
-use inspectah_core::types::kernelboot::{KernelBootSection, SysctlOverride};
+use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
@@ -77,12 +77,6 @@ const DRIFTIFY_CONF: &str = "/etc/modprobe.d/driftify.conf";
 const APPONE_CONF: &str = "/etc/tmpfiles.d/appone.conf";
 const APPONE_VAR_DIR: &str = "/var/lib/appone";
 const APPONE_VAR_MODE: &str = "0750";
-/// One of two included sysctl keys. The second keeps the synthesized
-/// file in the export after this one is excluded, so the case tests the
-/// key's line and not the file's existence.
-const SYSCTL_KEY: &str = "net.ipv4.ip_forward";
-const SYSCTL_LINE: &str = "net.ipv4.ip_forward = 1";
-const OTHER_SYSCTL_KEY: &str = "vm.swappiness";
 /// No `/etc/tuned/<profile>/tuned.conf` entry exists for this profile,
 /// so the Containerfile takes the `active_profile` branch rather than
 /// the excluded-profile-file FIXME.
@@ -92,7 +86,6 @@ const CONTAINER_GROUP: &str = "Container Management";
 
 // -- Export paths and rendered text, hand-transcribed from the renderers --
 
-const SYNTHESIZED_SYSCTL_PATH: &str = "sysctl/etc/sysctl.d/99-inspectah-migrated.conf";
 const DRIFTIFY_EXPORT_PATH: &str = "config/etc/modprobe.d/driftify.conf";
 const APPONE_EXPORT_PATH: &str = "config/etc/tmpfiles.d/appone.conf";
 /// The `d` line `render_tmpfiles_conf` writes for a `Provision`
@@ -381,8 +374,8 @@ fn group_members_installed(export: &Export) -> bool {
 
 // -- Fixtures --------------------------------------------------------------
 
-/// Config, sysctl, tuned, and one `/var` directory whose only creator is
-/// a `config.files` entry. Four of the table's cases read this one host.
+/// Config, tuned, and one `/var` directory whose only creator is a
+/// `config.files` entry. Three of the table's cases read this one host.
 fn kernel_and_storage_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
@@ -406,24 +399,6 @@ fn kernel_and_storage_snapshot() -> InspectionSnapshot {
         ],
     });
     snap.kernel_boot = Some(KernelBootSection {
-        sysctl_overrides: vec![
-            SysctlOverride {
-                key: SYSCTL_KEY.into(),
-                runtime: "1".into(),
-                default: "0".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            },
-            SysctlOverride {
-                key: OTHER_SYSCTL_KEY.into(),
-                runtime: "10".into(),
-                default: "60".into(),
-                source: "/etc/sysctl.d/99-custom.conf".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            },
-        ],
         tuned_active: TUNED_PROFILE.into(),
         tuned_disposition: FindingKind::included(),
         ..Default::default()
@@ -620,51 +595,6 @@ fn cases() -> Vec<Case> {
                     e.text(DRIFTIFY_EXPORT_PATH),
                     "",
                     "the excluded file is absent from the tarball"
-                );
-            },
-        },
-        Case {
-            name: "sysctl row and the synthesized drop-in \
-                   (SetInclude(Sysctl(net.ipv4.ip_forward), false))",
-            endpoint: "/api/snapshot/sections",
-            snapshot: kernel_and_storage_snapshot,
-            setup: Vec::new,
-            op: || {
-                set_include(
-                    ItemId::Sysctl {
-                        key: SYSCTL_KEY.to_string(),
-                    },
-                    false,
-                )
-            },
-            surface: |s| kernel_boot_include(s, SYSCTL_KEY),
-            export: |e| e.text(SYNTHESIZED_SYSCTL_PATH).contains(SYSCTL_LINE),
-            before: true,
-            pin_before: |s, e| {
-                assert_eq!(
-                    kernel_boot_row(s, SYSCTL_KEY)["subtitle"],
-                    json!("\"1\" (default: \"0\")"),
-                    "the row shows the runtime value the drop-in writes"
-                );
-                assert!(
-                    e.text(SYNTHESIZED_SYSCTL_PATH).contains(SYSCTL_LINE),
-                    "the included key is written as its own line"
-                );
-            },
-            pin_after: |s, e| {
-                assert_eq!(
-                    kernel_boot_row(s, SYSCTL_KEY)["decision"]["include"],
-                    json!(false)
-                );
-                let conf = e.text(SYNTHESIZED_SYSCTL_PATH);
-                assert!(
-                    conf.contains("vm.swappiness = 10"),
-                    "the other included key keeps the file alive, so the \
-                     assertion below is about the line and not the file: {conf}"
-                );
-                assert!(
-                    !conf.contains(SYSCTL_KEY),
-                    "the excluded key leaves the drop-in: {conf}"
                 );
             },
         },
