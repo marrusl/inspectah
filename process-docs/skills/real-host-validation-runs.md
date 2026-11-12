@@ -866,6 +866,85 @@ On RHEL 9.8 the drift run dropped the ssh session that started it
 on. Start a drift-then-scan run on the guest with `ssh -n ... setsid
 nohup`, as for refine, and wait on a marker file, not on the session.
 
+### Measured, 2026-11-12: sysctl carriage, scan to build
+
+Run at `97b4da13` on RHEL 9.8 and RHEL 10.2, both aarch64, each reverted
+to its clean snapshot and given a standard drift run. tuned was active
+with `throughput-performance` on both. Every criterion passed on both
+hosts.
+
+**What the drift run gives you, and what it does not.** It writes
+`/etc/sysctl.d/99-driftify.conf`, `hugepages.conf` and `thp.conf`. Only
+`vm.compaction_proactiveness` drifts (`thp.conf` asks for `0`, the
+kernel runs `20`). `vm.nr_hugepages` came up at `128` on both guests, so
+it did not drift. Four cases had to be planted by hand, in three passes
+on the same guest, each scanned:
+
+```
+# pass A
+echo 'kernel.sysrq = 1' | sudo tee -a /etc/sysctl.conf    # not applied: drifts against 50-default.conf's 16
+sudo ln -s /dev/null /etc/sysctl.d/50-coredump.conf       # mask over a vendor file
+echo 'kernel.pid_max = 4194304' | sudo tee /etc/sysctl.d/50-pid-max.conf   # same-name shadow
+# pass B
+sudo ln -sfn /dev/null /etc/sysctl.d/99-sysctl.conf       # rpm -Va: ....L....
+# pass C
+echo 'db_password = canary-realhost' | sudo tee /etc/sysctl.d/80-app.conf
+```
+
+They go in separate passes because each later plant changes the whole
+explanation: the mask on `99-sysctl.conf` turns the `/etc/sysctl.conf`
+edit off, and a redacted file makes values and drift unknown. Both hosts
+ship `50-coredump.conf` and `50-pid-max.conf` in `/usr/lib/sysctl.d`, and
+`rpm -qf` names `systemd-udev` for both `/etc/sysctl.conf` and the
+`99-sysctl.conf` link. RHEL 10.2 adds `10-map-count.conf`.
+
+**What passed.**
+
+- Pass A: two drift lines (`kernel.sysrq`, sourced through the
+  `99-sysctl.conf` link with the link note, and `vm.compaction_proactiveness`)
+  and two vendor-replacement lines (`disables` and `replaces`). No table
+  row is sourced from a masked or shadowed vendor file. The mask is staged
+  as a 0-byte regular file, and the other files with the host's sha256.
+  An `item_id` of kind `Sysctl` gets HTTP 400 and the generation does not
+  move. Excluding `/etc/sysctl.conf` in refine lists `99-sysctl.conf` as
+  not carried, `excluded` via `/etc/sysctl.conf`, and the next export
+  drops the file.
+- Pass B: one `config.files` entry for `99-sysctl.conf`, RPM-owned
+  modified with flags `....L....` and empty content. It is staged as a
+  0-byte file. Nothing in the sysctl block names it, and `kernel.sysrq`
+  falls back to `50-default.conf`.
+- Builds: the scan tarball and an unchanged refine export built on both
+  hosts with the COPY-source check clean. RHEL 9.8 took 590 s and 409 s,
+  with the two known lint warnings. RHEL 10.2 took 427 s and 323 s, with
+  the three. In every image, `systemd-sysctl --cat-config` reads
+  `/etc/sysctl.d/50-coredump.conf` and `50-pid-max.conf` in place of their
+  `/usr/lib/sysctl.d` namesakes, which stay in the image from the base.
+  `kernel.core_pattern` appears nowhere in its output, and the 0-byte
+  `99-sysctl.conf` is read as empty.
+- Pass C: the canary is in no file of the tarball, the HTML report or
+  `/api/view`. The explanation is unknown, with one `redacted_file` input.
+- An ancestor link: with `/usr/local/lib/sysctl.d` a link to a directory
+  under `/var`, its file is recorded as `outside_link` with the `/var`
+  target and its content is not read. Values and drift become unknown, and
+  the file is listed as not carried (`usr_local_lib`). The planted
+  directory also shows up as an unbacked `/var` directory, which is the
+  plant, not a defect.
+
+**For the next run.**
+
+- RHEL 10.2 build logs print
+  `%transfiletriggerpostun(info-...) scriptlet failed` and
+  `Error in <unknown> scriptlet in rpm package libipa_hbac` during the
+  package install, and the build still succeeds. This is not caused by
+  the export.
+- A redacted sysctl file is staged with its placeholder line
+  (`REDACTED_PASSWORD_6`), which systemd-sysctl will not read as an
+  assignment. The pass C export was not built.
+- `secrets-review.md` lists the redacted sysctl file twice, with identical
+  rows.
+- Two shell traps. zsh reads `$h:t15/...` as a history modifier, so write
+  `"${h}:t15/..."`. podman refuses an upper-case image tag.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
