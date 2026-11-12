@@ -1,9 +1,11 @@
 //! What an export tells the operator beyond the tarball itself.
 //!
 //! Every entry carries a [`ExportWarningKind`], so a consumer never infers
-//! severity from the wording. The fields are private and the only
-//! constructors are [`ExportWarning::failure`] and
-//! [`ExportWarning::notice`], so an entry without a kind cannot be built.
+//! severity from the wording. The fields are private, and producers build
+//! entries through the two constructors, [`ExportWarning::failure`] and
+//! [`ExportWarning::notice`], each of which names the kind. `Deserialize`
+//! is derived so a test can parse the header back, which is the one other
+//! way to make an entry.
 //!
 //! The web route serializes the list into the `x-export-warnings` response
 //! header as `[{"kind":"failure","text":"..."}, ...]`.
