@@ -4495,21 +4495,30 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
     const STOCK_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release";
     const EPEL_KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10";
 
+    /// A base image's `redhat-release` version, release and architecture.
+    type Base = (&'static str, &'static str, &'static str);
+    /// The host fixture's own major and architecture.
+    const EL10_AARCH64: Base = ("10.2", "21.el10", "aarch64");
+    /// A base of another major than the EL10 host fixture.
+    const EL9_AARCH64: Base = ("9.8", "1.el9", "aarch64");
+    /// A base of another architecture than the aarch64 host fixture.
+    const EL10_X86_64: Base = ("10.2", "21.el10", "x86_64");
+
     /// A base image that ships `redhat-release` and `bash`, not
-    /// `epel-release`.
-    fn base_with_redhat_release() -> BaselineData {
+    /// `epel-release`, at `version`-`release` on `arch`.
+    fn base_with_redhat_release((version, release, arch): Base) -> BaselineData {
         let entry = |name: &str| BaselinePackageEntry {
             name: name.into(),
             epoch: Some("0".into()),
-            version: "10.2".into(),
-            release: "21.el10".into(),
-            arch: "aarch64".into(),
+            version: version.into(),
+            release: release.into(),
+            arch: arch.into(),
         };
         BaselineData {
             image_digest: "sha256:base".into(),
             packages: ["redhat-release", "bash"]
                 .into_iter()
-                .map(|n| (format!("{n}.aarch64"), entry(n)))
+                .map(|n| (format!("{n}.{arch}"), entry(n)))
                 .collect(),
             extracted_at: "2026-11-11T00:00:00Z".into(),
         }
@@ -4557,10 +4566,13 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
 
     /// A key whose owning package the base image ships, and which `rpm -V`
     /// reports unmodified, is the base image's own file: it is recorded
-    /// once, excluded with that reason, and raises no warning. A key owned
-    /// only by a package the base lacks (EPEL's), a modified one, and an
-    /// unowned one are carried, and so is every key when there is no
-    /// baseline.
+    /// once, excluded with that reason, and raises no warning. The owner is
+    /// matched by package name, so a base of another major or architecture
+    /// than the host still ships it: a RHEL 9 host scanned against a RHEL
+    /// 10 base is the case the rule exists for. A key owned only by a
+    /// package the base lacks (EPEL's), a modified one, and an unowned one
+    /// are carried, and so is every key when there is no baseline or
+    /// `rpm -Va` failed.
     #[test]
     fn a_key_the_base_image_ships_unmodified_is_left_out() {
         const OWNED: &str = "@@bash\n/usr/bin/bash\n\
@@ -4574,7 +4586,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             owners: &'static str,
             rpm_va: &'static str,
             va_exit: i32,
-            baseline: bool,
+            baseline: Option<Base>,
             /// `shipped_by_base` of the stock key; `None` means carried.
             stock: Option<&'static str>,
         }
@@ -4584,7 +4596,23 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 owners: OWNED,
                 rpm_va: "",
                 va_exit: 0,
-                baseline: true,
+                baseline: Some(EL10_AARCH64),
+                stock: Some("redhat-release"),
+            },
+            Case {
+                name: "RHEL 9.8 base against the RHEL 10 host",
+                owners: OWNED,
+                rpm_va: "",
+                va_exit: 0,
+                baseline: Some(EL9_AARCH64),
+                stock: Some("redhat-release"),
+            },
+            Case {
+                name: "x86_64 base against the aarch64 host",
+                owners: OWNED,
+                rpm_va: "",
+                va_exit: 0,
+                baseline: Some(EL10_X86_64),
                 stock: Some("redhat-release"),
             },
             Case {
@@ -4592,7 +4620,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 owners: OWNED,
                 rpm_va: STOCK_MODIFIED,
                 va_exit: 1,
-                baseline: true,
+                baseline: Some(EL10_AARCH64),
                 stock: None,
             },
             Case {
@@ -4600,7 +4628,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 owners: UNOWNED,
                 rpm_va: "",
                 va_exit: 0,
-                baseline: true,
+                baseline: Some(EL10_AARCH64),
                 stock: None,
             },
             Case {
@@ -4608,7 +4636,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 owners: OWNED,
                 rpm_va: "",
                 va_exit: 0,
-                baseline: false,
+                baseline: None,
                 stock: None,
             },
             Case {
@@ -4616,16 +4644,16 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 owners: OWNED,
                 rpm_va: "",
                 va_exit: 1,
-                baseline: true,
+                baseline: Some(EL10_AARCH64),
                 stock: None,
             },
         ];
 
-        let base = base_with_redhat_release();
         for case in &cases {
+            let base = case.baseline.map(base_with_redhat_release);
             let (rpm, warnings) = inspect_gpg_host(
                 |m| host_with_stock_and_epel_keys(m, case.owners, case.rpm_va, case.va_exit),
-                case.baseline.then_some(&base),
+                base.as_ref(),
             );
             assert!(warnings.is_empty(), "{}: {warnings:?}", case.name);
             let at = |path: &str| -> Vec<&inspectah_core::types::rpm::RepoFile> {
