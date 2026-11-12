@@ -22,6 +22,7 @@ import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
 import type { SectionGroupMeta } from "../api/types";
+import { sectionHref } from "./sectionHref";
 
 /** localStorage key for persisting group expand/collapse state. */
 const EXPANDED_STORAGE_KEY = "inspectah-sidebar-expanded";
@@ -491,6 +492,8 @@ export function Sidebar({
           <NavItem
             key={hasKebab ? undefined : sec.id}
             itemId={sec.id}
+            to={sectionHref(sec.id)}
+            preventDefault
             isActive={activeSection === sec.id}
             aria-current={activeSection === sec.id ? "page" : undefined}
             onClick={() => onSelect(sec.id)}
@@ -620,6 +623,8 @@ export function Sidebar({
               <NavItem
                 key={secKebab ? undefined : sec.id}
                 itemId={sec.id}
+                to={sectionHref(sec.id)}
+                preventDefault
                 isActive={activeSection === sec.id}
                 aria-current={activeSection === sec.id ? "page" : undefined}
                 onClick={() => onSelect(sec.id)}

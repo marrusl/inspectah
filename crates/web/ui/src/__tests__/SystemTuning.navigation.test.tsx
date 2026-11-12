@@ -64,21 +64,25 @@ function serveLayout(layout: string) {
 }
 
 /**
- * The sidebar entry labelled `label`, with its badge text.
- *
- * PatternFly renders a `NavItem` with no `to` as an `<a>` with no `href`,
- * which has no link role and so no accessible name (the open item
- * `inspectah-refine-sidebar-section-links-cannot-take-focus`). The entry
- * is therefore found by its visible label, the text a user clicks.
+ * The sidebar link for `label`, found by role and accessible name, with
+ * its badge text.
  */
 async function sidebarEntry(navName: string, label: string, badge: string) {
   const nav = await screen.findByRole("navigation", { name: navName });
-  const entry = (await within(nav).findByText(label)).closest("a");
-  expect(entry).not.toBeNull();
-  expect(entry!.querySelector(".pf-v6-c-badge")).toHaveTextContent(
+  const entry = await within(nav).findByRole("link", {
+    name: new RegExp(`^${label} `),
+  });
+  expect(entry.querySelector(".pf-v6-c-badge")).toHaveTextContent(
     new RegExp(`^${badge}$`),
   );
-  return entry!;
+  return entry;
+}
+
+/** Select a sidebar entry from the keyboard: focus it, press Enter. */
+async function activateFromKeyboard(entry: HTMLElement) {
+  entry.focus();
+  expect(entry).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
 }
 
 /** A paragraph of the panel whose text is exactly `text`. */
@@ -100,13 +104,9 @@ async function openSingleHost(layout: string) {
   serveLayout(layout);
   render(<App />);
   // The badge counts tuned rows only, and no layout here has one.
-  const entry = await sidebarEntry(
-    "Section navigation",
-    SYSTEM_TUNING,
-    "0",
-  );
+  const entry = await sidebarEntry("Sections", SYSTEM_TUNING, "0");
   expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
-  await userEvent.click(entry);
+  await activateFromKeyboard(entry);
   expect(
     await screen.findByRole("heading", { level: 2, name: SYSTEM_TUNING }),
   ).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe("System Tuning navigation, aggregate", () => {
     serveLayout("aggregate");
     render(<App />);
     const entry = await sidebarEntry("Aggregate sections", SYSTEM_TUNING, "0 / 0");
-    await userEvent.click(entry);
+    await activateFromKeyboard(entry);
     const panel = await screen.findByRole("region", { name: "Sysctl" });
     expectReadOnly(panel);
     paragraph(

@@ -1,4 +1,5 @@
 import { Nav, NavGroup, NavItem, Badge } from "@patternfly/react-core";
+import { sectionHref } from "../sectionHref";
 import type { AggregateSection, AggregateItem } from "../../api/types";
 import type { UseVariantAckResult } from "../../hooks/useVariantAck";
 
@@ -56,6 +57,8 @@ export function AggregateSidebar({
       <NavItem
         key={section.id}
         itemId={section.id}
+        to={sectionHref(section.id)}
+        preventDefault
         isActive={activeSection === section.id}
         aria-current={activeSection === section.id ? "page" : undefined}
         onClick={() => onSelect(section.id)}

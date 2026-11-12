@@ -212,6 +212,35 @@ describe("Sidebar", () => {
     expect(screen.getByText("Subscription")).toBeInTheDocument();
   });
 
+  it("gives every section entry link semantics and keyboard activation", async () => {
+    const onSelect = vi.fn();
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={onSelect}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+        viewData={MOCK_VIEW_DATA}
+        groups={MOCK_GROUPS}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Sections" });
+    const sections = MOCK_GROUPS.flatMap((g) => g.sections);
+    for (const sec of sections) {
+      const link = within(nav).getByRole("link", {
+        name: new RegExp(`^${sec.label.replace(/[&]/g, "\\$&")} `),
+      });
+      link.focus();
+      expect(link).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      expect(onSelect).toHaveBeenLastCalledWith(sec.id);
+    }
+    expect(onSelect).toHaveBeenCalledTimes(sections.length);
+    // The hash is never followed: selection happens in place.
+    expect(window.location.hash).toBe("");
+  });
+
   it("lists System Tuning with a badge counting tuned rows only", () => {
     const groups = MOCK_GROUPS.map((g) =>
       g.slug === "system-config"
@@ -247,7 +276,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    const entry = screen.getByText("System Tuning").closest("a")!;
+    const entry = screen.getByRole("link", { name: /^System Tuning / });
     expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
 
     // A host with sysctl files and no tuned selection is cleared at 0.
