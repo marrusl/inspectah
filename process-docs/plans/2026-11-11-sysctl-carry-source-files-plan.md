@@ -10,7 +10,7 @@
 
 **Tech stack:** Rust, serde, insta, MiniJinja, axum, React/TypeScript with Vitest. One new dev-dependency: `comrak` (GFM parser) in `inspectah-pipeline`, for spec case 19.
 
-**Spec:** `process-docs/specs/proposed/2026-11-11-sysctl-carry-source-files.md` (at `207c6178`). The spec is the contract; section numbers below (§) and case numbers (case N) are the spec's.
+**Spec:** `process-docs/specs/proposed/2026-11-11-sysctl-carry-source-files.md` (at `22956315`). The spec is the contract; section numbers below (§) and case numbers (case N) are the spec's.
 
 **Verification convention:** every `cargo` command runs without a pipe, so the exit code is cargo's. The gate for each commit is the pre-commit hook's: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`. Frontend tasks add `npx tsc --noEmit` and `npx vitest run` in `crates/web/ui`.
 
@@ -19,10 +19,6 @@
 ## Dependency
 
 This plan builds on branch `fix/include-modified-rpm-configs` (`ef8ec686` and the commits after it): modified RPM configs are included at collection, a failed capture is a `ContentNotCaptured` advisory, and the snapshot schema is 26. It is being merged into `main` in parallel with this plan. **Task 1 verifies it has landed before any code changes.** This plan's schema bump is 26 to 27 (Task 11).
-
-## Questions for Mark
-
-1. **Case 5's "a mask line is reported".** In case 5 the mask is `/etc/sysctl.d/99-sysctl.conf -> /dev/null` and no `/usr/lib/sysctl.d/99-sysctl.conf` exists (systemd ships only the `/etc` link). § 5.3 defines `vendor_replacements()` as admin files that replace or mask a *host vendor file*, and § 5.5 reports masks only through that list, so the audit has no line for this mask. The refine view does show it, as a `files` row with `body.kind == "mask"`. **As written, the plan asserts the refine `files` row and asserts no vendor-replacement line for case 5** (Task 6, Task 9). If the audit should also report a mask that masks no vendor file, which § 5.5 item it belongs in and its wording are a spec decision. Case 15's mask-only host is written with a same-named vendor file under it (Task 4), which keeps that case within the § 5.3 definition.
 
 ## Global constraints
 
@@ -71,7 +67,9 @@ Inputs the spec implies but no § 8 case exercises, most likely first. Each has 
 
 Each task names its lane so the implementer persona can be assigned per task.
 
-- **Lane R (Rust workspace):** Tasks 1, 2, 3, 4, 5, 6, 7, 9, 11, 14.
+Fifteen tasks.
+
+- **Lane R (Rust workspace):** Tasks 1, 2, 3, 4, 5, 6, 7, 9, 11, 14, 15. Task 15 runs on real hosts and needs the VM operation skill supplied at dispatch time.
 - **Lane W (web frontend, report templates, Axum handlers):** Tasks 8, 10, 12, 13.
 
 Task 9 deletes code in `handlers.rs` and `aggregate_handlers.rs` because removing `ItemId::Sysctl` does not compile otherwise; those edits are deletions only, and every addition to the handlers is Task 10's.
@@ -270,7 +268,7 @@ Per § 5.4's table: each `Read.content` through `scan_and_redact_field` under `f
 
 - [ ] **Step 1: Write the failing tests:**
   - `case_04_unowned_mask`: `/usr/lib/sysctl.d/50-coredump.conf` setting a key, `/etc/sysctl.d/50-coredump.conf -> /dev/null`. No key from the vendor file in `effective()`; `vendor_replacements() == [Masks{"50-coredump.conf"}]`; `render_export` holds a regular, empty `config/etc/sysctl.d/50-coredump.conf` (`symlink_metadata().is_file()`, length 0).
-  - `case_05_rpm_owned_mask`: `/etc/sysctl.d/99-sysctl.conf -> /dev/null` RPM-owned with `rpm -Va` `....L....`, `/etc/sysctl.conf` setting `k`. `config.files` has exactly one entry at the link path, `RpmOwnedModified`, included, empty, flags `....L....`; the export holds an empty regular `config/etc/sysctl.d/99-sysctl.conf`; `k` absent from `effective()`; the file's `body` is `Mask`; `vendor_replacements()` is empty (Question 1). Twin: an `L`-only row whose link points at `/etc/sysctl.conf` produces no config entry.
+  - `case_05_rpm_owned_mask`: `/etc/sysctl.d/99-sysctl.conf -> /dev/null` RPM-owned with `rpm -Va` `....L....`, `/etc/sysctl.conf` setting `k`. `config.files` has exactly one entry at the link path, `RpmOwnedModified`, included, empty, flags `....L....`; the export holds an empty regular `config/etc/sysctl.d/99-sysctl.conf`; `k` absent from `effective()`; the file's `body` is `Mask`; `vendor_replacements()` is empty: no `/usr/lib/sysctl.d/99-sysctl.conf` exists, so the mask appears in refine's file list only and the audit adds no vendor-replacement line for it (spec case 5, Mark, 2026-11-11). Twin: an `L`-only row whose link points at `/etc/sysctl.conf` produces no config entry.
   - `case_06_sysctl_conf_through_the_symlink` (export half): `99-sysctl.conf -> ../sysctl.conf`, `rpm -Va` `S.5....T.  c /etc/sysctl.conf`; keys attributed to `99-sysctl.conf` with `link_target == Some("/etc/sysctl.conf")`; `carriage()` names the `/etc/sysctl.conf` entry; it is included; the export holds `config/etc/sysctl.conf`. Then `SetInclude{Config{"/etc/sysctl.conf"}, false}` on `session(..)`: `export_session` lacks `etc/sysctl.conf` under the config tree. (The panel half is Task 9.)
   - `case_11_drifted_key_export`: export has no `sysctl/` directory, no file named `99-inspectah-migrated.conf` anywhere, and the Containerfile names neither.
   - `case_12_one_drifted_key_does_not_drop_the_file`: seven keys, one differs; the exported `config/etc/sysctl.d/90-tuning.conf` is byte-identical to the host content; the entry is included, `shadowed_by` absent, disposition kind `actionable`; exactly one `Differs` row.
@@ -375,7 +373,7 @@ The template renders the same blocks as the audit from a context built from `Sys
 
 - [ ] **Step 1: Write the failing tests** (extend the cases, serializing the view of `session(..)` with `serde_json::to_value(build_web_view(&session))`):
   - case 6 (panel half): after excluding `/etc/sysctl.conf`, `sysctl.not_carried` holds `{path: "/etc/sysctl.d/99-sysctl.conf", reason: {kind: "excluded", config_path: "/etc/sysctl.conf"}}`; before, `vendor_replacements` is empty and the file row's `config_path` is `/etc/sysctl.conf`.
-  - case 5: the `files` row for `/etc/sysctl.d/99-sysctl.conf` has `body.kind == "mask"`.
+  - case 5: the `files` row for `/etc/sysctl.d/99-sysctl.conf` has `body.kind == "mask"` and `config_path == "/etc/sysctl.d/99-sysctl.conf"`, and `vendor_replacements` holds no entry naming `99-sysctl.conf` (spec case 5, Mark, 2026-11-11).
   - case 15: both hosts' `sysctl.state == "host"`, `explanation.state == "resolved"`, empty `settings`; host A's `vendor_replacements[0].action == "masks"`; host B's `as_written[0].kind == "glob_assign"`.
   - case 16: `sysctl == {state: "unavailable", reason: <contains the cause>}`.
   - case 17 (overlapping): `explanation == {state: "unknown", inputs: [{kind: "outside_link", path, target}]}`, no settings or drift anywhere in `sysctl`; canary absent from the whole view JSON.
@@ -467,6 +465,62 @@ The test builds five sessions (case 15 host A and B, case 16 `sysctl -a` failure
 
 Backlog dispositions (§ 9) are recorded outside this repository after the branch merges.
 
+### Task 15: Real-host validation run (Lane R)
+
+Runs after Tasks 1 to 14 have landed, against the branch tip. It changes no code. It follows `process-docs/skills/real-host-validation-runs.md`; read it in full first. Dispatch needs the VM operation skill, which this repository does not hold.
+
+**Hosts:** the RHEL 9.8 and RHEL 10.2 aarch64 guests that file's recent runs used, each reverted to its clean snapshot before the run (profiles are cumulative). Do not reboot a guest between the drift run and a scan: tuned reapplies its profile at boot, which changes the expected drift set.
+
+**Binary:** `cargo zigbuild --target aarch64-unknown-linux-musl --release`; on each guest, `inspectah version` prints the branch tip's short commit. Record it.
+
+**What driftify plants and what it does not.** The standard profile writes `/etc/sysctl.d/99-driftify.conf` (applied live), `hugepages.conf` (applied live) and `thp.conf` (written, not applied, so `vm.compaction_proactiveness` drifts). It does not edit `/etc/sysctl.conf`, mask a sysctl file, shadow a vendor sysctl file, or put a secret in a sysctl file. The guide plants by hand where the drift tool falls short (the disabled-repo and repo-less plants), so this task plants those four by hand, with the commands below, and the report lists each as a driftify follow-up. A mask on `99-sysctl.conf` turns off `/etc/sysctl.conf`, and a secret makes the whole explanation unknown, so the plants go in three passes on the same guest, each scanned.
+
+**Step 1: Pass A plants**, after `driftify --profile standard`:
+
+```
+ls -l /usr/lib/sysctl.d/ /etc/sysctl.d/                  # record both listings
+rpm -qf /etc/sysctl.conf /etc/sysctl.d/99-sysctl.conf    # record the owners
+echo 'kernel.sysrq = 1' | sudo tee -a /etc/sysctl.conf   # not applied live
+sudo ln -s /dev/null /etc/sysctl.d/50-coredump.conf      # mask over a vendor file
+echo 'kernel.pid_max = 4194304' | sudo tee /etc/sysctl.d/50-pid-max.conf   # same-name shadow
+sudo rpm -Va | grep sysctl                               # record
+```
+
+If `/usr/lib/sysctl.d/` lacks `50-coredump.conf` or `50-pid-max.conf` on a host, use another vendor name it lists, and record the substitution. If `/etc/sysctl.d/99-sysctl.conf` is not a package-owned link to `../sysctl.conf` on a host, record that and skip the criteria below that name it on that host.
+
+**Step 2: Pass A scan and checks.** Scan as root, extract the tarball, then run refine on it over `ssh -n` with `setsid` as the guide shows, and drive it with `curl`.
+
+- [ ] A1 snapshot: `schema_version` is 27; `kernel_boot` holds `sysctl` and no `sysctl_overrides`; `sysctl.files` lists `99-driftify.conf`, `hugepages.conf`, `thp.conf` and `50-pid-max.conf` under `etc` with `body.kind == "read"`, `50-coredump.conf` under `etc` with `body.kind == "mask"`, `99-sysctl.conf` under `etc` read with `link_target == "/etc/sysctl.conf"`, and every file `ls /usr/lib/sysctl.d/` printed under `usr_lib`.
+- [ ] A2 audit, `#### Sysctl`: the settings table is present (a `Resolved` explanation); drift lines exist for `vm.compaction_proactiveness` (files request `0`) and `kernel.sysrq` (source `/etc/sysctl.d/99-sysctl.conf:<line>` with the `/etc/sysctl.conf` link note); every other drift line is listed in the report with an explanation (`vm.nr_hugepages` drifts when the guest cannot allocate 128 pages); no row's source names `/usr/lib/sysctl.d/50-coredump.conf` or `/usr/lib/sysctl.d/50-pid-max.conf`.
+- [ ] A3 audit, vendor files replaced: exactly two lines, `/etc/sysctl.d/50-coredump.conf` *disables* and `/etc/sysctl.d/50-pid-max.conf` *replaces* its `/usr/lib/sysctl.d` namesake, both in the carried wording.
+- [ ] A4 config tree and Containerfile: `config/etc/sysctl.d/` holds `99-driftify.conf`, `hugepages.conf`, `thp.conf` and `50-pid-max.conf` with the host file's `sha256sum`, and `50-coredump.conf` as a regular 0-byte file; `config/etc/sysctl.conf` has the host file's `sha256sum`; `find . -name 99-inspectah-migrated.conf` and `find . -type d -name sysctl` print nothing; no Containerfile line names `99-inspectah-migrated` or `COPY sysctl/`.
+- [ ] A5 refine: `/api/groups` lists `system_tuning`, labelled System Tuning, in `system_config`; `/api/view` has no `sysctls` key, `sysctl.state == "host"`, `sysctl.explanation.state == "resolved"`, and a `files` row for `50-coredump.conf` with `body.kind == "mask"`; a `POST /api/op` whose `item_id` kind is `Sysctl` is refused (4xx) and the generation in `/api/view` does not move.
+- [ ] A6 refine, case 6 on a real host: download an export at the current generation and keep it; then `SetInclude` on `{"kind":"Config","key":{"path":"/etc/sysctl.conf"}}` with `include: false`; `/api/view` lists `/etc/sysctl.d/99-sysctl.conf` in `sysctl.not_carried` with reason `excluded` and `config_path` `/etc/sysctl.conf`; a second export lacks `config/etc/sysctl.conf`.
+
+**Step 3: Pass B plant, scan and checks.** On the same guest: `sudo ln -sfn /dev/null /etc/sysctl.d/99-sysctl.conf`, then record `sudo rpm -Va | grep 99-sysctl`. Rescan and rerun refine.
+
+- [ ] B1 snapshot: `config.files` holds exactly one entry at `/etc/sysctl.d/99-sysctl.conf`, RPM-owned modified, included, empty content, with the flags `rpm -Va` printed (an `L` among them); `sysctl.files` shows it with `body.kind == "mask"`.
+- [ ] B2 audit: no row or drift line for `kernel.sysrq` sourced from `99-sysctl.conf`; no vendor-replacement line naming `99-sysctl.conf` (spec case 5, Mark, 2026-11-11); the two A3 lines are unchanged.
+- [ ] B3 refine: the `files` row for `99-sysctl.conf` has `body.kind == "mask"` and `config_path == "/etc/sysctl.d/99-sysctl.conf"`; `vendor_replacements` holds nothing naming it.
+- [ ] B4 export: the scan tarball and an untouched refine export each hold `config/etc/sysctl.d/99-sysctl.conf` as a regular 0-byte file and `config/etc/sysctl.conf` with the host's `sha256sum`.
+
+**Step 4: Pass B builds.** For the pass B scan tarball and the untouched pass B refine export: run the guide's COPY-source check, then `podman build` under `env -u HTTP_PROXY -u HTTPS_PROXY -u NO_PROXY`, then `bootc container lint`. Time each build with `date +%s`.
+
+- [ ] C1: the COPY-source check prints no `MISSING` line; both builds pass; lint shows only the known warnings (two on RHEL 9.8, `nonempty-run-tmp` and `var-tmpfiles`; three on RHEL 10.2, adding `nonempty-boot`).
+- [ ] C2: in each image, `ls -l /etc/sysctl.d/` shows `50-coredump.conf` and `99-sysctl.conf` as regular 0-byte files and the four admin files present; `/usr/lib/sysctl.d/50-coredump.conf` is present from the base image; `systemd-sysctl --cat-config` reads `/etc/sysctl.d/50-coredump.conf` and `/etc/sysctl.d/50-pid-max.conf` in place of their `/usr/lib/sysctl.d` namesakes. Record its output.
+
+**Step 5: Pass C plant, scan and checks.** On the same guest: `echo 'db_password = canary-realhost' | sudo tee /etc/sysctl.d/80-app.conf`. Rescan and rerun refine.
+
+- [ ] D1: `grep -rl canary-realhost` over the extracted tarball, the audit, the HTML report and the `/api/view` JSON prints nothing.
+- [ ] D2 audit: the unknown text, with one line naming `/etc/sysctl.d/80-app.conf` as text that redaction replaced; no settings table and no drift line.
+- [ ] D3 refine: `sysctl.explanation.state == "unknown"` with one input, `redacted_file` naming `/etc/sysctl.d/80-app.conf`; no settings or drift anywhere under `sysctl`.
+
+**Step 6: Teardown.** Check for a leftover refine server (`pgrep -a inspectah` on the guest), remove the base image with `sudo podman rmi` if the guest will not be reverted, and `poweroff` inside the guest.
+
+**Step 7: Report.** Every criterion above, per host, as pass or fail with the command and its output for each failure. **A failure is reported, not fixed**: no code change in this task, and later criteria that do not depend on the failed one still run. The report lists the driftify follow-ups: an `/etc/sysctl.conf` edit, a vendor sysctl mask, a same-name vendor shadow, and a secret-bearing sysctl file, at a profile level where the mask on `99-sysctl.conf` and the `/etc/sysctl.conf` edit do not collide.
+
+**Step 8: Skill update.** Add a `### Measured, <date>: sysctl carriage, scan to build` subsection to `process-docs/skills/real-host-validation-runs.md` with the commit, hosts, the plants, what passed and what did not, and any finding the next run needs. Commit `docs(skills): record the sysctl real-host run`.
+
 ---
 
 ## Coverage
@@ -505,6 +559,7 @@ Backlog dispositions (§ 9) are recorded outside this repository after the branc
 | § 6 | stale docs and skills | 14 |
 | § 6 | CHANGELOG | 14 |
 | § 8 | tests encoding removed behavior deleted or rewritten | 6, 9, 10, 11, 13 |
+| (plan) | real-host run of scan, audit, refine and build on RHEL 9 and 10 | 15 |
 
 ### Spec test cases
 
@@ -512,22 +567,22 @@ Backlog dispositions (§ 9) are recorded outside this repository after the branc
 |---|---|---|
 | 1 | 4 | `case_01_each_directory_is_read` |
 | 2 | 4 | `case_02_priority_by_name_across_directories` |
-| 3 | 4 | `case_03_same_name_shadow_each_adjacent_pair` |
-| 4 | 6 | `case_04_unowned_mask` |
-| 5 | 1, 6, 9 | config rule; `case_05_rpm_owned_mask`; view `files` row |
-| 6 | 6, 9 | `case_06_sysctl_conf_through_the_symlink` (export, panel) |
+| 3 | 4, 15 | `case_03_same_name_shadow_each_adjacent_pair`; real host pass A |
+| 4 | 6, 15 | `case_04_unowned_mask`; real host pass A |
+| 5 | 1, 6, 9, 15 | config rule; `case_05_rpm_owned_mask`; view `files` row; real host pass B |
+| 6 | 6, 9, 15 | `case_06_sysctl_conf_through_the_symlink` (export, panel); real host A6 |
 | 7 | 2, 4 | `normalize_spellings`; `case_07_key_spellings` |
 | 8 | 4 | `case_08_repeated_assignment_in_one_file` |
 | 9 | 2, 4 | `parse_lines`; `case_09_dash_prefixed_assignment` |
 | 10 | 4, 7 | outcome; audit `not written` and reversed drift |
-| 11 | 6, 7 | export absence; audit drift line and paragraph |
+| 11 | 6, 7, 15 | export absence; audit drift line and paragraph; real host A2, A4 |
 | 12 | 6, 8, 9 | byte-identical export; `section_count`; toggleable |
 | 13 | 2, 4 | `values_equal_ignores_whitespace_runs`; `case_13_whitespace_is_not_drift` |
 | 14 | 2, 4, 7 | parser; no row; audit "As written" |
 | 15 | 4, 9, 10, 12, 13 | snapshot; view; `/api/groups`; fixtures; navigation |
 | 16 | 4, 7, 9, 12, 13 | snapshot; audit; view; fixtures; navigation |
 | 17 | 4, 7, 8, 9, 12, 13 | snapshot; audit; HTML; view; fixtures; navigation |
-| 18 | 5, 7, 8, 9 | snapshot; audit; HTML; view |
+| 18 | 5, 7, 8, 9, 15 | snapshot; audit; HTML; view; real host pass C |
 | 19 | 7, 8 | `case_19_literal_rendering` (comrak); HTML escaping |
 | 20 | 2 | `sysctl_key_on_the_wire` |
 | 21 | 10, 11, 12, 13 | sections; `case_21_aggregate`; fixtures; navigation |
