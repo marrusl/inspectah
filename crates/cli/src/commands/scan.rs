@@ -46,7 +46,7 @@ use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::baseline_fmt;
-use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
+use inspectah_pipeline::render::not_carried::{apply_scan_package_defaults, not_carried_notice};
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
 
@@ -917,6 +917,13 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
             });
             if verbosity == crate::progress::Verbosity::Quiet {
                 print_quiet_footer(scan_start.elapsed(), &end_state, sensitivity.as_deref());
+            }
+            // After the summary, in every verbosity: quiet hides progress,
+            // not results. stderr only, so nothing reaches stdout. The
+            // notice points at the tarball's audit report and
+            // Containerfile, so only this branch, which wrote them, prints it.
+            if let Some(notice) = not_carried_notice(&snapshot) {
+                eprintln!("{notice}");
             }
             Ok(outcome)
         }

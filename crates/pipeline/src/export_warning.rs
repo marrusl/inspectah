@@ -24,6 +24,18 @@ pub enum ExportWarningKind {
     Notice,
 }
 
+impl ExportWarningKind {
+    /// The label the CLI prints before an entry's text: `Failure` or
+    /// `Notice`, capitalized like the `Warning:` and `Error:` lines it
+    /// prints on the same stream.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Failure => "Failure",
+            Self::Notice => "Notice",
+        }
+    }
+}
+
 /// One entry of an export's warnings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportWarning {
@@ -56,6 +68,14 @@ impl ExportWarning {
     /// This entry's text, for display.
     pub fn text(&self) -> &str {
         &self.text
+    }
+}
+
+/// `Notice: <text>` or `Failure: <text>`, as the CLI prints an entry on
+/// stderr. The label comes from the kind, never from the text.
+impl std::fmt::Display for ExportWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind.label(), self.text)
     }
 }
 
@@ -95,6 +115,17 @@ pub fn sanitize_bounded(id: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI line for each kind: the label is the kind's, whatever the
+    /// text says.
+    #[test]
+    fn display_labels_each_entry_by_its_kind() {
+        assert_eq!(ExportWarning::notice("a").to_string(), "Notice: a");
+        assert_eq!(
+            ExportWarning::failure("Notice: b").to_string(),
+            "Failure: Notice: b"
+        );
+    }
 
     /// Every byte class the export's warnings can carry.
     ///

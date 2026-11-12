@@ -72,7 +72,7 @@ use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_pipeline::redaction::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::not_carried::{
-    NOT_CARRIED_REASON, apply_scan_package_defaults, not_carried_packages,
+    NOT_CARRIED_REASON, apply_scan_package_defaults, not_carried_notice, not_carried_packages,
 };
 use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
@@ -872,6 +872,64 @@ fn the_notice_leads_a_failure_from_the_same_export() {
             "{label}"
         );
     }
+}
+
+// ── The scan's not-carried notice ────────────────────────────────────
+
+/// What `inspectah scan` prints to stderr once the tarball is written:
+/// each entry on its own line, the label from its kind. The command
+/// itself needs root and a real host, so this runs the layer below it:
+/// the scan's collect, dispositions and render path (`scan_export`),
+/// then the same `not_carried_notice` call and `Display` the command
+/// prints.
+fn scan_stderr_lines(snapshot: &InspectionSnapshot) -> Vec<String> {
+    not_carried_notice(snapshot)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn the_scan_prints_a_notice_for_not_carried_unit_owners() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_export(collected(&host_mock()), dir.path());
+    assert_eq!(
+        scan_stderr_lines(&snapshot),
+        vec![
+            "Notice: 2 packages that own a unit enabled on the source host are not \
+             carried: firewalld, rhc. See the Not carried table in audit-report.md \
+             and the # Not carried block in the Containerfile."
+                .to_string()
+        ]
+    );
+    // Both places the notice points at exist in the scan tarball.
+    let scan = Surfaces::read(dir.path());
+    assert!(!scan.not_carried_table().is_empty(), "{}", scan.audit);
+    assert!(
+        !scan.not_carried_block().is_empty(),
+        "{}",
+        scan.containerfile
+    );
+}
+
+/// No enabled units, so no not-carried package owns one: the not-carried
+/// list is still there, but the scan prints nothing.
+#[test]
+fn the_scan_prints_nothing_without_not_carried_unit_owners() {
+    let mut snapshot = collected(&host_mock());
+    snapshot
+        .services
+        .as_mut()
+        .expect("the services section")
+        .enabled_units
+        .clear();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let snapshot = scan_export(snapshot, dir.path());
+    assert!(
+        !not_carried_packages(&snapshot).is_empty(),
+        "the list is not empty, or the absence proves nothing"
+    );
+    assert_eq!(scan_stderr_lines(&snapshot), Vec::<String>::new());
 }
 
 // ── A config the collector could not capture ─────────────────────────
