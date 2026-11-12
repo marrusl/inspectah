@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-11 |
-| Status | Proposed. Direction and five design decisions ratified by the project owner on 2026-11-11 (§ 3). Depends on the modified-config default (below). |
+| Status | Implemented. Landed on main on 2026-11-12 from `feat/sysctl-carry-source-files`. Direction and five design decisions ratified by the project owner on 2026-11-11 (§ 3). Depends on the modified-config default (below). |
 | Scope | The single-host sysctl design in full: the collector, the snapshot types that hold its output, the redaction pass over them, every renderer and refine surface that reads them, and the System Tuning section's registry entry. For a fleet aggregate, only what is clearly correct now (§ 5.7): the per-key sysctl merge is removed, sysctl files merge through the config path's existing per-path variants, and the aggregate System Tuning section is reachable. The general config-file path is used as it is, plus one classification rule for RPM-owned `/dev/null` links (§ 5.1). |
 | Backlog items | Seven sysctl items; disposition in § 9. |
 | Verified | Code read at `6f07ff4b` (HEAD, 2026-11-11); line numbers are a convenience and the symbol name is the identifier. Upstream behavior as read on 2026-11-11: systemd `src/sysctl/sysctl.c` (`v252` and `main`), `man/sysctl.d.xml` and `man/standard-conf.xml`; tuned `tuned/plugins/plugin_sysctl.py` and `tuned-main.conf` (`master`); RPM `lib/verify.c` (`rpm-4.16.x`); cmark-gfm `extensions/table.c` and `extensions/ext_scanners.re`. |

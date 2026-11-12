@@ -1,6 +1,6 @@
 # Sysctl: carry the admin's files, report runtime drift: implementation plan
 
-> **Status: Proposed (2026-11-11).** Not executed.
+> **Status: Implemented (2026-11-12).** Executed on `feat/sysctl-carry-source-files` and landed on main.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking. Every task is test-first: write the tests it names, watch them fail for the stated reason, then implement.
 
@@ -10,7 +10,7 @@
 
 **Tech stack:** Rust, serde, insta, MiniJinja, axum, React/TypeScript with Vitest. One new dev-dependency: `comrak` (GFM parser) in `inspectah-cli`, whose `sysctl_scan_test.rs` parses the audit for spec case 19.
 
-**Spec:** `process-docs/specs/proposed/2026-11-11-sysctl-carry-source-files.md` (at `22956315`). The spec is the contract; section numbers below (§) and case numbers (case N) are the spec's.
+**Spec:** `process-docs/specs/implemented/2026-11-11-sysctl-carry-source-files.md` (at `22956315`). The spec is the contract; section numbers below (§) and case numbers (case N) are the spec's.
 
 **Verification convention:** every `cargo` command runs without a pipe, so the exit code is cargo's. The gate for each commit is the pre-commit hook's: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D clippy::all`, `cargo test --workspace`. Frontend tasks add `npx tsc --noEmit` and `npx vitest run` in `crates/web/ui`.
 
