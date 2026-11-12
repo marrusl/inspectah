@@ -8,11 +8,16 @@ export interface UserCardProps {
   user: UserDecision;
   isPending: boolean;
   onStrategyChange: (username: string, strategy: "skip" | "useradd") => void;
+  /**
+   * Sends the password choice; for "new", `hashPassword` produces the hash.
+   * Returns `undefined` when the request was dropped because one for this
+   * user is already in flight.
+   */
   onPasswordChange: (
     username: string,
     choice: "none" | "preserve" | "new",
-    hash?: string,
-  ) => Promise<void>;
+    hashPassword?: () => Promise<string>,
+  ) => Promise<void> | undefined;
 }
 
 /** Redact a crypt(3) hash, showing only the prefix. */
@@ -85,10 +90,13 @@ export function UserCard({
       return;
     }
     setPasswordError("");
+    const outcome = onPasswordChange(user.name, "new", () =>
+      sha512Crypt(newPassword),
+    );
+    if (!outcome) return;
     setIsHashing(true);
     try {
-      const hash = await sha512Crypt(newPassword);
-      await onPasswordChange(user.name, "new", hash);
+      await outcome;
       setPasswordSet(true);
       setNewPassword("");
       setConfirmPassword("");

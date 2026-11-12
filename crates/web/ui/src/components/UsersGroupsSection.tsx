@@ -9,6 +9,7 @@ import {
 } from "@patternfly/react-core";
 import type { UserDecision, ViewResponse } from "../api/types";
 import { setUserStrategy, setUserPassword } from "../api/client";
+import { usePendingGuard } from "../hooks/usePendingGuard";
 import { UserCard } from "./UserCard";
 import { UserArtifactPreview } from "./UserArtifactPreview";
 
@@ -25,38 +26,56 @@ export function UsersGroupsSection({
   onViewUpdate,
   onMutationError,
 }: UsersGroupsSectionProps) {
-  const [isPending, setIsPending] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Requests in flight, by username: the strategy and the password both
+  // change the one user record, so a user's card is held while either is.
+  const { pendingKeys, runGuarded } = usePendingGuard();
 
   const handleStrategyChange = useCallback(
     (username: string, strategy: "skip" | "useradd") => {
-      setIsPending(true);
-      setUserStrategy(username, strategy)
-        .then(onViewUpdate)
-        .catch(onMutationError)
-        .finally(() => setIsPending(false));
+      runGuarded(username, () =>
+        setUserStrategy(username, strategy)
+          .then(onViewUpdate)
+          .catch(onMutationError),
+      );
     },
-    [onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError],
   );
 
+  /**
+   * Sends the password choice. For a new password, `hashPassword` runs
+   * inside the guard, so a second click while it hashes is dropped too.
+   * Returns the outcome (rejecting on failure, after `onMutationError` for a
+   * failed request), or `undefined` when the user already has a request in
+   * flight and this one was dropped.
+   */
   const handlePasswordChange = useCallback(
-    async (
+    (
       username: string,
       choice: "none" | "preserve" | "new",
-      hash?: string,
-    ) => {
-      setIsPending(true);
-      try {
-        const view = await setUserPassword(username, choice, hash);
-        onViewUpdate(view);
-      } catch (err) {
-        onMutationError(err instanceof Error ? err : new Error(String(err)));
-        throw err; // Re-throw so callers can distinguish success from failure
-      } finally {
-        setIsPending(false);
-      }
+      hashPassword?: () => Promise<string>,
+    ): Promise<void> | undefined => {
+      let outcome: Promise<void> | undefined;
+      runGuarded(username, () => {
+        outcome = (async () => {
+          const hash = hashPassword ? await hashPassword() : undefined;
+          try {
+            const view = await setUserPassword(username, choice, hash);
+            onViewUpdate(view);
+          } catch (err) {
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            );
+            throw err;
+          }
+        })();
+        // The caller handles the rejection through `outcome`; the guard
+        // only needs to know when it settles.
+        return outcome.catch(() => {});
+      });
+      return outcome;
     },
-    [onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError],
   );
 
   // Summarize which users are included via useradd. The full set of
@@ -150,7 +169,7 @@ export function UsersGroupsSection({
         <UserCard
           key={user.name}
           user={user}
-          isPending={isPending}
+          isPending={pendingKeys.has(user.name)}
           onStrategyChange={handleStrategyChange}
           onPasswordChange={handlePasswordChange}
         />

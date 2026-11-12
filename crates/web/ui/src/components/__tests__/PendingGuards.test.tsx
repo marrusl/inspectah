@@ -7,6 +7,9 @@
  * The container and tuned rows already disabled their checkbox while a
  * request was pending, but Space on the row calls the same handler and a
  * disabled checkbox does not stop it, so those cases press Space twice.
+ *
+ * Set password hashes in the browser before it sends anything, so its
+ * guard has to hold from the click, not from the request.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
@@ -19,6 +22,7 @@ import {
 import { MainContent } from "../MainContent";
 import { ContainerSection } from "../ContainerSection";
 import { TunedSection } from "../TunedSection";
+import { UsersGroupsSection } from "../UsersGroupsSection";
 import type {
   FlatpakDecisionDto,
   GroupInfo,
@@ -26,13 +30,21 @@ import type {
   RefinedPackage,
   RepoGroupInfo,
   TunedDecisionDto,
+  UserDecision,
   ViewResponse,
 } from "../../api/types";
 import * as client from "../../api/client";
+import * as crypt from "../../utils/crypt";
 
 vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
   ungroupGroup: vi.fn(),
+  setUserStrategy: vi.fn(),
+  setUserPassword: vi.fn(),
+}));
+
+vi.mock("../../utils/crypt", () => ({
+  sha512Crypt: vi.fn(),
 }));
 
 const VENDOR: RepoGroupInfo = {
@@ -142,6 +154,41 @@ const TUNED: TunedDecisionDto = {
   include: true,
 };
 
+const USER: UserDecision = {
+  name: "alice",
+  uid: 1000,
+  gid: 1000,
+  shell: "/bin/bash",
+  home: "/home/alice",
+  include: true,
+  classification: "interactive",
+  containerfile_strategy: "skip",
+  password_choice: "new",
+};
+
+function renderUsers(onMutationError: (err: Error) => void) {
+  render(
+    <UsersGroupsSection
+      users={[USER]}
+      sessionIsSensitive={false}
+      onViewUpdate={vi.fn()}
+      onMutationError={onMutationError}
+    />,
+  );
+}
+
+/** Opens alice's password form and fills it in, ready to submit. */
+function renderPasswordForm(onMutationError: (err: Error) => void) {
+  renderUsers(onMutationError);
+  fireEvent.click(screen.getByRole("button", { name: "Expand alice details" }));
+  fireEvent.click(screen.getByRole("button", { name: /Password options/ }));
+  for (const label of ["Password", "Confirm password"]) {
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { value: "hunter2" },
+    });
+  }
+}
+
 function renderMainContent(onMutationError: (err: Error) => void) {
   render(
     <MainContent
@@ -159,7 +206,7 @@ function renderMainContent(onMutationError: (err: Error) => void) {
 
 interface GuardCase {
   name: string;
-  request: "applyOp" | "ungroupGroup";
+  request: "applyOp" | "ungroupGroup" | "setUserStrategy" | "setUserPassword";
   renderWith: (onMutationError: (err: Error) => void) => void;
   control: () => HTMLElement;
   /** What the operator does, when it is not a click on the control. */
@@ -236,6 +283,18 @@ const CASES: GuardCase[] = [
       screen.getByRole("checkbox", { name: "Toggle throughput-performance" }),
     trigger: pressSpace("tuned-item-throughput-performance"),
   },
+  {
+    name: "user include checkbox",
+    request: "setUserStrategy",
+    renderWith: renderUsers,
+    control: () => screen.getByRole("checkbox", { name: "Include alice" }),
+  },
+  {
+    name: "user set password button",
+    request: "setUserPassword",
+    renderWith: renderPasswordForm,
+    control: () => screen.getByRole("button", { name: "Set password" }),
+  },
 ];
 
 /** Holds every request open; `fail` rejects the most recent one. */
@@ -253,17 +312,18 @@ function holdRequests(request: GuardCase["request"]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(crypt.sha512Crypt).mockResolvedValue("$6$salt$hash");
 });
 
 describe.each(CASES)("pending guard: $name", (c) => {
-  it("sends one request when triggered twice", () => {
+  it("sends one request when triggered twice", async () => {
     const { mock } = holdRequests(c.request);
     c.renderWith(vi.fn());
     const control = c.control();
 
     const trigger = c.trigger ?? (() => control.click());
 
-    act(() => {
+    await act(async () => {
       trigger();
       trigger();
     });
@@ -278,7 +338,7 @@ describe.each(CASES)("pending guard: $name", (c) => {
     c.renderWith(onMutationError);
     const control = c.control();
 
-    act(() => control.click());
+    await act(async () => control.click());
     expect(control).toBeDisabled();
 
     fail(new Error("connection reset"));
@@ -286,7 +346,7 @@ describe.each(CASES)("pending guard: $name", (c) => {
     await waitFor(() => expect(control).toBeEnabled());
     expect(onMutationError).toHaveBeenCalledTimes(1);
 
-    act(() => control.click());
+    await act(async () => control.click());
     expect(mock).toHaveBeenCalledTimes(2);
   });
 });
@@ -338,5 +398,33 @@ describe.each([
     expect(mock).toHaveBeenNthCalledWith(1, sentTo(FLATPAK));
     expect(mock).toHaveBeenNthCalledWith(2, sentTo(other));
     expect(boxes[1]).toBeDisabled();
+  });
+});
+
+describe("pending guard: user set password", () => {
+  it("holds the user from the click, through hashing, until the request settles", async () => {
+    let finishHash: (hash: string) => void = () => {};
+    vi.mocked(crypt.sha512Crypt).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finishHash = resolve;
+        }),
+    );
+    const { mock } = holdRequests("setUserPassword");
+    renderPasswordForm(vi.fn());
+
+    await act(async () =>
+      screen.getByRole("button", { name: "Set password" }).click(),
+    );
+
+    // Still hashing: nothing sent, and the user's other control is held too.
+    expect(mock).not.toHaveBeenCalled();
+    expect(screen.getByRole("checkbox", { name: "Include alice" })).toBeDisabled();
+
+    await act(async () => finishHash("$6$salt$hash"));
+
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect(mock).toHaveBeenCalledWith("alice", "new", "$6$salt$hash");
+    expect(screen.getByRole("checkbox", { name: "Include alice" })).toBeDisabled();
   });
 });
