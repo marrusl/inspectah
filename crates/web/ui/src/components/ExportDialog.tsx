@@ -12,6 +12,7 @@ import {
 import type { RefineStats, ViewResponse } from "../api/types";
 import { exportTarball, fetchView } from "../api/client";
 import { ApiError } from "../api/types";
+import type { ExportWarning } from "../api/exportWarnings";
 
 export interface ExportDialogProps {
   isOpen: boolean;
@@ -38,6 +39,11 @@ export function ExportDialog({
   const [stale, setStale] = useState(false);
   const [sensitiveAck, setSensitiveAck] = useState(false);
   const [unmatchedAck, setUnmatchedAck] = useState(false);
+  // Non-null once a download finished with warnings: the dialog then stays
+  // open showing them until the operator closes it.
+  const [downloadWarnings, setDownloadWarnings] = useState<
+    ExportWarning[] | null
+  >(null);
 
   const excludedPackages =
     stats?.sections.find((s) => s.kind === "package")?.excluded ?? 0;
@@ -58,14 +64,18 @@ export function ExportDialog({
     setStale(false);
 
     try {
-      const blob = await exportTarball(generation, sensitiveAck);
+      const { blob, warnings } = await exportTarball(generation, sensitiveAck);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = "inspectah-refine-output.tar.gz";
       a.click();
       URL.revokeObjectURL(url);
-      onClose();
+      if (warnings.length > 0) {
+        setDownloadWarnings(warnings);
+      } else {
+        onClose();
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setStale(true);
@@ -95,8 +105,46 @@ export function ExportDialog({
     setStale(false);
     setSensitiveAck(false);
     setUnmatchedAck(false);
+    setDownloadWarnings(null);
     onClose();
   }, [onClose]);
+
+  if (downloadWarnings !== null) {
+    return (
+      <Modal
+        variant={ModalVariant.small}
+        isOpen={isOpen}
+        onClose={handleClose}
+        aria-label="Export tarball"
+      >
+        <ModalHeader title="Downloaded, with warnings" />
+        <ModalBody>
+          {downloadWarnings.map((w, i) => (
+            // A failure is something asked for that is not in the export,
+            // but the export itself succeeded, so `warning` rather than
+            // `danger`, which this dialog keeps for "Export failed".
+            <Alert
+              key={i}
+              variant={w.kind === "failure" ? "warning" : "info"}
+              isInline
+              title={w.text}
+              data-testid={`export-warning-${i}`}
+              style={
+                i > 0
+                  ? { marginTop: "var(--pf-t--global--spacer--sm)" }
+                  : undefined
+              }
+            />
+          ))}
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="primary" onClick={handleClose}>
+            Close
+          </Button>
+        </ModalFooter>
+      </Modal>
+    );
+  }
 
   return (
     <Modal

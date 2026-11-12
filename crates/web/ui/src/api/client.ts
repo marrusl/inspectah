@@ -11,6 +11,11 @@ import type {
   SectionGroupMeta,
 } from "./types";
 import { ApiError } from "./types";
+import { parseExportWarnings } from "./exportWarnings";
+import type { ExportWarning } from "./exportWarnings";
+
+/** Matches `EXPORT_WARNINGS_HEADER` in crates/web/src/handlers.rs. */
+const EXPORT_WARNINGS_HEADER = "x-export-warnings";
 
 // --- Internal helpers ---
 
@@ -144,10 +149,16 @@ export async function markViewed(id: string): Promise<void> {
   if (!res.ok && res.status !== 204) return parseJsonError(res);
 }
 
+export interface ExportResult {
+  blob: Blob;
+  /** Parsed `x-export-warnings` entries; `[]` when there is nothing to say. */
+  warnings: ExportWarning[];
+}
+
 export async function exportTarball(
   generation: number,
   acknowledgeSensitive = false,
-): Promise<Blob> {
+): Promise<ExportResult> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -160,7 +171,8 @@ export async function exportTarball(
     body: JSON.stringify({ generation }),
   });
   if (!res.ok) return parseJsonError(res);
-  return res.blob();
+  const warnings = parseExportWarnings(res.headers.get(EXPORT_WARNINGS_HEADER));
+  return { blob: await res.blob(), warnings };
 }
 
 // --- User decision endpoints ---

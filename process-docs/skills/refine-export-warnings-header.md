@@ -47,6 +47,33 @@ directory: ..."`, from `rescan_upload_dir`) are `String`s returned by
 `ensure_upload_dir` and are **not** in this header. Nothing surfaces them
 yet (backlog: `inspectah-rescan-warnings-have-no-consumer`).
 
+## Client
+
+The refine UI reads the header in `exportTarball`
+(`crates/web/ui/src/api/client.ts`), which returns `{blob, warnings}`.
+Parsing is `parseExportWarnings` in `crates/web/ui/src/api/exportWarnings.ts`,
+and it never throws, because the tarball is already downloaded when it runs:
+
+- A missing header is `[]`.
+- A header that is not JSON, or not an array, becomes one `failure` entry
+  saying the warnings could not be read. Entries without a string `text`
+  are dropped and replaced by that same entry, once, at the end.
+- An unknown `kind` is shown as a `failure`, never hidden and never
+  downgraded to a notice.
+
+`ExportDialog.tsx` closes on success when the list is empty. Otherwise it
+stays open as "Downloaded, with warnings" with one inline alert per entry:
+`failure` as `warning` (the export itself succeeded; the dialog keeps
+`danger` for "Export failed"), `notice` as `info`. The text is the alert
+title as a React text node. Alerts are not individually dismissable;
+closing the dialog dismisses them. Every entry is shown: the planned
+pre-download not-carried notice, which would let the post-download list
+skip a notice already shown, does not exist yet.
+
+The header is already in the CORS `expose_headers` list
+(`crates/web/src/lib.rs`), which matters only for a cross-origin dev page;
+the served UI is same-origin.
+
 ## Why each byte is safe in a header
 
 Entry text can carry snapshot-chosen names, so two layers apply.

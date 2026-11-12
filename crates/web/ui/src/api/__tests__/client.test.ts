@@ -209,13 +209,14 @@ function mockFetchError(status: number, error: string): void {
   );
 }
 
-function mockFetchBlob(data: ArrayBuffer): void {
+function mockFetchBlob(data: ArrayBuffer, exportWarnings = "[]"): void {
   vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
     new Response(data, {
       status: 200,
       headers: {
         "Content-Type": "application/gzip",
         "Content-Disposition": 'attachment; filename="export.tar.gz"',
+        "x-export-warnings": exportWarnings,
       },
     }),
   );
@@ -451,8 +452,25 @@ describe("POST mutation endpoints", () => {
       expect(url).toBe("/api/tarball");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({ generation: 7 });
-      expect(result).toBeInstanceOf(Blob);
-      expect(result.size).toBe(4);
+      expect(result.blob).toBeInstanceOf(Blob);
+      expect(result.blob.size).toBe(4);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it("returns the parsed x-export-warnings entries", async () => {
+      const tarData = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]).buffer;
+      mockFetchBlob(
+        tarData,
+        JSON.stringify([
+          { kind: "notice", text: "1 package that owns a unit enabled on the source host is not carried: cronie." },
+          { kind: "failure", text: "epel-release.noarch: staged RPM not verified, not exported" },
+        ]),
+      );
+      const result = await exportTarball(7);
+      expect(result.warnings).toEqual([
+        { kind: "notice", text: "1 package that owns a unit enabled on the source host is not carried: cronie." },
+        { kind: "failure", text: "epel-release.noarch: staged RPM not verified, not exported" },
+      ]);
     });
 
     it("throws ApiError on 409 stale generation", async () => {

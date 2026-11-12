@@ -142,6 +142,7 @@ describe("ExportDialog", () => {
     });
     mockFetch.mockResolvedValueOnce({
       ok: true,
+      headers: new Headers({ "x-export-warnings": "[]" }),
       blob: () => Promise.resolve(mockBlob),
     });
 
@@ -190,6 +191,7 @@ describe("ExportDialog", () => {
     });
     mockFetch.mockResolvedValueOnce({
       ok: true,
+      headers: new Headers({ "x-export-warnings": "[]" }),
       blob: () => Promise.resolve(mockBlob),
     });
 
@@ -231,6 +233,151 @@ describe("ExportDialog", () => {
       expect(createObjectURL).toHaveBeenCalledWith(mockBlob);
       expect(clickSpy).toHaveBeenCalled();
       expect(revokeObjectURL).toHaveBeenCalledWith(mockUrl);
+    });
+  });
+
+  describe("after download", () => {
+    let createObjectURL: ReturnType<typeof vi.fn>;
+    let revokeObjectURL: ReturnType<typeof vi.fn>;
+    let clickSpy: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      createObjectURL = vi.fn(() => "blob:http://localhost/fake-url");
+      revokeObjectURL = vi.fn();
+      vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+      clickSpy = vi.fn();
+      const origCreateElement = document.createElement.bind(document);
+      vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+        const el = origCreateElement(tag);
+        if (tag === "a") {
+          el.click = clickSpy;
+        }
+        return el;
+      });
+    });
+
+    function mockTarball(headers: Record<string, string>) {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers(headers),
+        blob: () => Promise.resolve(new Blob(["fake tarball"])),
+      });
+    }
+
+    function renderOpen(onClose = vi.fn()) {
+      render(
+        <ExportDialog
+          isOpen={true}
+          onClose={onClose}
+          stats={MOCK_STATS}
+          generation={7}
+          sessionIsSensitive={false}
+          onViewUpdate={vi.fn()}
+        />,
+      );
+      return onClose;
+    }
+
+    const NOTICE =
+      "2 packages that own a unit enabled on the source host are not carried: firewalld, rhc. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.";
+    const FAILURE =
+      "epel-release.noarch: staged RPM not verified, not exported";
+
+    it("stays open listing the warnings, a notice as info and a failure as warning", async () => {
+      const user = userEvent.setup();
+      mockTarball({
+        "x-export-warnings": JSON.stringify([
+          { kind: "notice", text: NOTICE },
+          { kind: "failure", text: FAILURE },
+        ]),
+      });
+      const onClose = renderOpen();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await screen.findByText("Downloaded, with warnings");
+      expect(clickSpy).toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+
+      const notice = screen.getByTestId("export-warning-0");
+      const failure = screen.getByTestId("export-warning-1");
+      expect(notice).toHaveTextContent(NOTICE);
+      expect(notice).toHaveClass("pf-m-info");
+      expect(failure).toHaveTextContent(FAILURE);
+      expect(failure).toHaveClass("pf-m-warning");
+
+      // Not individually dismissable: the only way out is closing the dialog.
+      expect(
+        screen.queryByRole("button", { name: /close .*alert/i }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Export" }),
+      ).not.toBeInTheDocument();
+
+      // The footer button; the modal's X is also labelled "Close".
+      const footerClose = screen
+        .getAllByRole("button", { name: "Close" })
+        .find((b) => b.textContent === "Close");
+      expect(footerClose).toBeDefined();
+      await user.click(footerClose!);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes on success when the header is []", async () => {
+      const user = userEvent.setup();
+      mockTarball({ "x-export-warnings": "[]" });
+      const onClose = renderOpen();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(clickSpy).toHaveBeenCalled();
+      expect(
+        screen.queryByText("Downloaded, with warnings"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("closes on success when the header is missing", async () => {
+      const user = userEvent.setup();
+      mockTarball({});
+      const onClose = renderOpen();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(clickSpy).toHaveBeenCalled();
+    });
+
+    it("still downloads and says so when the header is malformed", async () => {
+      const user = userEvent.setup();
+      mockTarball({ "x-export-warnings": "[{not json" });
+      const onClose = renderOpen();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      await screen.findByText("Downloaded, with warnings");
+      expect(clickSpy).toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByTestId("export-warning-0")).toHaveClass(
+        "pf-m-warning",
+      );
+      expect(screen.queryByText("Export failed")).not.toBeInTheDocument();
+    });
+
+    it("renders warning text as plain text, not markup", async () => {
+      const user = userEvent.setup();
+      mockTarball({
+        "x-export-warnings": JSON.stringify([
+          { kind: "failure", text: "<b>bold</b>.noarch: not exported" },
+        ]),
+      });
+      renderOpen();
+
+      await user.click(screen.getByRole("button", { name: "Export" }));
+
+      const entry = await screen.findByTestId("export-warning-0");
+      expect(entry).toHaveTextContent("<b>bold</b>.noarch: not exported");
+      expect(entry.querySelector("b")).toBeNull();
     });
   });
 
