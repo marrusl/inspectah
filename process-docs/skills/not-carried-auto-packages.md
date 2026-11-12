@@ -76,6 +76,14 @@ no list is emitted, when:
   owner's name is in the list, else `PackageExcluded`.
 - `/var`: the evidence counts pulled-in packages as carried, so their
   directories are not provisioned.
+- Refine export warnings: one `notice` entry in `x-export-warnings` when
+  the list holds packages that own an enabled unit, naming the count and
+  the first three by display name, then `and N more`, and pointing at the
+  audit table and the `# Not carried` block. `not_carried_notice` in
+  `crates/refine/src/session.rs` builds it from `not_carried_packages`
+  filtered to entries with `enabled_units`; it never decides "owns an
+  enabled unit" itself. Names are sanitized and bounded because the
+  entry rides in a header. Contract: `refine-export-warnings-header.md`.
 
 Order on every surface: packages owning a unit in `services.enabled_units`
 first, then the rest; each part by name, then arch. The display name is
@@ -155,5 +163,7 @@ Measured at commit `af96710c` (2026-11-09), same hosts, drift and plants
 
 - `service-omission-model.md`: `OmissionReason::NotCarried` and the
   presence rules that decide whether a unit is omitted.
+- `refine-export-warnings-header.md`: the header the export notice rides
+  in, and its kinds.
 - `package-identity-is-name-dot-arch.md`: why the class keys on `name.arch`.
 - `rpm-output-field-parsing.md`: how `leaf_dep_tree` is built.
