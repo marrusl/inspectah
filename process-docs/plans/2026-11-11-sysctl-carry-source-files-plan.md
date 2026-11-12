@@ -436,7 +436,7 @@ The template renders the same blocks as the audit from a context built from `Sys
   - Rewrite Task 5's `legacy_sysctl_overrides_not_captured` as `legacy_sysctl_overrides_absent_from_a_scan`: the snapshot JSON of the case 11 host has no key `sysctl_overrides` under `kernel_boot`.
 - [ ] **Step 2: Run** `cargo test -p inspectah-core --test snapshot_test schema_26`, `cargo test -p inspectah-refine --test tarball_test schema_26`, `cargo test -p inspectah-cli --bin inspectah schema_26` and `cargo test -p inspectah-cli --test sysctl_scan_test legacy_sysctl_overrides`. Expected: FAIL (schema 26 still loads everywhere; the field still serializes as `[]`).
 - [ ] **Step 3: Implement** and update the skill file's version history paragraph (26 to 27, semantic staleness).
-- [ ] **Step 4: Run** the full gate. Expected: PASS. Removal checks: `grep -rnw "SysctlOverride" crates --include='*.rs'` finds nothing; `grep -rn "sysctl_overrides" crates --include='*.rs'` finds only the string literal in `legacy_sysctl_overrides_absent_from_a_scan` (the old payload lives in the fixture under `testdata/`, outside `crates`).
+- [ ] **Step 4: Run** the full gate. Expected: PASS. Removal checks: `grep -rnw "SysctlOverride" crates --include='*.rs'` finds nothing; `grep -rnw "sysctl_overrides" crates --include='*.rs'` finds only the string literal in `legacy_sysctl_overrides_absent_from_a_scan` (`-w` keeps the test's own name, where the term is not a whole word, out of the match) (the old payload lives in the fixture under `testdata/`, outside `crates`).
 - [ ] **Step 5: Commit** `feat(core)!: raise the snapshot schema to 27 for the sysctl section`.
 
 ### Task 12: Case 22 fixtures from the real handlers (Lane W)
