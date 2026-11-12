@@ -511,6 +511,148 @@ describe("ExportDialog", () => {
         ).not.toBeInTheDocument();
       });
 
+      // After firewalld is included: one owner left, and the notice says so.
+      const ROWS_AFTER_INCLUDE = NOT_CARRIED_ROWS.filter(
+        (r) => r.display_name !== "firewalld",
+      );
+      const NOTICE_AFTER_INCLUDE = {
+        kind: "notice" as const,
+        text: "1 package that owns a unit enabled on the source host is not carried: rhc. See the Not carried table in audit-report.md and the # Not carried block in the Containerfile.",
+      };
+
+      it("drops the notice shown at Export, not one that arrives mid-download", async () => {
+        const user = userEvent.setup();
+        let respond: (headers: Record<string, string>) => void = () => {};
+        mockFetch.mockReturnValueOnce(
+          new Promise((resolve) => {
+            respond = (headers) =>
+              resolve({
+                ok: true,
+                headers: new Headers(headers),
+                blob: () => Promise.resolve(new Blob(["fake tarball"])),
+              });
+          }),
+        );
+        const props = {
+          isOpen: true,
+          onClose: vi.fn(),
+          stats: MOCK_STATS,
+          generation: 7,
+          sessionIsSensitive: false,
+          onViewUpdate: vi.fn(),
+          onReviewNotCarried: vi.fn(),
+        };
+        const { rerender } = render(
+          <ExportDialog
+            {...props}
+            notCarriedPackages={NOT_CARRIED_ROWS}
+            notCarriedNotice={VIEW_NOTICE}
+          />,
+        );
+
+        await user.click(screen.getByRole("button", { name: "Export" }));
+        // The view changes while the tarball is still on its way.
+        rerender(
+          <ExportDialog
+            {...props}
+            notCarriedPackages={ROWS_AFTER_INCLUDE}
+            notCarriedNotice={NOTICE_AFTER_INCLUDE}
+          />,
+        );
+        respond({
+          "x-export-warnings": JSON.stringify([
+            VIEW_NOTICE,
+            NOTICE_AFTER_INCLUDE,
+          ]),
+        });
+
+        // The operator saw VIEW_NOTICE when pressing Export; the later one
+        // was never on screen before download, so it is shown.
+        await screen.findByText("Downloaded, with warnings");
+        expect(screen.getByTestId("export-warning-0")).toHaveTextContent(
+          NOTICE_AFTER_INCLUDE.text,
+        );
+        expect(screen.queryByTestId("export-warning-1")).toBeNull();
+        expect(screen.queryByText(VIEW_NOTICE.text)).toBeNull();
+      });
+
+      it("shows the current notice when reopened after the view changed", async () => {
+        const user = userEvent.setup();
+        const onClose = vi.fn();
+        const props = {
+          onClose,
+          stats: MOCK_STATS,
+          generation: 7,
+          sessionIsSensitive: false,
+          onViewUpdate: vi.fn(),
+          onReviewNotCarried: vi.fn(),
+        };
+        const { rerender } = render(
+          <ExportDialog
+            isOpen={true}
+            {...props}
+            notCarriedPackages={NOT_CARRIED_ROWS}
+            notCarriedNotice={VIEW_NOTICE}
+          />,
+        );
+        mockTarball({
+          "x-export-warnings": JSON.stringify([
+            VIEW_NOTICE,
+            { kind: "failure", text: FAILURE },
+          ]),
+        });
+        await user.click(screen.getByRole("button", { name: "Export" }));
+        await screen.findByText("Downloaded, with warnings");
+        const footerClose = screen
+          .getAllByRole("button", { name: "Close" })
+          .find((b) => b.textContent === "Close");
+        await user.click(footerClose!);
+
+        // An include between the two opens changes the rows and the notice.
+        rerender(
+          <ExportDialog
+            isOpen={false}
+            {...props}
+            notCarriedPackages={ROWS_AFTER_INCLUDE}
+            notCarriedNotice={NOTICE_AFTER_INCLUDE}
+          />,
+        );
+        rerender(
+          <ExportDialog
+            isOpen={true}
+            {...props}
+            notCarriedPackages={ROWS_AFTER_INCLUDE}
+            notCarriedNotice={NOTICE_AFTER_INCLUDE}
+          />,
+        );
+
+        expect(
+          screen.queryByText("Downloaded, with warnings"),
+        ).not.toBeInTheDocument();
+        const notice = screen.getByTestId("not-carried-notice");
+        expect(notice).toHaveTextContent(
+          "1 package that owns an enabled unit will not be carried",
+        );
+        await user.click(
+          within(notice).getByRole("button", {
+            name: "Show not-carried details",
+          }),
+        );
+        expect(within(notice).getByText("rhcd.service")).toBeInTheDocument();
+        expect(within(notice).queryByText("firewalld.service")).toBeNull();
+
+        // And the download dedupes against the notice now on screen.
+        mockTarball({
+          "x-export-warnings": JSON.stringify([NOTICE_AFTER_INCLUDE]),
+        });
+        await user.click(screen.getByRole("button", { name: "Export" }));
+
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(2));
+        expect(
+          screen.queryByText("Downloaded, with warnings"),
+        ).not.toBeInTheDocument();
+      });
+
       it("shows a header notice that differs from the view's", async () => {
         const user = userEvent.setup();
         const drifted = {
