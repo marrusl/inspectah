@@ -4,6 +4,10 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
+/// The most links one resolution follows before it fails as a loop, the
+/// kernel's `ELOOP` limit.
+const MAX_SYMLINK_HOPS: usize = 40;
+
 pub struct MockExecutor {
     commands: HashMap<String, ExecResult>,
     files: HashMap<String, String>,
@@ -25,6 +29,9 @@ pub struct MockExecutor {
     /// `read_file` is called. Lets tests distinguish PermissionDenied
     /// from NotFound without registering actual file content.
     file_errors: HashMap<String, io::ErrorKind>,
+    /// Paths whose `read_link` fails with a specific error kind, other
+    /// than the `InvalidInput` (`EINVAL`) a path that is not a link gives.
+    link_errors: HashMap<String, io::ErrorKind>,
     /// Prefix-based command matching. After exact-match lookup fails,
     /// `run()` checks if the full command string starts with any
     /// registered prefix.
@@ -44,6 +51,7 @@ impl MockExecutor {
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
             file_errors: HashMap::new(),
+            link_errors: HashMap::new(),
             prefix_commands: HashMap::new(),
             command_log: Mutex::new(Vec::new()),
         }
@@ -117,6 +125,14 @@ impl MockExecutor {
     /// simulate PermissionDenied on files like /etc/shadow.
     pub fn with_file_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
         self.file_errors.insert(path.to_string(), error_kind);
+        self
+    }
+
+    /// Register a path whose `read_link` fails with `error_kind`, as an
+    /// I/O or permission failure does on a real host. Takes priority over
+    /// a registered link and over the not-a-link answer.
+    pub fn with_link_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
+        self.link_errors.insert(path.to_string(), error_kind);
         self
     }
 
@@ -215,11 +231,25 @@ impl Executor for MockExecutor {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
     }
 
+    /// As `readlink(2)`: every component but the last is resolved through
+    /// registered links, then the last is read. A registered path that is
+    /// not a link fails with `InvalidInput` (`EINVAL`), an unregistered
+    /// one with `NotFound`.
     fn read_link(&self, path: &Path) -> io::Result<String> {
-        self.links
-            .get(path.to_str().unwrap_or(""))
-            .cloned()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+        if let Some(&error_kind) = self.link_errors.get(path.to_str().unwrap_or("")) {
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
+        let physical = self.resolve(path, false)?;
+        let key = physical.to_str().unwrap_or("");
+        if let Some(target) = self.links.get(key) {
+            return Ok(target.clone());
+        }
+        let kind = if self.is_registered(key) {
+            io::ErrorKind::InvalidInput
+        } else {
+            io::ErrorKind::NotFound
+        };
+        Err(io::Error::new(kind, path.display().to_string()))
     }
 
     fn host_root(&self) -> &Path {
@@ -227,37 +257,62 @@ impl Executor for MockExecutor {
     }
 
     fn resolve_final_target(&self, path: &Path) -> io::Result<PathBuf> {
+        self.resolve(path, true)
+    }
+}
+
+impl MockExecutor {
+    /// Resolve `path` through registered links, an ancestor directory's
+    /// as well as the path's own, as `canonicalize` does; the last
+    /// component is followed only when `follow_last` is set. A link
+    /// registered with [`with_dangling_link`] fails with `NotFound`; more
+    /// than [`MAX_SYMLINK_HOPS`] links, or a path seen twice, is a loop.
+    ///
+    /// [`with_dangling_link`]: MockExecutor::with_dangling_link
+    fn resolve(&self, path: &Path, follow_last: bool) -> io::Result<PathBuf> {
         let mut current = normalize_mock_path(path);
         let mut visited = HashSet::new();
-
-        loop {
-            let key = current.to_str().unwrap_or("").to_string();
-            if !visited.insert(key.clone()) {
+        'resolve: loop {
+            if !visited.insert(current.clone()) || visited.len() > MAX_SYMLINK_HOPS {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("symlink loop detected at {}", current.display()),
                 ));
             }
-            if self.dangling_links.contains(&key) {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("dangling symlink at {}", current.display()),
-                ));
+            let components: Vec<Component> = current.components().collect();
+            let mut prefix = PathBuf::new();
+            for (i, component) in components.iter().enumerate() {
+                prefix.push(component);
+                if i + 1 == components.len() && !follow_last {
+                    break;
+                }
+                let key = prefix.to_str().unwrap_or("");
+                if self.dangling_links.contains(key) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("dangling symlink at {}", prefix.display()),
+                    ));
+                }
+                if let Some(target) = self.links.get(key) {
+                    // An absolute target replaces the parent in `join`.
+                    let mut next = prefix.parent().unwrap_or(Path::new("/")).join(target);
+                    next.extend(&components[i + 1..]);
+                    current = normalize_mock_path(&next);
+                    continue 'resolve;
+                }
             }
-
-            let target_str = match self.links.get(&key) {
-                Some(t) => t.clone(),
-                None => return Ok(current),
-            };
-
-            let target_path = Path::new(&target_str);
-            current = if target_path.is_absolute() {
-                normalize_mock_path(target_path)
-            } else {
-                let parent = current.parent().unwrap_or(Path::new("/"));
-                normalize_mock_path(&parent.join(target_path))
-            };
+            return Ok(current);
         }
+    }
+
+    /// Whether `path` is registered as anything: a file, a directory, a
+    /// link, or an injected read error on one.
+    fn is_registered(&self, path: &str) -> bool {
+        self.files.contains_key(path)
+            || self.file_errors.contains_key(path)
+            || self.dirs.contains_key(path)
+            || self.dir_errors.contains_key(path)
+            || self.links.contains_key(path)
     }
 }
 
@@ -417,6 +472,52 @@ mod tests {
             mock.read_link(Path::new("/etc/sysctl.d/b.conf")).unwrap(),
             "/etc/sysctl.d/gone.conf"
         );
+    }
+
+    #[test]
+    fn test_mock_resolve_final_target_through_ancestor_link() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/sysctl.d", "/var/lib/app")
+            .with_link("/var/lib/app/b.conf", "../shared/b.conf")
+            .with_file("/var/lib/app/a.conf", "");
+        let cases = [
+            ("/etc/sysctl.d/a.conf", "/var/lib/app/a.conf"),
+            ("/etc/sysctl.d/b.conf", "/var/lib/shared/b.conf"),
+            ("/etc/sysctl.d", "/var/lib/app"),
+        ];
+        for (path, expected) in cases {
+            let resolved = mock.resolve_final_target(Path::new(path)).unwrap();
+            assert_eq!(resolved, PathBuf::from(expected), "{path}");
+        }
+    }
+
+    #[test]
+    fn test_mock_read_link_kinds() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/sysctl.d", "/var/lib/app")
+            .with_link("/var/lib/app/b.conf", "/etc/b.conf")
+            .with_file("/var/lib/app/a.conf", "")
+            .with_file("/etc/c.conf", "")
+            .with_link_error("/etc/d.conf", io::ErrorKind::PermissionDenied);
+        // Every component but the last resolves, as readlink(2) does.
+        assert_eq!(
+            mock.read_link(Path::new("/etc/sysctl.d/b.conf")).unwrap(),
+            "/etc/b.conf"
+        );
+        assert_eq!(
+            mock.read_link(Path::new("/etc/sysctl.d")).unwrap(),
+            "/var/lib/app"
+        );
+        let cases = [
+            ("/etc/sysctl.d/a.conf", io::ErrorKind::InvalidInput),
+            ("/etc/c.conf", io::ErrorKind::InvalidInput),
+            ("/etc/missing.conf", io::ErrorKind::NotFound),
+            ("/etc/d.conf", io::ErrorKind::PermissionDenied),
+        ];
+        for (path, kind) in cases {
+            let err = mock.read_link(Path::new(path)).unwrap_err();
+            assert_eq!(err.kind(), kind, "{path}");
+        }
     }
 
     #[test]

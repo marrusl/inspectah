@@ -53,9 +53,22 @@ the inspector sees a missing file where a real host has content. Use
 `with_dangling_link()` for a link whose target is missing: it makes
 `resolve_final_target` fail with `NotFound`, as `canonicalize` does. The
 sysctl harness (`crates/cli/tests/support/sysctl_hosts.rs`,
-`SysctlHost::link`) applies this rule for every link it is given.
+`SysctlHost::link`) applies this rule for every link it is given,
+and for a link to a directory it registers the target's listing and
+files under the link's path too.
 
-**6. The RPM ownership query key.** The RPM inspector lists owned paths
+**6. Link checks behave like the real syscalls.** `resolve_final_target`
+follows a link on any component, so `/etc/sysctl.d/a.conf` under a
+linked `/etc/sysctl.d` resolves into the link's target, as
+`canonicalize` does. `read_link` resolves every component but the
+last, as `readlink(2)` does, and fails with `InvalidInput` (`EINVAL`)
+on a registered path that is not a link and `NotFound` on an
+unregistered one. A collector that must not read an entry before it
+knows where the entry resolves (the sysctl reader) treats only
+`InvalidInput` as "not a link"; use `with_link_error()` to inject any
+other failure. Callers that only ask `is_ok()` are unaffected.
+
+**7. The RPM ownership query key.** The RPM inspector lists owned paths
 with `rpm -qa --queryformat @@%{NAME}\n[%{FILENAMES}\n]` (the `\n` is
 the two characters backslash and `n`). A mock registering an older
 format gets exit 127, and the only symptom is the warning "rpm file

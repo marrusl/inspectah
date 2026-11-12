@@ -1003,6 +1003,17 @@ fn case_16_collection_failures_snapshot() {
                 .dangling_link("/etc/sysctl.d/90-x.conf", "/etc/sysctl.d/gone.conf"),
             "sysctl: cannot read /etc/sysctl.d/90-x.conf:",
         ),
+        (
+            "a link check that fails other than as not-a-link",
+            failure_host()
+                .sysctl_a("vm.swappiness = 10\n")
+                .file("/etc/sysctl.d/90-x.conf", "vm.dirty_ratio = 20\n")
+                .link_error(
+                    "/etc/sysctl.d/90-x.conf",
+                    std::io::ErrorKind::PermissionDenied,
+                ),
+            "sysctl: cannot read /etc/sysctl.d/90-x.conf:",
+        ),
     ];
     for (layout, host, cause) in hosts {
         let snap = reload(&scan(host));
@@ -1110,6 +1121,49 @@ fn case_17_outside_links_snapshot() {
             ),
             overwritten: Vec::new(),
         }]
+    );
+}
+
+/// An opaque line no redaction pattern matches, in a file reached only
+/// through a linked sysctl directory.
+const ANCESTOR_CANARY: &str = "host-canary-94c6";
+const ANCESTOR_FILE: &str = "/etc/sysctl.d/90-app.conf";
+const ANCESTOR_TARGET: &str = "/var/lib/app/90-app.conf";
+
+/// `/etc/sysctl.d` is itself a link out of the configuration trees; the
+/// entry under it is a regular file there.
+fn ancestor_link_host() -> SysctlHost {
+    SysctlHost::new()
+        .link("/etc/sysctl.d", "/var/lib/app")
+        .file(
+            ANCESTOR_TARGET,
+            &format!("vm.swappiness = 10\n{ANCESTOR_CANARY}\n"),
+        )
+        .file("/usr/lib/sysctl.d/50-default.conf", "vm.swappiness = 60\n")
+        .sysctl_a("vm.swappiness = 10\n")
+}
+
+#[test]
+fn case_17_outside_ancestor_link_snapshot() {
+    let snap = scan_without_canary("ancestor link", ancestor_link_host(), ANCESTOR_CANARY);
+    let app = section(&snap)
+        .files
+        .iter()
+        .find(|f| f.path() == ANCESTOR_FILE)
+        .expect("the entry is collected");
+    assert_eq!(
+        app.body,
+        SysctlFileBody::OutsideLink {
+            target: ANCESTOR_TARGET.into()
+        },
+        "classified by its resolved path, not read"
+    );
+    assert_eq!(
+        section(&snap).effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::OutsideLink {
+            file: file_ref(SysctlDir::Etc, "90-app.conf"),
+            target: ANCESTOR_TARGET.into(),
+        }])
     );
 }
 
@@ -1914,6 +1968,20 @@ fn case_17_outside_links_audit() {
 }
 
 #[test]
+fn case_17_outside_ancestor_link_audit() {
+    let md = audit(&reload(&scan(ancestor_link_host())));
+    assert!(
+        !md.contains(ANCESTOR_CANARY),
+        "the linked directory's file never reaches the audit"
+    );
+    assert!(
+        sysctl_block(&md)
+            .iter()
+            .any(|line| line.contains(ANCESTOR_TARGET))
+    );
+}
+
+#[test]
 fn case_18_redaction_makes_the_explanation_unknown_audit() {
     let redacted_file = |path: &str| {
         format!("`{path}` held text that redaction replaced, so what it sets is not known.")
@@ -2340,6 +2408,16 @@ fn case_17_outside_links_html() {
     )));
     assert_eq!(kernel_boot_count(&shadowed), 1, "shadowed link");
     assert!(!html_text(html_sysctl_block(&shadowed)).contains(UNKNOWN_INTRO));
+}
+
+#[test]
+fn case_17_outside_ancestor_link_html() {
+    let page = html(&reload(&scan(ancestor_link_host())));
+    assert!(
+        !page.contains(ANCESTOR_CANARY),
+        "the linked directory's file never reaches the HTML report"
+    );
+    assert!(html_text(html_sysctl_block(&page)).contains(ANCESTOR_TARGET));
 }
 
 #[test]
@@ -2828,6 +2906,22 @@ fn case_17_outside_links_view() {
     assert_eq!(
         shadowed["explanation"],
         swappiness_writes_60_from(SITE_LINK)
+    );
+}
+
+#[test]
+fn case_17_outside_ancestor_link_view() {
+    let session = session(&reload(&scan(ancestor_link_host())));
+    assert!(
+        !view(&session).to_string().contains(ANCESTOR_CANARY),
+        "the linked directory's file never reaches the view"
+    );
+    assert_eq!(
+        sysctl_view(&session)["explanation"],
+        serde_json::json!({
+            "state": "unknown",
+            "inputs": [{"kind": "outside_link", "path": ANCESTOR_FILE, "target": ANCESTOR_TARGET}],
+        })
     );
 }
 

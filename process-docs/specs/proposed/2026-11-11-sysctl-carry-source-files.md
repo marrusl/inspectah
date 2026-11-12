@@ -113,12 +113,14 @@ The config collector gains one rule in the `rpm -Va` loop, after the existing `i
 
 `collect_sysctl_overrides` is replaced by a reader that records what is on disk and what the kernel reports. It resolves nothing; parsing and resolution are pure functions in `inspectah-core` (§ 5.3), so the collector, the audit, refine, deserialization and tests all compute them the same way.
 
-**Directories**, highest priority first (`sysctl.d(5)` SYNOPSIS, `standard-conf.xml`): `/etc/sysctl.d`, `/run/sysctl.d`, `/usr/local/lib/sysctl.d`, `/usr/lib/sysctl.d`. Entries ending in `.conf` only. For each entry:
+**Directories**, highest priority first (`sysctl.d(5)` SYNOPSIS, `standard-conf.xml`): `/etc/sysctl.d`, `/run/sysctl.d`, `/usr/local/lib/sysctl.d`, `/usr/lib/sysctl.d`. Entries ending in `.conf` only. Each entry is classified by its final path, the path it resolves to through every link: the entry's own and any ancestor directory's, since `/etc/sysctl.d` can itself be a link. Checking only the entry's own link would read a regular file under a linked directory without knowing where it is. Then:
 
-- A symlink whose final target is `/dev/null` is a mask. It is not read.
-- A symlink whose final target is under `/etc/` or under one of the four directories is read through, and its final target recorded (`99-sysctl.conf` records `/etc/sysctl.conf`).
-- A symlink whose final target is anywhere else is recorded with that target and **not read**. This is the boundary the config inspector draws when it turns an `/etc` link into `/var` into an advisory with empty content (`config/mod.rs:210-252`), applied here as an allowlist: a section that only explains has no reason to pull content from outside the configuration trees into the snapshot and reports. systemd-sysctl does read such a file, and its unknown lines can set, override or cancel any key, so while it survives shadowing no value or drift is stated for the host (§ 5.3, `Unknown`).
-- A regular file is read. Content over the config inspector's `MAX_CONFIG_FILE_SIZE` counts as a read failure.
+- A final path of `/dev/null` is a mask. It is not read.
+- A final path under `/etc/` or under one of the four directories is read through the entry, and the final path recorded when it differs from the entry's path (`99-sysctl.conf` records `/etc/sysctl.conf`).
+- A final path anywhere else is recorded as the target and **not read**. This is the boundary the config inspector draws when it turns an `/etc` link into `/var` into an advisory with empty content (`config/mod.rs:210-252`), applied here as an allowlist: a section that only explains has no reason to pull content from outside the configuration trees into the snapshot and reports. systemd-sysctl does read such a file, and its unknown lines can set, override or cancel any key, so while it survives shadowing no value or drift is stated for the host (§ 5.3, `Unknown`).
+- Content over the config inspector's `MAX_CONFIG_FILE_SIZE` counts as a read failure.
+
+Only the not-a-link answer (`EINVAL`) from reading the entry as a link means the entry itself is not a link. Any other failure to read the link or to resolve the final path is a failure to read the entry, so no entry is read before its final path is known.
 
 **Failures.** A directory that does not exist is normal. Any other failure to list a directory, to read an entry (a dangling link included), or to run `sysctl -a` makes the whole explanation unavailable: `KernelBootSection.sysctl` is `None` and the kernel/boot inspector reports the reason as degraded, as today (`kernelboot.rs:86-92`, `:201-207`). No partial section is stored: an explanation missing a file, or missing the runtime values, would claim drift or `not exposed` where neither is true. Config carriage is a separate inspector and is unaffected.
 

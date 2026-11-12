@@ -55,11 +55,12 @@ const TARBALL_PREFIX: &str = "sysctl-host";
 /// Every registered path is listed in its parent directory, up to a
 /// top-level directory, so the `/etc` walk and the sysctl reader find it.
 ///
-/// `MockExecutor::read_file` and `file_exists` do not follow links, while
-/// the real executor's do. [`build`](SysctlHost::build) therefore
-/// registers, at each link's own path, the content a real read there
-/// returns: the final target's content, or `""` for `/dev/null`. No test
-/// registers a link by hand.
+/// `MockExecutor::read_file`, `read_dir` and `file_exists` do not follow
+/// links, while the real executor's do. [`build`](SysctlHost::build)
+/// therefore registers, at each link's own path, what a real read there
+/// returns: the final target's content, or `""` for `/dev/null`; for a
+/// link to a directory, that directory's listing and the content of each
+/// file directly in it. No test registers a link by hand.
 #[derive(Debug, Default)]
 pub struct SysctlHost {
     files: BTreeMap<String, String>,
@@ -67,6 +68,7 @@ pub struct SysctlHost {
     dangling_links: BTreeMap<String, String>,
     dirs: BTreeMap<String, BTreeSet<String>>,
     dir_errors: BTreeMap<String, std::io::ErrorKind>,
+    link_errors: BTreeMap<String, std::io::ErrorKind>,
     /// Owned paths by package, for the ownership query.
     rpm_owned: BTreeMap<String, Vec<String>>,
     /// `(flags, path)` rows of `rpm -Va`.
@@ -150,6 +152,13 @@ impl SysctlHost {
         self
     }
 
+    /// Reading `path` as a link fails with `kind`, an error other than the
+    /// not-a-link answer a regular file gives.
+    pub fn link_error(mut self, path: &str, kind: std::io::ErrorKind) -> Self {
+        self.link_errors.insert(path.into(), kind);
+        self
+    }
+
     /// The executor the inspectors run over.
     pub fn build(self) -> MockExecutor {
         let mut ownership = String::from("@@bash\n/usr/bin/bash\n");
@@ -188,6 +197,9 @@ impl SysctlHost {
         for (path, content) in &self.files {
             mock = mock.with_file(path, content);
         }
+        for (path, kind) in &self.link_errors {
+            mock = mock.with_link_error(path, *kind);
+        }
         for (path, target) in &self.dangling_links {
             mock = mock.with_dangling_link(path, target);
         }
@@ -196,22 +208,30 @@ impl SysctlHost {
         }
         // What a real read of each link returns, now that every link is
         // registered and chains resolve.
-        let through_links: Vec<(String, String)> = self
-            .links
-            .keys()
-            .filter_map(|path| {
-                let target = mock.resolve_final_target(Path::new(path)).ok()?;
-                let target = target.to_str()?;
-                let content = if target == DEV_NULL {
-                    Some(String::new())
-                } else {
-                    self.files.get(target).cloned()
-                };
-                content.map(|content| (path.clone(), content))
-            })
-            .collect();
-        for (path, content) in through_links {
+        let mut through_files: Vec<(String, String)> = Vec::new();
+        let mut through_dirs: Vec<(String, Vec<String>)> = Vec::new();
+        for path in self.links.keys() {
+            let Ok(target) = mock.resolve_final_target(Path::new(path)) else {
+                continue;
+            };
+            let target = target.to_str().expect("UTF-8 path");
+            if target == DEV_NULL {
+                through_files.push((path.clone(), String::new()));
+            } else if let Some(content) = self.files.get(target) {
+                through_files.push((path.clone(), content.clone()));
+            } else if let Some(entries) = self.dirs.get(target) {
+                through_dirs.push((path.clone(), entries.iter().cloned().collect()));
+                through_files.extend(entries.iter().filter_map(|name| {
+                    let content = self.files.get(&format!("{target}/{name}"))?;
+                    Some((format!("{path}/{name}"), content.clone()))
+                }));
+            }
+        }
+        for (path, content) in through_files {
             mock = mock.with_file(&path, &content);
+        }
+        for (path, entries) in through_dirs {
+            mock = mock.with_dir(&path, entries.iter().map(String::as_str).collect());
         }
         mock
     }

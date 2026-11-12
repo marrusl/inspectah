@@ -268,37 +268,43 @@ fn collect_sysctl_section(exec: &dyn Executor) -> Result<SysctlSection, String> 
     })
 }
 
-/// What one `*.conf` entry is. A link is resolved to its final target: a
-/// mask is not read, a target under `/etc/` or a sysctl directory is read
-/// through `path`, and any other target is recorded and not read.
+/// What one `*.conf` entry is, decided by the path it resolves to through
+/// every link, the entry's own and any ancestor directory's: `/dev/null`
+/// is a mask and is not read; a path under `/etc/` or a sysctl directory
+/// is read through `path`, recording that final path when it differs from
+/// `path`; any other path is recorded and not read.
+///
+/// Only `InvalidInput` (`EINVAL`) from `read_link` means the entry itself
+/// is not a link. Any other failure to read the link or to resolve the
+/// path is an error, so an entry whose final path is not known is never
+/// read.
 fn read_sysctl_entry(exec: &dyn Executor, path: &str) -> Result<SysctlFileBody, String> {
     let entry = Path::new(path);
-    if exec.read_link(entry).is_err() {
-        return Ok(SysctlFileBody::Read {
-            link_target: None,
-            content: read_sysctl_content(exec, path)?,
-            redacted: false,
-        });
+    let cannot_read = |e: std::io::Error| format!("sysctl: cannot read {path}: {e}");
+    match exec.read_link(entry) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {}
+        Err(e) => return Err(cannot_read(e)),
     }
     let target = exec
         .resolve_final_target(entry)
-        .map_err(|e| format!("sysctl: cannot read {path}: {e}"))?
+        .map_err(cannot_read)?
         .to_string_lossy()
         .into_owned();
     if target == DEV_NULL {
         return Ok(SysctlFileBody::Mask);
     }
-    if is_sysctl_read_through_target(&target) {
-        return Ok(SysctlFileBody::Read {
-            content: read_sysctl_content(exec, path)?,
-            link_target: Some(target),
-            redacted: false,
-        });
+    if !is_sysctl_read_through_target(&target) {
+        return Ok(SysctlFileBody::OutsideLink { target });
     }
-    Ok(SysctlFileBody::OutsideLink { target })
+    Ok(SysctlFileBody::Read {
+        content: read_sysctl_content(exec, path)?,
+        link_target: Some(target).filter(|target| target != path),
+        redacted: false,
+    })
 }
 
-/// Whether a link's final target is inside the configuration trees the
+/// Whether an entry's final path is inside the configuration trees the
 /// sysctl section reads: `/etc/` or one of the sysctl directories.
 fn is_sysctl_read_through_target(target: &str) -> bool {
     target.starts_with("/etc/")
