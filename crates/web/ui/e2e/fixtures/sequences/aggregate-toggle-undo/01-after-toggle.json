@@ -166,5 +166,6 @@
       "enabled": true
     }
   ],
-  "repo_conflict_count": 0
+  "repo_conflict_count": 0,
+  "sysctl": { "state": "aggregate" }
 }

@@ -217,7 +217,74 @@
   "service_dropins": [],
   "quadlets": [],
   "flatpaks": [],
-  "sysctls": [],
+  "sysctl": {
+    "as_written": [],
+    "explanation": {
+      "drift": [
+        {
+          "file_value": "10",
+          "from": {
+            "line": 1,
+            "link_target": null,
+            "path": "/etc/sysctl.d/90-tuning.conf"
+          },
+          "key": "vm.swappiness",
+          "runtime": "60"
+        }
+      ],
+      "settings": [
+        {
+          "key": "net.ipv4.ip_forward",
+          "outcome": {
+            "from": {
+              "line": 2,
+              "link_target": null,
+              "path": "/etc/sysctl.d/90-tuning.conf"
+            },
+            "kind": "writes",
+            "runtime": {
+              "kind": "matches"
+            },
+            "value": "1"
+          },
+          "overwritten": []
+        },
+        {
+          "key": "vm.swappiness",
+          "outcome": {
+            "from": {
+              "line": 1,
+              "link_target": null,
+              "path": "/etc/sysctl.d/90-tuning.conf"
+            },
+            "kind": "writes",
+            "runtime": {
+              "kind": "differs",
+              "runtime": "60"
+            },
+            "value": "10"
+          },
+          "overwritten": []
+        }
+      ],
+      "state": "resolved"
+    },
+    "files": [
+      {
+        "body": {
+          "kind": "read",
+          "link_target": null
+        },
+        "config_path": "/etc/sysctl.d/90-tuning.conf",
+        "dir": "etc",
+        "path": "/etc/sysctl.d/90-tuning.conf"
+      }
+    ],
+    "not_carried": [],
+    "state": "host",
+    "tuned_active": null,
+    "vendor_replacements": []
+  },
   "tuned": [],
   "users_groups_decisions": [],
   "package_groups": [

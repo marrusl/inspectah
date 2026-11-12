@@ -282,5 +282,8 @@ expression: value
     ],
     "host_count": 3,
     "informational_variant_count": 0
+  },
+  "sysctl": {
+    "state": "aggregate"
   }
 }
