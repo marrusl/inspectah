@@ -58,7 +58,10 @@ function packageFor(row: NotCarriedRow, include: boolean): RefinedPackage {
   } as RefinedPackage;
 }
 
-function makeView(rows: NotCarriedRow[], packages: RefinedPackage[]): ViewResponse {
+function makeView(
+  rows: NotCarriedRow[],
+  packages: RefinedPackage[],
+): ViewResponse {
   return {
     packages,
     config_files: [],
@@ -165,7 +168,9 @@ describe("MainContent: the Not carried group", () => {
       },
     ]);
     await waitFor(() =>
-      expect(screen.queryByTestId("not-carried-row-firewalld.noarch")).toBeNull(),
+      expect(
+        screen.queryByTestId("not-carried-row-firewalld.noarch"),
+      ).toBeNull(),
     );
     // The known limit: its dependency is still listed.
     expect(
@@ -192,7 +197,10 @@ describe("MainContent: the Not carried group", () => {
       kind: "Op",
       op: "SetInclude",
       target: {
-        item_id: { kind: "Package", key: { name: "firewalld", arch: "noarch" } },
+        item_id: {
+          kind: "Package",
+          key: { name: "firewalld", arch: "noarch" },
+        },
         include: false,
       },
     });

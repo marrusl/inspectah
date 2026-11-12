@@ -76,10 +76,10 @@ export function NotCarriedGroup({
         onToggle={(_e, isExpanded) => setExpanded(isExpanded)}
       >
         <p className="inspectah-not-carried__help">
-          Auto-installed packages that nothing carried in the image needs.
-          The export leaves them out and lists them in the Containerfile's{" "}
-          <code># Not carried</code> block. Including one adds it to the
-          install list and restores its enabled units.
+          Auto-installed packages that nothing carried in the image needs. The
+          export leaves them out and lists them in the Containerfile's{" "}
+          <code># Not carried</code> block. Including one adds it to the install
+          list and restores its enabled units.
         </p>
         <p
           className="inspectah-not-carried__help"

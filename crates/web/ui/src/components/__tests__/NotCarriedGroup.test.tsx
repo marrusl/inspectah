@@ -29,10 +29,7 @@ const ROWS: NotCarriedRow[] = [
   row("atop", "x86_64", []),
 ];
 
-async function renderExpanded(
-  rows: NotCarriedRow[],
-  onInclude = vi.fn(),
-) {
+async function renderExpanded(rows: NotCarriedRow[], onInclude = vi.fn()) {
   const user = userEvent.setup();
   render(<NotCarriedGroup rows={rows} onInclude={onInclude} />);
   await user.click(screen.getByRole("button", { name: /not carried/i }));
