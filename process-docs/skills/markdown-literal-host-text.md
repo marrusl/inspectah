@@ -43,20 +43,19 @@ lines); that is pre-existing, not covered by this helper yet.
 ## The HTML report is not Markdown
 
 The HTML report's sysctl block (`templates/report/kernel.html`) states
-the same sentences, but never through `md_code`: its backticks and
-`\u{..}` escapes would print as text. `report.rs` (`sysctl_runs`) turns
-each copy template into runs of text, where the copy's own backtick spans
-and every filled `{hole}` are `code` runs, and the template prints every
-run through MiniJinja's HTML autoescape, inside `<code>` for a code run.
-Nothing in the block is marked `|safe`; `sysctl_block_has_no_safe_filter`
-guards that.
+the same sentences, but never through `md_code`: its backticks would
+print as text. Every value goes through `md_literal::literal_text`, the
+escaping `md_code` itself calls (control characters other than tab and
+U+2028/U+2029 as `\u{..}`, `(empty)` for ""), with no fence and no pipe
+escape. `report.rs` (`sysctl_runs`) turns each copy template into runs of
+text: the copy's own backtick spans and every filled `{hole}` are `code`
+runs, except `(empty)`, which is plain text as in the audit. The template
+prints every run through MiniJinja's HTML autoescape, inside `<code>` for
+a code run. Nothing in the block is marked `|safe`;
+`sysctl_block_has_no_safe_filter` guards that.
 
-Two consequences for tests and readers:
-
-- MiniJinja's autoescape writes `/` as `&#x2f;` (and `'` as `&#x27;`), so
-  a raw `html.contains("/etc/sysctl.d/..")` never matches. Decode the
-  entities first, as `html_text` in `crates/cli/tests/sysctl_scan_test.rs`
-  does.
-- Control characters are not escaped in HTML: a newline in a file name
-  sits raw inside `<code>` and the browser shows it as a space; other
-  control characters pass through as they are.
+MiniJinja's autoescape writes `/` as `&#x2f;` (and `'` as `&#x27;`), so a
+raw `html.contains("/etc/sysctl.d/..")` never matches, and a negative
+assertion on such a string passes whatever the page holds. Decode the
+entities first, as `html_text` in `crates/cli/tests/sysctl_scan_test.rs`
+does.

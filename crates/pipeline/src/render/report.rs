@@ -20,6 +20,7 @@ use inspectah_core::types::users::UserGroupDecision;
 use minijinja::{Environment, Value, context};
 
 use super::advisory::{advisory_type_str, config_advisories};
+use super::md_literal::literal_text;
 use super::report_data::{SectionState, build_filter_data, script_safe_json, section_state};
 use super::selinux;
 use super::sysctl_report::{
@@ -1339,11 +1340,12 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 // the same `sysctl_report` and the same copy. Each sentence reaches the
 // template as runs of text, and the template prints every run through
 // MiniJinja's HTML autoescape, never marked safe: a run is either copy or
-// a host value, and `code` runs print inside `<code>`.
+// a host value, and `code` runs print inside `<code>`. A value is first
+// escaped as the audit escapes it (`md_literal::literal_text`).
 
 /// What fills a `{hole}` of a sysctl copy template.
 enum Hole<'a> {
-    /// A host value: a code run, escaped by the template.
+    /// A host value: a code run of its literal text, escaped by the template.
     Value(&'a str),
     /// Fixed copy, such as the vendor line's verb.
     Copy(&'a str),
@@ -1352,6 +1354,13 @@ enum Hole<'a> {
 /// One run of sysctl text for the template.
 fn sysctl_run(text: &str, code: bool) -> serde_json::Value {
     serde_json::json!({ "text": text, "code": code })
+}
+
+/// A host value as a run: the audit's literal text (line breaks as
+/// `\u{..}`), in a code run, or the plain `(empty)` the audit prints for
+/// an empty value.
+fn value_run(value: &str) -> serde_json::Value {
+    sysctl_run(&literal_text(value), !value.is_empty())
 }
 
 /// Copy text as runs: the copy's Markdown code spans (`` `x` ``) become
@@ -1383,7 +1392,7 @@ fn sysctl_runs(template: &str, holes: &[(&str, Hole<'_>)]) -> Vec<serde_json::Va
             .map(|(_, fill)| fill)
             .unwrap_or_else(|| panic!("sysctl copy template hole `{name}` has no value"))
         {
-            Hole::Value(value) => runs.push(sysctl_run(value, true)),
+            Hole::Value(value) => runs.push(value_run(value)),
             Hole::Copy(copy) => push_copy_runs(&mut runs, copy),
         }
         rest = &after[close + 1..];
@@ -1549,30 +1558,30 @@ fn sysctl_row(
             from,
             runtime,
         } => (
-            vec![sysctl_run(value, true)],
+            vec![value_run(value)],
             match runtime {
                 RuntimeObservation::Matches => vec![sysctl_run(RUNTIME_SAME, false)],
                 RuntimeObservation::NotExposed => vec![sysctl_run(RUNTIME_NOT_EXPOSED, false)],
-                RuntimeObservation::Differs { runtime } => vec![sysctl_run(runtime, true)],
+                RuntimeObservation::Differs { runtime } => vec![value_run(runtime)],
             },
             from,
         ),
         SysctlOutcome::Cancelled { by, runtime } => (
             vec![sysctl_run(FILE_NOT_WRITTEN, false)],
             match runtime {
-                Some(runtime) => vec![sysctl_run(runtime, true)],
+                Some(runtime) => vec![value_run(runtime)],
                 None => vec![sysctl_run(RUNTIME_NOT_EXPOSED, false)],
             },
             by,
         ),
     };
-    let mut source = vec![sysctl_run(&sysctl_line_ref_text(from), true)];
+    let mut source = vec![value_run(&sysctl_line_ref_text(from))];
     if let Some(target) = line_link_target(snap, from) {
         push_copy_runs(&mut source, " ");
         source.extend(sysctl_runs(LINK_NOTE, &[("target", Hole::Value(&target))]));
     }
     serde_json::json!({
-        "key": [sysctl_run(setting.key.as_str(), true)],
+        "key": [value_run(setting.key.as_str())],
         "file_value": file_value,
         "runtime": runtime,
         "source": source,

@@ -23,12 +23,24 @@
 /// What an empty value renders as.
 const EMPTY: &str = "(empty)";
 
+/// A host value as literal text, the escaping every surface shares:
+/// control characters other than tab, and U+2028 and U+2029, as `\u{..}`
+/// escapes, and `(empty)` for "". No fence and no pipe escape; the HTML
+/// report prints this through MiniJinja's autoescape.
+pub fn literal_text(value: &str) -> String {
+    if value.is_empty() {
+        EMPTY.to_string()
+    } else {
+        escape_line_breaking(value)
+    }
+}
+
 /// Inline code span per spec § 5.5 "Literal text"; `(empty)` for "".
 pub fn md_code(value: &str) -> String {
+    let escaped = literal_text(value);
     if value.is_empty() {
-        return EMPTY.to_string();
+        return escaped;
     }
-    let escaped = escape_line_breaking(value);
     let longest_run = escaped.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest_run + 1);
     // CommonMark strips one space from each end of a span whose content
@@ -110,6 +122,25 @@ mod tests {
         ];
         for (name, value, expected) in cases {
             assert_eq!(md_code(value), expected, "{name}");
+        }
+    }
+
+    /// The escaping every surface shares: line breaks and `(empty)`, with
+    /// no fence and no pipe escape.
+    #[test]
+    fn literal_text_escapes_line_breaks_only() {
+        let cases = [
+            ("plain", "vm.swappiness", "vm.swappiness"),
+            ("empty", "", "(empty)"),
+            ("newline", "a\nb", "a\\u{a}b"),
+            ("line separator", "a\u{2028}b", "a\\u{2028}b"),
+            ("tab kept", "32768\t60999", "32768\t60999"),
+            ("backticks kept", "a```b", "a```b"),
+            ("pipe kept", "a|b", "a|b"),
+            ("html stays as written", "<img src=x>", "<img src=x>"),
+        ];
+        for (name, value, expected) in cases {
+            assert_eq!(literal_text(value), expected, "{name}");
         }
     }
 

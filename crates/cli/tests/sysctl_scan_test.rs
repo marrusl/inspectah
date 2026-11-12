@@ -2436,7 +2436,31 @@ fn case_19_literal_rendering_html() {
         "```",
         CORE_PATTERN,
         "/etc/sysctl.d/50-core.conf:1",
+        // The audit's escape for a line break, not a raw newline the
+        // browser shows as a space.
+        "/etc/sysctl.d/70-new\\u{a}line.conf:1",
     ] {
         assert!(text.contains(value), "`{value}` is in the text: {text}");
     }
+    assert!(
+        !block.contains("70-new\nline.conf"),
+        "no raw newline in a value: {block}"
+    );
+}
+
+/// An empty written value prints `(empty)`, as the audit prints it.
+#[test]
+fn case_19_literal_rendering_empty_value_html() {
+    let report = html(&reload(&scan(
+        SysctlHost::new()
+            .file("/etc/sysctl.d/50-empty.conf", "kernel.foo =\n")
+            .sysctl_a("kernel.foo = \n"),
+    )));
+    let block = html_sysctl_block(&report);
+    assert!(!block.contains("<code></code>"), "{block}");
+    let text = html_text(block);
+    assert!(
+        text.contains("kernel.foo (empty) same /etc/sysctl.d/50-empty.conf:1"),
+        "{text}"
+    );
 }
