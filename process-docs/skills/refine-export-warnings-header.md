@@ -37,7 +37,8 @@ The value is a JSON array of objects, never a bare string:
   block renders, and filters to entries with enabled units. See
   `not-carried-auto-packages.md`.
 - `not_verified_warning`: one failure per included package that claimed
-  a staged upload the export could not prove.
+  a staged upload the export could not prove. Its `name.arch` is
+  sanitized and cut to `NOT_VERIFIED_ID_MAX` (128) bytes.
 
 The notice goes first because there is at most one, so the cap can only
 ever drop failures behind it.
@@ -86,11 +87,25 @@ Entry text can carry snapshot-chosen names, so two layers apply.
 `serde_json::to_string` escapes the C0 range, which closes header
 injection. It passes DEL and non-ASCII through, which `HeaderValue`
 rejects (a 500 rather than a download), so every snapshot-named string
-goes through `sanitize_package_id` first. The notice also bounds each
-name (`NOT_CARRIED_NOTICE_NAME_MAX`) and names at most three, so it has a
-fixed maximum size. `warnings_header_value_escapes_c0_and_leaves_the_rest_to_the_sanitizer`
-pins the division. A new producer that puts a snapshot string in `text`
-sanitizes it the same way.
+goes through `sanitize_package_id` first. `warnings_header_value_escapes_c0_and_leaves_the_rest_to_the_sanitizer`
+pins the division.
+
+## Why the header stays small
+
+The cap bounds the number of entries, not their size, and a snapshot
+chooses how long a package name is. So every snapshot-named string is
+also length-bounded, through `sanitize_bounded` in `session.rs`: a
+failure's id to `NOT_VERIFIED_ID_MAX` (128) bytes, each notice name to
+`NOT_CARRIED_NOTICE_NAME_MAX` (64), and the notice names at most three.
+`not_verified_warning_bounds_a_hostile_package_id` serializes the worst
+case (the notice, nineteen bounded failures and the tail) and asserts it
+under 8 KB, the size at which browsers and proxies may drop a header; it
+measures about 4.2 KB. A new producer that puts a snapshot string in
+`text` uses `sanitize_bounded`, and that test grows a case for it.
+
+The notice-first order is pinned end to end by
+`the_notice_leads_a_failure_from_the_same_export` in
+`crates/cli/tests/not_carried_parity_test.rs`.
 
 ## It is not the record
 

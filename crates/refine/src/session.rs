@@ -4080,13 +4080,37 @@ fn verify_staged_upload(
     })
 }
 
+/// The most bytes the package id in a not-verified failure may take,
+/// after sanitizing. The id is `name.arch` from the snapshot, whose
+/// length an imported snapshot chooses; twenty unbounded ones would pass
+/// the 8 KB a proxy may drop a header at, which is what the header's cap
+/// exists to prevent. Real ids are well under this.
+const NOT_VERIFIED_ID_MAX: usize = 128;
+
 /// The warning an export response carries for a package that claimed a
 /// staged upload the export could not prove.
 fn not_verified_warning(pkg: &PackageEntry) -> ExportWarning {
     ExportWarning::failure(format!(
         "{}: staged RPM not verified, not exported",
-        sanitize_package_id(&canonical_package_id(&pkg.name, &pkg.arch))
+        sanitize_bounded(
+            &canonical_package_id(&pkg.name, &pkg.arch),
+            NOT_VERIFIED_ID_MAX
+        )
     ))
+}
+
+/// [`sanitize_package_id`], then cut to at most `max` bytes, ending in
+/// `...` when cut, for a snapshot-chosen name bound for the warnings
+/// header.
+fn sanitize_bounded(id: &str, max: usize) -> String {
+    const ELLIPSIS: &str = "...";
+    let mut id = sanitize_package_id(id);
+    if id.len() > max {
+        // Sanitized ids are ASCII, so any byte index is a char boundary.
+        id.truncate(max - ELLIPSIS.len());
+        id.push_str(ELLIPSIS);
+    }
+    id
 }
 
 /// How many package names the not-carried notice spells out before it
@@ -4118,16 +4142,7 @@ fn not_carried_notice(owners: &[String]) -> Option<ExportWarning> {
     let shown: Vec<String> = owners
         .iter()
         .take(NOT_CARRIED_NOTICE_NAMES)
-        .map(|name| {
-            let mut name = sanitize_package_id(name);
-            if name.len() > NOT_CARRIED_NOTICE_NAME_MAX {
-                // Sanitized names are ASCII, so any byte index is a char
-                // boundary.
-                name.truncate(NOT_CARRIED_NOTICE_NAME_MAX - "...".len());
-                name.push_str("...");
-            }
-            name
-        })
+        .map(|name| sanitize_bounded(name, NOT_CARRIED_NOTICE_NAME_MAX))
         .collect();
     let rest = owners.len() - shown.len();
     let names = if rest > 0 {
@@ -7805,6 +7820,51 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(sanitize_package_id(input), *want, "{input:?}");
         }
+    }
+
+    /// A not-verified failure bounds a snapshot-chosen package id, and the
+    /// worst a header can then carry, the notice plus nineteen such
+    /// failures and the tail at the cap of twenty, stays under the 8 KB a
+    /// proxy may drop a header at.
+    #[test]
+    fn not_verified_warning_bounds_a_hostile_package_id() {
+        let hostile = format!("evil\r\n\u{7f}\u{20ac}{}", "a".repeat(100_000));
+        let pkg = PackageEntry {
+            name: hostile.clone(),
+            arch: "x86_64".into(),
+            ..Default::default()
+        };
+        let failure = not_verified_warning(&pkg);
+        let suffix = ": staged RPM not verified, not exported";
+        let id = failure
+            .text()
+            .strip_suffix(suffix)
+            .expect("the fixed suffix");
+        assert_eq!(id.len(), NOT_VERIFIED_ID_MAX, "{id}");
+        assert!(id.starts_with("evil____aaa") && id.ends_with("..."), "{id}");
+        assert!(failure.text().is_ascii());
+
+        // An ordinary id is untouched.
+        let pkg = PackageEntry {
+            name: "epel-release".into(),
+            arch: "noarch".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            not_verified_warning(&pkg).text(),
+            "epel-release.noarch: staged RPM not verified, not exported"
+        );
+
+        // The header at its worst, serialized as the route serializes it.
+        let notice = not_carried_notice(&vec![hostile; 10]).expect("owners give a notice");
+        let mut worst = vec![notice];
+        worst.extend(std::iter::repeat_n(failure.clone(), 19));
+        worst.push(ExportWarning::failure(format!(
+            "...and {} more",
+            usize::MAX
+        )));
+        let header = serde_json::to_string(&worst).unwrap();
+        assert!(header.len() < 8192, "{} bytes", header.len());
     }
 
     /// The not-carried notice: absent with no unit owners, singular for
