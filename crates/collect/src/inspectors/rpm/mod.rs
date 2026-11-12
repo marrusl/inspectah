@@ -50,7 +50,10 @@ struct SupplementaryData {
     gpg_keys: Vec<inspectah_core::types::rpm::RepoFile>,
     module_streams: Vec<inspectah_core::types::rpm::EnabledModuleStream>,
     version_locks: Vec<inspectah_core::types::rpm::VersionLockEntry>,
-    rpm_va: Vec<inspectah_core::types::rpm::RpmVaEntry>,
+    /// `rpm -Va`'s report of modified files. `None` when it failed, or
+    /// did not run on this host, so a step that needs "unmodified" can tell
+    /// it from a clean verify.
+    rpm_va: Option<Vec<inspectah_core::types::rpm::RpmVaEntry>>,
     /// One per key a repo file names that could not be collected.
     gpg_key_warnings: Vec<Warning>,
 }
@@ -225,15 +228,18 @@ impl RpmInspector {
         let module_streams = modules::parse_module_streams(exec);
         let version_locks = modules::parse_version_locks(exec);
 
+        // `rpm -Va` exits non-zero whenever it reports a modified file, so
+        // the exit code alone is not failure: failure is a non-zero exit
+        // with nothing reported.
         let rpm_va = if matches!(source, SourceSystem::PackageBased { .. }) {
             let va_result = exec.run("rpm", &["-Va"]);
             if va_result.stdout.is_empty() {
-                Vec::new()
+                va_result.success().then(Vec::new)
             } else {
-                modules::parse_rpm_va(&va_result.stdout)
+                Some(modules::parse_rpm_va(&va_result.stdout))
             }
         } else {
-            Vec::new()
+            None
         };
 
         SupplementaryData {
@@ -443,12 +449,12 @@ impl Inspector for RpmInspector {
 
         // 6. Keys the base image already ships stay out of the export. This
         //    needs the baseline, file ownership and `rpm -Va`; without a
-        //    baseline, or on a host `rpm -Va` does not run on, every key is
-        //    carried, which is the safe answer: a missing key fails the
-        //    build, a redundant copy does not.
+        //    baseline, or on a host `rpm -Va` does not run on or failed on,
+        //    every key is carried, which is the safe answer: a missing key
+        //    fails the build, a redundant copy does not.
         let mut gpg_keys = supp.gpg_keys;
         if let Some(baseline) = ctx.baseline_data
-            && matches!(ctx.source_system, SourceSystem::PackageBased { .. })
+            && let Some(rpm_va) = &supp.rpm_va
         {
             let base_packages: HashSet<&str> = baseline
                 .packages
@@ -458,7 +464,7 @@ impl Inspector for RpmInspector {
             repos::leave_out_keys_the_base_ships(
                 &mut gpg_keys,
                 &file_ownership,
-                &supp.rpm_va,
+                rpm_va,
                 &base_packages,
             );
         }
@@ -513,7 +519,7 @@ impl Inspector for RpmInspector {
             packages_added,
             base_image_only,
             version_changes,
-            rpm_va: supp.rpm_va,
+            rpm_va: supp.rpm_va.unwrap_or_default(),
             repo_files: supp.repo_files,
             gpg_keys,
             module_streams: supp.module_streams,
@@ -4511,8 +4517,15 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
 
     /// A RHEL 10.2 host with `redhat.repo` naming the stock key from two
     /// sections and `epel.repo` naming EPEL's. `owners` is the
-    /// file-ownership output and `rpm_va` the `rpm -Va` output.
-    fn host_with_stock_and_epel_keys(m: MockExecutor, owners: &str, rpm_va: &str) -> MockExecutor {
+    /// file-ownership output, `rpm_va` the `rpm -Va` output and `va_exit`
+    /// its exit code: 1 with output is rpm reporting modified files, 1
+    /// with none is `rpm -Va` failing.
+    fn host_with_stock_and_epel_keys(
+        m: MockExecutor,
+        owners: &str,
+        rpm_va: &str,
+        va_exit: i32,
+    ) -> MockExecutor {
         m.with_file(
             "/etc/yum.repos.d/redhat.repo",
             "[rhel-10-baseos]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\n\
@@ -4536,7 +4549,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             "rpm -Va",
             ExecResult {
                 stdout: rpm_va.into(),
-                exit_code: if rpm_va.is_empty() { 0 } else { 1 },
+                exit_code: va_exit,
                 ..Default::default()
             },
         )
@@ -4560,6 +4573,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
             name: &'static str,
             owners: &'static str,
             rpm_va: &'static str,
+            va_exit: i32,
             baseline: bool,
             /// `shipped_by_base` of the stock key; `None` means carried.
             stock: Option<&'static str>,
@@ -4569,6 +4583,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 name: "stock key, base package, unmodified",
                 owners: OWNED,
                 rpm_va: "",
+                va_exit: 0,
                 baseline: true,
                 stock: Some("redhat-release"),
             },
@@ -4576,6 +4591,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 name: "stock key modified on the host",
                 owners: OWNED,
                 rpm_va: STOCK_MODIFIED,
+                va_exit: 1,
                 baseline: true,
                 stock: None,
             },
@@ -4583,6 +4599,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 name: "stock key owned by no package",
                 owners: UNOWNED,
                 rpm_va: "",
+                va_exit: 0,
                 baseline: true,
                 stock: None,
             },
@@ -4590,7 +4607,16 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
                 name: "no baseline",
                 owners: OWNED,
                 rpm_va: "",
+                va_exit: 0,
                 baseline: false,
+                stock: None,
+            },
+            Case {
+                name: "rpm -Va failed",
+                owners: OWNED,
+                rpm_va: "",
+                va_exit: 1,
+                baseline: true,
                 stock: None,
             },
         ];
@@ -4598,7 +4624,7 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$nosuchvar
         let base = base_with_redhat_release();
         for case in &cases {
             let (rpm, warnings) = inspect_gpg_host(
-                |m| host_with_stock_and_epel_keys(m, case.owners, case.rpm_va),
+                |m| host_with_stock_and_epel_keys(m, case.owners, case.rpm_va, case.va_exit),
                 case.baseline.then_some(&base),
             );
             assert!(warnings.is_empty(), "{}: {warnings:?}", case.name);
