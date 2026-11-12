@@ -19,6 +19,9 @@
 //!   `# N config file(s) captured` line, for a host whose only config
 //!   finding is an RPM-owned file the operator changed.
 //!
+//! Two tests reuse the fixture for the refine export's not-carried
+//! notice, which names the not-carried unit owners and no pulled-in one.
+//!
 //! The last tests reuse the fixture for safety checks rather than parity
 //! claims: a config whose content the collector could not capture is
 //! staged by neither path, nor by `inspectah aggregate` or a refine export
@@ -72,8 +75,10 @@ use inspectah_pipeline::render::not_carried::{
 };
 use inspectah_pipeline::render::tarball::create_tarball;
 use inspectah_pipeline::validate::validate;
+use inspectah_refine::export_warning::{ExportWarning, ExportWarningKind};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
+use inspectah_refine::types::{ItemId, RefinementOp};
 
 // ── The fixture ──────────────────────────────────────────────────────
 
@@ -748,6 +753,76 @@ fn out_of_class_packages_are_in_neither_not_carried_list() {
                 "{label}: {name} is outside the class but listed:\n{lines:#?}"
             );
         }
+    }
+}
+
+// ── The export's not-carried notice ──────────────────────────────────
+
+/// The warnings an export of `session` returns.
+fn export_warnings(session: &RefineSession) -> Vec<ExportWarning> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&dir.path().join("export.tar.gz"))
+        .expect("the export writes")
+}
+
+/// The fixture as refine opens it: as collected, and as the scan tarball
+/// carries it.
+fn refine_snapshots() -> [(&'static str, InspectionSnapshot); 2] {
+    let collected = collected(&host_mock());
+    let mut scanned = collected.clone();
+    apply_scan_package_defaults(&mut scanned);
+    [("collected", collected), ("scan tarball", scanned)]
+}
+
+/// One notice names the not-carried packages that own an enabled unit,
+/// in the `# Not carried` block's order. `httpd-core` owns the enabled
+/// `httpd.service` too, but the leaf pulls it in, so it is carried and
+/// not named; `python3-firewall` is not carried but owns no unit.
+#[test]
+fn the_export_notices_not_carried_packages_that_own_an_enabled_unit() {
+    for (label, snapshot) in refine_snapshots() {
+        let warnings = export_warnings(&RefineSession::new(snapshot));
+        assert_eq!(
+            warnings,
+            vec![ExportWarning::notice(
+                "2 packages that own a unit enabled on the source host are not \
+                 carried: firewalld, rhc. See the Not carried table in \
+                 audit-report.md and the # Not carried block in the Containerfile."
+            )],
+            "{label}"
+        );
+        let text = warnings[0].text();
+        assert!(!text.contains("httpd"), "{label}: {text}");
+        assert!(!text.contains("python3-firewall"), "{label}: {text}");
+    }
+}
+
+/// Including the unit owners carries them, and the notice goes with them.
+#[test]
+fn no_notice_once_the_unit_owners_are_included() {
+    for (label, snapshot) in refine_snapshots() {
+        let mut session = RefineSession::new(snapshot);
+        for (name, arch) in [("firewalld", "noarch"), ("rhc", "x86_64")] {
+            session
+                .apply(RefinementOp::SetInclude {
+                    item_id: ItemId::Package {
+                        name: name.into(),
+                        arch: arch.into(),
+                    },
+                    include: true,
+                })
+                .unwrap_or_else(|e| panic!("{label}: include {name}: {e}"));
+        }
+        let warnings = export_warnings(&session);
+        assert!(
+            warnings
+                .iter()
+                .all(|w| w.kind() != ExportWarningKind::Notice),
+            "{label}: {warnings:?}"
+        );
     }
 }
 

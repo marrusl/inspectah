@@ -14,6 +14,7 @@ use inspectah_pipeline::build::extract::{
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
+use inspectah_pipeline::render::not_carried::{NotCarriedPackage, not_carried_packages};
 use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
@@ -4088,6 +4089,62 @@ fn not_verified_warning(pkg: &PackageEntry) -> ExportWarning {
     ))
 }
 
+/// How many package names the not-carried notice spells out before it
+/// counts the rest. Three keeps the notice to one line in the Export
+/// dialog and names every unit owner measured on the RHEL 10.2
+/// validation host (`cronie`, `firewalld`, `rsyslog`) and all but one of
+/// the four on RHEL 9.8.
+const NOT_CARRIED_NOTICE_NAMES: usize = 3;
+
+/// The most bytes one name in the not-carried notice may take, after
+/// sanitizing. The snapshot names these packages, so without a bound
+/// their length is the snapshot's choice, and the notice travels in a
+/// response header.
+const NOT_CARRIED_NOTICE_NAME_MAX: usize = 64;
+
+/// The one notice an export carries when it leaves out not-carried
+/// packages that own a unit enabled on the source host, or `None` when
+/// it leaves out none.
+///
+/// `owners` are those packages' display names, in the `# Not carried`
+/// block's order, which puts unit owners first. The first
+/// [`NOT_CARRIED_NOTICE_NAMES`] are named and the rest counted. Each name
+/// is sanitized like a package id in any other export warning, then
+/// bounded, so the whole entry is printable ASCII of bounded size.
+fn not_carried_notice(owners: &[String]) -> Option<ExportWarning> {
+    if owners.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = owners
+        .iter()
+        .take(NOT_CARRIED_NOTICE_NAMES)
+        .map(|name| {
+            let mut name = sanitize_package_id(name);
+            if name.len() > NOT_CARRIED_NOTICE_NAME_MAX {
+                // Sanitized names are ASCII, so any byte index is a char
+                // boundary.
+                name.truncate(NOT_CARRIED_NOTICE_NAME_MAX - "...".len());
+                name.push_str("...");
+            }
+            name
+        })
+        .collect();
+    let rest = owners.len() - shown.len();
+    let names = if rest > 0 {
+        format!("{} and {rest} more", shown.join(", "))
+    } else {
+        shown.join(", ")
+    };
+    let lead = match owners.len() {
+        1 => "1 package that owns a unit enabled on the source host is not carried".to_string(),
+        n => format!("{n} packages that own a unit enabled on the source host are not carried"),
+    };
+    Some(ExportWarning::notice(format!(
+        "{lead}: {names}. See the Not carried table in audit-report.md \
+         and the # Not carried block in the Containerfile."
+    )))
+}
+
 /// Reduce a package id to the bytes a staged filename may carry, mapping
 /// everything else to `_`.
 ///
@@ -4254,11 +4311,13 @@ pub fn should_include_in_containerfile(disposition: &FindingKind) -> bool {
 /// prepared, not a path that can still resolve somewhere else; `None`
 /// means no directory has been prepared and so nothing can be proved.
 ///
-/// Returns one [`ExportWarning::failure`] per package that claimed a
-/// staged upload the export could not prove. Those packages are demoted,
-/// not fatal: the export succeeds, the Containerfile carries a FIXME
-/// instead of a `COPY`, and nothing is written for them under
-/// `repoless-packages/`.
+/// Returns the export's warnings. First, at most one
+/// [`ExportWarning::notice`] when the export leaves out not-carried
+/// packages that own a unit enabled on the source host. Then one
+/// [`ExportWarning::failure`] per package that claimed a staged upload
+/// the export could not prove. Those packages are demoted, not fatal: the
+/// export succeeds, the Containerfile carries a FIXME instead of a
+/// `COPY`, and nothing is written for them under `repoless-packages/`.
 /// The arguments `render_refine_export` needs, captured from a session by
 /// [`RefineSession::export_plan`] so that every caller renders from the
 /// same assembly. Owned throughout, so the HTTP route can build it under
@@ -4363,8 +4422,21 @@ pub fn render_refine_export(
     // verified set the Containerfile renders from. A package whose upload
     // cannot be proved is demoted to a FIXME and a warning rather than
     // exported.
-    let (proved, warnings) = prove_staged_uploads(upload_dir_canon, snap);
+    let (proved, mut warnings) = prove_staged_uploads(upload_dir_canon, snap);
     let verified = verified_uploads(&proved);
+
+    // The not-carried notice reads the same list the Containerfile's
+    // `# Not carried` block and the audit table render, so all three name
+    // the same packages. It leads the warnings: there is at most one, and
+    // the header's cap then never drops it behind a run of failures.
+    let unit_owners: Vec<String> = not_carried_packages(snap)
+        .iter()
+        .filter(|p| !p.enabled_units.is_empty())
+        .map(NotCarriedPackage::display_name)
+        .collect();
+    if let Some(notice) = not_carried_notice(&unit_owners) {
+        warnings.insert(0, notice);
+    }
 
     // 2e. Extract payload files from source tarball for unmanaged files
     //     and repo-less RPMs. These were bundled at scan time and must be
@@ -7733,6 +7805,48 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(sanitize_package_id(input), *want, "{input:?}");
         }
+    }
+
+    /// The not-carried notice: absent with no unit owners, singular for
+    /// one, three names and a count past three, and a hostile name
+    /// sanitized and bounded so the entry stays a valid header value.
+    #[test]
+    fn not_carried_notice_names_owners_and_bounds_its_text() {
+        use crate::export_warning::ExportWarningKind;
+        const TAIL: &str = ". See the Not carried table in audit-report.md \
+                            and the # Not carried block in the Containerfile.";
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(not_carried_notice(&[]), None);
+
+        let cases: &[(&[&str], &str)] = &[
+            (
+                &["firewalld"],
+                "1 package that owns a unit enabled on the source host is not carried: firewalld",
+            ),
+            (
+                &["cronie", "firewalld", "rsyslog"],
+                "3 packages that own a unit enabled on the source host are not carried: \
+                 cronie, firewalld, rsyslog",
+            ),
+            (
+                &["cronie", "firewalld", "insights-client", "rsyslog", "rhc"],
+                "5 packages that own a unit enabled on the source host are not carried: \
+                 cronie, firewalld, insights-client and 2 more",
+            ),
+        ];
+        for (owners, lead) in cases {
+            let notice = not_carried_notice(&names(owners)).expect("owners give a notice");
+            assert_eq!(notice.kind(), ExportWarningKind::Notice);
+            assert_eq!(notice.text(), format!("{lead}{TAIL}"), "{owners:?}");
+        }
+
+        let hostile = format!("evil\r\nX-Evil: 1\u{7f}\u{20ac}{}", "a".repeat(10_000));
+        let notice = not_carried_notice(&[hostile.clone(), hostile.clone(), hostile]).unwrap();
+        let text = notice.text();
+        assert!(text.contains("evil__X-Evil__1__aaa"), "{text}");
+        assert!(text.len() < 512, "{} bytes", text.len());
+        assert!(text.is_ascii() && !text.chars().any(|c| c.is_ascii_control()));
     }
 
     /// Each refusal [`verify_staged_upload`] can make, paired with an
