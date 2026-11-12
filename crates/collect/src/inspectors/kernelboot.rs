@@ -206,12 +206,14 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
 /// derived from the section by `inspectah-core`.
 ///
 /// A directory that does not exist is normal. Any other failure to list a
-/// directory, to read an entry, or to run `sysctl -a` is an error naming
-/// the cause.
+/// directory, partway through included, to read an entry, or to run
+/// `sysctl -a` is an error naming the cause.
 fn collect_sysctl_section(exec: &dyn Executor) -> Result<SysctlSection, String> {
     let mut files = Vec::new();
     for dir in SysctlDir::ALL {
-        let entries = match exec.read_dir(Path::new(dir.path())) {
+        // Strict: one entry missing from the listing could be the file
+        // that sets, overrides or cancels a key.
+        let entries = match exec.read_dir_strict(Path::new(dir.path())) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(format!("sysctl: cannot list {}: {e}", dir.path())),

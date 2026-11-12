@@ -29,6 +29,11 @@ pub struct MockExecutor {
     /// `read_file` is called. Lets tests distinguish PermissionDenied
     /// from NotFound without registering actual file content.
     file_errors: HashMap<String, io::ErrorKind>,
+    /// Directories whose listing yields the registered entries and then
+    /// fails with a specific error kind partway, as a real directory
+    /// iterator can. `read_dir` drops the failure, as the real one does;
+    /// `read_dir_strict` returns it.
+    dir_iteration_errors: HashMap<String, io::ErrorKind>,
     /// Paths whose `read_link` fails with a specific error kind, other
     /// than the `InvalidInput` (`EINVAL`) a path that is not a link gives.
     link_errors: HashMap<String, io::ErrorKind>,
@@ -51,6 +56,7 @@ impl MockExecutor {
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
             file_errors: HashMap::new(),
+            dir_iteration_errors: HashMap::new(),
             link_errors: HashMap::new(),
             prefix_commands: HashMap::new(),
             command_log: Mutex::new(Vec::new()),
@@ -125,6 +131,17 @@ impl MockExecutor {
     /// simulate PermissionDenied on files like /etc/shadow.
     pub fn with_file_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
         self.file_errors.insert(path.to_string(), error_kind);
+        self
+    }
+
+    /// Register a directory whose listing yields its registered entries
+    /// (see [`with_dir`]) and then fails with `error_kind`, as a real
+    /// directory iterator can after a successful open.
+    ///
+    /// [`with_dir`]: MockExecutor::with_dir
+    pub fn with_dir_iteration_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
+        self.dir_iteration_errors
+            .insert(path.to_string(), error_kind);
         self
     }
 
@@ -229,6 +246,14 @@ impl Executor for MockExecutor {
             .get(key)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+    }
+
+    fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>> {
+        let entries = self.read_dir(path)?;
+        match self.dir_iteration_errors.get(path.to_str().unwrap_or("")) {
+            Some(&error_kind) => Err(io::Error::new(error_kind, path.display().to_string())),
+            None => Ok(entries),
+        }
     }
 
     /// As `readlink(2)`: every component but the last is resolved through
@@ -389,6 +414,25 @@ mod tests {
     fn test_mock_read_dir_not_found() {
         let mock = MockExecutor::new();
         assert!(mock.read_dir(Path::new("/nonexistent")).is_err());
+    }
+
+    #[test]
+    fn test_mock_read_dir_iteration_error() {
+        let mock = MockExecutor::new()
+            .with_dir("/run/sysctl.d", vec!["50-early.conf"])
+            .with_dir_iteration_error("/run/sysctl.d", io::ErrorKind::Other);
+        let dir = Path::new("/run/sysctl.d");
+        assert_eq!(mock.read_dir(dir).unwrap(), ["50-early.conf"]);
+        assert_eq!(
+            mock.read_dir_strict(dir).unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
+        assert_eq!(
+            mock.read_dir_strict(Path::new("/missing"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

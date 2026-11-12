@@ -69,6 +69,7 @@ pub struct SysctlHost {
     dirs: BTreeMap<String, BTreeSet<String>>,
     dir_errors: BTreeMap<String, std::io::ErrorKind>,
     link_errors: BTreeMap<String, std::io::ErrorKind>,
+    dir_iteration_errors: BTreeMap<String, std::io::ErrorKind>,
     /// Owned paths by package, for the ownership query.
     rpm_owned: BTreeMap<String, Vec<String>>,
     /// `(flags, path)` rows of `rpm -Va`.
@@ -152,6 +153,13 @@ impl SysctlHost {
         self
     }
 
+    /// Listing `dir` yields its entries and then fails with `kind`, as a
+    /// real directory iterator can after the directory opened.
+    pub fn dir_iteration_error(mut self, dir: &str, kind: std::io::ErrorKind) -> Self {
+        self.dir_iteration_errors.insert(dir.into(), kind);
+        self
+    }
+
     /// Reading `path` as a link fails with `kind`, an error other than the
     /// not-a-link answer a regular file gives.
     pub fn link_error(mut self, path: &str, kind: std::io::ErrorKind) -> Self {
@@ -196,6 +204,9 @@ impl SysctlHost {
         }
         for (path, content) in &self.files {
             mock = mock.with_file(path, content);
+        }
+        for (dir, kind) in &self.dir_iteration_errors {
+            mock = mock.with_dir_iteration_error(dir, *kind);
         }
         for (path, kind) in &self.link_errors {
             mock = mock.with_link_error(path, *kind);

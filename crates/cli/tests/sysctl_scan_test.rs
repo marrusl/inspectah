@@ -1004,6 +1004,14 @@ fn case_16_collection_failures_snapshot() {
             "sysctl: cannot read /etc/sysctl.d/90-x.conf:",
         ),
         (
+            "/run/sysctl.d fails partway through its listing",
+            failure_host()
+                .sysctl_a("vm.swappiness = 10\n")
+                .file("/run/sysctl.d/50-early.conf", "vm.swappiness = 10\n")
+                .dir_iteration_error("/run/sysctl.d", std::io::ErrorKind::Other),
+            "sysctl: cannot list /run/sysctl.d:",
+        ),
+        (
             "a link check that fails other than as not-a-link",
             failure_host()
                 .sysctl_a("vm.swappiness = 10\n")

@@ -394,6 +394,12 @@ impl Executor for RealExecutor {
             .collect()
     }
 
+    fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>> {
+        std::fs::read_dir(path)?
+            .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect()
+    }
+
     fn read_link(&self, path: &Path) -> io::Result<String> {
         let target = std::fs::read_link(path)?;
         Ok(target.to_string_lossy().into_owned())
@@ -439,6 +445,18 @@ mod tests {
         let exec = RealExecutor::new();
         let result = exec.read_dir(std::path::Path::new("/nonexistent_dir_abc123"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_real_executor_read_dir_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.conf"), "").unwrap();
+        let exec = RealExecutor::new();
+        assert_eq!(exec.read_dir_strict(dir.path()).unwrap(), ["a.conf"]);
+        let missing = exec
+            .read_dir_strict(&dir.path().join("missing"))
+            .unwrap_err();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

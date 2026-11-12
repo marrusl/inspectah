@@ -1551,6 +1551,13 @@ VARIANT_ID="workstation"
             ))
         }
 
+        fn read_dir_strict(&self, _path: &std::path::Path) -> Result<Vec<String>, std::io::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            ))
+        }
+
         fn read_link(&self, _path: &std::path::Path) -> Result<String, std::io::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,

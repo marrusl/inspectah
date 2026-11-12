@@ -68,7 +68,17 @@ knows where the entry resolves (the sysctl reader) treats only
 `InvalidInput` as "not a link"; use `with_link_error()` to inject any
 other failure. Callers that only ask `is_ok()` are unaffected.
 
-**7. The RPM ownership query key.** The RPM inspector lists owned paths
+**7. `read_dir` returns a partial listing.** Both executors' `read_dir`
+drop an entry the directory iterator fails on and return the rest,
+which inspectors that tolerate a missing file rely on. A caller whose
+answer is wrong when one entry is missing (the sysctl reader: the
+missing file could set or cancel any key) uses `read_dir_strict`, which
+fails instead. `with_dir_iteration_error()` makes a mock directory list
+its entries and then fail: `read_dir` hides it, `read_dir_strict`
+returns it. A `with_dir_error()` test does not cover this case: it
+fails the open, which both methods already report.
+
+**8. The RPM ownership query key.** The RPM inspector lists owned paths
 with `rpm -qa --queryformat @@%{NAME}\n[%{FILENAMES}\n]` (the `\n` is
 the two characters backslash and `n`). A mock registering an older
 format gets exit 127, and the only symptom is the warning "rpm file

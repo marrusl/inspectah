@@ -50,6 +50,15 @@ pub trait Executor: Send + Sync {
     fn read_file(&self, path: &Path) -> io::Result<String>;
     fn file_exists(&self, path: &Path) -> bool;
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>>;
+
+    /// Every entry name in `path`, or an error when the directory cannot
+    /// be opened or any entry cannot be read. Unlike [`read_dir`], which
+    /// returns the entries it could read, this never returns a partial
+    /// listing: for a caller whose result is wrong when one entry is
+    /// missing.
+    ///
+    /// [`read_dir`]: Executor::read_dir
+    fn read_dir_strict(&self, path: &Path) -> io::Result<Vec<String>>;
     fn read_link(&self, path: &Path) -> io::Result<String>;
     fn host_root(&self) -> &Path;
 
