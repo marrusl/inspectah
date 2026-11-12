@@ -23,6 +23,7 @@ use inspectah_core::types::sysctl::{
     SysctlSetting, UnknownInput, VendorReplacement,
 };
 use inspectah_pipeline::render::audit::render_audit;
+use inspectah_pipeline::render::configtree::PathError;
 use inspectah_pipeline::render::report::render_report;
 use inspectah_pipeline::render::sysctl_report::AGGREGATE_LINE;
 use inspectah_pipeline::render::sysctl_report::{
@@ -2271,6 +2272,92 @@ fn case_19_literal_rendering_backslash_before_pipe_audit() {
             "{backslashes} backslash(es) before a pipe"
         );
     }
+}
+
+// ── Case 19, a path the export refuses ───────────────────────────────
+
+/// The case 19 newline file, included, with a same-named vendor file.
+fn refused_path_host() -> SysctlHost {
+    SysctlHost::new()
+        .file(&refused_path(), "vm.swappiness = 10\n")
+        .file(
+            &format!("{}/{NEWLINE_NAME}", SysctlDir::UsrLib.path()),
+            "vm.swappiness = 30\n",
+        )
+        .sysctl_a("vm.swappiness = 10\n")
+}
+
+/// The `/etc` path of the case 19 newline file.
+fn refused_path() -> String {
+    path(SysctlDir::Etc, NEWLINE_NAME)
+}
+
+/// Why the exporter refuses the newline file's path.
+fn refusal() -> String {
+    PathError::LineBreakOrControl.to_string()
+}
+
+/// The wording a vendor line uses only when the replacement reaches the
+/// target.
+const REACHES_THE_TARGET: &str = "on the target as well";
+
+#[test]
+fn case_19_refused_path_export() {
+    let snap = reload(&scan(refused_path_host()));
+    assert!(
+        config_entry(&snap, &refused_path())
+            .disposition
+            .is_included(),
+        "the config entry is included"
+    );
+    let scan_tree = render_export(&snap);
+    let refine_tree = export_session(&session(&snap));
+    for (surface, tree) in [("scan", &scan_tree), ("refine", &refine_tree)] {
+        let paths = tree_paths(tree.path());
+        assert!(
+            !paths.iter().any(|p| p.contains("70-new")),
+            "{surface}: the export refuses the path, so lacks the file: {paths:?}"
+        );
+    }
+}
+
+#[test]
+fn case_19_refused_path_audit() {
+    let md = audit(&reload(&scan(refused_path_host())));
+    let block = sysctl_block(&md);
+    assert!(
+        !block.iter().any(|line| line.contains(REACHES_THE_TARGET)),
+        "no line claims the replacement reaches the target: {block:#?}"
+    );
+    let refusal = refusal();
+    assert!(
+        block.iter().any(|line| line.contains(&refusal)),
+        "the not-carried line names the refusal: {block:#?}"
+    );
+}
+
+#[test]
+fn case_19_refused_path_html() {
+    let text = html_text(html_sysctl_block(&html(&reload(
+        &scan(refused_path_host()),
+    ))));
+    assert!(!text.contains(REACHES_THE_TARGET), "{text}");
+    assert!(text.contains(&refusal()), "{text}");
+}
+
+#[test]
+fn case_19_refused_path_view() {
+    let sysctl = sysctl_view(&session(&reload(&scan(refused_path_host()))));
+    let refused = serde_json::json!({
+        "kind": "refused",
+        "config_path": refused_path(),
+        "reason": refusal(),
+    });
+    assert_eq!(
+        sysctl["not_carried"],
+        serde_json::json!([{"path": refused_path(), "reason": refused}])
+    );
+    assert_eq!(sysctl["vendor_replacements"][0]["carriage"], refused);
 }
 
 // ── HTML report ──────────────────────────────────────────────────────

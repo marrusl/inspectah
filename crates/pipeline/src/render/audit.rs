@@ -22,12 +22,12 @@ use super::sysctl_report::{
     AS_WRITTEN_UNPARSED_LINE, AsWritten, CarriageState, DRIFT_INTRO, DRIFT_LABEL, DRIFT_LINE,
     FILE_NOT_WRITTEN, LINK_NOTE, NOT_CARRIED_ADVISORY_LINE, NOT_CARRIED_ADVISORY_VIA_LINE,
     NOT_CARRIED_EXCLUDED_LINE, NOT_CARRIED_EXCLUDED_VIA_LINE, NOT_CARRIED_LABEL,
-    NOT_CARRIED_NO_CONFIG_ENTRY_LINE, NOT_CARRIED_RUNTIME_DIR_LINE, NOT_CARRIED_USR_LOCAL_LIB_LINE,
-    NotCarried, OUTSIDE_LINK_LINE, REDACTED_FILE_LINE, REDACTED_RUNTIME_LINE, RUNTIME_NOT_EXPOSED,
-    RUNTIME_SAME, SysctlReport, TRUST_LINE, TUNED_ACTIVE_LINE, UNAVAILABLE_LINE, UNAVAILABLE_TAIL,
-    UNKNOWN_INTRO, VENDOR_CARRIED_LINE, VENDOR_LABEL, VENDOR_NO_CONFIG_ENTRY_LINE,
-    VENDOR_NOT_CARRIED_LINE, VENDOR_VERB_DISABLES, VENDOR_VERB_REPLACES, VendorLine, fill,
-    line_link_target, sysctl_report,
+    NOT_CARRIED_NO_CONFIG_ENTRY_LINE, NOT_CARRIED_REFUSED_LINE, NOT_CARRIED_REFUSED_VIA_LINE,
+    NOT_CARRIED_RUNTIME_DIR_LINE, NOT_CARRIED_USR_LOCAL_LIB_LINE, NotCarried, OUTSIDE_LINK_LINE,
+    REDACTED_FILE_LINE, REDACTED_RUNTIME_LINE, RUNTIME_NOT_EXPOSED, RUNTIME_SAME, SysctlReport,
+    TRUST_LINE, TUNED_ACTIVE_LINE, UNAVAILABLE_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
+    VENDOR_CARRIED_LINE, VENDOR_LABEL, VENDOR_NO_CONFIG_ENTRY_LINE, VENDOR_NOT_CARRIED_LINE,
+    VENDOR_VERB_DISABLES, VENDOR_VERB_REPLACES, VendorLine, fill, line_link_target, sysctl_report,
 };
 use crate::section_group::SectionGroup;
 
@@ -847,7 +847,9 @@ fn vendor_line_text(line: &VendorLine) -> String {
     };
     let template = match line.carriage {
         CarriageState::Carried { .. } => VENDOR_CARRIED_LINE,
-        CarriageState::Excluded { .. } | CarriageState::Advisory { .. } => VENDOR_NOT_CARRIED_LINE,
+        CarriageState::Excluded { .. }
+        | CarriageState::Advisory { .. }
+        | CarriageState::Refused { .. } => VENDOR_NOT_CARRIED_LINE,
         CarriageState::NoConfigEntry => VENDOR_NO_CONFIG_ENTRY_LINE,
     };
     fill(
@@ -868,10 +870,22 @@ fn vendor_line_text(line: &VendorLine) -> String {
 
 /// Item 5: a file the image does not get, with the reason.
 fn not_carried_text(file: &NotCarried) -> String {
+    let mut reason = None;
     let (template, path, config_path) = match file {
         NotCarried::RuntimeDir { path } => (NOT_CARRIED_RUNTIME_DIR_LINE, path, None),
         NotCarried::UsrLocalLib { path } => (NOT_CARRIED_USR_LOCAL_LIB_LINE, path, None),
         NotCarried::Etc { path, carriage } => match carriage {
+            CarriageState::Refused {
+                config_path,
+                reason: refusal,
+            } => {
+                reason = Some(refusal.to_string());
+                if config_path == path {
+                    (NOT_CARRIED_REFUSED_LINE, path, None)
+                } else {
+                    (NOT_CARRIED_REFUSED_VIA_LINE, path, Some(config_path))
+                }
+            }
             CarriageState::Excluded { config_path } if config_path == path => {
                 (NOT_CARRIED_EXCLUDED_LINE, path, None)
             }
@@ -896,6 +910,10 @@ fn not_carried_text(file: &NotCarried) -> String {
     let mut values = vec![("path", path.as_str())];
     if let Some(config_path) = &config_path {
         values.push(("config_path", config_path.as_str()));
+    }
+    // The refusal is the exporter's own fixed text, not host text.
+    if let Some(reason) = &reason {
+        values.push(("reason", reason.as_str()));
     }
     fill(template, &values)
 }

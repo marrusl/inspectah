@@ -387,9 +387,21 @@ pub enum ReplacementAction {
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CarriageDto {
-    Carried { config_path: String },
-    Excluded { config_path: String },
-    Advisory { config_path: String },
+    Carried {
+        config_path: String,
+    },
+    /// Included, but the export refuses `config_path`; `reason` is the
+    /// exporter's refusal text.
+    Refused {
+        config_path: String,
+        reason: String,
+    },
+    Excluded {
+        config_path: String,
+    },
+    Advisory {
+        config_path: String,
+    },
     NoConfigEntry,
 }
 
@@ -409,6 +421,12 @@ pub enum NotCarriedReason {
     /// A file in `/usr/local/lib/sysctl.d`, carried only on the
     /// unmanaged-file path.
     UsrLocalLib,
+    /// Included, but the export refuses `config_path`; `reason` is the
+    /// exporter's refusal text.
+    Refused {
+        config_path: String,
+        reason: String,
+    },
     Excluded {
         config_path: String,
     },

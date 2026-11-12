@@ -28,12 +28,12 @@ use super::sysctl_report::{
     AS_WRITTEN_UNPARSED_LINE, AsWritten, CarriageState, DRIFT_INTRO, DRIFT_LABEL, DRIFT_LINE,
     FILE_NOT_WRITTEN, LINK_NOTE, NOT_CARRIED_ADVISORY_LINE, NOT_CARRIED_ADVISORY_VIA_LINE,
     NOT_CARRIED_EXCLUDED_LINE, NOT_CARRIED_EXCLUDED_VIA_LINE, NOT_CARRIED_LABEL,
-    NOT_CARRIED_NO_CONFIG_ENTRY_LINE, NOT_CARRIED_RUNTIME_DIR_LINE, NOT_CARRIED_USR_LOCAL_LIB_LINE,
-    NotCarried, OUTSIDE_LINK_LINE, REDACTED_FILE_LINE, REDACTED_RUNTIME_LINE, RUNTIME_NOT_EXPOSED,
-    RUNTIME_SAME, SysctlHostReport, SysctlReport, TRUST_LINE, TUNED_ACTIVE_LINE, UNAVAILABLE_LINE,
-    UNAVAILABLE_TAIL, UNKNOWN_INTRO, VENDOR_CARRIED_LINE, VENDOR_LABEL,
-    VENDOR_NO_CONFIG_ENTRY_LINE, VENDOR_NOT_CARRIED_LINE, VENDOR_VERB_DISABLES,
-    VENDOR_VERB_REPLACES, line_link_target, sysctl_report,
+    NOT_CARRIED_NO_CONFIG_ENTRY_LINE, NOT_CARRIED_REFUSED_LINE, NOT_CARRIED_REFUSED_VIA_LINE,
+    NOT_CARRIED_RUNTIME_DIR_LINE, NOT_CARRIED_USR_LOCAL_LIB_LINE, NotCarried, OUTSIDE_LINK_LINE,
+    REDACTED_FILE_LINE, REDACTED_RUNTIME_LINE, RUNTIME_NOT_EXPOSED, RUNTIME_SAME, SysctlHostReport,
+    SysctlReport, TRUST_LINE, TUNED_ACTIVE_LINE, UNAVAILABLE_LINE, UNAVAILABLE_TAIL, UNKNOWN_INTRO,
+    VENDOR_CARRIED_LINE, VENDOR_LABEL, VENDOR_NO_CONFIG_ENTRY_LINE, VENDOR_NOT_CARRIED_LINE,
+    VENDOR_VERB_DISABLES, VENDOR_VERB_REPLACES, line_link_target, sysctl_report,
 };
 
 /// Advisory discriminant for synthesized orphan full-shadow entries. Not an
@@ -1525,9 +1525,9 @@ fn sysctl_host_context(snap: &InspectionSnapshot, host: &SysctlHostReport) -> se
             };
             let template = match line.carriage {
                 CarriageState::Carried { .. } => VENDOR_CARRIED_LINE,
-                CarriageState::Excluded { .. } | CarriageState::Advisory { .. } => {
-                    VENDOR_NOT_CARRIED_LINE
-                }
+                CarriageState::Excluded { .. }
+                | CarriageState::Advisory { .. }
+                | CarriageState::Refused { .. } => VENDOR_NOT_CARRIED_LINE,
                 CarriageState::NoConfigEntry => VENDOR_NO_CONFIG_ENTRY_LINE,
             };
             sysctl_runs(
@@ -1610,10 +1610,22 @@ fn unknown_input_runs(input: &UnknownInput) -> Vec<serde_json::Value> {
 /// Item 5: a file the image does not get, with the reason, worded as the
 /// audit words it.
 fn not_carried_runs(file: &NotCarried) -> Vec<serde_json::Value> {
+    let mut reason = None;
     let (template, path, config_path) = match file {
         NotCarried::RuntimeDir { path } => (NOT_CARRIED_RUNTIME_DIR_LINE, path, None),
         NotCarried::UsrLocalLib { path } => (NOT_CARRIED_USR_LOCAL_LIB_LINE, path, None),
         NotCarried::Etc { path, carriage } => match carriage {
+            CarriageState::Refused {
+                config_path,
+                reason: refusal,
+            } => {
+                reason = Some(refusal.to_string());
+                if config_path == path {
+                    (NOT_CARRIED_REFUSED_LINE, path, None)
+                } else {
+                    (NOT_CARRIED_REFUSED_VIA_LINE, path, Some(config_path))
+                }
+            }
             CarriageState::Excluded { config_path } if config_path == path => {
                 (NOT_CARRIED_EXCLUDED_LINE, path, None)
             }
@@ -1636,6 +1648,10 @@ fn not_carried_runs(file: &NotCarried) -> Vec<serde_json::Value> {
     let mut holes = vec![("path", Hole::Value(path))];
     if let Some(config_path) = config_path {
         holes.push(("config_path", Hole::Value(config_path)));
+    }
+    // The refusal is the exporter's own fixed text, not host text.
+    if let Some(reason) = &reason {
+        holes.push(("reason", Hole::Copy(reason)));
     }
     sysctl_runs(template, &holes)
 }

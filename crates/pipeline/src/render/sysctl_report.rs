@@ -10,6 +10,7 @@
 //!
 //! The spec's fixed copy is held here as constants, verbatim.
 
+use super::configtree::{PathError, validate_path};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::sysctl::{
@@ -74,7 +75,8 @@ pub const VENDOR_VERB_REPLACES: &str = "replaces";
 pub const VENDOR_VERB_DISABLES: &str = "disables";
 /// Item 4, the admin file is carried.
 pub const VENDOR_CARRIED_LINE: &str = "{admin} {verb} {vendor} entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy.";
-/// Item 4, the admin file's config entry is excluded or advisory.
+/// Item 4, the admin file's config entry is excluded or advisory, or is
+/// included at a path the export refuses.
 pub const VENDOR_NOT_CARRIED_LINE: &str = "{admin} {verb} {vendor} on this host. It is not carried, so on the target the vendor file applies.";
 /// Item 4, the admin file has no config entry.
 pub const VENDOR_NO_CONFIG_ENTRY_LINE: &str = "{admin} {verb} {vendor} on this host. It has no Configuration Files row, so it reaches the target only if a package there ships it.";
@@ -98,6 +100,12 @@ pub const NOT_CARRIED_ADVISORY_LINE: &str = "{path}: its Configuration Files row
 /// an advisory.
 pub const NOT_CARRIED_ADVISORY_VIA_LINE: &str =
     "{path}: the Configuration Files row that carries it, {config_path}, is an advisory.";
+/// Item 5, an `/etc` file whose own config entry is included at a path
+/// the export refuses; `{reason}` is the refusal.
+pub const NOT_CARRIED_REFUSED_LINE: &str = "{path}: its Configuration Files row is included, but the export refuses the path ({reason}) and does not write the file.";
+/// Item 5, an `/etc` file carried through another path's entry, which is
+/// included at a path the export refuses.
+pub const NOT_CARRIED_REFUSED_VIA_LINE: &str = "{path}: the Configuration Files row that carries it, {config_path}, is included, but the export refuses that path ({reason}) and does not write the file.";
 /// Item 5, an `/etc` file with no config entry.
 pub const NOT_CARRIED_NO_CONFIG_ENTRY_LINE: &str = "{path}: it has no Configuration Files row.";
 
@@ -187,8 +195,16 @@ pub struct SysctlDrift {
 /// How an `/etc` sysctl file reaches the image, as the surfaces word it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CarriageState {
-    /// The config entry at `config_path` is included.
+    /// The config entry at `config_path` is included and the export
+    /// writes it.
     Carried { config_path: String },
+    /// The config entry at `config_path` is included, but the exporter
+    /// refuses its path (`configtree::validate_path`), so the export does
+    /// not hold the file.
+    Refused {
+        config_path: String,
+        reason: PathError,
+    },
     /// The config entry at `config_path` is excluded.
     Excluded { config_path: String },
     /// The config entry at `config_path` is an advisory.
@@ -442,7 +458,8 @@ pub fn line_link_target(snap: &InspectionSnapshot, at: &SysctlLineRef) -> Option
 }
 
 /// The carriage state a config entry, or its absence, gives a file:
-/// included is `Carried`, an advisory is `Advisory`, anything else is
+/// included is `Carried`, or `Refused` when the exporter's own path check
+/// refuses the entry's path; an advisory is `Advisory`; anything else is
 /// `Excluded`.
 fn carriage_state(entry: Option<&ConfigFileEntry>) -> CarriageState {
     let Some(entry) = entry else {
@@ -450,7 +467,14 @@ fn carriage_state(entry: Option<&ConfigFileEntry>) -> CarriageState {
     };
     let config_path = entry.path.clone();
     if entry.disposition.is_included() {
-        CarriageState::Carried { config_path }
+        // The stager's check, on the path as the stager passes it.
+        match validate_path(entry.path.trim_start_matches('/')) {
+            Ok(()) => CarriageState::Carried { config_path },
+            Err(reason) => CarriageState::Refused {
+                config_path,
+                reason,
+            },
+        }
     } else if entry.disposition.is_advisory() {
         CarriageState::Advisory { config_path }
     } else {

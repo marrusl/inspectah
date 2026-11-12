@@ -151,6 +151,13 @@ fn vendor_replacement(v: VendorLine) -> VendorReplacementDto {
         vendor_path: file_path(SysctlDir::UsrLib, &name),
         carriage: match v.carriage {
             CarriageState::Carried { config_path } => CarriageDto::Carried { config_path },
+            CarriageState::Refused {
+                config_path,
+                reason,
+            } => CarriageDto::Refused {
+                config_path,
+                reason: reason.to_string(),
+            },
             CarriageState::Excluded { config_path } => CarriageDto::Excluded { config_path },
             CarriageState::Advisory { config_path } => CarriageDto::Advisory { config_path },
             CarriageState::NoConfigEntry => CarriageDto::NoConfigEntry,
@@ -167,6 +174,13 @@ fn not_carried(n: NotCarried) -> Option<NotCarriedDto> {
         NotCarried::Etc { path, carriage } => {
             let reason = match carriage {
                 CarriageState::Carried { .. } => return None,
+                CarriageState::Refused {
+                    config_path,
+                    reason,
+                } => NotCarriedReason::Refused {
+                    config_path,
+                    reason: reason.to_string(),
+                },
                 CarriageState::Excluded { config_path } => {
                     NotCarriedReason::Excluded { config_path }
                 }

@@ -88,7 +88,7 @@ pub fn validate_symlink_target(target: &str, _root: &str) -> Result<(), PathErro
 }
 
 /// Path safety errors.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
     #[error("path contains NUL byte")]
     NulByte,

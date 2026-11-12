@@ -317,12 +317,12 @@ The `#### Sysctl Overrides` table (`audit.rs:585-604`) becomes `#### Sysctl`. On
 
    When it is `Unknown`, no table and no drift lines. In their place: "Values and drift are not stated for this host, because inspectah does not know every input below as the host had it. One unknown line can set, override or cancel any key." Then one line per `UnknownInput`: "`<path>` links to `<target>`, outside `/etc` and the sysctl directories, and inspectah did not read it.", "`<path>` held text that redaction replaced, so what it sets is not known.", or "The running value of `<key>` held text that redaction removed."
 3. **Runtime drift** (`Resolved` only), one line per `Differs` key: "`<key>` runs at `<runtime>`; the files request `<file value>` (`<source>`)." Above the lines, once: "These keys run at a value other than the one the files request. A tuned profile, another service, a hand-run `sysctl -w`, or a module that created the key after systemd-sysctl ran at early boot can each cause this, and some of them reapply at every boot, so the value after a reboot cannot be read from this scan. The image gets the files, not the running values." When the snapshot records an active tuned profile, the paragraph adds: "tuned profile `<profile>` is active on this host."
-4. **Vendor files replaced**, one line per `VendorReplacement`, worded by the file's `carriage()`:
-   - Carried (a `Config` entry that is included): "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy."
-   - A `Config` entry that is excluded or advisory: "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` on this host. It is not carried, so on the target the vendor file applies."
+4. **Vendor files replaced**, one line per `VendorReplacement`, worded by the file's carriage. Carriage is `carriage()` plus the exporter's own path check: an included entry whose path `configtree::validate_path` refuses (a file name holding a line break, for one) is not written to the export, so it is not carried, and the report calls `validate_path` itself rather than restating its rule.
+   - Carried (a `Config` entry that is included, at a path the export writes): "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` entirely, on the target as well, so keys the target's version of that vendor file sets will not apply from it. Compare it with the target image's copy."
+   - A `Config` entry that is excluded or advisory, or included at a path the export refuses: "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` on this host. It is not carried, so on the target the vendor file applies."
    - `NoConfigEntry`: "`/etc/sysctl.d/<name>` replaces `/usr/lib/sysctl.d/<name>` on this host. It has no Configuration Files row, so it reaches the target only if a package there ships it."
    The mask wording says "disables" in place of "replaces".
-5. **Not carried**: files in `/run/sysctl.d` (generated at runtime) and `/usr/local/lib/sysctl.d` (carried only as unmanaged files under `--include-unmanaged`); and every `/etc` file whose `carriage()` is an excluded or advisory entry, or `NoConfigEntry`, with that reason. An `/etc` outside link is listed here by its carriage like any file; what it does to the explanation is item 2's.
+5. **Not carried**: files in `/run/sysctl.d` (generated at runtime) and `/usr/local/lib/sysctl.d` (carried only as unmanaged files under `--include-unmanaged`); and every `/etc` file whose carriage is an excluded or advisory entry, an included entry at a path the export refuses, or `NoConfigEntry`, with that reason. A refused path names the exporter's refusal: "`<path>`: its Configuration Files row is included, but the export refuses the path (<refusal>) and does not write the file.", or, when another path's row carries the file, "`<path>`: the Configuration Files row that carries it, `<config path>`, is included, but the export refuses that path (<refusal>) and does not write the file." The refusal is `PathError`'s own fixed text, not host text. An `/etc` outside link is listed here by its carriage like any file; what it does to the explanation is item 2's.
 6. **As written**: glob assignments, glob exclusions and unparsed lines, with file and line number. A file with `redacted` set contributes none: once a multi-line match is replaced, its line numbers are not the host's. While it survives, item 2 names it.
 
 **Literal text.** Every interpolated value in this section (keys, values, file names, paths, link targets, unparsed text, profile names, the degradation reason) goes through one helper that renders it as an inline code span Markdown cannot reinterpret:
@@ -420,10 +420,13 @@ pub enum ReplacementAction { Shadows, Masks }
 
 /// `config_path` is the Configuration Files row the panel links to: the
 /// file's own path, or `/etc/sysctl.conf` for the package's
-/// `99-sysctl.conf` link (§ 5.3, `carriage()`).
+/// `99-sysctl.conf` link (§ 5.3, `carriage()`). `Refused` is an included
+/// row whose path the export refuses; `reason` is the refusal's text
+/// (§ 5.5 item 5).
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CarriageDto {
     Carried { config_path: String },
+    Refused { config_path: String, reason: String },
     Excluded { config_path: String },
     Advisory { config_path: String },
     NoConfigEntry,
@@ -435,6 +438,7 @@ pub struct NotCarriedDto { pub path: String, pub reason: NotCarriedReason }
 pub enum NotCarriedReason {
     RuntimeDir,                                // /run/sysctl.d
     UsrLocalLib,                               // unmanaged-file path only
+    Refused { config_path: String, reason: String },
     Excluded { config_path: String },
     Advisory { config_path: String },
     NoConfigEntry,
