@@ -188,6 +188,28 @@ label then shows the partial count. A package with no serving repository has
 an Upload button in place of the checkbox, here as in the main list. Use it
 to supply the RPM, as described in [Handle Repo-less RPMs](repoless-rpms.md).
 
+### Packages not carried
+
+Packages that were not user-installed on the source host, and that
+nothing the image installs needs, are left out of the export and listed
+in the Containerfile's `# Not carried` block. In the Packages view they
+are in the "Not carried" group below the package list, collapsed, with a
+count of the packages and of those that own a unit enabled on the source
+host, such as `firewalld` or `cronie`. Those come first, marked "Enabled
+on source host" with their units.
+
+Choose Include on a row to carry the package: it leaves the group, joins
+the package list as an included package, and the export installs it and
+enables its units again. To leave it out again, clear its checkbox in the
+package list, or undo.
+
+Including a package does not clear its own dependencies from the group.
+They stay listed, although dnf installs them with the package: including
+`firewalld` leaves `python3-firewall` in the group.
+
+The group is not shown when nothing is listed, and also when the scan
+has no leaf data to decide what is needed.
+
 ### Package groups
 
 A package group installed with `dnf group install` appears as one row with
@@ -367,6 +389,18 @@ inside unpacks to `inspectah-<hostname>-refined/`, which contains:
 - The refined Containerfile reflecting all your include/exclude decisions
 - Updated scan data with your triage overrides applied
 - The audit report
+
+When the export leaves out packages that own a unit enabled on the
+source host, the dialog says so before you download, in a collapsed
+notice such as "2 packages that own enabled units will not be carried".
+Expand it for the names and units. Its "Review not-carried packages"
+link closes the dialog and opens the Not carried group in the Packages
+view.
+
+When an export comes with warnings, such as an uploaded RPM the export
+could not verify, the dialog stays open after the download as
+"Downloaded, with warnings" and lists them. It does not repeat the
+not-carried notice it showed before the download.
 
 One difference exists today between the preview pane and the Export
 dialog: package groups render as their individual members in the exported
