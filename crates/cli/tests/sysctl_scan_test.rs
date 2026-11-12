@@ -1095,6 +1095,248 @@ fn case_17_outside_links_snapshot() {
     );
 }
 
+// ── Case 18 ──────────────────────────────────────────────────────────
+
+const APP_CONF: &str = "/etc/sysctl.d/80-app.conf";
+const CORE_CONF: &str = "/etc/sysctl.d/85-core.conf";
+/// The path a runtime value's findings carry.
+const PROC_SYS: &str = "/proc/sys";
+/// A one-line PEM in JSON, each line break written as the two
+/// characters `\n`.
+const ONE_LINE_PEM: &str = concat!(
+    r#"{"private_key":"-----BEGIN PRIVATE KEY-----\nU0VDUkVUX0NBTkFSWQ==\n"#,
+    r#"-----END PRIVATE KEY-----"}"#,
+    "\n"
+);
+
+/// The host of the *secret in a file* layout, with `sysctl -a` set by
+/// the caller.
+fn secret_in_a_file_host() -> SysctlHost {
+    SysctlHost::new()
+        .file(
+            APP_CONF,
+            "vm.swappiness = 10\ndb_password = canary-inside\n",
+        )
+        .file("/usr/lib/sysctl.d/10-vendor.conf", "vm.dirty_ratio = 20\n")
+}
+
+/// The findings the redaction pass recorded at `path`.
+fn findings_at(snap: &InspectionSnapshot, path: &str) -> usize {
+    snap.redactions.iter().filter(|f| f.path == path).count()
+}
+
+/// The reloaded snapshot of `host`, after asserting that `canary` is in
+/// neither the serialized snapshot nor any file of the export.
+fn scan_without_canary(layout: &str, host: SysctlHost, canary: &str) -> InspectionSnapshot {
+    let snap = reload(&scan(host));
+    let written = serde_json::to_string(&snap).expect("the snapshot serializes");
+    assert!(
+        !written.contains(canary),
+        "{layout}: `{canary}` survives in the snapshot"
+    );
+    let tree = render_export(&snap);
+    for relative in tree_paths(tree.path()) {
+        let file = tree.path().join(&relative);
+        if let Ok(bytes) = std::fs::read(&file) {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(canary),
+                "{layout}: `{canary}` survives in the export's {relative}"
+            );
+        }
+    }
+    snap
+}
+
+/// The content of the sysctl file at `path`; panics unless it was read.
+fn read_content<'a>(section: &'a SysctlSection, path: &str) -> &'a str {
+    match &section
+        .files
+        .iter()
+        .find(|f| f.path() == path)
+        .unwrap_or_else(|| panic!("no sysctl file at {path}"))
+        .body
+    {
+        SysctlFileBody::Read { content, .. } => content,
+        other => panic!("{path} was not read: {other:?}"),
+    }
+}
+
+#[test]
+fn case_18_redaction_makes_the_explanation_unknown_snapshot() {
+    // Secret in a file.
+    let secret_in_file = scan_without_canary(
+        "secret in a file",
+        secret_in_a_file_host().sysctl_a("vm.dirty_ratio = 30\nvm.swappiness = 60\n"),
+        "canary-inside",
+    );
+    assert_eq!(
+        section(&secret_in_file).effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::RedactedFile {
+            file: file_ref(SysctlDir::Etc, "80-app.conf"),
+        }])
+    );
+    // The config pass records one finding at the path and the sysctl
+    // pass records its own.
+    assert_eq!(findings_at(&secret_in_file, APP_CONF), 2);
+
+    // Its twin has no sysctl section to redact; config carriage is the
+    // same byte for byte.
+    let twin = reload(&scan(secret_in_a_file_host().sysctl_a_fails(1)));
+    assert!(
+        twin.kernel_boot
+            .as_ref()
+            .expect("kernel/boot")
+            .sysctl
+            .is_none(),
+        "the twin collects no sysctl section"
+    );
+    assert_eq!(findings_at(&twin, APP_CONF), 1);
+    let entry = config_entry(&secret_in_file, APP_CONF);
+    assert!(entry.disposition.is_included(), "{:?}", entry.disposition);
+    assert_eq!(
+        serde_json::to_string(entry).expect("serializes"),
+        serde_json::to_string(config_entry(&twin, APP_CONF)).expect("serializes"),
+        "the config entry is the same with and without the sysctl pass"
+    );
+    let exported = "config/etc/sysctl.d/80-app.conf";
+    let read_exported = |snap: &InspectionSnapshot| {
+        std::fs::read(render_export(snap).path().join(exported))
+            .unwrap_or_else(|e| panic!("the export lacks {exported}: {e}"))
+    };
+    assert_eq!(read_exported(&secret_in_file), read_exported(&twin));
+
+    // Secret only at runtime: the file's literal equals the token the
+    // runtime value would get, and is never compared with it.
+    let runtime_only = scan_without_canary(
+        "secret only at runtime",
+        SysctlHost::new()
+            .file(CORE_CONF, "kernel.core_pattern = REDACTED_PASSWORD_1\n")
+            .sysctl_a("kernel.core_pattern = password=canary-runtime\n"),
+        "canary-runtime",
+    );
+    let core_pattern = SysctlKey::normalize("kernel.core_pattern");
+    let runtime_section = section(&runtime_only);
+    assert_eq!(
+        runtime_section.effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::RedactedRuntime {
+            key: core_pattern.clone(),
+        }])
+    );
+    assert_eq!(
+        runtime_section.redacted_runtime,
+        std::slice::from_ref(&core_pattern)
+    );
+    assert!(!runtime_section.runtime.contains_key(&core_pattern));
+    assert!(runtime_keys(&runtime_only).is_empty());
+    assert_eq!(findings_at(&runtime_only, PROC_SYS), 1);
+
+    // Secret only in the file, token-like runtime: the mirror.
+    let file_only = scan_without_canary(
+        "secret only in the file",
+        SysctlHost::new()
+            .file(CORE_CONF, "kernel.core_pattern = password=canary-file\n")
+            .sysctl_a("kernel.core_pattern = REDACTED_PASSWORD_1\n"),
+        "canary-file",
+    );
+    assert_eq!(
+        section(&file_only).effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::RedactedFile {
+            file: file_ref(SysctlDir::Etc, "85-core.conf"),
+        }])
+    );
+    assert!(section(&file_only).redacted_runtime.is_empty());
+    assert_eq!(findings_at(&file_only, CORE_CONF), 2);
+    assert_eq!(findings_at(&file_only, PROC_SYS), 0);
+
+    // One-line PEM through an allowed link.
+    let pem_link = "/etc/sysctl.d/90-app.conf";
+    let pem = scan_without_canary(
+        "one-line PEM through an allowed link",
+        SysctlHost::new()
+            .link(pem_link, "/etc/app/credentials.json")
+            .file("/etc/app/credentials.json", ONE_LINE_PEM),
+        "U0VDUkVUX0NBTkFSWQ",
+    );
+    assert_eq!(
+        section(&pem).effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::RedactedFile {
+            file: file_ref(SysctlDir::Etc, "90-app.conf"),
+        }])
+    );
+    // The config walker reads the link through as well, so its entry
+    // records one finding at the link's path and the sysctl pass another.
+    assert!(
+        config_entry(&pem, pem_link)
+            .content
+            .contains("REDACTED_PRIVATEKEY_"),
+        "{:?}",
+        config_entry(&pem, pem_link).content
+    );
+    assert_eq!(findings_at(&pem, pem_link), 2);
+
+    // Equal values under different keys: the canary is the pairing.
+    let equal = scan_without_canary(
+        "equal values under different keys",
+        SysctlHost::new()
+            .file(APP_CONF, "db_password = 60\nvm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+        "db_password = 60",
+    );
+    let equal_section = section(&equal);
+    assert_eq!(
+        equal_section.effective(),
+        SysctlExplanation::Unknown(vec![UnknownInput::RedactedFile {
+            file: file_ref(SysctlDir::Etc, "80-app.conf"),
+        }])
+    );
+    for (copy, content) in [
+        ("sysctl copy", read_content(equal_section, APP_CONF)),
+        (
+            "config entry",
+            config_entry(&equal, APP_CONF).content.as_str(),
+        ),
+    ] {
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "{copy}: {content:?}");
+        let token = lines[0];
+        assert!(
+            token.starts_with("REDACTED_") && !token.contains(char::is_whitespace),
+            "{copy}: the password line is one token: {token:?}"
+        );
+        assert_eq!(lines[1], "vm.swappiness = 60", "{copy}");
+        assert_eq!(
+            content.matches(token).count(),
+            1,
+            "{copy}: the token occurs only on the password line"
+        );
+    }
+    assert_eq!(findings_at(&equal, APP_CONF), 2);
+
+    // Shadowed redacted file: it does not survive, so nothing is unknown.
+    let vendor = "/usr/lib/sysctl.d/50-x.conf";
+    let shadowed = scan_without_canary(
+        "shadowed redacted file",
+        SysctlHost::new()
+            .file(vendor, "db_password = canary-shadowed\n")
+            .file("/etc/sysctl.d/50-x.conf", "vm.swappiness = 60\n")
+            .sysctl_a("vm.swappiness = 60\n"),
+        "canary-shadowed",
+    );
+    assert_eq!(
+        resolved(section(&shadowed)),
+        [SysctlSetting {
+            key: SysctlKey::normalize("vm.swappiness"),
+            outcome: writes(
+                "60",
+                line(SysctlDir::Etc, "50-x.conf", 1),
+                RuntimeObservation::Matches
+            ),
+            overwritten: Vec::new(),
+        }]
+    );
+    assert_eq!(findings_at(&shadowed, vendor), 1);
+}
+
 // ── Case 20 ──────────────────────────────────────────────────────────
 
 #[test]

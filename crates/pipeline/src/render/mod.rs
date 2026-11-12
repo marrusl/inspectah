@@ -306,6 +306,7 @@ mod tests {
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::services::SystemdDropIn;
+        use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -465,6 +466,37 @@ mod tests {
             aggregate: _,
             review_status: _,
         } = NonRpmItem::default();
+
+        // `kernel_boot.sysctl`. No sysctl type has a `Default`, so each
+        // pattern sits in a function that is never called: the compiler
+        // still checks every pattern for completeness.
+        fn _classify_sysctl_section(section: SysctlSection) {
+            let SysctlSection {
+                files: _,            // each classified below
+                runtime: _,          // scrubbed: value removed on any match
+                redacted_runtime: _, // exempt: kernel key names
+            } = section;
+        }
+        fn _classify_sysctl_file(file: SysctlFile) {
+            let SysctlFile {
+                dir: _,  // exempt: one of four directories
+                name: _, // exempt: file name, as `ConfigFileEntry.path`
+                body: _, // each variant classified below
+            } = file;
+        }
+        fn _classify_sysctl_file_body(body: SysctlFileBody) {
+            match body {
+                SysctlFileBody::Mask => {} // no fields
+                SysctlFileBody::OutsideLink {
+                    target: _, // scrubbed: one line under the entry's path
+                } => {}
+                SysctlFileBody::Read {
+                    link_target: _, // scrubbed: one line under the entry's path
+                    content: _,     // scrubbed: sysctl pass, under the file's path
+                    redacted: _,    // exempt: a flag the pass writes
+                } => {}
+            }
+        }
     }
 
     /// Plant a distinct secret in every content-bearing field and assert
@@ -488,10 +520,14 @@ mod tests {
     fn exactly_the_exempt_fields_survive_the_export() {
         use inspectah_core::types::config::ConfigFileKind;
         use inspectah_core::types::containers::{ComposeFile, ContainerSection, QuadletUnit};
+        use inspectah_core::types::kernelboot::KernelBootSection;
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
         use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::sysctl::{
+            SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlSection,
+        };
 
         // Each sentinel is planted behind a keyword the pattern set
         // recognises, so a visited field redacts it and an unvisited one
@@ -515,6 +551,10 @@ mod tests {
             "SENTINEL-COMPOSE",
             "SENTINEL-MANIFEST",
             "SENTINEL-GITREMOTE",
+            "SENTINEL-SYSCTL-CONTENT",
+            "SENTINEL-SYSCTL-LINK",
+            "SENTINEL-SYSCTL-OUTSIDE",
+            "SENTINEL-SYSCTL-RUNTIME",
         ];
 
         // Declared exempt, and planted anyway so the exemption is a
@@ -655,6 +695,47 @@ mod tests {
                 content: "<zone>\n  <!-- password=SENTINEL-FIREWALL -->\n</zone>\n".into(),
                 ..Default::default()
             }],
+            ..Default::default()
+        });
+
+        // Planted field by field, not a host layout: the collector-driven
+        // cases are in `crates/cli/tests/sysctl_scan_test.rs`.
+        snap.kernel_boot = Some(KernelBootSection {
+            sysctl: Some(SysctlSection {
+                files: vec![
+                    SysctlFile {
+                        dir: SysctlDir::Etc,
+                        name: "80-app.conf".into(),
+                        body: SysctlFileBody::Read {
+                            link_target: None,
+                            content: "password=SENTINEL-SYSCTL-CONTENT\n".into(),
+                            redacted: false,
+                        },
+                    },
+                    SysctlFile {
+                        dir: SysctlDir::Etc,
+                        name: "85-link.conf".into(),
+                        body: SysctlFileBody::Read {
+                            link_target: Some("/etc/app/password=SENTINEL-SYSCTL-LINK".into()),
+                            content: "vm.swappiness = 10\n".into(),
+                            redacted: false,
+                        },
+                    },
+                    SysctlFile {
+                        dir: SysctlDir::Etc,
+                        name: "90-outside.conf".into(),
+                        body: SysctlFileBody::OutsideLink {
+                            target: "/var/lib/app/password=SENTINEL-SYSCTL-OUTSIDE".into(),
+                        },
+                    },
+                ],
+                runtime: [(
+                    SysctlKey::normalize("kernel.core_pattern"),
+                    "password=SENTINEL-SYSCTL-RUNTIME".to_string(),
+                )]
+                .into(),
+                redacted_runtime: Vec::new(),
+            }),
             ..Default::default()
         });
 

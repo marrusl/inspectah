@@ -4,6 +4,7 @@ use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
     RedactionState,
 };
+use inspectah_core::types::sysctl::{SysctlFileBody, SysctlSection};
 use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -760,6 +761,70 @@ fn scan_and_redact_field(
     findings
 }
 
+/// The path a sysctl runtime value is scanned under: it came from the
+/// kernel's `/proc/sys` tree, not from a file.
+const SYSCTL_RUNTIME_PATH: &str = "/proc/sys";
+
+/// Scrub every host-text field of the sysctl section in place and return
+/// the findings.
+///
+/// - A read file's `content` is scanned and replaced under the file's own
+///   path; `redacted` records whether anything in it changed, which is
+///   what makes `SysctlSection::effective()` report the file as unknown.
+/// - `link_target` and `OutsideLink.target` are scanned as one line under
+///   the entry's path. A path is not a line systemd-sysctl parses, so a
+///   change there does not set `redacted`.
+/// - Each runtime value is scanned as the line `<key> = <value>` under
+///   [`SYSCTL_RUNTIME_PATH`]. On any finding the value is removed from
+///   `runtime` and its key recorded in `redacted_runtime`: nothing reads a
+///   scrubbed remainder, so none is stored, and no token is minted for it.
+///
+/// File names, directories and kernel key names are not scanned, for the
+/// reason `ConfigFileEntry.path` is not.
+fn redact_sysctl_section(
+    section: &mut SysctlSection,
+    registry: &mut CounterRegistry,
+) -> Vec<RedactionFinding> {
+    let mut findings = Vec::new();
+    for file in &mut section.files {
+        let path = file.path();
+        match &mut file.body {
+            SysctlFileBody::Mask => {}
+            SysctlFileBody::OutsideLink { target } => {
+                findings.extend(scan_and_redact_field(target, &path, registry));
+            }
+            SysctlFileBody::Read {
+                link_target,
+                content,
+                redacted,
+            } => {
+                if let Some(target) = link_target {
+                    findings.extend(scan_and_redact_field(target, &path, registry));
+                }
+                let before = content.clone();
+                findings.extend(scan_and_redact_field(content, &path, registry));
+                *redacted = *content != before;
+            }
+        }
+    }
+
+    let mut removed = Vec::new();
+    section.runtime.retain(|key, value| {
+        let line = format!("{} = {value}", key.as_str());
+        let line_findings = scan_content(&line, SYSCTL_RUNTIME_PATH);
+        if line_findings.is_empty() {
+            return true;
+        }
+        findings.extend(line_findings);
+        removed.push(key.clone());
+        false
+    });
+    section.redacted_runtime.extend(removed);
+    section.redacted_runtime.sort();
+    section.redacted_runtime.dedup();
+    findings
+}
+
 /// Redact a snapshot in place, setting its `redaction_state` and populating `redactions`.
 ///
 /// - Scans config file contents and shadow entries for secrets.
@@ -938,6 +1003,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             }
             kernelboot.cmdline = content;
             all_findings.extend(cmdline_findings);
+        }
+
+        // The sysctl section: vendor, runtime and link-read files and
+        // kernel values that no other pass sees.
+        if let Some(ref mut sysctl) = kernelboot.sysctl {
+            all_findings.extend(redact_sysctl_section(sysctl, &mut registry));
         }
 
         // The dracut, modprobe, modules-load and tuned files are
@@ -1487,6 +1558,17 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     }
     if let Some(ref kernelboot) = snapshot.kernel_boot {
         post_redaction_content.insert("/proc/cmdline".to_string(), kernelboot.cmdline.clone());
+        // After the config files above, so an `/etc` sysctl file that also
+        // has a config entry keeps that entry's content in its slot.
+        if let Some(ref sysctl) = kernelboot.sysctl {
+            for file in &sysctl.files {
+                if let SysctlFileBody::Read { content, .. } = &file.body {
+                    post_redaction_content
+                        .entry(file.path())
+                        .or_insert_with(|| content.clone());
+                }
+            }
+        }
     }
     if let Some(ref sched) = snapshot.scheduled_tasks {
         for unit in &sched.generated_timer_units {
