@@ -197,9 +197,10 @@ accepts. A repo with no effective member, or whose members are all
 excluded already, cannot be excluded, so the repo's own control cannot
 drop its file and key (Mark, 2026-11-12); a shared file or key can still
 go when another section that names it is excluded. Refine has no file- or
-key-level control yet: an unmodified `.repo` file is not in
-`config.files`, and excluding a modified one's Configuration row leaves
-its `rpm.repo_files` entry, and every key, as they were.
+key-level control yet: an unmodified, RPM-owned `.repo` file is not in
+`config.files`, and a modified or unowned one is, but excluding its
+Configuration row leaves its `rpm.repo_files` entry, and every key, as
+they were.
 
 The rule acts only on an exclusion that reaches a file (Mark,
 2026-11-12). With no repo op the projection keeps the scan's dispositions,
