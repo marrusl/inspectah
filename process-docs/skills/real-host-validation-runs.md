@@ -1107,10 +1107,41 @@ daemon list, and in the base images after `dnf install cups libvirt-daemon`.
   already in the search path, so the alias has to be an `ln -s`.
 - `preset-all` puts every unit back to preset, whichever way it was
   rendered. `--preset-mode=enable-only` re-enables anything rendered off
-  against an `enable` preset. Both base images ship a zero-length
-  `/etc/machine-id`, so whether first boot applies presets decides
-  whether a rendered "off" survives. That was not measured: it needs a
-  booted host.
+  against an `enable` preset. Neither runs at first boot (next
+  item).
+- **First boot does not re-apply presets.** Both base images ship a
+  zero-length `/etc/machine-id`. Installed with `bootc install
+  to-existing-root` and booted, RHEL 10 logged `Initializing machine ID
+  from random generator` and `first-boot-complete.target ... skipped
+  because of an unmet condition check (ConditionFirstBoot=yes)`. A
+  `systemctl disable`, an `rm` of a unit's links, a shipped preset file
+  with `systemctl preset`, `mask` and `add-wants` all kept their
+  build-time state through two boots. RHEL 9 showed the same unit
+  states on its console. Only this install route was tried.
+- **A masked `tmp.mount` makes `/tmp` read-only on a booted bootc
+  host.** The base images pull `tmp.mount` in through a vendor link.
+  With it masked, `/tmp` is the read-only composefs root's directory
+  (`touch: ... Read-only file system`), `bootc status` fails with
+  `Ensuring selinux install_t type: ... Read-only file system` (it works
+  with `TMPDIR=/var/tmp`), and `bootc-publish-rhsm-facts.service` fails
+  at boot. Measured on RHEL 10.2.
+- **Booting a probe image on a test guest.** Run `bootc install
+  to-existing-root` from the image with `podman run --privileged
+  --pid=host -v /var/lib/containers:/var/lib/containers -v /dev:/dev -v
+  /:/target --security-opt label=type:unconfined_t`, passing
+  `--root-ssh-authorized-keys` with a copy of the key under `/root` (the
+  guest's `/home` is a separate volume). Then log in as root with
+  `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`, since
+  the host keys are new. The installed system has no Parallels tools,
+  so `prlctl list -f` shows no address, and `prlctl restart` is
+  cancelled. On RHEL 9.8 the installed system never got an address,
+  with or without an NM keyfile, and the cause was not found. Bake a
+  oneshot unit into the probe image that writes its measurements to
+  `/var` and a summary to `/dev/tty1`, then read the summary with
+  `prlctl capture <vm> --file x.png`. Revert the guest afterwards.
+- A podman container booted with `--systemd=always` cannot stand in for
+  a first boot: podman writes its own machine-id into it even when none
+  is supplied, and mounts its own tmpfs on `/tmp`.
 - Installing `podman-docker` on RHEL 10.2 upgraded podman to 6.1.1, and
   the next `podman build` failed at its first `RUN` with
   `netavark: failed to load network options: IO error: invalid type:
