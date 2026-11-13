@@ -4,6 +4,17 @@ import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { UserDecision } from "../api/types";
 import { sha512Crypt } from "../utils/crypt";
 
+/** A failed request on a user, kept by the owner of the Users guard. */
+export interface UserFailure {
+  /**
+   * Which request failed. A "new-password" failure shows in the
+   * new-password form and opens it; the others show on the card itself,
+   * where they are visible with the card closed.
+   */
+  action: "strategy" | "password-option" | "new-password";
+  message: string;
+}
+
 export interface UserCardProps {
   user: UserDecision;
   isPending: boolean;
@@ -19,16 +30,16 @@ export interface UserCardProps {
     hashPassword?: () => Promise<string>,
   ) => Promise<void> | undefined;
   /**
-   * The last set-password failure for this user, kept by the owner so it
-   * outlives this card, which unmounts on a section switch.
+   * The last failed request on this user, kept by the owner so it outlives
+   * this card, which unmounts on a section switch.
    */
-  passwordFailure: string | undefined;
+  failure: UserFailure | undefined;
   /**
-   * Clears `passwordFailure` at the owner: when the operator edits the
-   * form, picks another password option, or closes the card or form while
-   * it shows the failure, which acknowledges it.
+   * Clears a new-password `failure` at the owner: when the operator edits
+   * the form, picks another password option, or closes the card or form
+   * while it shows the failure, which acknowledges it.
    */
-  onClearPasswordFailure: () => void;
+  onClearFailure: () => void;
 }
 
 /** Redact a crypt(3) hash, showing only the prefix. */
@@ -44,9 +55,13 @@ export function UserCard({
   isPending,
   onStrategyChange,
   onPasswordChange,
-  passwordFailure,
-  onClearPasswordFailure,
+  failure,
+  onClearFailure,
 }: UserCardProps) {
+  const passwordFailure =
+    failure?.action === "new-password" ? failure.message : undefined;
+  const cardFailure =
+    failure && failure.action !== "new-password" ? failure.message : undefined;
   const [expanded, setExpanded] = useState(Boolean(passwordFailure));
   const [passwordExpanded, setPasswordExpanded] = useState(
     Boolean(passwordFailure),
@@ -65,17 +80,19 @@ export function UserCard({
 
   // A failure can land while this card is mounted but collapsed, or before
   // it mounts again after a section switch: open the password form to it.
+  // Keyed on the failure itself, not its message, so a repeat of the same
+  // failure after the operator closed the form opens it again.
   useEffect(() => {
-    if (passwordFailure) {
+    if (failure?.action === "new-password") {
       setExpanded(true);
       setPasswordExpanded(true);
       setPasswordInputVisible(true);
     }
-  }, [passwordFailure]);
+  }, [failure]);
 
   const clearPasswordFailure = useCallback(() => {
-    if (passwordFailure) onClearPasswordFailure();
-  }, [passwordFailure, onClearPasswordFailure]);
+    if (passwordFailure) onClearFailure();
+  }, [passwordFailure, onClearFailure]);
 
   // Closing the card or the password form while it shows a failure is the
   // operator acknowledging it, so the failure does not open them again
@@ -264,6 +281,19 @@ export function UserCard({
           }}
         >
           Non-interactive account &mdash; review recommended before including
+        </div>
+      )}
+
+      {cardFailure && (
+        <div
+          data-testid={`user-failure-${user.name}`}
+          style={{
+            fontSize: "var(--pf-t--global--font--size--sm)",
+            color: "var(--pf-t--global--color--status--danger--default)",
+            marginTop: "var(--pf-t--global--spacer--xs)",
+          }}
+        >
+          {cardFailure}
         </div>
       )}
 

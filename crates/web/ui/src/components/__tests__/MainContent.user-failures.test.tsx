@@ -265,3 +265,54 @@ describe.each([
     expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
   });
 });
+
+/**
+ * A failed strategy change or a failed "No password" or "Keep existing"
+ * choice used to reach only `onMutationError`, which logs. The card shows
+ * it where it is visible with the card closed, since none of these come
+ * from the new-password form.
+ */
+describe.each([
+  {
+    action: "strategy change",
+    mock: () => vi.mocked(client.setUserStrategy),
+    prepare: () => {},
+    trigger: () => includeAlice().click(),
+    message: "Failed to change the Containerfile strategy. Please try again.",
+  },
+  {
+    action: "password option",
+    mock: () => vi.mocked(client.setUserPassword),
+    prepare: openPasswordForm,
+    trigger: () => screen.getByRole("radio", { name: "No password" }).click(),
+    message: "Failed to change the password option. Please try again.",
+  },
+])("a failed $action", ({ mock, prepare, trigger, message }) => {
+  it.each([
+    { where: "while the card is mounted", away: false },
+    { where: "while on another section", away: true },
+  ])("shows on the card $where, and a successful retry clears it", async ({ away }) => {
+    const held = hold(mock());
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+
+    prepare();
+    await act(async () => trigger());
+    if (away) rerender(<MainContent {...props} activeSection="packages" />);
+    await act(async () => held.fail());
+    if (away) rerender(<MainContent {...props} />);
+
+    expect(screen.getByText(message)).toBeVisible();
+    expect(props.onMutationError).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(includeAlice()).toBeEnabled());
+
+    prepare();
+    await act(async () => trigger());
+    expect(screen.queryByText(message)).toBeNull();
+    await act(async () => held.succeed());
+
+    await waitFor(() => expect(includeAlice()).toBeEnabled());
+    expect(screen.queryByText(message)).toBeNull();
+    expect(mock()).toHaveBeenCalledTimes(2);
+  });
+});

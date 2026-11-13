@@ -27,6 +27,7 @@ import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { VersionChangesTable } from "./VersionChangesTable";
 import { UsersGroupsSection } from "./UsersGroupsSection";
+import type { UserFailure } from "./UserCard";
 import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
 import { SectionSearch } from "./SectionSearch";
@@ -309,7 +310,7 @@ export function MainContent({
   // still be on the card when they come back. A failure ends with the
   // user record it was about: a reset replaces every record, and a user
   // that leaves the view is a new record if it comes back.
-  const userFailures = useItemFailures<string>();
+  const userFailures = useItemFailures<UserFailure>();
   const { clearAll: clearUserFailures, retain: retainUserFailures } =
     userFailures;
   useEffect(() => {

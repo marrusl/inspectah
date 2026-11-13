@@ -12,6 +12,7 @@ import { setUserStrategy, setUserPassword } from "../api/client";
 import type { PendingGuard } from "../hooks/usePendingGuard";
 import type { ItemFailures } from "../hooks/useItemFailures";
 import { UserCard } from "./UserCard";
+import type { UserFailure } from "./UserCard";
 import { UserArtifactPreview } from "./UserArtifactPreview";
 
 export interface UsersGroupsSectionProps {
@@ -26,14 +27,28 @@ export interface UsersGroupsSectionProps {
    */
   pendingGuard: PendingGuard;
   /**
-   * Set-password failures, by username. Owned with the guard, so a failure
-   * that lands while this section is unmounted is still shown when it
-   * mounts again, and ended by the owner when the user record is replaced.
+   * Failed requests, by username. Owned with the guard, so a failure that
+   * lands while this section is unmounted is still shown when it mounts
+   * again, and ended by the owner when the user record is replaced.
    */
-  userFailures: ItemFailures<string>;
+  userFailures: ItemFailures<UserFailure>;
 }
 
-const PASSWORD_FAILURE_MESSAGE = "Failed to set password. Please try again.";
+const STRATEGY_FAILURE: UserFailure = {
+  action: "strategy",
+  message: "Failed to change the Containerfile strategy. Please try again.",
+};
+const PASSWORD_OPTION_FAILURE: UserFailure = {
+  action: "password-option",
+  message: "Failed to change the password option. Please try again.",
+};
+const NEW_PASSWORD_FAILURE: UserFailure = {
+  action: "new-password",
+  message: "Failed to set password. Please try again.",
+};
+
+const toError = (err: unknown) =>
+  err instanceof Error ? err : new Error(String(err));
 
 export function UsersGroupsSection({
   users,
@@ -49,20 +64,24 @@ export function UsersGroupsSection({
 
   const handleStrategyChange = useCallback(
     (username: string, strategy: "skip" | "useradd") => {
-      runGuarded(username, () =>
-        setUserStrategy(username, strategy)
+      runGuarded(username, () => {
+        const recordFailure = beginAttempt(username);
+        return setUserStrategy(username, strategy)
           .then(onViewUpdate)
-          .catch(onMutationError),
-      );
+          .catch((err: unknown) => {
+            recordFailure(STRATEGY_FAILURE);
+            onMutationError(toError(err));
+          });
+      });
     },
-    [runGuarded, onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError, beginAttempt],
   );
 
   /**
    * Sends the password choice. For a new password, `hashPassword` runs
    * inside the guard, so a second click while it hashes is dropped too.
-   * A new password that fails, in the hash or in the request, is recorded
-   * in `userFailures`; only a failed request is also reported to
+   * A choice that fails, in the hash or in the request, is recorded in
+   * `userFailures`; only a failed request is also reported to
    * `onMutationError`. Returns the outcome (rejecting on failure), or
    * `undefined` when the user already has a request in flight and this one
    * was dropped.
@@ -83,15 +102,13 @@ export function UsersGroupsSection({
               const view = await setUserPassword(username, choice, hash);
               onViewUpdate(view);
             } catch (err) {
-              onMutationError(
-                err instanceof Error ? err : new Error(String(err)),
-              );
+              onMutationError(toError(err));
               throw err;
             }
           } catch (err) {
-            if (choice === "new") {
-              recordFailure(PASSWORD_FAILURE_MESSAGE);
-            }
+            recordFailure(
+              choice === "new" ? NEW_PASSWORD_FAILURE : PASSWORD_OPTION_FAILURE,
+            );
             throw err;
           }
         })();
@@ -198,8 +215,8 @@ export function UsersGroupsSection({
           isPending={pendingKeys.has(user.name)}
           onStrategyChange={handleStrategyChange}
           onPasswordChange={handlePasswordChange}
-          passwordFailure={failures.get(user.name)}
-          onClearPasswordFailure={() => clearFailure(user.name)}
+          failure={failures.get(user.name)}
+          onClearFailure={() => clearFailure(user.name)}
         />
       ))}
 
