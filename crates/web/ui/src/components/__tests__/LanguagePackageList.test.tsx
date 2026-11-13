@@ -125,7 +125,8 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
-import { LanguagePackageList } from "../LanguagePackageList";
+// Rendered with a real pending guard, as its owner supplies one in the app.
+import { LanguagePackageListWithGuard as LanguagePackageList } from "../../test-utils/withPendingGuard";
 
 describe("LanguagePackageList", () => {
   const envs: LanguagePackageEnv[] = [

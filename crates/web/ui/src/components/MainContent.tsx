@@ -286,6 +286,15 @@ export function MainContent({
   const packageGuard = usePendingGuard();
   const repoGuard = usePendingGuard();
   const groupGuard = usePendingGuard();
+  // Guards for the sections that send their own requests. They live here,
+  // not in the sections, because a section unmounts when the operator
+  // switches away, and a guard that unmounted with it would come back
+  // empty while its request was still in flight. MainContent itself stays
+  // mounted for the whole session.
+  const pinGuard = usePendingGuard();
+  const containerGuard = usePendingGuard();
+  const tunedGuard = usePendingGuard();
+  const usersGuard = usePendingGuard();
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -648,6 +657,7 @@ export function MainContent({
         sessionIsSensitive={viewData?.session_is_sensitive ?? false}
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
+        pendingGuard={usersGuard}
       />
     );
   }
@@ -695,6 +705,7 @@ export function MainContent({
           onNavigateToConfig={(configPath) =>
             onNavigateToItem?.("config", `configs:${configPath}`)
           }
+          tunedGuard={tunedGuard}
         />
       </>
     );
@@ -712,6 +723,7 @@ export function MainContent({
           flatpaks={viewData?.flatpaks ?? []}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
+          pendingGuard={containerGuard}
         />
       </>
     );
@@ -755,6 +767,7 @@ export function MainContent({
             onSetPackagePin={onSetPackagePin}
             onSetBulkPackagePin={onSetBulkPackagePin}
             searchQuery={filterText}
+            pinGuard={pinGuard}
           />
         )}
       </div>

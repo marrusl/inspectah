@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Sidebar } from "../Sidebar";
+// Rendered with a real pending guard, as its owner supplies one in the app.
+import { SidebarWithGuard as Sidebar } from "../../test-utils/withPendingGuard";
 import type {
   HealthResponse,
   ReferenceSection,

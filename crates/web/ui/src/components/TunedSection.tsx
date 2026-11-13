@@ -7,7 +7,7 @@ import type {
   TriageTag,
 } from "../api/types";
 import { applyOp } from "../api/client";
-import { usePendingGuard } from "../hooks/usePendingGuard";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -19,6 +19,11 @@ export interface TunedSectionProps {
   tuned: TunedDecisionDto[];
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
+  /**
+   * Requests in flight. The owner must outlive this section, which
+   * unmounts on a section switch.
+   */
+  pendingGuard: PendingGuard;
 }
 
 const LEVEL_BORDER: Record<string, string> = {
@@ -45,8 +50,9 @@ export function TunedSection({
   tuned,
   onViewUpdate,
   onMutationError,
+  pendingGuard,
 }: TunedSectionProps) {
-  const { pendingKeys: pendingIds, runGuarded } = usePendingGuard();
+  const { pendingKeys: pendingIds, runGuarded } = pendingGuard;
 
   const handleToggle = useCallback(
     (profile: string, currentInclude: boolean) => {

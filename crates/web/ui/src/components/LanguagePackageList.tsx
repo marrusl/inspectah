@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Label, Content } from "@patternfly/react-core";
 import type { LanguagePackageEnv } from "../api/types";
-import { usePendingGuard } from "../hooks/usePendingGuard";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 
 /** Confidence-to-PatternFly Label color mapping per Plan 1 gate. */
 const CONFIDENCE_COLOR: Record<string, "green" | "orange" | "grey"> = {
@@ -61,6 +61,12 @@ export interface LanguagePackageListProps {
   ) => Promise<unknown> | void;
   /** When non-empty, auto-expands environments with matching packages and highlights matches. */
   searchQuery?: string;
+  /**
+   * Pin requests in flight. A single pin and a bulk pin in one environment
+   * do not block each other: each sends explicit values. The owner must
+   * outlive this list, which unmounts on a section switch.
+   */
+  pinGuard: PendingGuard;
 }
 
 export function LanguagePackageList({
@@ -71,12 +77,11 @@ export function LanguagePackageList({
   onSetPackagePin,
   onSetBulkPackagePin,
   searchQuery,
+  pinGuard,
 }: LanguagePackageListProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
-  // Pin requests in flight. A single pin and a bulk pin in one environment
-  // do not block each other: each sends explicit values.
-  const { pendingKeys: pinPending, runGuarded } = usePendingGuard();
+  const { pendingKeys: pinPending, runGuarded } = pinGuard;
   const expandBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const envRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 

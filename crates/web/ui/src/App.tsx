@@ -17,6 +17,7 @@ import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
+import { usePendingGuard } from "./hooks/usePendingGuard";
 import { useRpmUpload } from "./hooks/useRpmUpload";
 import { useGroups } from "./hooks/useGroups";
 import { Sidebar } from "./components/Sidebar";
@@ -223,6 +224,11 @@ function SingleHostApp({
   );
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
+
+  // Batch toggles in flight. The guard lives here because the sidebar does
+  // not stay mounted: the mobile overlay unmounts on close, and the desktop
+  // sidebar unmounts when the viewport narrows.
+  const batchGuard = usePendingGuard();
 
   /** Batch-toggle all actionable items in a section group. */
   const handleBatchToggle = useCallback(
@@ -718,6 +724,7 @@ function SingleHostApp({
                   groups={groups.data}
                   searchSlot={searchSlot}
                   onBatchToggle={handleBatchToggle}
+                  batchGuard={batchGuard}
                 />
               </div>
             )}
@@ -772,6 +779,7 @@ function SingleHostApp({
                 onClose={closeSidebarOverlay}
                 searchSlot={searchSlot}
                 onBatchToggle={handleBatchToggle}
+                batchGuard={batchGuard}
               />
             )}
           </>

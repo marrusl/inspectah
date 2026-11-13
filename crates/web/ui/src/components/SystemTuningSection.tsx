@@ -5,6 +5,7 @@ import type {
 } from "../api/types";
 import { SysctlPanel } from "./SysctlPanel";
 import { TunedSection } from "./TunedSection";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 
 export interface SystemTuningSectionProps {
   sysctl: SysctlViewDto;
@@ -13,6 +14,8 @@ export interface SystemTuningSectionProps {
   onMutationError: (err: Error) => void;
   /** Opens the Configuration Files row for a sysctl file. */
   onNavigateToConfig?: (configPath: string) => void;
+  /** Tuned requests in flight, owned by a component that outlives this one. */
+  tunedGuard: PendingGuard;
 }
 
 /**
@@ -27,6 +30,7 @@ export function SystemTuningSection({
   onViewUpdate,
   onMutationError,
   onNavigateToConfig,
+  tunedGuard,
 }: SystemTuningSectionProps) {
   const hasTuned = tuned.length > 0;
   const showPanel = sysctl.state !== "host" || sysctl.files.length > 0;
@@ -64,6 +68,7 @@ export function SystemTuningSection({
             tuned={tuned}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
+            pendingGuard={tunedGuard}
           />
         </>
       )}

@@ -20,12 +20,11 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { MainContent } from "../MainContent";
-import { ContainerSection } from "../ContainerSection";
-import { TunedSection } from "../TunedSection";
-import { UsersGroupsSection } from "../UsersGroupsSection";
+import type { MainContentProps } from "../MainContent";
 import type {
   FlatpakDecisionDto,
   GroupInfo,
+  LanguagePackageEnv,
   QuadletDecisionDto,
   RefinedPackage,
   RepoGroupInfo,
@@ -166,14 +165,34 @@ const USER: UserDecision = {
   password_choice: "new",
 };
 
-function renderUsers(onMutationError: (err: Error) => void) {
+/**
+ * Renders one section through MainContent, which owns the section guards
+ * in the app, so these cases exercise the production owner.
+ */
+function renderSection(
+  activeSection: string,
+  view: Partial<ViewResponse>,
+  onMutationError: (err: Error) => void,
+) {
   render(
-    <UsersGroupsSection
-      users={[USER]}
-      sessionIsSensitive={false}
+    <MainContent
+      activeSection={activeSection}
+      loading={false}
+      viewData={{ ...VIEW, ...view } as ViewResponse}
+      sections={null}
       onViewUpdate={vi.fn()}
       onMutationError={onMutationError}
+      sectionSearchOpen={false}
+      onSectionSearchClose={vi.fn()}
     />,
+  );
+}
+
+function renderUsers(onMutationError: (err: Error) => void) {
+  renderSection(
+    "users_groups",
+    { users_groups_decisions: [USER] },
+    onMutationError,
   );
 }
 
@@ -190,18 +209,7 @@ function renderPasswordForm(onMutationError: (err: Error) => void) {
 }
 
 function renderMainContent(onMutationError: (err: Error) => void) {
-  render(
-    <MainContent
-      activeSection="packages"
-      loading={false}
-      viewData={VIEW}
-      sections={null}
-      onViewUpdate={vi.fn()}
-      onMutationError={onMutationError}
-      sectionSearchOpen={false}
-      onSectionSearchClose={vi.fn()}
-    />,
-  );
+  renderSection("packages", {}, onMutationError);
 }
 
 interface GuardCase {
@@ -240,14 +248,7 @@ const CASES: GuardCase[] = [
     name: "quadlet toggle",
     request: "applyOp",
     renderWith: (onMutationError) =>
-      render(
-        <ContainerSection
-          quadlets={[QUADLET]}
-          flatpaks={[]}
-          onViewUpdate={vi.fn()}
-          onMutationError={onMutationError}
-        />,
-      ),
+      renderSection("containers", { quadlets: [QUADLET] }, onMutationError),
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle myapp.container" }),
     trigger: pressSpace("quadlet-item-/etc/containers/systemd/myapp.container"),
@@ -256,14 +257,7 @@ const CASES: GuardCase[] = [
     name: "flatpak toggle",
     request: "applyOp",
     renderWith: (onMutationError) =>
-      render(
-        <ContainerSection
-          quadlets={[]}
-          flatpaks={[FLATPAK]}
-          onViewUpdate={vi.fn()}
-          onMutationError={onMutationError}
-        />,
-      ),
+      renderSection("containers", { flatpaks: [FLATPAK] }, onMutationError),
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle org.mozilla.firefox" }),
     trigger: pressSpace("flatpak-item-org.mozilla.firefox"),
@@ -272,13 +266,7 @@ const CASES: GuardCase[] = [
     name: "tuned profile toggle",
     request: "applyOp",
     renderWith: (onMutationError) =>
-      render(
-        <TunedSection
-          tuned={[TUNED]}
-          onViewUpdate={vi.fn()}
-          onMutationError={onMutationError}
-        />,
-      ),
+      renderSection("system_tuning", { tuned: [TUNED] }, onMutationError),
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle throughput-performance" }),
     trigger: pressSpace("tuned-item-throughput-performance"),
@@ -361,14 +349,7 @@ describe.each([
 ])("pending guard: flatpaks differing only by $differ", ({ other }) => {
   it("guards each row by its own identity", async () => {
     const { mock } = holdRequests("applyOp");
-    render(
-      <ContainerSection
-        quadlets={[]}
-        flatpaks={[FLATPAK, other]}
-        onViewUpdate={vi.fn()}
-        onMutationError={vi.fn()}
-      />,
-    );
+    renderSection("containers", { flatpaks: [FLATPAK, other] }, vi.fn());
     const rows = screen.getAllByTestId("flatpak-item-org.mozilla.firefox");
     const boxes = screen.getAllByRole("checkbox", {
       name: "Toggle org.mozilla.firefox",
@@ -432,3 +413,139 @@ describe("pending guard: user set password", () => {
     ).toBeDisabled();
   });
 });
+
+const NPM_GLOBALS: LanguagePackageEnv = {
+  ecosystem: "npm",
+  path: "/usr/lib/node_modules",
+  method: "npm global",
+  packages: [{ name: "typescript", detected_version: "5.4.0", pinned: false }],
+  confidence: "high",
+  manifest_basis: "package-lock.json",
+  include: true,
+  has_c_extensions: false,
+  system_site_packages: false,
+};
+
+/** A request the test holds open, and how to settle it. */
+interface HeldRequest {
+  sent: ReturnType<typeof vi.fn>;
+  settle: () => void;
+  props?: Partial<MainContentProps>;
+}
+
+function heldClientRequest(request: GuardCase["request"]): HeldRequest {
+  const { mock, fail } = holdRequests(request);
+  return { sent: mock, settle: () => fail(new Error("connection reset")) };
+}
+
+function heldPin(): HeldRequest {
+  let settle: () => void = () => {};
+  const sent = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+  );
+  return { sent, settle: () => settle(), props: { onSetPackagePin: sent } };
+}
+
+interface LifetimeCase {
+  name: string;
+  section: string;
+  view: Partial<ViewResponse>;
+  hold: () => HeldRequest;
+  /** Brings the control on screen, for a section that starts collapsed. */
+  reveal?: () => void;
+  control: () => HTMLElement;
+  trigger: () => void;
+}
+
+const LIFETIME_CASES: LifetimeCase[] = [
+  {
+    name: "quadlet toggle",
+    section: "containers",
+    view: { quadlets: [QUADLET] },
+    hold: () => heldClientRequest("applyOp"),
+    control: () =>
+      screen.getByRole("checkbox", { name: "Toggle myapp.container" }),
+    trigger: pressSpace("quadlet-item-/etc/containers/systemd/myapp.container"),
+  },
+  {
+    name: "tuned profile toggle",
+    section: "system_tuning",
+    view: { tuned: [TUNED] },
+    hold: () => heldClientRequest("applyOp"),
+    control: () =>
+      screen.getByRole("checkbox", { name: "Toggle throughput-performance" }),
+    trigger: pressSpace("tuned-item-throughput-performance"),
+  },
+  {
+    name: "user include checkbox",
+    section: "users_groups",
+    view: { users_groups_decisions: [USER] },
+    hold: () => heldClientRequest("setUserStrategy"),
+    control: () => screen.getByRole("checkbox", { name: "Include alice" }),
+    trigger: () =>
+      screen.getByRole("checkbox", { name: "Include alice" }).click(),
+  },
+  {
+    name: "language package pin",
+    section: "language_packages",
+    view: { language_packages: [NPM_GLOBALS] },
+    hold: heldPin,
+    reveal: () =>
+      fireEvent.click(
+        screen.getByTestId("lang-env-expand-npm:/usr/lib/node_modules"),
+      ),
+    control: () => screen.getByTestId("lang-pkg-pin-typescript"),
+    trigger: () =>
+      fireEvent.keyDown(screen.getByTestId("lang-pkg-typescript"), {
+        key: "Enter",
+      }),
+  },
+];
+
+/**
+ * Switching sections unmounts the section's component. A guard that lived
+ * there came back empty while its request was still in flight, so the same
+ * request could go out again.
+ */
+describe.each(LIFETIME_CASES)(
+  "pending guard survives a section switch: $name",
+  (c) => {
+    it("suppresses a repeat until the request settles", async () => {
+      const held = c.hold();
+      const props: MainContentProps = {
+        activeSection: c.section,
+        loading: false,
+        viewData: { ...VIEW, ...c.view } as ViewResponse,
+        sections: null,
+        onViewUpdate: vi.fn(),
+        onMutationError: vi.fn(),
+        sectionSearchOpen: false,
+        onSectionSearchClose: vi.fn(),
+        ...held.props,
+      };
+      const { rerender } = render(<MainContent {...props} />);
+      c.reveal?.();
+
+      await act(async () => c.trigger());
+      expect(held.sent).toHaveBeenCalledTimes(1);
+
+      rerender(<MainContent {...props} activeSection="packages" />);
+      expect(() => c.control()).toThrow();
+      rerender(<MainContent {...props} />);
+      c.reveal?.();
+
+      expect(c.control()).toBeDisabled();
+      await act(async () => c.trigger());
+      expect(held.sent).toHaveBeenCalledTimes(1);
+
+      await act(async () => held.settle());
+      await waitFor(() => expect(c.control()).toBeEnabled());
+
+      await act(async () => c.trigger());
+      expect(held.sent).toHaveBeenCalledTimes(2);
+    });
+  },
+);

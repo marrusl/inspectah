@@ -18,7 +18,7 @@ import {
 } from "@patternfly/react-core";
 import { EllipsisVIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
-import { usePendingGuard } from "../hooks/usePendingGuard";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 import type { ReferenceSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 import type { ViewResponse } from "../api/types";
@@ -50,6 +50,12 @@ export interface SidebarProps {
   searchSlot?: ReactNode;
   /** Callback for batch-toggling all actionable items in a group. */
   onBatchToggle?: (groupSlug: string, include: boolean) => Promise<void>;
+  /**
+   * Batch toggles in flight, by the group or section slug the request
+   * sends. The owner must outlive the sidebar: the mobile overlay unmounts
+   * on close while its request is still running.
+   */
+  batchGuard: PendingGuard;
 }
 
 function sectionCount(
@@ -136,6 +142,7 @@ export function Sidebar({
   onClose,
   searchSlot,
   onBatchToggle,
+  batchGuard,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   const [expandedGroups, setExpandedGroups] = useState<
@@ -145,9 +152,8 @@ export function Sidebar({
 
   // --- Batch-toggle state ---
   const [openMenuSlug, setOpenMenuSlug] = useState<string | null>(null);
-  // Batch toggles in flight, by the group or section slug the request
-  // sends. Not shared with the per-item toggles in the main view.
-  const { pendingKeys: batchPending, runGuarded: runBatch } = usePendingGuard();
+  // Not shared with the per-item toggles in the main view.
+  const { pendingKeys: batchPending, runGuarded: runBatch } = batchGuard;
   const [pkgConfirmSlug, setPkgConfirmSlug] = useState<string | null>(null);
   const [batchAnnouncement, setBatchAnnouncement] = useState("");
 

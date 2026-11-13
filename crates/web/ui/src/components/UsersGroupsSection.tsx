@@ -9,7 +9,7 @@ import {
 } from "@patternfly/react-core";
 import type { UserDecision, ViewResponse } from "../api/types";
 import { setUserStrategy, setUserPassword } from "../api/client";
-import { usePendingGuard } from "../hooks/usePendingGuard";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 import { UserCard } from "./UserCard";
 import { UserArtifactPreview } from "./UserArtifactPreview";
 
@@ -18,6 +18,12 @@ export interface UsersGroupsSectionProps {
   sessionIsSensitive: boolean;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
+  /**
+   * Requests in flight, by username: the strategy and the password both
+   * change the one user record, so a user's card is held while either is.
+   * The owner must outlive this section, which unmounts on a section switch.
+   */
+  pendingGuard: PendingGuard;
 }
 
 export function UsersGroupsSection({
@@ -25,11 +31,10 @@ export function UsersGroupsSection({
   sessionIsSensitive,
   onViewUpdate,
   onMutationError,
+  pendingGuard,
 }: UsersGroupsSectionProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
-  // Requests in flight, by username: the strategy and the password both
-  // change the one user record, so a user's card is held while either is.
-  const { pendingKeys, runGuarded } = usePendingGuard();
+  const { pendingKeys, runGuarded } = pendingGuard;
 
   const handleStrategyChange = useCallback(
     (username: string, strategy: "skip" | "useradd") => {

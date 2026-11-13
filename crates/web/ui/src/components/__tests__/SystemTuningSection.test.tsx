@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { SystemTuningSection } from "../SystemTuningSection";
+// Rendered with a real pending guard, as its owner supplies one in the app.
+import { SystemTuningSectionWithGuard as SystemTuningSection } from "../../test-utils/withPendingGuard";
 import type {
   SysctlFileDto,
   SysctlViewDto,

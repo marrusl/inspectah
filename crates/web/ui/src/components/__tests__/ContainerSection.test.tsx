@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ContainerSection } from "../ContainerSection";
+// Rendered with a real pending guard, as its owner supplies one in the app.
+import { ContainerSectionWithGuard as ContainerSection } from "../../test-utils/withPendingGuard";
 import type {
   QuadletDecisionDto,
   FlatpakDecisionDto,
