@@ -107,6 +107,16 @@ export function UserCard({
     setPasswordExpanded(!passwordExpanded);
   }, [passwordExpanded, clearPasswordFailure]);
 
+  // What the password form shows: its own check, or the request's failure.
+  // The card announces it only while the form is open to show it, so a
+  // closed form leaves no hidden copy behind.
+  const shownPasswordError = passwordError || passwordFailure;
+  const passwordFormOpen =
+    expanded &&
+    passwordExpanded &&
+    (passwordInputVisible || user.password_choice === "new");
+  const announcedPasswordError = passwordFormOpen ? shownPasswordError : "";
+
   const isInteractive = user.classification === "interactive";
 
   // "Preserve" is only available when the user has an existing password hash.
@@ -284,10 +294,14 @@ export function UserCard({
         </div>
       )}
 
-      {/* A failure can land while focus is elsewhere. The live region is
-          always in the page, so a screen reader announces the failure when
-          it appears, and only then: a card that mounts with a failure
-          already showing does not announce it again. */}
+      {/* The card's one announcer. A failure can land while focus is
+          elsewhere, or while the password form is closed, so it is
+          announced from this live region, which is in the page for as long
+          as the card is: a screen reader announces a failure when it
+          appears, and only then. A card that mounts with a failure already
+          showing does not announce it again. The password form shows its
+          own failure as plain text, so this region carries a hidden copy
+          of it, named for the user since the form may not have focus. */}
       <HelperText
         isLiveRegion
         data-testid={`user-failure-${user.name}`}
@@ -299,6 +313,11 @@ export function UserCard({
       >
         {cardFailure && (
           <HelperTextItem variant="error">{cardFailure}</HelperTextItem>
+        )}
+        {announcedPasswordError && (
+          <span className="inspectah-sr-only">
+            {`New password for ${user.name}: ${announcedPasswordError}`}
+          </span>
         )}
       </HelperText>
 
@@ -574,21 +593,21 @@ export function UserCard({
                           marginBottom: "6px",
                         }}
                       />
-                      {/* Always in the page while the form is open, so a
-                          failure that lands is announced (see the card's
-                          failure region above). */}
+                      {/* Not live: the form can open with a failure in it,
+                          and a region inserted with its content is not
+                          reliably announced. The card's announcer above
+                          announces it. */}
                       <HelperText
-                        isLiveRegion
                         data-testid={`user-password-error-${user.name}`}
                         style={
-                          passwordError || passwordFailure
+                          shownPasswordError
                             ? { marginBottom: "6px" }
                             : undefined
                         }
                       >
-                        {(passwordError || passwordFailure) && (
+                        {shownPasswordError && (
                           <HelperTextItem variant="error">
-                            {passwordError || passwordFailure}
+                            {shownPasswordError}
                           </HelperTextItem>
                         )}
                       </HelperText>

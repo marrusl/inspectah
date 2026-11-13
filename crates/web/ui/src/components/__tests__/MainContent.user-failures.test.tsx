@@ -371,9 +371,11 @@ describe.each([
 
 /**
  * A failure can land while the operator's focus is elsewhere, so each one
- * is in a polite live region that is in the page before the failure is,
- * which is what makes a screen reader announce the change. One region
- * only, so the failure is announced once.
+ * is announced from the card's polite live region, which is in the page
+ * for as long as the card is, before the failure is: that is what makes a
+ * screen reader announce the change. A new-password failure also shows in
+ * the password form, which can open with it, so that copy is not live.
+ * One announcer per card, so the failure is announced once.
  */
 describe("user failures are announced", () => {
   /** The live regions and alerts the element sits in. */
@@ -387,19 +389,77 @@ describe("user failures are announced", () => {
     return found;
   }
 
-  it("announces a new-password failure in the form's live region", async () => {
+  /** Every live region and alert in the card. */
+  function cardAnnouncers(username: string): Element[] {
+    return Array.from(
+      screen
+        .getByTestId(`user-card-${username}`)
+        .querySelectorAll('[aria-live], [role="alert"], [role="status"]'),
+    );
+  }
+
+  /** The announcement for a new-password failure on alice. */
+  const PASSWORD_ANNOUNCEMENT = `New password for alice: ${PASSWORD_FAILURE}`;
+
+  it("announces a new-password failure in the card's live region, not the form", async () => {
     const held = hold(vi.mocked(client.setUserPassword));
     render(<MainContent {...baseProps()} />);
     await submitNewPassword();
-    const region = screen.getByTestId("user-password-error-alice");
+    const region = screen.getByTestId("user-failure-alice");
     expect(region).toHaveAttribute("aria-live", "polite");
     expect(region).toHaveTextContent("");
 
     await act(async () => held.fail());
 
-    const text = screen.getByText(PASSWORD_FAILURE);
-    expect(region).toContainElement(text);
-    expect(announcers(text)).toEqual([region]);
+    expect(region).toHaveTextContent(PASSWORD_ANNOUNCEMENT);
+    expect(cardAnnouncers("alice")).toEqual([region]);
+    const shown = screen.getByText(PASSWORD_FAILURE);
+    expect(shown).toBeVisible();
+    expect(announcers(shown)).toEqual([]);
+  });
+
+  it("announces a new-password failure that lands after the operator closed the form", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    render(<MainContent {...baseProps()} />);
+    await submitNewPassword();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Password options/ })[0],
+    );
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    const region = screen.getByTestId("user-failure-alice");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveTextContent("");
+
+    await act(async () => held.fail());
+
+    // The form opens again to show it, and the region that was already in
+    // the page is the one that announces it.
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+    expect(screen.getByTestId("user-failure-alice")).toBe(region);
+    expect(region).toHaveTextContent(PASSWORD_ANNOUNCEMENT);
+    expect(cardAnnouncers("alice")).toEqual([region]);
+  });
+
+  it("announces the form's own check from the card's live region while the form shows it", () => {
+    render(<MainContent {...baseProps()} />);
+    openPasswordForm();
+    const region = screen.getByTestId("user-failure-alice");
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "hunter2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set password" }));
+
+    expect(region).toHaveTextContent(
+      "New password for alice: Passwords do not match.",
+    );
+    expect(announcers(screen.getByText("Passwords do not match."))).toEqual(
+      [],
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Password options/ })[0],
+    );
+    expect(region).toHaveTextContent("");
   });
 
   it("announces a strategy failure in the card's live region", async () => {
