@@ -295,6 +295,7 @@ export function MainContent({
   const containerGuard = usePendingGuard();
   const tunedGuard = usePendingGuard();
   const usersGuard = usePendingGuard();
+  const serviceGuard = usePendingGuard();
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -683,6 +684,7 @@ export function MainContent({
           dropins={viewData?.service_dropins ?? []}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
+          pendingGuard={serviceGuard}
         />
       </>
     );

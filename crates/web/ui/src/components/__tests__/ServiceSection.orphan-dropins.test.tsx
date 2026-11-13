@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ServiceSection } from "../ServiceSection";
+// Rendered with a real pending guard, as its owner supplies one in the app.
+import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/withPendingGuard";
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,

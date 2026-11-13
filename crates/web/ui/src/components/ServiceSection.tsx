@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
   ServiceDecisionDto,
@@ -8,6 +8,7 @@ import type {
   TriageTag,
 } from "../api/types";
 import { applyOp } from "../api/client";
+import type { PendingGuard } from "../hooks/usePendingGuard";
 import {
   attentionLabelColor,
   formatTriageReason,
@@ -20,6 +21,21 @@ export interface ServiceSectionProps {
   dropins: DropInDecisionDto[];
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
+  /**
+   * Requests in flight, by `serviceKey` and `dropinKey`. The owner must
+   * outlive this section, which unmounts on a section switch.
+   */
+  pendingGuard: PendingGuard;
+}
+
+/** Guard key for a service: the whole of its op's item_id key. */
+function serviceKey(unit: string): string {
+  return JSON.stringify(["service", unit]);
+}
+
+/** Guard key for a drop-in: the whole of its op's item_id key. */
+function dropinKey(path: string): string {
+  return JSON.stringify(["dropin", path]);
 }
 
 /** Group drop-ins by their parent unit name. */
@@ -161,8 +177,9 @@ export function ServiceSection({
   dropins,
   onViewUpdate,
   onMutationError,
+  pendingGuard,
 }: ServiceSectionProps) {
-  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const { pendingKeys, runGuarded } = pendingGuard;
 
   const dropinsByUnit = useMemo(() => groupDropinsByUnit(dropins), [dropins]);
 
@@ -171,68 +188,45 @@ export function ServiceSection({
     return dropins.filter((d) => !units.has(d.unit));
   }, [services, dropins]);
 
+  const sendInclude = useCallback(
+    (key: string, op: RefinementOp) => {
+      runGuarded(key, () =>
+        applyOp(op)
+          .then(onViewUpdate)
+          .catch((err) =>
+            onMutationError(
+              err instanceof Error ? err : new Error(String(err)),
+            ),
+          ),
+      );
+    },
+    [runGuarded, onViewUpdate, onMutationError],
+  );
+
   const handleToggleService = useCallback(
     (unit: string, currentInclude: boolean) => {
-      const id = `service:${unit}`;
-      setPendingIds((prev) => new Set(prev).add(id));
-      const op: RefinementOp = {
+      sendInclude(serviceKey(unit), {
         op: "SetInclude",
         target: {
           item_id: { kind: "Service", key: { unit } },
           include: !currentInclude,
         },
-      };
-      applyOp(op)
-        .then((updatedView) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onViewUpdate(updatedView);
-        })
-        .catch((err) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onMutationError(err instanceof Error ? err : new Error(String(err)));
-        });
+      });
     },
-    [onViewUpdate, onMutationError],
+    [sendInclude],
   );
 
   const handleToggleDropin = useCallback(
     (path: string, currentInclude: boolean) => {
-      const id = `dropin:${path}`;
-      setPendingIds((prev) => new Set(prev).add(id));
-      const op: RefinementOp = {
+      sendInclude(dropinKey(path), {
         op: "SetInclude",
         target: {
           item_id: { kind: "DropIn", key: { path } },
           include: !currentInclude,
         },
-      };
-      applyOp(op)
-        .then((updatedView) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onViewUpdate(updatedView);
-        })
-        .catch((err) => {
-          setPendingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(id);
-            return next;
-          });
-          onMutationError(err instanceof Error ? err : new Error(String(err)));
-        });
+      });
     },
-    [onViewUpdate, onMutationError],
+    [sendInclude],
   );
 
   if (services.length === 0 && dropins.length === 0) {
@@ -257,7 +251,7 @@ export function ServiceSection({
         const bucket = extractTriageBucket(svc.triage);
         const badge = badgeTextForTriage(svc.triage);
         const level = triageBucketToAttention(svc.triage);
-        const isPending = pendingIds.has(`service:${svc.unit}`);
+        const isPending = pendingKeys.has(serviceKey(svc.unit));
         const svcLocked = svc.locked === true;
         const isShadow = svc.shadow_type === "full_shadow";
 
@@ -410,7 +404,7 @@ export function ServiceSection({
                 dropin={di}
                 parentExcluded={!svc.include}
                 parentLocked={svcLocked}
-                isPending={pendingIds.has(`dropin:${di.path}`)}
+                isPending={pendingKeys.has(dropinKey(di.path))}
                 onToggle={handleToggleDropin}
               />
             ))}
@@ -443,7 +437,7 @@ export function ServiceSection({
                     dropin={di}
                     parentExcluded={false}
                     parentLocked={false}
-                    isPending={pendingIds.has(`dropin:${di.path}`)}
+                    isPending={pendingKeys.has(dropinKey(di.path))}
                     onToggle={handleToggleDropin}
                   />
                 ))}

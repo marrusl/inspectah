@@ -22,12 +22,14 @@ import {
 import { MainContent } from "../MainContent";
 import type { MainContentProps } from "../MainContent";
 import type {
+  DropInDecisionDto,
   FlatpakDecisionDto,
   GroupInfo,
   LanguagePackageEnv,
   QuadletDecisionDto,
   RefinedPackage,
   RepoGroupInfo,
+  ServiceDecisionDto,
   TunedDecisionDto,
   UserDecision,
   ViewResponse,
@@ -153,6 +155,24 @@ const TUNED: TunedDecisionDto = {
   include: true,
 };
 
+const SERVICE: ServiceDecisionDto = {
+  unit: "httpd.service",
+  triage: {
+    triage: { mode: "single_host", site: null },
+    primary_reason: "service_non_default_state",
+    annotations: [],
+  } as ServiceDecisionDto["triage"],
+  include: true,
+  current_state: "enabled",
+};
+
+const DROPIN: DropInDecisionDto = {
+  unit: "httpd.service",
+  path: "/etc/systemd/system/httpd.service.d/override.conf",
+  triage: SERVICE.triage,
+  include: true,
+};
+
 const USER: UserDecision = {
   name: "alice",
   uid: 1000,
@@ -270,6 +290,32 @@ const CASES: GuardCase[] = [
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle throughput-performance" }),
     trigger: pressSpace("tuned-item-throughput-performance"),
+  },
+  {
+    name: "service toggle",
+    request: "applyOp",
+    renderWith: (onMutationError) =>
+      renderSection(
+        "services",
+        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        onMutationError,
+      ),
+    control: () =>
+      screen.getByRole("checkbox", { name: "Toggle httpd.service" }),
+    trigger: pressSpace("service-item-httpd.service"),
+  },
+  {
+    name: "service drop-in toggle",
+    request: "applyOp",
+    renderWith: (onMutationError) =>
+      renderSection(
+        "services",
+        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        onMutationError,
+      ),
+    control: () =>
+      screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),
+    trigger: pressSpace(`dropin-item-${DROPIN.path}`),
   },
   {
     name: "user include checkbox",
@@ -478,6 +524,25 @@ const LIFETIME_CASES: LifetimeCase[] = [
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle throughput-performance" }),
     trigger: pressSpace("tuned-item-throughput-performance"),
+  },
+  {
+    name: "service toggle",
+    section: "services",
+    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    hold: () => heldClientRequest("applyOp"),
+    control: () =>
+      screen.getByRole("checkbox", { name: "Toggle httpd.service" }),
+    trigger: pressSpace("service-item-httpd.service"),
+  },
+  {
+    name: "service drop-in toggle",
+    section: "services",
+    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    hold: () => heldClientRequest("applyOp"),
+    control: () =>
+      screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),
+    trigger: () =>
+      screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }).click(),
   },
   {
     name: "user include checkbox",

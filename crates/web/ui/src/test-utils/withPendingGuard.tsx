@@ -19,6 +19,10 @@ import {
   type TunedSectionProps,
 } from "../components/TunedSection";
 import {
+  ServiceSection,
+  type ServiceSectionProps,
+} from "../components/ServiceSection";
+import {
   SystemTuningSection,
   type SystemTuningSectionProps,
 } from "../components/SystemTuningSection";
@@ -54,4 +58,11 @@ export function SystemTuningSectionWithGuard(
 ) {
   const guard = usePendingGuard();
   return <SystemTuningSection {...props} tunedGuard={guard} />;
+}
+
+export function ServiceSectionWithGuard(
+  props: Omit<ServiceSectionProps, "pendingGuard">,
+) {
+  const guard = usePendingGuard();
+  return <ServiceSection {...props} pendingGuard={guard} />;
 }
