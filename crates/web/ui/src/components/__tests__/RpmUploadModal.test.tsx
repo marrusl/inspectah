@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RpmUploadModal } from "../RpmUploadModal";
 import { RpmBatchUploadModal } from "../RpmBatchUploadModal";
+import type { UploadMatchResult } from "../../hooks/useRpmUpload";
 
 describe("RpmUploadModal", () => {
   const defaultProps = {
@@ -192,6 +193,80 @@ describe("RpmUploadModal", () => {
       /custom-agent-2\.0-1\.el9\.x86_64\.rpm matches custom-agent/,
     );
     expect(screen.queryByTestId("upload-error")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The modal stays mounted in App while closed, so closing it mid-upload
+   * left the request running: reopening allowed a second upload, and the
+   * first one's result landed in the modal opened for the next package.
+   * Closing is blocked until the upload settles instead.
+   */
+  describe("while an upload is in flight", () => {
+    async function startHeldUpload(onClose: () => void) {
+      let finish: (result: UploadMatchResult) => void = () => {};
+      const onUpload = vi.fn(
+        () =>
+          new Promise<UploadMatchResult>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      render(
+        <RpmUploadModal
+          {...defaultProps}
+          onUpload={onUpload}
+          onClose={onClose}
+        />,
+      );
+      chooseRpm("custom-agent-1.0-1.el9.x86_64.rpm");
+      await screen.findByText(
+        /custom-agent-1\.0-1\.el9\.x86_64\.rpm matches custom-agent/,
+      );
+      return {
+        onUpload,
+        upload: screen.getByRole("button", { name: /confirm|upload/i }),
+        finish: () =>
+          finish({
+            uploaded: 1,
+            matched: "custom-agent.x86_64",
+            status: "matched",
+          }),
+      };
+    }
+
+    it("cannot be closed by the header, Escape, Cancel or the backdrop", async () => {
+      const onClose = vi.fn();
+      const held = await startHeldUpload(onClose);
+      await act(async () => held.upload.click());
+
+      expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      const backdrop = document.querySelector(".pf-v6-c-backdrop");
+      expect(backdrop).not.toBeNull();
+      fireEvent.click(backdrop!);
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("dialog", { name: /Upload RPM for custom-agent/ }),
+      ).toBeInTheDocument();
+
+      await act(async () => held.finish());
+      await screen.findByTestId("upload-match-result");
+      expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends one upload when confirmed twice", async () => {
+      const held = await startHeldUpload(vi.fn());
+
+      await act(async () => {
+        held.upload.click();
+        held.upload.click();
+      });
+
+      expect(held.onUpload).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

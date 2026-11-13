@@ -73,6 +73,9 @@ export function RpmUploadModal({
     error?: string;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
+  // The synchronous copy of `uploading`. Two clicks in one tick both run
+  // before the disabled state renders, so only the ref drops the second.
+  const uploadingRef = useRef(false);
   const [matchResult, setMatchResult] = useState<UploadMatchResult | null>(
     null,
   );
@@ -111,7 +114,9 @@ export function RpmUploadModal({
   }, []);
 
   const handleConfirm = useCallback(async () => {
+    if (uploadingRef.current) return;
     if (file && validation?.valid) {
+      uploadingRef.current = true;
       setUploading(true);
       setUploadError(null);
       try {
@@ -128,6 +133,7 @@ export function RpmUploadModal({
         setMatchResult(null);
         setUploadError(err instanceof Error ? err.message : String(err));
       } finally {
+        uploadingRef.current = false;
         setUploading(false);
       }
     }
@@ -141,9 +147,13 @@ export function RpmUploadModal({
     triggerRef,
   ]);
 
+  // No close while an upload is in flight. This component stays mounted
+  // while closed, so a close here left the request running: reopening
+  // allowed a second upload, and the first one's result landed in the
+  // modal opened for the next package.
   const handleClose = useCallback(() => {
+    if (uploadingRef.current) return;
     handleClear();
-    setUploading(false);
     onClose();
     // Return focus to trigger element
     triggerRef.current?.focus();
@@ -155,7 +165,8 @@ export function RpmUploadModal({
     <Modal
       variant={ModalVariant.medium}
       isOpen={isOpen}
-      onClose={handleClose}
+      // Without onClose the Modal drops its close button and ignores Escape.
+      onClose={uploading ? undefined : handleClose}
       aria-label={`Upload RPM for ${packageName}`}
     >
       <ModalHeader title={`Upload RPM for ${packageName}`} />
