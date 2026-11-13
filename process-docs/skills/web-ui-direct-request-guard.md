@@ -1,6 +1,6 @@
 ---
 name: web-ui-direct-request-guard
-description: A refine UI control that sends its request directly instead of through App's `useMutation` has no `isPending`, so it must go through `usePendingGuard`, keyed by the full identity of the item it changes, or a double click or a repeated key press sends the request twice.
+description: A refine UI control that sends its request directly instead of through App's `useMutation` has no `isPending`, so it must go through `usePendingGuard`, keyed by the full identity of the item it changes and owned by a component that stays mounted for the session, or a double click, a repeated key press, or a repeat after navigating away and back sends the request twice.
 ---
 
 # Direct-request controls need `usePendingGuard`
@@ -50,28 +50,47 @@ runGuarded(key, () =>
 - **Guard the whole action, not only the request.** Set password hashes in
   the browser before it sends anything, so the hash runs inside the guarded
   request and a second click while hashing is dropped too.
-- **When the guard lives below the handler, return the promise.** The pin,
-  batch toggle and reset guards live in the component that renders the
-  control (`LanguagePackageList`, `Sidebar`, `StatsBar`), and App's handler
-  returns its request so the guard is held until it settles.
+- **Own the guard where it survives navigation.** The guard is React
+  state and a ref, so it lasts only as long as the component that calls
+  `usePendingGuard`. The components that render these controls do not
+  last: `MainContent` mounts only the active section, so switching
+  sections unmounts it, and App mounts the mobile sidebar overlay only
+  while it is open. A guard owned there comes back empty while its request
+  is still in flight, and the same request goes out again. So the owner is
+  a component that stays mounted for the session, and the control's
+  component takes the guard as a required prop (`pendingGuard`, `pinGuard`,
+  `batchGuard`). Required, so a new render site cannot quietly create a
+  guard of its own.
+- **When the guard lives above the request, return the promise.** The pin,
+  batch toggle and reset requests are App's handlers, called through a
+  callback prop. Each handler returns its request so the guard is held
+  until it settles.
 - **Disable the control from `pendingKeys`.** That is what the operator
   sees; the ref inside the hook is what actually drops a second call.
 
 ## Guarded controls and their keys
 
-| Control | Where | Key |
-|---|---|---|
-| Package checkbox, Not carried Include | `MainContent` | `name.arch` |
-| Repo switch | `MainContent` | section id |
-| Group toggle, ungroup | `MainContent` | group name |
-| Quadlet row | `ContainerSection` | `["quadlet", path]` |
-| Flatpak row | `ContainerSection` | `["flatpak", app_id, remote, branch]` |
-| Tuned row | `TunedSection` | `tuned:<profile>` |
-| User include, strategy, password | `UsersGroupsSection` | username |
-| Language package pin | `LanguagePackageList` | `["pin", ecosystem, env_path, package]` |
-| Bulk pin | `LanguagePackageList` | `["bulk-pin", ecosystem, env_path]` |
-| Batch toggle | `Sidebar` | group or section slug |
-| Reset | `StatsBar` | `reset` |
+| Control | Rendered in | Guard owner | Key |
+|---|---|---|---|
+| Package checkbox, Not carried Include | `MainContent` | `MainContent` | `name.arch` |
+| Repo switch | `MainContent` | `MainContent` | section id |
+| Group toggle, ungroup | `MainContent` | `MainContent` | group name |
+| Quadlet row | `ContainerSection` | `MainContent` | `["quadlet", path]` |
+| Flatpak row | `ContainerSection` | `MainContent` | `["flatpak", app_id, remote, branch]` |
+| Tuned row | `TunedSection` | `MainContent` | `tuned:<profile>` |
+| User include, strategy, password | `UsersGroupsSection` | `MainContent` | username |
+| Language package pin | `LanguagePackageList` | `MainContent` | `["pin", ecosystem, env_path, package]` |
+| Bulk pin | `LanguagePackageList` | `MainContent` | `["bulk-pin", ecosystem, env_path]` |
+| Batch toggle | `Sidebar` | App | group or section slug |
+| Reset | `StatsBar` | `StatsBar` | `reset` |
+
+`MainContent` is rendered unconditionally and without a `key`, so it stays
+mounted for the session: it switches sections by what it renders, not by
+remounting. App holds the batch guard because neither sidebar stays
+mounted: the overlay unmounts on close, and the desktop sidebar unmounts
+when the viewport narrows. `StatsBar` is rendered unconditionally by
+`AppShell`, so it keeps its own reset guard. If any of these owners ever
+gets a `key` or a conditional mount, move its guards up.
 
 The user's strategy and password share one key because both change the one
 user record. A batch toggle or bulk pin does not block the per-item toggles
@@ -96,9 +115,18 @@ explicit values, so they cannot double-apply.
 `components/__tests__/PendingGuards.test.tsx` is a table over the guarded
 controls: trigger twice in one `act` with a request held open and assert
 one call, then reject the request and assert the control is enabled again.
-Add a row when you add a direct-request control. Controls whose request is
+Add a row when you add a direct-request control. The section rows render
+through `MainContent`, their production owner. Controls whose request is
 a callback prop rather than a client call (pin, bulk pin, batch toggle,
 reset) have the same two cases in their own component test files, where
-their fixtures live. Where a key has more than one field, add a case with
+their fixtures live; those tests render the component through a wrapper in
+`src/test-utils/withPendingGuard.tsx` that stands in for its owner.
+
+Each guard owned above its control also has a lifetime case: hold a
+request open, unmount the control's component and mount it again, and
+assert the control is still disabled and a repeat is still dropped until
+the request settles. The section cases switch `MainContent` to another
+section and back (`PendingGuards.test.tsx`); the batch toggle case closes
+and reopens the mobile overlay in a full `App` (`src/__tests__/BatchToggle.guard.test.tsx`). Where a key has more than one field, add a case with
 two items differing in only one field: a held request on one leaves the
 other enabled and sending its own request.
