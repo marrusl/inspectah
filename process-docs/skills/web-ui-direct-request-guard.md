@@ -61,6 +61,19 @@ runGuarded(key, () =>
   component takes the guard as a required prop (`pendingGuard`, `pinGuard`,
   `batchGuard`). Required, so a new render site cannot quietly create a
   guard of its own.
+- **No pending state of your own around a direct request.** A `useState`
+  set of ids or an `isSubmitting` flag next to a direct request has both
+  faults this skill exists for: it is not synchronous, so two key presses
+  in one tick both send, and it dies with the component. Use the shared
+  guard from the stable owner instead.
+- **What a request leaves behind must outlive the control too.** A
+  failure message held in the component that started the request is lost
+  when that component unmounts before the request settles, and the
+  operator comes back to a control with no sign that anything failed.
+  Keep it with the guard's owner. Set password does this: `MainContent`
+  holds the failure by username, and the user card opens its password
+  form to show it on return. `onMutationError` is not a substitute: in
+  `MainContent` it only logs.
 - **When the guard lives above the request, return the promise.** The pin,
   batch toggle and reset requests are App's handlers, called through a
   callback prop. Each handler returns its request so the guard is held
@@ -78,6 +91,8 @@ runGuarded(key, () =>
 | Quadlet row | `ContainerSection` | `MainContent` | `["quadlet", path]` |
 | Flatpak row | `ContainerSection` | `MainContent` | `["flatpak", app_id, remote, branch]` |
 | Tuned row | `TunedSection` | `MainContent` | `tuned:<profile>` |
+| Service row | `ServiceSection` | `MainContent` | `["service", unit]` |
+| Service drop-in row | `ServiceSection` | `MainContent` | `["dropin", path]` |
 | User include, strategy, password | `UsersGroupsSection` | `MainContent` | username |
 | Language package pin | `LanguagePackageList` | `MainContent` | `["pin", ecosystem, env_path, package]` |
 | Bulk pin | `LanguagePackageList` | `MainContent` | `["bulk-pin", ecosystem, env_path]` |
@@ -126,7 +141,9 @@ Each guard owned above its control also has a lifetime case: hold a
 request open, unmount the control's component and mount it again, and
 assert the control is still disabled and a repeat is still dropped until
 the request settles. The section cases switch `MainContent` to another
-section and back (`PendingGuards.test.tsx`); the batch toggle case closes
+section and back (`PendingGuards.test.tsx`), and Set password has the
+same switch with a failure landing while the operator is away, asserting
+the failure shows on return; the batch toggle case closes
 and reopens the mobile overlay in a full `App` (`src/__tests__/BatchToggle.guard.test.tsx`). Where a key has more than one field, add a case with
 two items differing in only one field: a held request on one leaves the
 other enabled and sending its own request.
