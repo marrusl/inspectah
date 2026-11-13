@@ -486,9 +486,13 @@ function SingleHostApp({
       });
   }, [mutation]);
 
+  // Bumped on each successful reset, so MainContent can drop what it
+  // keeps for the records the reset replaced.
+  const [resetCounter, setResetCounter] = useState(0);
   const handleReset = useCallback(async () => {
     try {
       const result = await resetDefaults();
+      setResetCounter((n) => n + 1);
       view.invalidate();
       onMutationSuccess(result);
     } catch (err) {
@@ -745,6 +749,7 @@ function SingleHostApp({
                 sectionSearchOpen={sectionSearchOpen}
                 onSectionSearchClose={onSectionSearchClose}
                 filterClearCounter={filterClearCounter}
+                resetCounter={resetCounter}
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}
                 onNavigateToItem={handleNavigateFromSearch}

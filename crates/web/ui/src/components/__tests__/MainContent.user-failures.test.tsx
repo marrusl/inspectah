@@ -1,0 +1,216 @@
+/**
+ * A failed Users request is kept by MainContent, by username, so it
+ * outlives the user card, which unmounts on a section switch. What it must
+ * not outlive is the user record it was about: a reset replaces every
+ * record, and a user that leaves the view and comes back is a new record.
+ * A failure from before either of those is no longer true of the card.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { MainContent } from "../MainContent";
+import type { MainContentProps } from "../MainContent";
+import type { UserDecision, ViewResponse } from "../../api/types";
+import * as client from "../../api/client";
+import * as crypt from "../../utils/crypt";
+
+vi.mock("../../api/client", () => ({
+  applyOp: vi.fn(),
+  ungroupGroup: vi.fn(),
+  setUserStrategy: vi.fn(),
+  setUserPassword: vi.fn(),
+}));
+
+vi.mock("../../utils/crypt", () => ({
+  sha512Crypt: vi.fn(),
+}));
+
+const ALICE: UserDecision = {
+  name: "alice",
+  uid: 1000,
+  gid: 1000,
+  shell: "/bin/bash",
+  home: "/home/alice",
+  include: true,
+  classification: "interactive",
+  containerfile_strategy: "skip",
+  password_choice: "new",
+};
+
+const BOB: UserDecision = {
+  ...ALICE,
+  name: "bob",
+  uid: 1001,
+  gid: 1001,
+  home: "/home/bob",
+};
+
+const PASSWORD_FAILURE = "Failed to set password. Please try again.";
+
+function view(users: UserDecision[]): ViewResponse {
+  return {
+    packages: [],
+    config_files: [],
+    repo_groups: [],
+    package_groups: [],
+    generation: 1,
+    stats: {
+      sections: [],
+      needs_review_count: 0,
+      ops_applied: 0,
+      can_undo: false,
+      can_redo: false,
+      baseline_available: false,
+    },
+    version_changes: [],
+    service_states: [],
+    service_dropins: [],
+    quadlets: [],
+    flatpaks: [],
+    sysctl: { state: "unavailable", reason: "not collected" },
+    tuned: [],
+    users_groups_decisions: users,
+    session_is_sensitive: false,
+  } as unknown as ViewResponse;
+}
+
+function baseProps(): MainContentProps {
+  return {
+    activeSection: "users_groups",
+    loading: false,
+    viewData: view([ALICE, BOB]),
+    sections: null,
+    onViewUpdate: vi.fn(),
+    onMutationError: vi.fn(),
+    sectionSearchOpen: false,
+    onSectionSearchClose: vi.fn(),
+  };
+}
+
+/** Holds each call to `mock` open; settles the latest one on demand. */
+function hold(mock: {
+  mockImplementation: (impl: () => Promise<ViewResponse>) => unknown;
+}) {
+  let fail: (err: Error) => void = () => {};
+  let succeed: () => void = () => {};
+  mock.mockImplementation(
+    () =>
+      new Promise<ViewResponse>((resolve, reject) => {
+        fail = reject;
+        succeed = () => resolve(view([ALICE, BOB]));
+      }),
+  );
+  return {
+    fail: () => fail(new Error("connection reset")),
+    succeed: () => succeed(),
+  };
+}
+
+const includeAlice = () =>
+  screen.getByRole("checkbox", { name: "Include alice" });
+
+/** Opens alice's card and password options if they are closed. */
+function openPasswordForm() {
+  const expand = screen.queryByRole("button", { name: "Expand alice details" });
+  if (expand) fireEvent.click(expand);
+  if (!screen.queryByLabelText("Password")) {
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /Password options/ })[0],
+    );
+  }
+}
+
+/** Fills in and submits a new password for alice. */
+async function submitNewPassword() {
+  openPasswordForm();
+  for (const label of ["Password", "Confirm password"]) {
+    fireEvent.change(screen.getByLabelText(label), {
+      target: { value: "hunter2" },
+    });
+  }
+  await act(async () =>
+    screen.getByRole("button", { name: "Set password" }).click(),
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(crypt.sha512Crypt).mockResolvedValue("$6$salt$hash");
+});
+
+describe("user failures end with the user record", () => {
+  it("keeps a failure across a new view that still has the user", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+
+    rerender(<MainContent {...props} viewData={view([ALICE, BOB])} />);
+    rerender(<MainContent {...props} activeSection="packages" />);
+    rerender(<MainContent {...props} viewData={view([ALICE, BOB])} />);
+
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+  });
+
+  it("clears a shown failure on reset", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+
+    rerender(<MainContent {...props} resetCounter={1} />);
+
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+  });
+
+  it("drops a failure from a request that was in flight across a reset", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+
+    rerender(<MainContent {...props} resetCounter={1} />);
+    await act(async () => held.fail());
+
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+    await waitFor(() => expect(includeAlice()).toBeEnabled());
+  });
+
+  it("does not show an old failure on a user that left the view and came back", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+
+    rerender(<MainContent {...props} viewData={view([BOB])} />);
+    expect(screen.queryByTestId("user-card-alice")).toBeNull();
+    rerender(<MainContent {...props} viewData={view([ALICE, BOB])} />);
+
+    expect(screen.getByTestId("user-card-alice")).toBeInTheDocument();
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+  });
+
+  it("drops a failure from a request sent before the user left and came back", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+
+    rerender(<MainContent {...props} viewData={view([BOB])} />);
+    rerender(<MainContent {...props} viewData={view([ALICE, BOB])} />);
+    await act(async () => held.fail());
+
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+  });
+});

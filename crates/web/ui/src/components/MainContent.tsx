@@ -21,6 +21,7 @@ import type {
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
 import { usePendingGuard } from "../hooks/usePendingGuard";
+import { useItemFailures } from "../hooks/useItemFailures";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
@@ -69,6 +70,11 @@ export interface MainContentProps {
   onSectionSearchClose: () => void;
   /** Incremented when global search navigates, to clear section filter even for same-section nav. */
   filterClearCounter?: number;
+  /**
+   * Incremented after a successful reset. Every user record is replaced,
+   * so failures kept for the old records are cleared.
+   */
+  resetCounter?: number;
   /** When set, auto-expands any collapsed summary containing this item ID. */
   revealItemId?: string;
   /** Called with test ID when an action needs focus restoration after undo. */
@@ -138,6 +144,7 @@ export function MainContent({
   sectionSearchOpen,
   onSectionSearchClose,
   filterClearCounter = 0,
+  resetCounter = 0,
   revealItemId,
   onSetUndoFocusTarget,
   onNavigateToItem,
@@ -296,25 +303,24 @@ export function MainContent({
   const tunedGuard = usePendingGuard();
   const usersGuard = usePendingGuard();
   const serviceGuard = usePendingGuard();
-  // Set-password failures, by username. Held here for the same reason as
+  // Failed Users requests, by username. Held here for the same reason as
   // the guards: the card that shows the failure unmounts on a section
-  // switch, and a hash or request that fails while the operator is away
-  // must still be on the card when they come back.
-  const [passwordFailures, setPasswordFailures] = useState<
-    ReadonlyMap<string, string>
-  >(() => new Map());
-  const setPasswordFailure = useCallback(
-    (username: string, message: string | null) => {
-      setPasswordFailures((prev) => {
-        if (message === null && !prev.has(username)) return prev;
-        const next = new Map(prev);
-        if (message === null) next.delete(username);
-        else next.set(username, message);
-        return next;
-      });
-    },
-    [],
-  );
+  // switch, and a request that fails while the operator is away must
+  // still be on the card when they come back. A failure ends with the
+  // user record it was about: a reset replaces every record, and a user
+  // that leaves the view is a new record if it comes back.
+  const userFailures = useItemFailures<string>();
+  const { clearAll: clearUserFailures, retain: retainUserFailures } =
+    userFailures;
+  useEffect(() => {
+    clearUserFailures();
+  }, [resetCounter, clearUserFailures]);
+  useEffect(() => {
+    if (!viewData) return;
+    retainUserFailures(
+      new Set((viewData.users_groups_decisions ?? []).map((u) => u.name)),
+    );
+  }, [viewData, retainUserFailures]);
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -678,8 +684,7 @@ export function MainContent({
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
         pendingGuard={usersGuard}
-        passwordFailures={passwordFailures}
-        onPasswordFailure={setPasswordFailure}
+        userFailures={userFailures}
       />
     );
   }

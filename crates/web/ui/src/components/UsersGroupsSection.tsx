@@ -10,6 +10,7 @@ import {
 import type { UserDecision, ViewResponse } from "../api/types";
 import { setUserStrategy, setUserPassword } from "../api/client";
 import type { PendingGuard } from "../hooks/usePendingGuard";
+import type { ItemFailures } from "../hooks/useItemFailures";
 import { UserCard } from "./UserCard";
 import { UserArtifactPreview } from "./UserArtifactPreview";
 
@@ -25,12 +26,11 @@ export interface UsersGroupsSectionProps {
    */
   pendingGuard: PendingGuard;
   /**
-   * Set-password failures, by username, and the setter for them. Owned
-   * with the guard, so a failure that lands while this section is
-   * unmounted is still shown when it mounts again.
+   * Set-password failures, by username. Owned with the guard, so a failure
+   * that lands while this section is unmounted is still shown when it
+   * mounts again, and ended by the owner when the user record is replaced.
    */
-  passwordFailures: ReadonlyMap<string, string>;
-  onPasswordFailure: (username: string, message: string | null) => void;
+  userFailures: ItemFailures<string>;
 }
 
 const PASSWORD_FAILURE_MESSAGE = "Failed to set password. Please try again.";
@@ -41,11 +41,11 @@ export function UsersGroupsSection({
   onViewUpdate,
   onMutationError,
   pendingGuard,
-  passwordFailures,
-  onPasswordFailure,
+  userFailures,
 }: UsersGroupsSectionProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const { pendingKeys, runGuarded } = pendingGuard;
+  const { failures, begin: beginAttempt, clear: clearFailure } = userFailures;
 
   const handleStrategyChange = useCallback(
     (username: string, strategy: "skip" | "useradd") => {
@@ -62,7 +62,7 @@ export function UsersGroupsSection({
    * Sends the password choice. For a new password, `hashPassword` runs
    * inside the guard, so a second click while it hashes is dropped too.
    * A new password that fails, in the hash or in the request, is recorded
-   * with `onPasswordFailure`; only a failed request is also reported to
+   * in `userFailures`; only a failed request is also reported to
    * `onMutationError`. Returns the outcome (rejecting on failure), or
    * `undefined` when the user already has a request in flight and this one
    * was dropped.
@@ -75,7 +75,7 @@ export function UsersGroupsSection({
     ): Promise<void> | undefined => {
       let outcome: Promise<void> | undefined;
       runGuarded(username, () => {
-        onPasswordFailure(username, null);
+        const recordFailure = beginAttempt(username);
         outcome = (async () => {
           try {
             const hash = hashPassword ? await hashPassword() : undefined;
@@ -90,7 +90,7 @@ export function UsersGroupsSection({
             }
           } catch (err) {
             if (choice === "new") {
-              onPasswordFailure(username, PASSWORD_FAILURE_MESSAGE);
+              recordFailure(PASSWORD_FAILURE_MESSAGE);
             }
             throw err;
           }
@@ -101,7 +101,7 @@ export function UsersGroupsSection({
       });
       return outcome;
     },
-    [runGuarded, onViewUpdate, onMutationError, onPasswordFailure],
+    [runGuarded, onViewUpdate, onMutationError, beginAttempt],
   );
 
   // Summarize which users are included via useradd. The full set of
@@ -198,8 +198,8 @@ export function UsersGroupsSection({
           isPending={pendingKeys.has(user.name)}
           onStrategyChange={handleStrategyChange}
           onPasswordChange={handlePasswordChange}
-          passwordFailure={passwordFailures.get(user.name)}
-          onClearPasswordFailure={() => onPasswordFailure(user.name, null)}
+          passwordFailure={failures.get(user.name)}
+          onClearPasswordFailure={() => clearFailure(user.name)}
         />
       ))}
 
