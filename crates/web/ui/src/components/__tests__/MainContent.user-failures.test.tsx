@@ -216,6 +216,55 @@ describe("user failures end with the user record", () => {
 });
 
 /**
+ * Undo and Redo keep the user in the view but can replace their record.
+ * A failure about the record that step replaced is no longer true of the
+ * card; a failure on a user the step did not touch still is.
+ */
+describe("user failures across Undo and Redo", () => {
+  it("clears a shown failure when the step changes that user", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+
+    rerender(<MainContent {...props} historyChange={{ users: ["alice"] }} />);
+
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+  });
+
+  it("keeps a failure when the step changes only another user", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+
+    rerender(<MainContent {...props} historyChange={{ users: ["bob"] }} />);
+
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+  });
+
+  it("drops a failure from a request in flight across a step that changes the user, and records the next one", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+
+    rerender(<MainContent {...props} historyChange={{ users: ["alice"] }} />);
+    await act(async () => held.fail());
+
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+    await waitFor(() => expect(includeAlice()).toBeEnabled());
+
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+  });
+});
+
+/**
  * A failure opens the card and its password form so the operator sees it.
  * Closing either is the operator acknowledging it, so the failure must not
  * open them again when the card mounts after a section switch.

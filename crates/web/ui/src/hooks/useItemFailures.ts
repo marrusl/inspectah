@@ -17,6 +17,11 @@ export interface ItemFailures<F> {
   clearAll: () => void;
   /** Ends the lifetime of every item not in `present` and drops its failure. */
   retain: (present: ReadonlySet<string>) => void;
+  /**
+   * Ends the lifetime of each item in `keys` and drops its failure, for
+   * items still in the view whose record was replaced.
+   */
+  end: (keys: Iterable<string>) => void;
 }
 
 /**
@@ -24,7 +29,8 @@ export interface ItemFailures<F> {
  * controls that send them. Each item has a lifetime, a number taken from
  * a counter when the first attempt on it begins and never reused: a reset
  * or the item leaving the view ends it, so an attempt from before cannot
- * match a later one.
+ * match a later one. An owner can also end the lifetime of an item whose
+ * record was replaced while it stayed in the view.
  */
 export function useItemFailures<F>(): ItemFailures<F> {
   const [failures, setFailures] = useState<ReadonlyMap<string, F>>(
@@ -78,5 +84,17 @@ export function useItemFailures<F>(): ItemFailures<F> {
     });
   }, []);
 
-  return { failures, begin, clear, clearAll, retain };
+  const end = useCallback((keys: Iterable<string>) => {
+    const ended = new Set(keys);
+    for (const key of ended) lifetimes.current.delete(key);
+    setFailures((prev) => {
+      const gone = [...prev.keys()].filter((key) => ended.has(key));
+      if (gone.length === 0) return prev;
+      const next = new Map(prev);
+      for (const key of gone) next.delete(key);
+      return next;
+    });
+  }, []);
+
+  return { failures, begin, clear, clearAll, retain, end };
 }

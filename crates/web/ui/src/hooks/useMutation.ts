@@ -12,8 +12,11 @@ export interface UseMutationResult {
 type QueueEntry =
   { kind: "op"; op: RefinementOp } | { kind: "undo" } | { kind: "redo" };
 
+/** Which request produced a view: an op, or a step through history. */
+export type MutationKind = QueueEntry["kind"];
+
 export function useMutation(
-  onSuccess: (view: ViewResponse) => void,
+  onSuccess: (view: ViewResponse, kind: MutationKind) => void,
   onError: (err: Error) => void,
 ): UseMutationResult {
   const [isPending, setIsPending] = useState(false);
@@ -37,7 +40,7 @@ export function useMutation(
           result = await apiRedo();
         }
         queueRef.current.shift();
-        onSuccess(result);
+        onSuccess(result, entry.kind);
       } catch (err: unknown) {
         // Clear queue on error, revert all pending
         queueRef.current = [];

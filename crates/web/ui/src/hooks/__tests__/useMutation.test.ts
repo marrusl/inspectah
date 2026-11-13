@@ -62,7 +62,9 @@ describe("useMutation", () => {
       result.current.mutate(op);
     });
 
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith(MOCK_VIEW));
+    await waitFor(() =>
+      expect(onSuccess).toHaveBeenCalledWith(MOCK_VIEW, "op"),
+    );
     expect(onError).not.toHaveBeenCalled();
   });
 
@@ -80,7 +82,9 @@ describe("useMutation", () => {
       result.current.undo();
     });
 
-    await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onSuccess).toHaveBeenCalledWith(MOCK_VIEW, "undo"),
+    );
     expect(fetchSpy).toHaveBeenCalledWith("/api/undo", expect.any(Object));
   });
 
@@ -98,7 +102,9 @@ describe("useMutation", () => {
       result.current.redo();
     });
 
-    await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onSuccess).toHaveBeenCalledWith(MOCK_VIEW, "redo"),
+    );
     expect(fetchSpy).toHaveBeenCalledWith("/api/redo", expect.any(Object));
   });
 

@@ -28,6 +28,7 @@ import { ContextList } from "./ContextList";
 import { VersionChangesTable } from "./VersionChangesTable";
 import { UsersGroupsSection } from "./UsersGroupsSection";
 import type { UserFailure } from "./UserCard";
+import type { HistoryChange } from "./userHistory";
 import { ServiceSection } from "./ServiceSection";
 import { ContainerSection } from "./ContainerSection";
 import { SectionSearch } from "./SectionSearch";
@@ -76,6 +77,13 @@ export interface MainContentProps {
    * so failures kept for the old records are cleared.
    */
   resetCounter?: number;
+  /**
+   * Set to a new object after each successful Undo or Redo, naming the
+   * users whose record that step changed. Their kept failures were about
+   * the record the step replaced, so they are cleared; other users keep
+   * theirs.
+   */
+  historyChange?: HistoryChange;
   /** When set, auto-expands any collapsed summary containing this item ID. */
   revealItemId?: string;
   /** Called with test ID when an action needs focus restoration after undo. */
@@ -146,6 +154,7 @@ export function MainContent({
   onSectionSearchClose,
   filterClearCounter = 0,
   resetCounter = 0,
+  historyChange,
   revealItemId,
   onSetUndoFocusTarget,
   onNavigateToItem,
@@ -308,14 +317,21 @@ export function MainContent({
   // the guards: the card that shows the failure unmounts on a section
   // switch, and a request that fails while the operator is away must
   // still be on the card when they come back. A failure ends with the
-  // user record it was about: a reset replaces every record, and a user
-  // that leaves the view is a new record if it comes back.
+  // user record it was about: a reset replaces every record, an Undo or
+  // Redo replaces the records it changed, and a user that leaves the view
+  // is a new record if it comes back.
   const userFailures = useItemFailures<UserFailure>();
-  const { clearAll: clearUserFailures, retain: retainUserFailures } =
-    userFailures;
+  const {
+    clearAll: clearUserFailures,
+    retain: retainUserFailures,
+    end: endUserFailures,
+  } = userFailures;
   useEffect(() => {
     clearUserFailures();
   }, [resetCounter, clearUserFailures]);
+  useEffect(() => {
+    if (historyChange) endUserFailures(historyChange.users);
+  }, [historyChange, endUserFailures]);
   useEffect(() => {
     if (!viewData) return;
     retainUserFailures(

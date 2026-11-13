@@ -17,11 +17,14 @@ import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
+import type { MutationKind } from "./hooks/useMutation";
 import { usePendingGuard } from "./hooks/usePendingGuard";
 import { useRpmUpload } from "./hooks/useRpmUpload";
 import { useGroups } from "./hooks/useGroups";
 import { Sidebar } from "./components/Sidebar";
 import { MainContent } from "./components/MainContent";
+import { changedUsers } from "./components/userHistory";
+import type { HistoryChange } from "./components/userHistory";
 import { AppShell } from "./components/AppShell";
 import { AggregateApp } from "./components/AggregateApp";
 import { RpmUploadModal } from "./components/RpmUploadModal";
@@ -189,8 +192,27 @@ function SingleHostApp({
 
   const undoFocusRef = useRef<string | null>(null);
 
+  // The view on screen, to compare with the view an Undo or Redo returns.
+  // A ref, so a step that settles while others wait in the queue compares
+  // against the latest view rather than the one its callback closed over.
+  const shownViewRef = useRef(view.data);
+  useEffect(() => {
+    shownViewRef.current = view.data;
+  }, [view.data]);
+  // Set after each successful Undo or Redo that changed a user record, so
+  // MainContent can drop failures kept for the records the step replaced.
+  const [historyChange, setHistoryChange] = useState<HistoryChange>();
+
   const onMutationSuccess = useCallback(
-    (_result: ViewResponse) => {
+    (result: ViewResponse, kind?: MutationKind) => {
+      if (kind === "undo" || kind === "redo") {
+        const users = changedUsers(
+          shownViewRef.current?.users_groups_decisions,
+          result.users_groups_decisions,
+        );
+        shownViewRef.current = result;
+        if (users.length > 0) setHistoryChange({ users });
+      }
       view.invalidate();
 
       const testId = undoFocusRef.current;
@@ -750,6 +772,7 @@ function SingleHostApp({
                 onSectionSearchClose={onSectionSearchClose}
                 filterClearCounter={filterClearCounter}
                 resetCounter={resetCounter}
+                historyChange={historyChange}
                 revealItemId={revealItemId}
                 onSetUndoFocusTarget={handleSetUndoFocusTarget}
                 onNavigateToItem={handleNavigateFromSearch}
