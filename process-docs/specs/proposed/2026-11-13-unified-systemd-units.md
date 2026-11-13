@@ -288,7 +288,7 @@ cascades to every drop-in of that name, full shadows included
 | `.device`, `.scope` | Excluded. | They never exist as unit files. Administrator drop-ins for them (`*.device.d`, `*.scope.d`) are still collected as drop-ins (§ 7.7). |
 | Template (`name@.service`) | A mask is carried. Nothing else is: a template has no enablement without an instance name. | A masked template is durable state with its own name, and it masks every instance (§ 7.4). |
 | Enabled template instance (`wg-quick@wg0.service`) | Carry state, when the configuration the instance reads is in the export (§ 7.5, § 10.8). Instances tied to one host's devices are advisory. | Decided (§ 2). |
-| Hand-made link in `.wants` or `.requires`, a hand-made alias link, and every `.upholds` link | **Advisory only**, with the `systemctl add-wants` or `add-requires` line where one exists (§ 7.3, § 10.9). | Decided (§ 2) for hand-made links. That no `.upholds` link is carried, enable-made or not, is this spec's design: the link starts and restarts its unit (§ 7.3). | Decided (§ 2). An `.upholds` link starts and restarts its unit, so none is carried, enable-made or not. |
+| Hand-made link in `.wants` or `.requires`, a hand-made alias link, and every `.upholds` link | **Advisory only**, with the `systemctl add-wants` or `add-requires` line where one exists (§ 7.3, § 10.9). | Decided (§ 2) for hand-made links. That no `.upholds` link is carried, enable-made or not, is this spec's design: the link starts and restarts its unit (§ 7.3). |
 | Generated units | Excluded (§ 3). Administrator drop-ins on them are kept. | Decided. The generator's input is the fact, not its output. |
 | Transient units, runtime and `linked` states | Excluded, with today's warning. | Decided, and they do not survive a reboot or need manual handling. |
 | User units | Out of scope (§ 3). | Not part of this change. |
@@ -536,8 +536,9 @@ pub struct UnitStateChange {
     /// out (§ 7.3). Empty for most units.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<AlsoMember>,
-    /// Drop-ins under `/etc/systemd/system` that supply an `[Install]`
-    /// key naming a link (§ 7.2). An `enable` depends on them.
+    /// Drop-ins under `/etc/systemd/system` that apply to the unit and
+    /// hold an `[Install]` section (§ 7.2). Each is checked as a
+    /// `Destination` when the plan reads it (§ 10.2 rule 5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_drop_ins: Vec<String>,
     /// Paths under `/etc` a template instance cannot start without
@@ -707,7 +708,7 @@ read from a host file has one of three answers:
 | `MountUnitFinding.mount_point` | `Where=` | Stored only when it is an absolute path; otherwise `None`. Classified as an identifier. |
 | `MountUnitFinding.nofail` | `Options=` | A boolean. Nothing to scrub. |
 | `required_config`, `data_paths` | Paths in the template's unit file, expanded | Stored only when the expanded value is an absolute path under `/etc` or `/var`. Classified as identifiers. |
-| `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`. Classified as identifiers. |
+| `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
@@ -859,18 +860,17 @@ systemd documents as resetting the list, was not measured. Such a section
 is `Undetermined(DropInReset)` (run R5).
 
 The reader is a pure function over text. Only the collector calls it. The
-render-time plan reads no `[Install]` section; it applies one line test to
-staged files (§ 10.2 rule 7).
+render-time plan reads no `[Install]` key; it tests only whether a file
+holds an `[Install]` section (§ 10.2).
 
 A carried `enable` follows the `[Install]` the image has, and with no
 `[Install]` it exits 0 and links nothing (measured). So the reader, which
 already reads each drop-in, records on the state change the path of every
-drop-in under `/etc/systemd/system` that supplies a `WantedBy=`,
-`RequiredBy=` or `Alias=` value (`install_drop_ins`, § 6.3), and rule 5 of
-§ 10.2 omits the `enable` when one of them is not staged. A vendor
-drop-in arrives with its package and is not listed. One limit stays: when
-the operator excludes a full shadow, the command links what the vendor
-file's `[Install]` names, which may differ from the host's links.
+drop-in under `/etc/systemd/system` that applies to the unit and holds an
+`[Install]` section, whatever its keys (`install_drop_ins`, § 6.3). With
+the fragment, that is the row's install evidence, and rule 5 of § 10.2
+carries an `enable` or `disable` only when the export holds exactly that.
+A vendor drop-in arrives with its package and is not listed.
 
 ### 7.3 Enablement is read from the links
 
@@ -1312,7 +1312,9 @@ pub struct StagedWrites<'a> {
     pub writes: BTreeMap<Destination, StagedWrite<'a>>,
     pub withheld: Vec<(Destination, StagedFileKind, WithheldWhy)>,
 }
-pub struct StagedWrite<'a> { pub source: StagedFileKind, pub content: &'a str }
+/// `content` is borrowed from the snapshot, or owned when inspectah
+/// generates it (the flatpak provisioning service).
+pub struct StagedWrite<'a> { pub source: StagedFileKind, pub content: Cow<'a, str> }
 
 pub enum WithheldWhy {
     /// A zero-length file at a unit path is a mask (rule 1).
@@ -1320,6 +1322,8 @@ pub enum WithheldWhy {
     /// Another staged file has this destination, or needs it as a
     /// directory.
     Conflict { other: Destination },
+    /// A unit inspectah generates has the name of a collected unit.
+    GeneratedNameCollision { unit: UnitName },
 }
 
 pub(crate) fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
@@ -1369,27 +1373,30 @@ the Containerfile comes from anywhere else.
    entries (`make_timer_service`, `scheduled.rs:676`), and
    `flatpak-provision.service`. Their files are in `staged_writes` at their
    image destinations. Each is copied and enabled in its own section, in
-   that order, with the line the shared helper produces. One whose name is
-   also a collected unit's, or whose destination another staged file
-   claims, is declined with a FIXME that says to exclude one of the two.
-   A known case is not designed around: a host built from an inspectah
-   image has a local, enabled `flatpak-provision.service`, so a rescan of
-   it declines the generated unit until the operator excludes the
-   collected row and its file.
+   that order, with the line the shared helper produces. A generated unit
+   whose name is also a collected unit's is resolved before the list is
+   final: `staged_writes` withholds its files, the paired service of a
+   generated timer included, the request is declined with a FIXME, and the
+   collected unit is then planned against the files that remain. So a
+   collected vendor timer is never enabled over a generated file of its
+   name. A known case is not designed around: a host built from an
+   inspectah image has a local, enabled `flatpak-provision.service`, so a
+   rescan of it carries the collected copy and withholds the generated
+   one until the operator excludes the collected row and its file.
 
-**The kernel and boot section's own `RUN systemctl enable tuned.service`
-is removed; `tuned.service` is enabled or not through its own unit row.
-(Mark Russell, 2026-11-13)** That section enables `tuned.service` whenever tuned activation is included (§ 4), whatever the
-unit's state on the host, and with the `tuned` package excluded the line
-fails the build. Whether the unit is enabled is unit state, and the units
-section is its one owner (§ 8). The stock preset enables it
+**The kernel and boot section's own `RUN systemctl enable tuned.service` is
+removed; `tuned.service` is enabled or not through its own unit row. (Mark
+Russell, 2026-11-13)** That section enables `tuned.service` whenever tuned
+activation is included (§ 4), whatever the unit's state on the host, and
+with the `tuned` package excluded the line fails the build. Whether the
+unit is enabled is unit state, and the units section is its one owner
+(§ 8). The stock preset enables it
 (`testdata/fixtures/services/preset-90-default.preset`), so a host at
 preset gets the same from the image's preset, and a host that enabled it
-against a `disable` preset has a state change that goes through this
-plan. A host with an active profile and the service disabled therefore
-gets an image with the service off, which matches the host and differs
-from today. The kernel section keeps the lines that write the active
-profile.
+against a `disable` preset has a state change that goes through this plan.
+A host with an active profile and the service disabled therefore gets an
+image with the service off, which matches the host and differs from today.
+The kernel section keeps the lines that write the active profile.
 
 For each request the plan runs these rules in order. The first one that
 fails decides.
@@ -1400,9 +1407,9 @@ fails decides.
 | 2 | **Storage units act only on a package's file.** If the export stages a unit file at the name of a `PackagedStorage` unit, the administrator's file is what the image would load. | `enable`, `disable`, `mask` on a storage kind | Omitted: `the export carries an administrator's unit file for it (<path>)`. The mount advisory (§ 10.6) is rendered for the staged file. |
 | 3 | **Units the target needs are not switched off** (§ 10.3). | `disable` and `mask` on a protected unit; `mask` on `tmp.mount` | A FIXME line, no command. |
 | 4 | **A mask needs the path free.** `systemctl mask` makes a link at `/etc/systemd/system/<name>`, after every `COPY` (§ 10.7), and exits 1 when a regular file is there (measured). | `mask` when a unit file is staged at the name | Omitted: `the export also carries a unit file at <path>; exclude one of the two`. |
-| 5 | **The command needs a unit file.** See below. | `enable`, `disable`, `set-default` | Omitted: `unit file /etc/systemd/system/<name> is not in the export`, or the package reason the presence tiers give today. |
+| 5 | **The command acts on the file the row was recorded from.** See below. | `enable`, `disable`, `set-default` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, or the package reason the presence tiers give today. |
 | 6 | **An instance needs its configuration** (§ 10.8). | `enable` on an instance | Omitted, naming the path. |
-| 7 | **`Also=` members match.** See below. | `enable`, `disable` | An advisory, no command. |
+| 7 | **`Also=` members match, and nothing in `/etc` changes what `Also=` means.** See below. | `enable`, `disable` with a non-empty `also` list | An advisory, no command. |
 
 Rules 2 and 4 read the same fact, what `staged_writes` holds at the unit's
 name, and they answer the fleet case directly. One host's enabled,
@@ -1411,27 +1418,55 @@ that name merge into two valid rows. While the file's config row is
 included, rule 2 omits the enable and the advisory explains the file;
 when the operator excludes the file, the enable returns.
 
-**Rule 5, the unit file.** The file is the one `UnitFragment::file` names;
-for a `PackagedStorage` unit, the vendor file of its own name. An `enable`
-also needs every drop-in in the row's `install_drop_ins` to be in
-`staged_writes`: without it the command would exit 0 and link nothing, or
-link less than the host had. It is omitted as `InstallDropInNotStaged`,
-reading `the drop-in <path> that sets its [Install] section is not in the
-export`.
+**Install files.** Rules 5 and 7 ask one question of the export: which
+files under `/etc/systemd/system` can supply or change `[Install]` for a
+name `N`. They are:
 
-| What the export stages at that file's name | The fragment the row declares | The file is in the image when |
+- the unit file at `N`, and for an instance its template's unit file;
+- every `.conf` that holds an `[Install]` section in a drop-in directory
+  that applies to `N`: `N.d`, the template's `.d` for an instance, the
+  type-wide directory (`service.d`) and each dash-prefix directory
+  (`a-.service.d`).
+
+"Holds an `[Install]` section" is the only lexical read the plan makes.
+After lines that end in a backslash are joined to the next, the file has a
+line whose trimmed text is `[Install]`. The keys are not read, so an
+assignment with spaces around `=`, one continued over several lines and an
+empty reset all count, and a file whose content was not captured counts
+too. A drop-in with no such section, the usual `[Service]` override, is
+not an install file.
+
+**Rule 5, the row's own file.** `enable` and `disable` read the `[Install]`
+of whatever file the image loads. The row recorded one file. If the export
+changes which file that is, by excluding it or by staging another, the
+command acts on an `[Install]` nobody recorded, its `Also=` included.
+
+| The row's fragment | The export must | Otherwise |
 |---|---|---|
-| A unit file | Any | Always. The declared fragment is not consulted. |
-| Nothing | `Vendor`, `Shadowed`, or a `PackagedStorage` unit | Nothing | `Vendor`, or `Shadowed` | The presence tiers say the owning package is (`classify_service_presence`, unchanged). `owning_package: None` keeps Tier 1: emit. |
-| Nothing | `Local` | Never. |
+| `Local` or `Shadowed` | Stage the unit file at `/etc/systemd/system/<file>`. | Omitted: `UnitFileNotStaged`. |
+| `Vendor`, or a `PackagedStorage` unit | Stage no unit file at that name, and have the owning package in the image by the presence tiers (`classify_service_presence`, unchanged; `owning_package: None` keeps Tier 1: emit). | Omitted: `InstallEvidenceChanged`, or the package reason the tiers give today. |
 
-The plan uses the declared fragment only for the question the export
-cannot answer: whether a package ships the unit. Because rule 5 asks
-`staged_writes`, the renderer and the stager cannot disagree, which is the
-defect in `inspectah-timer-enable-lines-unquoted-and-trust-empty-units`
-item 2. The rule covers `disable` because `disable` on an absent unit
-exits 1 on RHEL 9 (0 on RHEL 10), as `enable` does on both. `mask`
-succeeds on an absent unit and is exempt (all measured).
+And for every fragment, the install drop-ins the export stages for the
+unit are exactly the row's `install_drop_ins`: none missing, none added.
+Each recorded path is read through `Destination`, and one that does not
+parse fails the rule. In a fleet aggregate, a staged install file whose
+row holds more than one content variant fails it too, since the row may
+have been recorded from another variant. For an instance whose `file` is
+its template, a unit file staged at the instance's own name fails it as
+well. All of these are `InstallEvidenceChanged`, reading `the [Install]
+section in the image would not be the one recorded on the source host
+(<path>)`.
+
+So a unit recorded `Shadowed` whose shadow is excluded gets no `enable`
+and no `disable`: the vendor file's `[Install]` was never read. A unit
+whose install drop-in is excluded gets no `enable` that would exit 0 and
+link nothing. A generated unit's request needs only its own file, which is
+in `staged_writes` by construction. `mask` reads no `[Install]`, succeeds
+on an absent unit, and is exempt. `disable` on an absent unit exits 1 on
+RHEL 9 (0 on RHEL 10), as `enable` does on both (all measured). Because
+the rule asks `staged_writes`, the renderer and the stager cannot
+disagree, which is the defect in
+`inspectah-timer-enable-lines-unquoted-and-trust-empty-units` item 2.
 
 **Rule 7, `Also=` members.** `systemctl enable U` also enables every unit
 `U`'s `[Install]` names in `Also=`, and the units those name in turn, in
@@ -1451,82 +1486,79 @@ host's individual links with `add-wants` and `ln -s` in place of `enable`
 was considered and rejected: the Containerfile should read like one a
 person would write. (Mark Russell, 2026-11-13)**
 
-The command on `U` is carried only when all three conditions hold. Each is
-one pass over data already in hand. Nothing follows `Also=` at render.
+A command on `U` with a non-empty `also` list is carried only when all
+three conditions hold. Each is one pass over data already in hand, and
+nothing follows `Also=` at render.
 
-1. **Every member's links match the verb.** For `enable`, each
-   `AlsoMember` in `U`'s `also` list is `Installed` or `Inert`. For
-   `disable`, each is `Unlinked` or `Inert`. `Other` matches neither
-   (§ 6.3). The state is the one read from the links (§ 7.3), so a member
-   with no `[Install]` and a hand-made link, which systemd reports as
-   `enabled`, is `Other` and stops a `disable` that would remove the link.
-2. **Every member is acted on only as its own rules allow.**
-   - A member that has a state change row: the row is included, has the
-     same verb, and passes rules 1 to 6. An instance whose configuration
-     gate fails, a storage unit rule 2 omits, a unit the operator excluded
-     and a protected unit all stop the command through their own rows.
-   - A member with no row: it is not a mount, automount or swap unit; for
-     `enable`, it is not a template instance; for `disable`, it is not a
-     protected unit. These are tested on the name alone. They are the
-     kinds inspectah acts on only through a row of their own, and without
-     one there is nothing to check the member against.
-3. **No staged file assigns `Also=` for `U` or for a member.** The list
-   was read from the unit files on the source host. A staged file can say
-   something else: the row may come from one host of a fleet and the file
-   from another, or from an edited snapshot. The plan does not read
-   `[Install]` sections to find out. It applies one line test, an
-   assignment to `Also`, to every file `staged_writes` holds at the name
-   of `U` or of a member, in the `.d` directory of either, and in the
-   template's for an instance. A match makes the command an advisory. A
-   match in a type-wide or prefix `.d` directory, which no single unit
-   owns, makes every `enable` and `disable` in the plan an advisory.
-   **A unit whose staged file sets `Also=` is always an advisory, with
-   the lines to add by hand. (Mark Russell, 2026-11-13)** That holds on a
-   single host too, where the list and the file agree.
+1. **Every member's links match the verb.** For `enable`, each member is
+   `Installed` or `Inert`. For `disable`, each is `Unlinked` or `Inert`.
+   `Other` matches neither (§ 6.3). The state is the one read from the
+   links (§ 7.3), so a member with no `[Install]` and a hand-made link,
+   which systemd reports as `enabled`, is `Other`.
+2. **Every member is acted on only as its own rules allow.** A member that
+   has a state change row: the row is included, has the same verb, and
+   passes rules 1 to 6. A member with no row is refused by name in two
+   cases the evidence cannot speak to: a template instance under
+   `enable`, whose configuration only its own row checks, and a protected
+   unit under `disable`, which a package-mode source does not have and the
+   image does.
+3. **The install evidence is what was recorded.** Neither `U` nor any
+   member has an install file in the snapshot, staged or excluded. The
+   list and the links were then read from vendor files alone, and vendor
+   files are what the image loads for every one of them. **A unit whose
+   staged file sets `Also=` is always an advisory, with the lines to add
+   by hand. (Mark Russell, 2026-11-13)** That is one case of this
+   condition, and it holds on a single host where the list and the file
+   agree.
 
 One pass is enough because the `also` list is everything `Also=` reaches
-from `U`: a member's own members are in it, so if a member's row would
-fail this rule on some further unit, `U` fails on that unit directly.
-Condition 3 keeps that true for an assembled export, since an edge the
-list lacks can only come from a staged file. Its cost is a local unit or
-full shadow whose own file uses `Also=`. The units that use `Also=` in the
-measured package set are vendor units, whose files the export does not
-stage.
+from `U`, so a member's own members are in it, and condition 3 means no
+file in the export can add an edge, drop one, or change what `enable`
+does to a member. What that costs: a local unit or full shadow that has
+`Also=` members, and a unit or member with an `[Install]` drop-in, are
+never carried. The units that use `Also=` in the measured package set are
+vendor units with nothing under `/etc` but links, so the ordinary case, an
+administrator who ran `enable`, is carried.
 
-Two things rule 7 leaves alone. A member whose file is not in the image is
-skipped by `enable` with exit 0 (measured); `disable` was not measured for
-that case (run R5). If it fails on RHEL 9 as `disable` on an absent
-operand does, the result is a failed build at that line, not a wrong
-image. A member with
-no row is at its preset on the source, and by § 3 the image has it there
-too.
+Three things rule 7 leaves alone. A member whose file is not in the image
+is skipped by `enable` with exit 0 (measured); `disable` was not measured
+for that case (run R5), and if it fails on RHEL 9 as `disable` on an
+absent operand does, the result is a failed build at that line, not a
+wrong image. A member with no row is at its preset on the source, and by
+§ 3 the image has it there too. And a snapshot whose recorded list
+disagrees with its own unit file, which a scan cannot produce, is believed:
+the plan checks that the files are the recorded ones, not that the record
+is true.
 
 `OmissionReason` gains:
 
 ```rust
-/// The unit's own file is not in the export (rule 5).
+/// A local or shadowed unit's own file is not in the export (rule 5).
 UnitFileNotStaged,
-/// A drop-in that supplies the unit's `[Install]` is not in the export
-/// (rule 5).
-InstallDropInNotStaged { path: String },
+/// The file or drop-ins that supply `[Install]` in the image are not the
+/// ones the row recorded (rule 5).
+InstallEvidenceChanged { path: String },
 /// The export carries an administrator's file for a storage unit (rule 2).
 StorageFileStaged { path: String },
 /// The target needs the unit, or needs it unmasked (rule 3). A FIXME.
 TargetNeedsUnit,
 /// A mask and a unit file claim one path (rule 4).
 MaskPathOccupied { path: String },
-/// Two writers claim the path of a unit inspectah generates. A FIXME.
-GeneratedUnitCollision { path: String },
-/// The command would also act on `member` (rule 7, conditions 1 and 2).
-/// An advisory.
+/// A unit inspectah generates has a collected unit's name. A FIXME.
+GeneratedNameCollision,
+/// The command would also act on `member` (rule 7). An advisory.
 AlsoMember { member: UnitName, why: AlsoWhy },
-/// A staged file assigns `Also=` (rule 7, condition 3). An advisory.
-StagedAlso { path: String },
 
-/// The member's links differ from what the verb produces; it has a row
-/// the plan does not carry with this verb; or it has no row and is a
-/// kind acted on only through one.
-pub enum AlsoWhy { LinksDiffer(MemberLinks), RowNotCarried, NeedsOwnRow }
+pub enum AlsoWhy {
+    /// The member's links on the source are not what the verb produces.
+    LinksDiffer(MemberLinks),
+    /// The member has a row the plan does not carry with this verb.
+    RowNotCarried,
+    /// The member has no row and is an instance or a protected unit.
+    NeedsOwnRow,
+    /// The unit or the member has an install file in the snapshot.
+    InstallFile { path: String },
+}
 ```
 
 Every reason not marked renders as an `# Omitted:` line. The `Also=`
@@ -1543,8 +1575,10 @@ advisory, for a links mismatch:
 The lines are `U`'s own command, then the opposite verb for each member
 recorded on the other side: `Unlinked` under an `enable`, `Installed`
 under a `disable`. That pair reproduced the host exactly for
-`cups.service` and `cups.socket` (measured). For every other reason the
-block names the member and the reason and gives no line.
+`cups.service` and `cups.socket` (measured). An `InstallFile` advisory
+names the file and gives `U`'s command alone, to be added after reading
+that file. For the other two reasons the block names the member and gives
+no line.
 
 **The no-RPM path runs every rule.** `render_service_intent` returns early
 into `render_without_rpm` when the snapshot has no package section
@@ -1709,9 +1743,9 @@ to the `/etc` file, which is the one that loads either way (measured).
 A unit inspectah generates is the one exception, and it is closed on
 itself. Its `COPY` and its enable sit together in its own section
 (scheduled tasks before the unit state section, container workloads
-after), and § 10.2 declines a generated unit whose name or destination a
-collected unit or another staged file shares. So no line in the unit state
-section depends on a `COPY` that follows it.
+after), and § 10.2 withholds the files of a generated unit whose name a
+collected unit shares. So no line in the unit state section depends on a
+`COPY` that follows it.
 
 The move is also why rules 1 and 4 of § 10.2 exist. With the commands
 last, `systemctl mask` meets a file already at its path and fails. A mask
@@ -1850,7 +1884,7 @@ The view response carries, in place of `service_states`:
 
 `declined` is computed by calling `plan_units` on the session's current
 snapshot, so the row shows what the export would do with the toggles as
-they stand, including a result caused by another row (rules 2, 4 and 7
+they stand, including a result caused by another row (rules 2, 4, 5 and 7
 of § 10.2). It is structured, so a refusal reaches a row whose
 `attention_reason` is null, as an imported row's may be. A file
 `staged_writes` withholds is shown the same way on the row that offered
@@ -1941,11 +1975,12 @@ not carried into the aggregate, as for every row today.
 **A merged export is validated at render, not at merge.** The merge joins
 rows by name and does not ask whether they agree. A package-owned mount
 unit's state change beside another host's administrator-written file of
-that name, a mask beside a unit file, and a recorded `Also=` list beside a
-staged file that assigns `Also=` are all kept, and each is decided by
-§ 10.2 from the files the operator leaves selected. Teaching the merge to
-reconcile them would be the aggregation redesign § 3 rules out, and would
-still miss a snapshot edited or imported after the merge.
+that name, a mask beside a unit file, and a row recorded from a vendor
+unit beside another host's shadow or `[Install]` drop-in are all kept, and
+each is decided by § 10.2 from the files the operator leaves selected.
+Teaching the merge to reconcile them would be the aggregation redesign § 3
+rules out, and would still miss a snapshot edited or imported after the
+merge.
 
 One aggregate defect closes as a side effect: a local timer present on some
 hosts was excluded by both of its owners and written anyway, because the
@@ -1994,9 +2029,10 @@ Phase 2 (every kind):
 - **T2. Types.** For each storage kind: a `state_changes` entry with a
   `local`, `shadowed` or `absent` fragment, or `vendor` with a null owner,
   fails to load; `vendor` with an owner loads, and fails when placed in
-  `mount_findings`. A template name, or a
-  packaged `tmp.mount` fails; a `.target` round-trips. A template name, or
-  an `absent` fragment, loads with `masked` and fails with `enabled`. A
+  `mount_findings`. A `TargetUnit`, tested directly, refuses
+  `cockpit.socket` and a packaged `tmp.mount`, and a `.target`
+  round-trips. Separately, in `state_changes`: a template name loads with
+  `masked` and fails with `enabled`, and so does an `absent` fragment. A
   `file` that is neither the unit's name nor its template's fails. A
   property test shows `classify` is total and stable through
   serialization. A signature test shows `systemctl_lines` takes
@@ -2058,7 +2094,11 @@ Phase 2 (every kind):
   package section. Config entries for `worker.service/extra.conf` and
   `worker.service` under `/etc/systemd/system`, in either order: neither
   is staged, both are named in a FIXME, and the enable is omitted; without
-  the first, the enable is carried. A failed write fails the export.
+  the first, the enable is carried. A failed write fails the export. A
+  unit recorded `Shadowed` whose shadow is excluded: no `enable` and no
+  `disable`, with `InstallEvidenceChanged`; a `Vendor` row with a unit
+  file staged at its name by another row: the same; each returns when the
+  export matches the row again.
 - **T16. Mask path.** A masked unit and a staged unit file of the same
   name: `MaskPathOccupied`. Excluding the file brings the mask back.
 - **T17. Runtime package updaters.** For `dnf-automatic.timer`, each
@@ -2095,8 +2135,11 @@ Phase 3 (one control per fact):
   enable is quoted and follows its own `COPY`. The kernel section writes
   the tuned profile and no `systemctl` line; `tuned.service` enabled
   against a `disable` preset is enabled from the unit state section, and
-  omitted when the `tuned` package is excluded. A generated unit whose
-  name is a collected unit's is declined with a FIXME.
+  omitted when the `tuned` package is excluded. A generated cron timer
+  and service named for a collected, enabled vendor timer, through the
+  scan export and the refine export: the request is declined with a
+  FIXME, neither generated file is in the staged tree, and the vendor
+  timer's enable is carried against the package's unit.
 
 Phase 4 (the `/etc/systemd/system` scan):
 
@@ -2107,13 +2150,13 @@ Phase 4 (the `/etc/systemd/system` scan):
   preset, a `Disabled` state change. With both links: `Enabled`, and an
   advisory for the extra link. Two `WantedBy=` values and one link:
   `PartialInstall`; with the second link shipped under `/usr/lib`:
-  `Enabled`, and no advisory for the vendor link. Only vendor links: `Disabled`. An `[Install]` holding only
-  `Also=`: no state change and no inventory entry. `getty@tty1.service`
-  with `enable getty@.service` in the presets and `DefaultInstance=tty1`:
-  no state change; `getty@tty2.service`: `Enabled`.
-  `remote-cryptsetup.target` disabled against an `enable` preset: an
-  inventory entry and no state change. The first four cases repeat for an
-  instance.
+  `Enabled`, and no advisory for the vendor link. Only vendor links:
+  `Disabled`. An `[Install]` holding only `Also=`: no state change and no
+  inventory entry. `getty@tty1.service` with `enable getty@.service` in the
+  presets and `DefaultInstance=tty1`: no state change;
+  `getty@tty2.service`: `Enabled`. `remote-cryptsetup.target` disabled
+  against an `enable` preset: an inventory entry and no state change. The
+  first four cases repeat for an instance.
 - **T23. Hand-made links.** A `multi-user.target.wants/backup.service`
   link to a unit with no `[Install]`: the `StaticUnit` link and its refine
   row exist; then the advisory holds the `add-wants` line, no `RUN` names
@@ -2129,7 +2172,9 @@ Phase 4 (the `/etc/systemd/system` scan):
   staged; `UnitFileNotStaged` with the file excluded. An instance with no
   file of its own has the template as `file`. A `WantedBy=` that comes
   only from a drop-in: carried, with the drop-in in `install_drop_ins`;
-  with that drop-in excluded, `InstallDropInNotStaged` and no enable. A
+  with that drop-in excluded, or with a second `[Install]` drop-in staged
+  for the unit that the row does not list, `InstallEvidenceChanged` and no
+  enable. An `install_drop_ins` path holding `..`: the same. A
   drop-in that assigns an empty
   `WantedBy=`: advised. A concrete instance file under
   `/run/systemd/system`, a copy under `/usr/local/lib/systemd/system`, and
@@ -2137,30 +2182,41 @@ Phase 4 (the `/etc/systemd/system` scan):
   warning naming the path and no state change, and the same unit without
   the extra file yields its row.
 - **T25. `Also=`.** Each case asserts the block or the carried line, and
-  the structured reason on the refine row. (a) `enable` with
-  three members, all `Installed`: carried. One `Unlinked`: an advisory
-  holding the `enable` line and a `disable` line for that member.
-  (b) `disable` with every member `Unlinked`: carried. A member with no
-  `[Install]` and a hand-made link: an advisory and no line to add.
-  (c) A member that is an instance with its own row, which this phase
-  omits: `RowNotCarried`. (d) A member whose row the operator excluded: an advisory;
-  included again: carried. (e) A member with no row that is an instance
-  (`enable`), a mount unit, or a `bootc-*` unit (`disable`): `NeedsOwnRow`.
-  (f) A member with no unit file: carried. (g) A chain `a`, `b`, `c` with
-  `c` `Unlinked`: `enable a` and `enable b` are both advisories naming
-  `c`. (h) A staged full shadow of a member, a staged local unit, and a
-  staged `service.d/` drop-in, each assigning `Also=`: `StagedAlso`; the
-  same files without the assignment leave the command carried. (i) `mask`
-  on a unit with members in any state: carried. (j) Two hosts that record
-  different links for one member, merged: `Other`. (k) `Also=` naming a
-  template is recorded as its `DefaultInstance=`, and as `Other` under
-  the template name when there is none.
+  the structured reason on the refine row. (a) A packaged unit with three
+  members, all `Installed`, and nothing in `/etc` but links: `enable` is
+  carried. It stays carried with a `[Service]`-only drop-in on the unit
+  and on a member. One member `Unlinked`: an advisory holding the `enable`
+  line and a `disable` line for that member. (b) `disable` with every
+  member `Unlinked`: carried. A member with no `[Install]` and a hand-made
+  link: an advisory and no line to add. (c) A member that is an instance
+  with its own row, which this phase omits: `RowNotCarried`. (d) A member
+  whose row the operator excluded: an advisory; included again: carried.
+  (e) A member with no row that is an instance (`enable`) or a `bootc-*`
+  unit (`disable`): `NeedsOwnRow`. (f) A member with no unit file:
+  carried. (g) A chain `a`, `b`, `c` with `c` `Unlinked`: `enable a` and
+  `enable b` are both advisories naming `c`. (h) Install evidence, each
+  with the unit otherwise carried. A packaged unit whose vendor file has
+  `Also=bootc-x.timer`, recorded `Shadowed` with an empty list because the
+  shadow drops the key, shadow excluded: no `enable` and no `disable`
+  (rule 5). A member recorded `Inert`, with another host's full shadow of
+  it that adds `WantedBy=` staged: `InstallFile`. A member with no row
+  whose `/etc` drop-in supplies its `WantedBy=`, drop-in excluded and
+  drop-in included: `InstallFile` both times. An instance recorded from a
+  vendor template, with a `name@.service` that sets `Also=` staged from
+  another row: omitted by rule 5. A staged local unit that sets `Also=`,
+  a local mount unit as a member, and a staged `service.d/` drop-in with
+  an `[Install]` section: `InstallFile`. A drop-in whose `[Install]`
+  section holds `Also = x`, an assignment continued over two lines, or an
+  empty `WantedBy=`: an install file each time. (i) `mask` on a unit with
+  members in any state: carried. (j) Two hosts that record different
+  links for one member, merged: `Other`. (k) `Also=` naming a template is
+  recorded as its `DefaultInstance=`, and as `Other` under the template
+  name when there is none.
 - **T26. Default target.** A `default.target` link to `graphical.target`
   yields `RUN systemctl set-default -- 'graphical.target'` with no
   comment beside it; no link, no line. The row's toggle removes and
   restores the line. A local target whose config row is excluded is
-  omitted. A `default_target` naming `cockpit.socket` or a packaged
-  `tmp.mount` fails to load; a `.target` round-trips.
+  omitted. A `default_target` naming `cockpit.socket` fails to load.
 - **T27. The instance floor.** An enabled instance found through the
   directory scan: a state change and a refine row exist, an `# Omitted:`
   line carries the placeholder reason, and no enable names it. An
@@ -2193,17 +2249,18 @@ Phase 5 (carried instances):
   `Also=` names the instance is an advisory while the instance is omitted
   and carried once its configuration is clean.
 
-**Real-host evidence.** "Measured" in this spec means the
-`Measured, 2026-11-13` subsection of
+**Real-host evidence.** "Measured" in this spec means the `Measured,
+2026-11-13` subsection of
 `process-docs/skills/real-host-validation-runs.md`: RHEL 9.8 (systemd 252)
 and RHEL 10.2 (systemd 257) hosts, and builds from `rhel9/rhel-bootc:9.8`
 and `rhel10/rhel-bootc:10.2`. A few facts quoted here were measured the
-same day and are not in that record yet: the survey results quoted in
-§ 5, § 7.4, § 16 and § 17 (what differed from preset, the one enabled
-instance, the rows a package install makes through `Also=`), the `enable`
-then `disable` pair for `cups`, the contents of the four template units in
-§ 7.5, the upheld-unit restart loop, and `/tmp` on a package-mode host
-with `tmp.mount` masked. Phase 2 adds them.
+same day and are not in that record yet: the survey results quoted in § 5,
+§ 7.4, § 16 and § 17 (what differed from preset, the one enabled instance,
+the rows a package install makes through `Also=`, that the packaged units
+with `Also=` have nothing under `/etc` but links), the `enable` then
+`disable` pair for `cups`, the contents of the four template units in §
+7.5, the upheld-unit restart loop, and `/tmp` on a package-mode host with
+`tmp.mount` masked. Phase 2 adds them.
 
 The runs below are still open (§ 15 says when). **Do not use the CentOS9
 or fedora44 VMs for them.**
@@ -2317,17 +2374,16 @@ provisioning service become requests to `plan_units`, and the tuned enable
 is removed, so that after this phase every `systemctl` line in the
 Containerfile is a planned one. Tests T19 to T21.
 
-**Phase 4: the `/etc/systemd/system` scan. Size L.**
-The `[Install]` reader with `install_drop_ins` and its half of rule 5, and
-the search-path test (§ 7.1, § 7.2); the link
-scan with vendor links, the install state, the instance preset lookup and
-the stock-state list (§ 7.3, § 7.4); the `also` list and rule 7 of § 10.2;
+**Phase 4: the `/etc/systemd/system` scan. Size L.** The `[Install]` reader
+with `install_drop_ins` and the drop-in half of rule 5 (the fragment half
+is phase 2), and the search-path test (§ 7.1, § 7.2); the link scan with
+vendor links, the install state, the instance preset lookup and the
+stock-state list (§ 7.3, § 7.4); the `also` list and rule 7 of § 10.2;
 `ManualLink` and its advisories (§ 10.9); the `.upholds` exclusion in the
 config walk; the default target (§ 7.6, § 10.5); and the overlap contract
 text. Enabled instances are collected as state changes and every one is
 omitted at render with a placeholder reason, `template instances are not
-carried yet`, on an `# Omitted:` line and a refine row. Tests T22 to
-T27.
+carried yet`, on an `# Omitted:` line and a refine row. Tests T22 to T27.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
@@ -2425,9 +2481,10 @@ Other objections worth weighing:
   only as complete as the last stock host scanned, and the rows a package
   install makes through `Also=` are carried as redundant lines (§ 7.4).
 - **Three limits are stated and not closed.** A rescan of a host built
-  from an inspectah image declines its own flatpak provisioning unit
-  (§ 10.2). A fleet whose hosts disagree about a unit's fragment is judged
-  on one host's owner when nothing is staged (§ 12). And `disable` with an
+  from an inspectah image carries the old flatpak provisioning unit and
+  withholds the new one (§ 10.2). A fleet whose hosts disagree about a
+  unit's fragment is judged on one host's owner when nothing is staged
+  (§ 12). And `disable` with an
   `Also=` member absent from the image is unmeasured on RHEL 9, where the
   worst case is a failed build (§ 10.2).
 - **The type split costs ergonomics.** `CarriedUnit` is an enum over two
@@ -2435,13 +2492,16 @@ Other objections worth weighing:
   do, and it still needs § 10.2 behind it. The types earn their place only
   if a snapshot that states the impossible should fail to load and not
   merely fail to render.
-- **Rule 7 declines commands an operator would expect.** A libvirt
+- **Rules 5 and 7 decline commands an operator would expect.** A libvirt
   service that is enabled while one of its sockets is disabled loses its
   line, although the two lines the advisory prints reproduce that host
-  exactly. A local unit that uses `Also=` is never carried. On a fleet,
-  hosts that disagree about one member turn the command into an advisory
-  for all. Sixty packaged units carry `Also=` once common daemons are
-  installed, so this will be visible.
+  exactly. A local unit with `Also=` members is never carried, and neither
+  is a packaged one once it or a member has an `[Install]` drop-in.
+  Excluding a full shadow takes the unit's `enable` with it. On a fleet,
+  hosts that disagree about one member, or about whether a unit is
+  shadowed, turn the command into an advisory or an omission for all.
+  Sixty packaged units carry `Also=` once common daemons are installed,
+  so this will be visible.
 - **The declining rules add up.** The search-path test drops a unit with
   a runtime copy that would be gone at the next boot, and the instance
   gate omits an enable whose configuration is a package's untouched file
