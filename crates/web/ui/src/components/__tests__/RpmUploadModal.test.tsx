@@ -210,10 +210,12 @@ describe("RpmUploadModal", () => {
   describe("while an upload is in flight", () => {
     async function startHeldUpload(onClose: () => void) {
       let finish: (result: UploadMatchResult) => void = () => {};
+      let refuse: (err: Error) => void = () => {};
       const onUpload = vi.fn(
         () =>
-          new Promise<UploadMatchResult>((resolve) => {
+          new Promise<UploadMatchResult>((resolve, reject) => {
             finish = resolve;
+            refuse = reject;
           }),
       );
       render(
@@ -236,6 +238,7 @@ describe("RpmUploadModal", () => {
             matched: "custom-agent.x86_64",
             status: "matched",
           }),
+        refuse: () => refuse(new Error("Upload failed (500): disk full")),
       };
     }
 
@@ -260,6 +263,31 @@ describe("RpmUploadModal", () => {
       await screen.findByTestId("upload-match-result");
       expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
       fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("recovers when the upload is refused: shows the error, sends a retry, and closes", async () => {
+      const onClose = vi.fn();
+      const held = await startHeldUpload(onClose);
+      await act(async () => held.upload.click());
+      expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+
+      await act(async () => held.refuse());
+
+      expect(screen.getByTestId("upload-error")).toHaveTextContent(
+        "Upload failed (500): disk full",
+      );
+      expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+
+      await act(async () => held.upload.click());
+      expect(held.onUpload).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+      await act(async () => held.finish());
+      await screen.findByTestId("upload-match-result");
+      expect(screen.queryByTestId("upload-error")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
