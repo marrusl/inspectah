@@ -288,7 +288,7 @@ cascades to every drop-in of that name, full shadows included
 | `.device`, `.scope` | Excluded. | They never exist as unit files. Administrator drop-ins for them (`*.device.d`, `*.scope.d`) are still collected as drop-ins (§ 7.7). |
 | Template (`name@.service`) | A mask is carried. Nothing else is: a template has no enablement without an instance name. | A masked template is durable state with its own name, and it masks every instance (§ 7.4). |
 | Enabled template instance (`wg-quick@wg0.service`) | Carry state, when the configuration the instance reads is in the export (§ 7.5, § 10.8). Instances tied to one host's devices are advisory. | Decided (§ 2). |
-| Hand-made link in `.wants` or `.requires`, a hand-made alias link, and every `.upholds` link | **Advisory only**, with the `systemctl add-wants` or `add-requires` line where one exists (§ 7.3, § 10.9). | Decided (§ 2). An `.upholds` link starts and restarts its unit, so none is carried, enable-made or not. |
+| Hand-made link in `.wants` or `.requires`, a hand-made alias link, and every `.upholds` link | **Advisory only**, with the `systemctl add-wants` or `add-requires` line where one exists (§ 7.3, § 10.9). | Decided (§ 2) for hand-made links. That no `.upholds` link is carried, enable-made or not, is this spec's design: the link starts and restarts its unit (§ 7.3). | Decided (§ 2). An `.upholds` link starts and restarts its unit, so none is carried, enable-made or not. |
 | Generated units | Excluded (§ 3). Administrator drop-ins on them are kept. | Decided. The generator's input is the fact, not its output. |
 | Transient units, runtime and `linked` states | Excluded, with today's warning. | Decided, and they do not survive a reboot or need manual handling. |
 | User units | Out of scope (§ 3). | Not part of this change. |
@@ -595,7 +595,7 @@ pub struct UnitSection {
     pub drop_ins: Vec<SystemdDropIn>,
     /// The administrator's mount, automount and swap units (§ 6.5).
     pub mount_findings: Vec<MountUnitFinding>,
-    /// Links made by hand, and instances tied to one host (§ 6.6).
+    /// Links inspectah reports and does not carry (§ 6.6).
     pub manual_links: Vec<ManualLink>,
     /// The default target, when the host sets one (§ 7.6).
     pub default_target: Option<DefaultTarget>,
@@ -640,8 +640,8 @@ classifies as `Advisory`:
 
 - every regular, non-empty file of those kinds under `/etc/systemd/system`;
 - an unowned one under the vendor directory, when it is enabled or masked;
-- a masked one whose fragment is `MaskOnly` or `UnownedVendor`, with
-  `state_change` holding `Masked` and no `mount_point`.
+- a mask on a name with no unit file (`MaskOnly`), with `state_change`
+  holding `Masked` and no `mount_point`.
 
 A package-owned vendor unit of these kinds never produces a finding. When
 its state differs from preset, or it is masked, it is a `UnitStateChange`
@@ -666,7 +666,8 @@ pub enum ManualLinkCause {
     /// The section names this link and others that are absent, so neither
     /// `enable` nor `disable` reproduces the host.
     PartialInstall,
-    /// The `[Install]` section could not be read with confidence (§ 7.2).
+    /// The `[Install]` section cannot be relied on (§ 7.2), one that
+    /// holds `UpheldBy=` included.
     Undetermined,
     /// An instance of a template tied to one host's devices (§ 7.5).
     HostDevice,
@@ -1038,10 +1039,9 @@ The table exists because the derivation cannot see the motivating cases
 `wg-quick up %i` and names no path under `/etc`. The OpenVPN templates
 pass `--config %i.conf` with a `WorkingDirectory=`. `dirsrv@.service`
 names its `/etc/dirsrv/slapd-%i` directory, which the derivation finds,
-and never names its data directory.
-An instance with neither list filled is carried on its unit file alone,
-and its row carries an `attention_reason` saying inspectah does not know
-what the instance reads.
+and never names its data directory. An instance with neither list filled
+is carried on its unit file alone, with an `attention_reason` saying
+inspectah does not know what the instance reads.
 
 ### 7.6 The default target
 
@@ -1215,11 +1215,10 @@ phase.
 | Aggregate timer control | `crates/web/src/aggregate_handlers.rs:1158`, `AggregateItemRow.tsx` | Emits `ItemId::SystemdTimer` with an include flag | Removed in phase 3 with the control (§ 8) |
 
 Phase 1 ends with a search of the tree for the quoted strings `"services"`,
-`service_states` and `service_dropins`, and each remaining hit is either
-renamed or listed in the phase report with the reason it stays (the
-user-facing word "services" is not this section's name).
-The frontend test suites that mock the view response are migrated in the
-same phase, since they are the only check that the two ends agree.
+`service_states` and `service_dropins`, and each remaining hit is renamed
+or listed in the phase report with the reason it stays. The frontend test
+suites that mock the view response are migrated in the same phase, since
+they are the only check that the two ends agree.
 
 ## 10. Render
 
@@ -1391,12 +1390,13 @@ that name merge into two valid rows. While the file's config row is
 included, rule 2 omits the enable and the advisory explains the file;
 when the operator excludes the file, the enable returns.
 
-**Rule 5, the unit file.** The file is the one `UnitFragment::file` names.
+**Rule 5, the unit file.** The file is the one `UnitFragment::file` names;
+for a `PackagedStorage` unit, the vendor file of its own name.
 
 | What the export stages at that file's name | The fragment the row declares | The file is in the image when |
 |---|---|---|
 | A unit file | Any | Always. The declared fragment is not consulted. |
-| Nothing | `Vendor`, or `Shadowed` | The presence tiers say the owning package is (`classify_service_presence`, unchanged). `owning_package: None` keeps Tier 1: emit. |
+| Nothing | `Vendor`, `Shadowed`, or a `PackagedStorage` unit | Nothing | `Vendor`, or `Shadowed` | The presence tiers say the owning package is (`classify_service_presence`, unchanged). `owning_package: None` keeps Tier 1: emit. |
 | Nothing | `Local` | Never. |
 
 The plan uses the declared fragment only for the question the export
@@ -1645,10 +1645,6 @@ condition, computed from `mount_point`:
 | A mount or swap with `nofail` absent | `#   No nofail option. If the unit is started at boot and its device is missing, units that require it fail, and boot can stop in emergency mode.` |
 | The state is enabled or masked, and the unit is not a masked `tmp.mount` | `#   To carry it, add after the configuration COPY: RUN systemctl <verb> -- '<unit>'` |
 
-The text states conditions, not outcomes: a copied unit file is not inert
-because nothing enables it, and a missing `nofail` matters only when the
-unit is started and something requires it.
-
 **Layout claims are tied to a base.** The two symlink lists are named
 constants beside `VAR_SYMLINKED_TOPLEVELS`
 (`crates/pipeline/src/render/selinux.rs:29`). On both RHEL bootc bases,
@@ -1764,14 +1760,16 @@ gets no advisory.
 
 ### 10.9 Hand-made link advisories
 
-For each `ManualLink`, comment lines and nothing else:
+For each `ManualLink`, comment lines and nothing else. Most are links made
+by hand; the links of a unit whose section holds `UpheldBy=` are here too
+(§ 7.3):
 
 | Cause | Text |
 |---|---|
 | `StaticUnit` | `# Advisory: <parent>.<relation>/<unit> is a link made by hand on the source host (<unit> has no [Install] entry that makes a link). Not carried.` |
 | `NotInInstall` | `# Advisory: <parent>.<relation>/<unit> is a link made by hand on the source host (the unit's [Install] section does not name <parent>). Not carried.` |
 | `PartialInstall` | `# Advisory: <unit> has some of the links its [Install] section names and not others, so neither enable nor disable reproduces the source host. Not carried. Present: <parent>.<relation>/<unit>.` |
-| `Undetermined` | `# Advisory: <parent>.<relation>/<unit> could not be matched to the unit's [Install] section. Not carried.` |
+| `Undetermined` | `# Advisory: <parent>.<relation>/<unit> is not carried: the unit's [Install] section cannot be relied on (<cause>).` The cause is the `InstallUnknown` variant in words; for `UpheldBy=`, that enabling the unit would also make an `.upholds` link. |
 | `HostDevice` | `# Advisory: <unit> is tied to a device of the source host. Not carried.` |
 
 For a link with relation `Alias` the first words are `<parent> is a link to
@@ -1789,19 +1787,17 @@ command line, since `systemctl` has no verb that makes one. Its text says
 that the link starts the unit as soon as it exists and restarts it
 whenever it stops, that adding it for a unit that exits produces a restart
 loop, that a RHEL 9 target does not honor it, and that the way to add it
-is `Upholds=` in a drop-in for the parent. An `Alias` link gets
-no command line either, since no verb but `enable` makes one (measured);
-the text says to add `Alias=` in a drop-in or make the link in the
-Containerfile. A `HostDevice` link gets no command at all.
+is `Upholds=` in a drop-in for the parent. An `Alias` link gets no command
+line either, since no verb but `enable` makes one (measured); the text
+says to add `Alias=` in a drop-in or make the link in the Containerfile.
+A `HostDevice` link gets no command at all, and both operands are quoted
+like every other.
 
 `add-wants` is offered in place of a literal `ln -s` because of what was
 measured for it: it works at build time, links to the `/etc` file when the
 unit has a full shadow, exits 1 when the unit is absent where a dangling
 link would build and do nothing, and does not read `[Install]`, so it
 makes exactly the one link.
-
-Both names are proved `UnitName`s and are single-quoted like every other
-operand.
 
 ## 11. Refine
 
@@ -1888,8 +1884,8 @@ narrowing are unchanged.
 - `mount_findings` merge by unit name, and `manual_links` by relation,
   parent and unit. Neither has an include flag to narrow.
 - A template instance merges as the `UnitStateChange` it is. Three fields
-  are merged toward the cautious side, across every host that has the
-  unit: in `also`, the union of the members, and a member two hosts
+  of every state change are merged toward the cautious side, across every
+  host that has the unit: in `also`, the union of the members, and a member two hosts
   record with different links is `Other`; `required_config` and
   `data_paths` are the union of the paths.
 - `default_target` takes the most prevalent target, and is excluded when the
@@ -1958,7 +1954,7 @@ Phase 2 (every kind):
 - **T2. Types.** For each storage kind: a `state_changes` entry with a
   `local`, `shadowed` or `absent` fragment, or `vendor` with a null owner,
   fails to load; `vendor` with an owner loads, and fails when placed in
-  `mount_findings`. A `default_target` naming `cockpit.socket` or a
+  `mount_findings`. A template name, or a
   packaged `tmp.mount` fails; a `.target` round-trips. A template name, or
   an `absent` fragment, loads with `masked` and fails with `enabled`. A
   `file` that is neither the unit's name nor its template's fails. A
@@ -1990,7 +1986,8 @@ Phase 2 (every kind):
 - **T10. Extracted fields.** A local mount unit whose `What=` holds a token
   the generic pattern matches, through scan and through a refine export:
   the token is absent from the whole serialized snapshot and from the
-  view response. The field guard destructures every type § 6.7 lists.
+  view response. The field guard destructures every § 6.7 type that
+  exists so far, and each later phase adds its own.
 - **T11. Masks.** A `/dev/null` link and a zero-length file over a vendor
   unit each yield one `Masked` state change with a `Vendor` fragment and
   that file's owner, no drop-in entry and no staged file. A comment-only
@@ -2070,7 +2067,7 @@ Phase 4 (the `/etc/systemd/system` scan):
   preset, a `Disabled` state change. With both links: `Enabled`, and an
   advisory for the extra link. Two `WantedBy=` values and one link:
   `PartialInstall`; with the second link shipped under `/usr/lib`:
-  `Enabled`. Only vendor links: `Disabled`. An `[Install]` holding only
+  `Enabled`, and no advisory for the vendor link. Only vendor links: `Disabled`. An `[Install]` holding only
   `Also=`: no state change and no inventory entry. `getty@tty1.service`
   with `enable getty@.service` in the presets and `DefaultInstance=tty1`:
   no state change; `getty@tty2.service`: `Enabled`.
@@ -2103,9 +2100,8 @@ Phase 4 (the `/etc/systemd/system` scan):
   holding the `enable` line and a `disable` line for that member.
   (b) `disable` with every member `Unlinked`: carried. A member with no
   `[Install]` and a hand-made link: an advisory and no line to add.
-  (c) A member that is an instance with its own row, omitted for a
-  redacted key: `RowNotCarried`; with clean configuration both are
-  carried. (d) A member whose row the operator excluded: an advisory;
+  (c) A member that is an instance with its own row, which this phase
+  omits: `RowNotCarried`. (d) A member whose row the operator excluded: an advisory;
   included again: carried. (e) A member with no row that is an instance
   (`enable`), a mount unit, or a `bootc-*` unit (`disable`): `NeedsOwnRow`.
   (f) A member with no unit file: carried. (g) A chain `a`, `b`, `c` with
@@ -2114,12 +2110,15 @@ Phase 4 (the `/etc/systemd/system` scan):
   staged `service.d/` drop-in, each assigning `Also=`: `StagedAlso`; the
   same files without the assignment leave the command carried. (i) `mask`
   on a unit with members in any state: carried. (j) Two hosts that record
-  different links for one member, merged: `Other`.
+  different links for one member, merged: `Other`. (k) `Also=` naming a
+  template is recorded as its `DefaultInstance=`, and as `Other` under
+  the template name when there is none.
 - **T26. Default target.** A `default.target` link to `graphical.target`
   yields `RUN systemctl set-default -- 'graphical.target'` with no
   comment beside it; no link, no line. The row's toggle removes and
   restores the line. A local target whose config row is excluded is
-  omitted.
+  omitted. A `default_target` naming `cockpit.socket` or a packaged
+  `tmp.mount` fails to load; a `.target` round-trips.
 - **T27. The instance floor.** An enabled instance found through the
   directory scan: a state change and a refine row exist, an `# Omitted:`
   line carries the placeholder reason, and no enable names it. An
@@ -2148,16 +2147,20 @@ Phase 5 (carried instances):
   controls: a clean unowned file, and a package-owned file the
   administrator changed with `rpm -Va` working. Under `--no-redaction`
   the WireGuard instance is carried with the attention note, and a
-  `Flagged` finding leaves the enable carried with its note.
+  `Flagged` finding leaves the enable carried with its note. A unit whose
+  `Also=` names the instance is an advisory while the instance is omitted
+  and carried once its configuration is clean.
 
 **Real-host evidence.** "Measured" in this spec means the
 `Measured, 2026-11-13` subsection of
 `process-docs/skills/real-host-validation-runs.md`: RHEL 9.8 (systemd 252)
 and RHEL 10.2 (systemd 257) hosts, and builds from `rhel9/rhel-bootc:9.8`
 and `rhel10/rhel-bootc:10.2`. A few facts quoted here were measured the
-same day and are not in that record yet: the per-type survey counts, the
-contents of the four template units in § 7.5, the upheld-unit restart
-loop, `multipathd.socket` on RHEL 9, and `/tmp` on a package-mode host
+same day and are not in that record yet: the survey results quoted in
+§ 5, § 7.4, § 16 and § 17 (what differed from preset, the one enabled
+instance, the rows a package install makes through `Also=`), the `enable`
+then `disable` pair for `cups`, the contents of the four template units in
+§ 7.5, the upheld-unit restart loop, and `/tmp` on a package-mode host
 with `tmp.mount` masked. Phase 2 adds them.
 
 The runs below are still open (§ 15 says when). **Do not use the CentOS9
@@ -2292,8 +2295,7 @@ T29.
 
 **The floor for instances** is the end of phase 4: every enabled instance
 named in an `# Omitted:` line, none carried. If phase 5 slips, the branch
-is complete without it only by the project owner's call (§ 16 question
-3).
+is complete without it only by the project owner's call (§ 16).
 
 **Phase 6: the Systemd units section. Size M, frontend.** § 11.2 after its
 own design pass. Grouping and presentation only.
@@ -2307,9 +2309,6 @@ there, so the merge carries the evidence with the code.
 | Before phase 4 is planned | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. |
 | After phase 2 | R1, R3 | R1 is the driving fix. R3 (a) to (c) can change how "off" has to be rendered. |
 | At the branch tip | R1, R2 and R4 | The merge gate. The branch does not merge to `main` until they pass. |
-
-Results go into `process-docs/skills/real-host-validation-runs.md` on the
-branch, so the merge carries the evidence with the code.
 
 ## 16. Open questions
 
