@@ -276,9 +276,9 @@ Two notes for whoever runs this next.
 - **A full shadow's wants-link still points at the vendor path.**
   `/etc/systemd/system/multi-user.target.wants/sshd.service ->
   /usr/lib/systemd/system/sshd.service` while the shadow sits at
-  `/etc/systemd/system/sshd.service`. Unmeasured which fragment systemd
-  loads at boot from that pair. Out of scope for the drop-in guard;
-  worth a measurement before anyone relies on full-shadow enablement.
+  `/etc/systemd/system/sshd.service`. Measured on 2026-11-13: systemd
+  loads the `/etc` file and the link target does not matter. See
+  [§ Measured, 2026-11-13](#measured-2026-11-13-systemd-unit-state-links-masks-and-build-time-systemctl).
 
 ## Stock files reach findings, and fixtures never contain them
 
@@ -978,6 +978,122 @@ script -q -e -c 'sudo ./inspectah scan -y -o ~/tty.tar.gz' tty.typescript
 
 Read the typescript with `cat -v`; the spinner frames come before the
 summary.
+
+### Measured, 2026-11-13: systemd unit state, links, masks and build-time systemctl
+
+No inspectah build was involved. Measured on RHEL 9.8 (systemd 252) and
+RHEL 10.2 (systemd 257), both aarch64, stock and after a kitchen-sink
+drift run, with planted units, and in `podman build` from
+`rhel9/rhel-bootc:9.8` and `rhel10/rhel-bootc:10.2`. Each fact holds on
+both releases unless it names one.
+
+**What `list-unit-files` and `is-enabled` report.**
+
+- Both releases print the preset column.
+- Template instances get no row. With `wg-quick@wg0` enabled, the
+  template reads `wg-quick@.service indirect disabled` and `is-enabled`
+  reads `enabled` for the instance. A template whose `DefaultInstance=`
+  is the enabled instance reads `enabled` (`getty@.service` with
+  `getty@tty1`). A concrete instance file, such as
+  `/etc/systemd/system/probe@site.service`, gets its own row.
+- `indirect` also covers a unit whose `[Install]` holds only `Also=`
+  (`sssd-kcm.service` and its siblings, stock on both), and a unit whose
+  only link is an alias its `[Install]` does not declare. The services
+  inspector drops `indirect` without a warning, so an enabled instance
+  never reaches a snapshot through this column.
+- A hand-made link into another target's `.wants` makes an installable
+  unit `enabled` in both commands. The same link to a unit with no
+  `[Install]` makes it `enabled` with preset `disabled`, where it read
+  `static` before. A declared `Alias=` link left alone after its wants
+  link is removed still reads `enabled`.
+- A `/dev/null` link and a zero-length regular file both read `masked`
+  (`LoadState=masked`). A file holding only a comment line, or only
+  blank lines, is **not** a mask. It reads `enabled` with
+  `LoadState=bad-setting`, and it replaces the vendor unit with a broken
+  one. Test for size zero, not for "no content after trimming".
+- A concrete instance file under `/etc` wins over a template under
+  `/usr/lib`: `FragmentPath` and `ExecStart` both come from it, and
+  `enable` links the instance to its own file.
+- `enable` reads `[Install]` from a drop-in, in
+  `/etc/systemd/system/<unit>.d/` and in `/usr/lib/systemd/system/<unit>.d/`.
+- `UpheldBy=` in `[Install]` works on systemd 257 only. RHEL 10 makes
+  `<target>.upholds/<unit>` on `enable`. RHEL 9 prints the "no
+  installation config" text, exits 0 and makes no link.
+- `disable` removes only links under `/etc`. A unit a package pulls in
+  through `/usr/lib/systemd/system/<target>.wants/` reads `disabled`
+  afterwards and is still in that target's `WantedBy=`. `disabled` does
+  not mean the unit will not start.
+
+**Stock hosts against the base images.**
+
+- `tmp.mount` is `disabled` against a `disabled` preset on both hosts,
+  nothing pulls it in, and `/tmp` is not a separate mount. Both base
+  images ship `/usr/lib/systemd/system/local-fs.target.wants/tmp.mount`,
+  so on the target `/tmp` is mounted from that unit while `is-enabled`
+  reads `disabled`. In an image only `mask` changes that. What `/tmp` is
+  on a booted host with the mask was not measured.
+- One unit both carry has a different preset on the host and in the
+  base image, on each release: `dnf-makecache.timer` (`enabled` on the
+  hosts, `disabled` in both images). Three more (`multi-user.target`,
+  `systemd-remount-fs.service`, and `sshd@.service` on RHEL 10) read
+  `static` in the image and `indirect` or `enabled-runtime` on the host.
+  The RHEL 9 host also has `remote-cryptsetup.target`
+  `disabled` against an `enable` preset, where the image has it
+  `enabled`. That is a target that differs from preset on every stock
+  RHEL 9 host, with no administrator involved.
+- Both stock hosts report `systemd-remount-fs.service` as
+  `enabled-runtime`, which the services inspector warns about.
+- Layout of both base images: `/home`, `/mnt`, `/root` (to
+  `var/roothome`) and `/srv` are links into `/var`. `/opt` and
+  `/usr/local` are directories. `/tmp` and `/var/tmp` are mode 1777
+  directories.
+
+**`systemctl` in a `RUN` step, with no manager running.**
+
+- `enable`, `disable`, `mask`, `set-default`, `add-wants` and
+  `add-requires` work. `systemctl enable -- 'unit'` works, and an
+  instance named with `\x2d` links as `probe@a\x2db.service`.
+- `mask` of a unit absent from the image succeeds. `mask` fails with
+  `already exists`, exit 1, when a regular file is at the `/etc` path,
+  zero length included.
+- `enable` of an absent unit exits 1. `disable` of an absent unit exits
+  1 on RHEL 9, and on RHEL 10 prints the same error and **exits 0**.
+- `add-wants` and `add-requires` of an absent unit exit 1. For a unit
+  with an `/etc` full shadow they link to the `/etc` file.
+- `enable` and `disable` follow `Also=` through a chain (a names b, b
+  names c: all three change). `mask` does not follow it: only the named
+  unit is masked. An `Also=` member absent from the image is skipped
+  with `Failed to enable auxiliary unit ..., ignoring.` and exit 0. A
+  masked member is skipped with `Unit ... is masked, ignoring.`
+- `is-enabled` and `list-unit-files` work in a `RUN` step. `systemctl
+  cat` and `show` fail with `System has not been booted with systemd`,
+  and `systemd-analyze verify` prints nothing and exits 0. To ask the
+  manager, run the built image with systemd as PID 1:
+  `sudo podman run -d --systemd=always <image> /sbin/init`, then
+  `podman exec`. That is a container, not a booted host, and podman
+  mounts its own tmpfs on `/tmp` in that mode.
+
+**A full shadow loads from `/etc` whatever its wants-link names.** A link
+made by `enable` before the `/etc` copy lands points at `/usr/lib/...`
+and still does after the `COPY`. Run with systemd as PID 1, the image
+loads the `/etc` file (`FragmentPath=/etc/systemd/system/vshadow2.service`,
+the administrator's `Description=`), and the unit is active, on both
+releases. systemd resolves the name, so the link target does not matter.
+`enable` after the `COPY` links to the `/etc` file.
+
+**Two traps from this run.**
+
+- Give each probe a name no earlier step touches. A `mask` of an absent
+  unit leaves a `/dev/null` link, and a later `enable` that names the
+  same unit through `Also=` reports it as masked. Wrap each probe as
+  `RUN ...; ( probe ); echo "rc=$?"` so one failure does not stop the
+  build.
+- `ssh host 'a && b && setsid nohup c ... & disown'` backgrounds the
+  whole `&&` list, so the session stays open until `c` ends. Put the
+  `setsid nohup` command in an `ssh -n` call of its own. Killing that
+  local `ssh` lets the rest of the local script run, which here started
+  a second copy of a planting script on the same guest; revert before
+  trusting what it measured.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
