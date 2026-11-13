@@ -79,14 +79,37 @@ runGuarded(key, () =>
   long-lived owner, a failure outlives the item too, unless something
   ends it. `useItemFailures` gives each item a lifetime: `clearAll` ends
   every one after a successful reset (App bumps `resetCounter` on
-  `MainContent`), and `retain` ends the lifetime of every item missing
-  from a new view and drops its failure. Start each attempt with
+  `MainContent`), `retain` ends the lifetime of every item missing
+  from a new view and drops its failure, and `end` ends the lifetime of
+  the items an Undo or Redo changed. Start each attempt with
   `begin(key)`: it clears the item's failure and returns the recorder for
   this attempt, which records nothing once the lifetime it started in has
-  ended. A request in flight across a reset, or across the item leaving
-  the view and coming back, settles against a record it never changed.
-  Section navigation does not end a lifetime, so a failure still survives
+  ended. A request in flight across a reset, an Undo or Redo that
+  changes the item, or the item leaving the view and coming back,
+  settles against a record it never changed. Section navigation and
+  ordinary refreshes do not end a lifetime, so a failure still survives
   a section switch.
+- **Undo and Redo end the lifetimes of the records they change.** A step
+  through history keeps the item in the view but can replace its record.
+  `useMutation` tells its success callback which kind of request
+  produced the view; on an Undo or Redo, App compares each user record in
+  the view on screen with the view the step returned (`changedUsers` in
+  `components/userHistory.ts`) and passes the changed names to
+  `MainContent` as `historyChange`, which calls `end` on them. Users the
+  step did not change keep their failures. Compare records rather than
+  read the undone op from `/api/ops`: that is a separate request that
+  can fail, and it would need per-op knowledge of which item an op
+  touches.
+- **Announce a failure that lands asynchronously.** The operator's focus
+  is rarely on the message when a request fails, so plain styled text is
+  silent to a screen reader. Put the message in PatternFly error helper
+  text (`HelperTextItem variant="error"`) inside a `HelperText
+  isLiveRegion` that stays in the page while its container is open, and
+  render only the item conditionally. A region that is already present
+  announces the change once; a container that mounts with a failure
+  already showing, after a section switch, does not announce it again.
+  Use one region per message: nesting a live region in an alert, or
+  adding `role="alert"` to a live region, reads it twice.
 - **Closing what shows a failure acknowledges it.** A failure that opens
   its form when the card mounts reopens it on every return unless
   dismissing it clears it. The user card clears a new-password failure
@@ -181,5 +204,15 @@ back, records nothing when it fails; closing the form survives a
 rerender and a switch, and a new failure opens it again; and each
 failure kind shows both when it lands on a mounted card and when it
 lands while the operator is away, until a successful retry clears it.
+The same file covers `historyChange` (a shown failure clears when the
+step changed the user, another user's failure stays, a held request that
+fails after the step records nothing) and checks that each failure lands
+in a polite live region that was in the page before it, with no second
+announcer around it.
 `src/__tests__/UserFailures.reset.test.tsx` runs the reset case in a
-full `App`, so it also covers App bumping `resetCounter`.
+full `App`, so it also covers App bumping `resetCounter`, and
+`src/__tests__/UserFailures.history.test.tsx` runs Undo in a full `App`
+with one changed and one unchanged user, so it covers the record
+comparison. `components/__tests__/RpmUploadModal.test.tsx` holds an
+upload and settles it both ways: a refusal must leave the modal able to
+upload again and to close.
