@@ -523,6 +523,10 @@ pub enum MemberLinks {
 pub struct AlsoMember {
     pub unit: UnitName,
     pub links: MemberLinks,
+    /// File names of the vendor drop-ins that apply to the member
+    /// (§ 7.2). Names only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_drop_ins: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -537,10 +541,15 @@ pub struct UnitStateChange {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<AlsoMember>,
     /// Drop-ins under `/etc/systemd/system` that apply to the unit and
-    /// hold an `[Install]` section (§ 7.2). Each is checked as a
+    /// are install files (§ 10.2): they hold an `[Install]` section or
+    /// carry a vendor drop-in's file name. Each is checked as a
     /// `Destination` when the plan reads it (§ 10.2 rule 5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_drop_ins: Vec<String>,
+    /// File names of the vendor drop-ins that apply to the unit (§ 7.2).
+    /// Names only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_drop_ins: Vec<String>,
     /// Paths under `/etc` a template instance cannot start without
     /// (§ 7.5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -709,6 +718,7 @@ read from a host file has one of three answers:
 | `MountUnitFinding.nofail` | `Options=` | A boolean. Nothing to scrub. |
 | `required_config`, `data_paths` | Paths in the template's unit file, expanded | Stored only when the expanded value is an absolute path under `/etc` or `/var`. Classified as identifiers. |
 | `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
+| `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
@@ -768,14 +778,14 @@ path. It refuses the observation where the search path would change it:
 - A unit file for the name, or for an instance its template, in a
   directory that outranks the fragment the collector chose, means systemd
   loads something the collector did not read.
-- A drop-in that applies to the name and holds an `[Install]` section, in
-  any directory on the list, changes what `enable` does.
+- A drop-in that applies to the name, in any directory on the list, and
+  that holds an `[Install]` section or has the file name of a vendor
+  drop-in, changes what `enable` does.
 
 Either finding makes the unit `Unsupported` (§ 7.2): a structured warning
-that names the unit and the path, and no state for it. A drop-in elsewhere
-with no `[Install]` section does not change enablement and is ignored, as
-it is today. The directory order is the documented one and was not
-measured (run R5).
+that names the unit and the path, and no state for it. Any other drop-in
+elsewhere is ignored, as it is today. The directory order is the
+documented one and was not measured (run R5).
 
 ### 7.2 The effective unit
 
@@ -866,11 +876,16 @@ holds an `[Install]` section (§ 10.2).
 A carried `enable` follows the `[Install]` the image has, and with no
 `[Install]` it exits 0 and links nothing (measured). So the reader, which
 already reads each drop-in, records on the state change the path of every
-drop-in under `/etc/systemd/system` that applies to the unit and holds an
-`[Install]` section, whatever its keys (`install_drop_ins`, § 6.3). With
-the fragment, that is the row's install evidence, and rule 5 of § 10.2
-carries an `enable` or `disable` only when the export holds exactly that.
-A vendor drop-in arrives with its package and is not listed.
+drop-in under `/etc/systemd/system` that applies to the unit and is an
+install file by the definition in § 10.2 (`install_drop_ins`, § 6.3).
+With the fragment, that is the row's install evidence, and rule 5 of
+§ 10.2 carries an `enable` or `disable` only when the export holds exactly
+that. A vendor drop-in arrives with its package and its content is not
+recorded. Its file name is: the collector lists the `.conf` names in the
+vendor drop-in directories that apply to the unit, and to each `Also=`
+member, as `vendor_drop_ins`. An `/etc` drop-in of the same name replaces
+the vendor one whatever either holds, so the plan needs the names to tell
+which `/etc` drop-ins can change `[Install]`.
 
 ### 7.3 Enablement is read from the links
 
@@ -1426,18 +1441,29 @@ files under `/etc/systemd/system` can supply or change `[Install]` for a
 name `N`. They are:
 
 - the unit file at `N`, and for an instance its template's unit file;
-- every `.conf` that holds an `[Install]` section in a drop-in directory
-  that applies to `N`: `N.d`, the template's `.d` for an instance, the
-  type-wide directory (`service.d`) and each dash-prefix directory
-  (`a-.service.d`).
+- every `.conf` in a drop-in directory that applies to `N` (`N.d`, the
+  template's `.d` for an instance, the type-wide directory `service.d`,
+  and each dash-prefix directory `a-.service.d`) that holds an `[Install]`
+  section, or that has the file name of a vendor drop-in in a directory
+  that applies to `N`.
+
+**An `/etc` drop-in is an install file if it holds an `[Install]`
+section, or if a vendor drop-in with the same file name exists in a
+drop-in directory that applies to the same name. (Mark Russell,
+2026-11-13)** systemd picks between drop-ins of one file name by
+directory before it reads them, so an `/etc` file with no `[Install]`
+section hides a vendor file of that name that has one, and excluding the
+`/etc` file brings the vendor section back. The names come from
+`vendor_drop_ins` on the row and on each member (§ 7.2). This precedence
+is systemd's documented behavior and was not measured (run R5).
 
 "Holds an `[Install]` section" is the only lexical read the plan makes.
 After lines that end in a backslash are joined to the next, the file has a
 line whose trimmed text is `[Install]`. The keys are not read, so an
 assignment with spaces around `=`, one continued over several lines and an
 empty reset all count, and a file whose content was not captured counts
-too. A drop-in with no such section, the usual `[Service]` override, is
-not an install file.
+too. A drop-in with no such section and a file name no vendor drop-in
+has, the usual `[Service]` override, is not an install file.
 
 **Rule 5, the row's own file.** `enable` and `disable` read the `[Install]`
 of whatever file the image loads. The row recorded one file. If the export
@@ -1446,7 +1472,8 @@ command acts on an `[Install]` nobody recorded, its `Also=` included.
 
 | The row's fragment | The export must | Otherwise |
 |---|---|---|
-| `Local` or `Shadowed` | Stage the unit file at `/etc/systemd/system/<file>`. | Omitted: `UnitFileNotStaged`. |
+| `Local` | Stage the unit file at `/etc/systemd/system/<file>`. | Omitted: `UnitFileNotStaged`. |
+| `Shadowed` | Stage the shadow at `/etc/systemd/system/<file>`. | Omitted: `InstallEvidenceChanged`, with the shadow's path. |
 | `Vendor`, or a `PackagedStorage` unit | Stage no unit file at that name, and have the owning package in the image by the presence tiers (`classify_service_presence`, unchanged; `owning_package: None` keeps Tier 1: emit). | Omitted: `InstallEvidenceChanged`, or the package reason the tiers give today. |
 
 And for every fragment, the install drop-ins the export stages for the
@@ -1489,9 +1516,14 @@ host's individual links with `add-wants` and `ln -s` in place of `enable`
 was considered and rejected: the Containerfile should read like one a
 person would write. (Mark Russell, 2026-11-13)**
 
-A command on `U` with a non-empty `also` list is carried only when all
-three conditions hold. Each is one pass over data already in hand, and
-nothing follows `Also=` at render.
+**In a fleet aggregate export, a command for a unit with a non-empty
+`Also=` list is always an advisory, with the lines to add by hand. (Mark
+Russell, 2026-11-13)** The merge does not keep every host's file paths
+(§ 12), so an aggregate cannot show that no install file exists.
+
+In a single-host export, a command on `U` with a non-empty `also` list is
+carried only when all three conditions hold. Each is one pass over data
+already in hand, and nothing follows `Also=` at render.
 
 1. **Every member's links match the verb.** For `enable`, each member is
    `Installed` or `Inert`. For `disable`, each is `Unlinked` or `Inert`.
@@ -1508,7 +1540,9 @@ nothing follows `Also=` at render.
 3. **The install evidence is what was recorded.** Neither `U` nor any
    member has an install file in the snapshot, staged or excluded. The
    list and the links were then read from vendor files alone, and vendor
-   files are what the image loads for every one of them. **A unit whose
+   files are what the image loads for every one of them, on the
+   assumption § 17 states: that the image's vendor files hold the
+   `[Install]` the source's did. **A unit whose
    staged file sets `Also=` is always an advisory, with the lines to add
    by hand. (Mark Russell, 2026-11-13)** That is one case of this
    condition, and it holds on a single host where the list and the file
@@ -1518,7 +1552,7 @@ One pass is enough because the `also` list is everything `Also=` reaches
 from `U`, so a member's own members are in it, and condition 3 means no
 file in the export can add an edge, drop one, or change what `enable`
 does to a member. What that costs: a local unit or full shadow that has
-`Also=` members, and a unit or member with an `[Install]` drop-in, are
+`Also=` members, and a unit or member with an install drop-in, are
 never carried. The units that use `Also=` in the measured package set are
 vendor units with nothing under `/etc` but links, so the ordinary case, an
 administrator who ran `enable`, is carried.
@@ -1536,7 +1570,7 @@ is true.
 `OmissionReason` gains:
 
 ```rust
-/// A local or shadowed unit's own file is not in the export (rule 5).
+/// A local unit's own file is not in the export (rule 5).
 UnitFileNotStaged,
 /// The file or drop-ins that supply `[Install]` in the image are not the
 /// ones the row recorded (rule 5).
@@ -1561,6 +1595,8 @@ pub enum AlsoWhy {
     NeedsOwnRow,
     /// The unit or the member has an install file in the snapshot.
     InstallFile { path: String },
+    /// The export is a fleet aggregate.
+    FleetAggregate,
 }
 ```
 
@@ -1580,8 +1616,9 @@ recorded on the other side: `Unlinked` under an `enable`, `Installed`
 under a `disable`. That pair reproduced the host exactly for
 `cups.service` and `cups.socket` (measured). An `InstallFile` advisory
 names the file and gives `U`'s command alone, to be added after reading
-that file. For the other two reasons the block names the member and gives
-no line.
+that file, and a `FleetAggregate` advisory gives `U`'s command and names
+every recorded member. For the other two reasons the block names the
+member and gives no line.
 
 **The no-RPM path runs every rule.** `render_service_intent` returns early
 into `render_without_rpm` when the snapshot has no package section
@@ -1693,9 +1730,9 @@ comment beside it. (Mark Russell, 2026-11-13)** A host that boots to
 `graphical.target` produces an image that does. `default_target` is
 recorded as included and has a toggle like any other row. Rule 5 of § 10.2
 applies as it does to any row, since `set-default` on a target whose file
-is not in the image cannot succeed: a `Local` or `Shadowed` target whose
-file is excluded is omitted with the `UnitFileNotStaged` reason. The operand is a `TargetUnit`, so no
-other kind can reach the line.
+is not in the image cannot succeed: a `Local` target whose file is
+excluded is omitted with the `UnitFileNotStaged` reason. The operand is a
+`TargetUnit`, so no other kind can reach the line.
 
 ### 10.6 Mount, automount and swap advisories
 
@@ -1896,7 +1933,7 @@ it, a config entry or a drop-in found by path, as `withheld` with the
 its scheduled or flatpak row.
 
 Two results of § 10.2 come from a toggle on a different row, and the unit
-row has to say so. Excluding a full shadow or an `[Install]` drop-in
+row has to say so. Excluding a full shadow or an install drop-in
 removes the unit's `enable` or `disable`: the unit row's `declined` is
 `InstallEvidenceChanged` with the path of that file. And an `Also=`
 advisory caused by an install file is `AlsoMember` with
@@ -1962,12 +1999,17 @@ narrowing are unchanged.
   the three string lists were unioned.
 - `mount_findings` merge by unit name, and `manual_links` by relation,
   parent and unit. Neither has an include flag to narrow.
-- A template instance merges as the `UnitStateChange` it is. Three fields
-  of every state change are merged toward the cautious side, across every
-  host that has the unit: in `also`, the union of the members, and a
-  member two hosts record with different links is `Other`;
-  `install_drop_ins`, `required_config` and `data_paths` are the union of
-  the paths.
+- A template instance merges as the `UnitStateChange` it is. The list
+  fields of every state change (`also`, `install_drop_ins`,
+  `vendor_drop_ins`, `required_config`, `data_paths`) are the union across
+  every host that has the unit.
+- **A command for a unit with a non-empty `also` list is always an
+  advisory in an aggregate (§ 10.2 rule 7).** An aggregate is a snapshot
+  whose rows carry `aggregate`. The merge keeps one `file_ownership` entry
+  per package name (`merge.rs:1332`), so a
+  package-owned, unmodified `[Install]` drop-in that one host has can be
+  absent from the aggregate, and rule 7 cannot establish that no install
+  file exists. The merge is not changed.
 - `default_target` takes the most prevalent target, and is excluded when the
   hosts do not all agree, the same rule `narrow_non_universal` applies.
 - `SystemdTimer` no longer has an include flag to narrow.
@@ -1987,7 +2029,7 @@ not carried into the aggregate, as for every row today.
 rows by name and does not ask whether they agree. A package-owned mount
 unit's state change beside another host's administrator-written file of
 that name, a mask beside a unit file, and a row recorded from a vendor
-unit beside another host's shadow or `[Install]` drop-in are all kept, and
+unit beside another host's shadow or install drop-in are all kept, and
 each is decided by § 10.2 from the files the operator leaves selected.
 Teaching the merge to reconcile them would be the aggregation redesign § 3
 rules out, and would still miss a snapshot edited or imported after the
@@ -2192,7 +2234,10 @@ Phase 4 (the `/etc/systemd/system` scan):
   only from a drop-in: carried, with the drop-in in `install_drop_ins`;
   with that drop-in excluded, or with a second `[Install]` drop-in staged
   for the unit that the row does not list, `InstallEvidenceChanged` and no
-  enable. An `install_drop_ins` path holding `..`: the same. A drop-in
+  enable. An `install_drop_ins` path holding `..`: the same. An `/etc`
+  drop-in with no `[Install]` section and a vendor drop-in's file name is
+  in `install_drop_ins`, and one with a file name of its own is not. A
+  drop-in
   that assigns an empty `WantedBy=`: advised. A concrete instance file
   under
   `/run/systemd/system`, a copy under `/usr/local/lib/systemd/system`, and
@@ -2203,8 +2248,9 @@ Phase 4 (the `/etc/systemd/system` scan):
   the structured reason on the refine row. (a) A packaged unit with three
   members, all `Installed`, and nothing in `/etc` but links: `enable` is
   carried. It stays carried with a `[Service]`-only drop-in on the unit
-  and on a member. One member `Unlinked`: an advisory holding the `enable`
-  line and a `disable` line for that member. (b) `disable` with every
+  and on a member, each under a file name no vendor drop-in has. One
+  member `Unlinked`: an advisory holding the `enable` line and a `disable`
+  line for that member. (b) `disable` with every
   member `Unlinked`: carried. A member with no `[Install]` and a hand-made
   link: an advisory and no line to add. (c) A member that is an instance
   with its own row, which this phase omits: `RowNotCarried`. (d) A member
@@ -2226,8 +2272,21 @@ Phase 4 (the `/etc/systemd/system` scan):
   an `[Install]` section: `InstallFile`. A drop-in whose `[Install]`
   section holds `Also = x`, an assignment continued over two lines, or an
   empty `WantedBy=`: an install file each time. (i) `mask` on a unit with
-  members in any state: carried. (j) Two hosts that record different
-  links for one member, merged: `Other`. (k) `Also=` naming a template is
+  members in any state: carried. (j) Fleet, through the real collector
+  and merge. Host A: a vendor `bundle.service` enabled against a `disable`
+  preset with `Also=helper.timer`, the helper `Inert`. Host B: a newer
+  version of one package ships an unmodified
+  `/etc/systemd/system/timer.d/10-install.conf` with an `[Install]`
+  section, no `bundle` unit, and no row for the helper. Merged, with the
+  bundle row included: an advisory with `FleetAggregate` on the refine
+  row. Host A alone: the enable is carried. (k) A vendor
+  `bundle.service.d/10-members.conf` with `[Install]` and
+  `Also=helper.service`, and an `/etc` drop-in of the same file name that
+  holds only `[Service]`, so the recorded list is empty: with the `/etc`
+  file included the enable is carried and the file is in
+  `install_drop_ins`; with it excluded, `InstallEvidenceChanged` and no
+  enable. The same `/etc` file on a member of a unit with `Also=`:
+  `InstallFile`. (l) `Also=` naming a template is
   recorded as its `DefaultInstance=`, and as `Other` under the template
   name when there is none.
 - **T26. Default target.** A `default.target` link to `graphical.target`
@@ -2322,6 +2381,9 @@ or fedora44 VMs for them.**
   `disable` when an `Also=` member is absent from the image. `systemctl
   preset` on an instance name and on a template with `DefaultInstance=`.
   `systemd-cryptsetup@` and `systemd-fsck@` links on a host with them.
+  Whether an `/etc` drop-in with no `[Install]` section hides a vendor
+  drop-in of the same file name that has one, for `enable`, across the
+  unit's own, template, type-wide and prefix directories.
 
 ## 14. Backlog items
 
@@ -2394,8 +2456,9 @@ is removed, so that after this phase every `systemctl` line in the
 Containerfile is a planned one. Tests T19 to T21.
 
 **Phase 4: the `/etc/systemd/system` scan. Size L.** The `[Install]` reader
-with `install_drop_ins` and the drop-in half of rule 5 (the fragment half
-is phase 2), and the search-path test (§ 7.1, § 7.2); the link scan with
+with `install_drop_ins`, `vendor_drop_ins` and the drop-in half of rule 5
+(the fragment half is phase 2), and the search-path test (§ 7.1, § 7.2);
+the link scan with
 vendor links, the install state, the instance preset lookup and the
 stock-state list (§ 7.3, § 7.4); the `also` list and rule 7 of § 10.2;
 `ManualLink` and its advisories (§ 10.9); the `.upholds` exclusion in the
@@ -2499,6 +2562,13 @@ Other objections worth weighing:
   The one row they produced needed a list to suppress it, that list is
   only as complete as the last stock host scanned, and the rows a package
   install makes through `Also=` are carried as redundant lines (§ 7.4).
+- **The rules compare the source with the export, not with the image.**
+  They assume the vendor unit files and drop-ins in the image hold the
+  same `[Install]` as those on the source. A different package version
+  can change an `Also=` list, and then a carried command has an indirect
+  effect nobody recorded, silently. The spec does not close it: comparing
+  against the target image is a non-goal (§ 3), and no version check is
+  made.
 - **Four limits are stated and not closed.** A rescan of a host built
   from an inspectah image carries the old flatpak provisioning unit and
   withholds the new one (§ 10.2). A fleet whose hosts disagree about a
@@ -2520,9 +2590,9 @@ Other objections worth weighing:
   is a packaged one once it or a member has any install file under `/etc`,
   even on a single host where the file and the record agree. Excluding a
   full shadow takes the unit's `enable` or `disable` with it, for every
-  shadowed unit and not only those with `Also=`. On a fleet,
-  hosts that disagree about one member, or about whether a unit is
-  shadowed, turn the command into an advisory or an omission for all.
+  shadowed unit and not only those with `Also=`. On a fleet, every
+  command for a unit with `Also=` members is an advisory, and hosts that
+  disagree about whether a unit is shadowed lose its command.
   Sixty packaged units carry `Also=` once common daemons are installed,
   so this will be visible.
 - **The declining rules add up.** The search-path test drops a unit with
