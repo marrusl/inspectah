@@ -10,7 +10,13 @@
  * open until the test fails it.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import App from "../App";
 import * as crypt from "../utils/crypt";
 

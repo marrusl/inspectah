@@ -291,28 +291,31 @@ describe.each([
   it.each([
     { where: "while the card is mounted", away: false },
     { where: "while on another section", away: true },
-  ])("shows on the card $where, and a successful retry clears it", async ({ away }) => {
-    const held = hold(mock());
-    const props = baseProps();
-    const { rerender } = render(<MainContent {...props} />);
+  ])(
+    "shows on the card $where, and a successful retry clears it",
+    async ({ away }) => {
+      const held = hold(mock());
+      const props = baseProps();
+      const { rerender } = render(<MainContent {...props} />);
 
-    prepare();
-    await act(async () => trigger());
-    if (away) rerender(<MainContent {...props} activeSection="packages" />);
-    await act(async () => held.fail());
-    if (away) rerender(<MainContent {...props} />);
+      prepare();
+      await act(async () => trigger());
+      if (away) rerender(<MainContent {...props} activeSection="packages" />);
+      await act(async () => held.fail());
+      if (away) rerender(<MainContent {...props} />);
 
-    expect(screen.getByText(message)).toBeVisible();
-    expect(props.onMutationError).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(includeAlice()).toBeEnabled());
+      expect(screen.getByText(message)).toBeVisible();
+      expect(props.onMutationError).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(includeAlice()).toBeEnabled());
 
-    prepare();
-    await act(async () => trigger());
-    expect(screen.queryByText(message)).toBeNull();
-    await act(async () => held.succeed());
+      prepare();
+      await act(async () => trigger());
+      expect(screen.queryByText(message)).toBeNull();
+      await act(async () => held.succeed());
 
-    await waitFor(() => expect(includeAlice()).toBeEnabled());
-    expect(screen.queryByText(message)).toBeNull();
-    expect(mock()).toHaveBeenCalledTimes(2);
-  });
+      await waitFor(() => expect(includeAlice()).toBeEnabled());
+      expect(screen.queryByText(message)).toBeNull();
+      expect(mock()).toHaveBeenCalledTimes(2);
+    },
+  );
 });
