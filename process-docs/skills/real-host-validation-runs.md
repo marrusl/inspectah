@@ -1081,6 +1081,43 @@ the administrator's `Description=`), and the unit is active, on both
 releases. systemd resolves the name, so the link target does not matter.
 `enable` after the `COPY` links to the `/etc` file.
 
+**`Also=` on packaged daemons, and rendering links without `enable`.**
+Measured the same day on clean hosts after installing a broad AppStream
+daemon list, and in the base images after `dnf install cups libvirt-daemon`.
+
+- With the daemons installed, 60 unit files on each release carry
+  `Also=`. Every member is installable: none is static, absent or a
+  timer naming its service. Most are the libvirt socket triples
+  (`virtXd.socket`, `-ro`, `-admin`), which name each other, and each
+  `virtXd.service` names its three sockets. `libvirtd.service` and
+  `virtqemud.service` also name `virtlogd.socket` and
+  `virtlockd.socket`, which belong to other packages.
+- `disable` of a member follows that member's own `Also=`: disabling
+  `virtqemud.socket` or `virtqemud-ro.socket` removes all three socket
+  links.
+- `disable` removes every link to the unit and to its `Also=` members
+  under `/etc`, including hand-made links. A link a person made to a
+  static member, or to an installable member in another target's
+  `.wants`, is removed too. `disable libvirtd.service` removes the
+  `virtlogd` and `virtlockd` socket links that `virtqemud.service`
+  also names.
+- `add-wants` and `add-requires` do not read `[Install]`. They create
+  no `Also=` member link and no alias link. No verb creates an alias
+  link without `enable`: `systemctl link` does nothing for a unit
+  already in the search path, so the alias has to be an `ln -s`.
+- `preset-all` puts every unit back to preset, whichever way it was
+  rendered. `--preset-mode=enable-only` re-enables anything rendered off
+  against an `enable` preset. Both base images ship a zero-length
+  `/etc/machine-id`, so whether first boot applies presets decides
+  whether a rendered "off" survives. That was not measured: it needs a
+  booted host.
+- Installing `podman-docker` on RHEL 10.2 upgraded podman to 6.1.1, and
+  the next `podman build` failed at its first `RUN` with
+  `netavark: failed to load network options: IO error: invalid type:
+  sequence, expected a map`. `podman build --network=host` worked.
+- zsh reads `$ip:table.tsv` as `$ip` with the `:t` modifier, so
+  `scp $ip:file` copies a mangled path. Write `"${ip}:file"`.
+
 **Two traps from this run.**
 
 - Give each probe a name no earlier step touches. A `mask` of an absent
