@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Toolbar,
   ToolbarContent,
@@ -177,6 +177,17 @@ export function StatsBar({
   // guard: the toolbar could otherwise reopen the confirm while it runs.
   const { pendingKeys, runGuarded } = usePendingGuard();
   const resetPending = pendingKeys.has(RESET_GUARD_KEY);
+  // Confirming disables the toolbar trigger, so the modal's focus trap
+  // cannot return focus to it when it closes and focus would drop to the
+  // page. After a confirm, focus goes to Export, an enabled control in the
+  // same toolbar. Cancel leaves the trap's normal return to the trigger.
+  const exportRef = useRef<HTMLButtonElement>(null);
+  const focusExportOnCloseRef = useRef(false);
+  useEffect(() => {
+    if (resetConfirmOpen || !focusExportOnCloseRef.current) return;
+    focusExportOnCloseRef.current = false;
+    exportRef.current?.focus();
+  }, [resetConfirmOpen]);
   const hasOps = (stats?.ops_applied ?? 0) > 0;
 
   return (
@@ -252,7 +263,12 @@ export function StatsBar({
             )}
             <ToolbarItem variant="separator" />
             <ToolbarItem>
-              <Button variant="primary" onClick={onExport} icon={<ExportIcon />}>
+              <Button
+                ref={exportRef}
+                variant="primary"
+                onClick={onExport}
+                icon={<ExportIcon />}
+              >
                 Export
               </Button>
             </ToolbarItem>
@@ -281,6 +297,7 @@ export function StatsBar({
               onClick={() => {
                 setResetConfirmOpen(false);
                 if (!onReset) return;
+                focusExportOnCloseRef.current = true;
                 runGuarded(RESET_GUARD_KEY, async () => {
                   await onReset();
                 });

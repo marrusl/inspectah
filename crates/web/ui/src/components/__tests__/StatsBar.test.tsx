@@ -330,4 +330,39 @@ describe("StatsBar reset pending guard", () => {
     act(() => screen.getByTestId("reset-confirm-yes").click());
     expect(callback).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * Confirming disables the toolbar trigger for as long as the reset runs,
+   * so the modal cannot hand focus back to it. Focus moves to Export
+   * instead, an enabled control in the same toolbar.
+   */
+  it("moves focus to Export when reset is confirmed from the keyboard", async () => {
+    const user = userEvent.setup();
+    const { callback } = heldCallback();
+    renderWithReset(callback);
+
+    resetButton().focus();
+    await user.keyboard("{Enter}");
+    screen.getByTestId("reset-confirm-yes").focus();
+    await user.keyboard("{Enter}");
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(resetButton()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Export" })).toHaveFocus();
+  });
+
+  it("returns focus to the trigger when reset is cancelled", async () => {
+    const user = userEvent.setup();
+    const { callback } = heldCallback();
+    renderWithReset(callback);
+
+    resetButton().focus();
+    await user.keyboard("{Enter}");
+    screen.getByRole("button", { name: "Cancel" }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("reset-confirm-modal")).toBeNull();
+    expect(resetButton()).toHaveFocus();
+  });
 });
