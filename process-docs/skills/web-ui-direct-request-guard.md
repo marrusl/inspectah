@@ -70,10 +70,34 @@ runGuarded(key, () =>
   failure message held in the component that started the request is lost
   when that component unmounts before the request settles, and the
   operator comes back to a control with no sign that anything failed.
-  Keep it with the guard's owner. Set password does this: `MainContent`
-  holds the failure by username, and the user card opens its password
-  form to show it on return. `onMutationError` is not a substitute: in
-  `MainContent` it only logs.
+  Keep it with the guard's owner, in `useItemFailures`
+  (`crates/web/ui/src/hooks/useItemFailures.ts`). The Users section does
+  this: `MainContent` holds each user's last failed request by username,
+  and the card shows it on return. `onMutationError` is not a substitute:
+  in `MainContent` it only logs.
+- **A kept failure ends with the record it was about.** Kept with a
+  long-lived owner, a failure outlives the item too, unless something
+  ends it. `useItemFailures` gives each item a lifetime: `clearAll` ends
+  every one after a successful reset (App bumps `resetCounter` on
+  `MainContent`), and `retain` ends the lifetime of every item missing
+  from a new view and drops its failure. Start each attempt with
+  `begin(key)`: it clears the item's failure and returns the recorder for
+  this attempt, which records nothing once the lifetime it started in has
+  ended. A request in flight across a reset, or across the item leaving
+  the view and coming back, settles against a record it never changed.
+  Section navigation does not end a lifetime, so a failure still survives
+  a section switch.
+- **Closing what shows a failure acknowledges it.** A failure that opens
+  its form when the card mounts reopens it on every return unless
+  dismissing it clears it. The user card clears a new-password failure
+  when the operator closes the card or the password form while it shows.
+- **Do not let a close abandon a request you cannot cancel.** A modal that
+  stays mounted while closed keeps its state, so resetting its busy flag
+  on close lets a second request start while the first still runs, and
+  the first one's result lands in the next opening. The RPM upload modal
+  blocks every close path while uploading (no `onClose` on the PatternFly
+  `Modal`, which withdraws the close button and ignores Escape) and
+  checks a ref before it sends, so a double click sends one upload.
 - **When the guard lives above the request, return the promise.** The pin,
   batch toggle and reset requests are App's handlers, called through a
   callback prop. Each handler returns its request so the guard is held
@@ -147,3 +171,15 @@ the failure shows on return; the batch toggle case closes
 and reopens the mobile overlay in a full `App` (`src/__tests__/BatchToggle.guard.test.tsx`). Where a key has more than one field, add a case with
 two items differing in only one field: a held request on one leaves the
 other enabled and sending its own request.
+
+Kept failures have their own cases in
+`components/__tests__/MainContent.user-failures.test.tsx`: a failure
+survives a new view that still has the item and a section switch; a
+reset clears it; an item that leaves the view and comes back shows none;
+a request held across a reset, or across the item leaving and coming
+back, records nothing when it fails; closing the form survives a
+rerender and a switch, and a new failure opens it again; and each
+failure kind shows both when it lands on a mounted card and when it
+lands while the operator is away, until a successful retry clears it.
+`src/__tests__/UserFailures.reset.test.tsx` runs the reset case in a
+full `App`, so it also covers App bumping `resetCounter`.
