@@ -549,3 +549,88 @@ describe.each(LIFETIME_CASES)(
     });
   },
 );
+
+const BOB: UserDecision = {
+  ...USER,
+  name: "bob",
+  uid: 1001,
+  gid: 1001,
+  home: "/home/bob",
+};
+
+/**
+ * The Users guard is keyed by username, so one user's request holds that
+ * user's card and no other.
+ */
+describe("pending guard: users are held one at a time", () => {
+  it("holds alice while bob stays usable and sends his own request", async () => {
+    const { mock } = holdRequests("setUserStrategy");
+    renderSection(
+      "users_groups",
+      { users_groups_decisions: [USER, BOB] },
+      vi.fn(),
+    );
+    const alice = screen.getByRole("checkbox", { name: "Include alice" });
+    const bob = screen.getByRole("checkbox", { name: "Include bob" });
+
+    await act(async () => alice.click());
+    expect(alice).toBeDisabled();
+    expect(bob).toBeEnabled();
+
+    await act(async () => bob.click());
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(mock).toHaveBeenNthCalledWith(1, "alice", expect.anything());
+    expect(mock).toHaveBeenNthCalledWith(2, "bob", expect.anything());
+    expect(alice).toBeDisabled();
+    expect(bob).toBeDisabled();
+  });
+});
+
+/**
+ * Hashing runs inside the guard before any request exists. A hash that
+ * fails, whether it throws or rejects, sends nothing, reports on the card
+ * only (it is not a failed request), and must release the user.
+ */
+describe.each([
+  {
+    failure: "throws synchronously",
+    breakHash: () =>
+      vi.mocked(crypt.sha512Crypt).mockImplementation(() => {
+        throw new Error("crypto unavailable");
+      }),
+  },
+  {
+    failure: "rejects",
+    breakHash: () =>
+      vi
+        .mocked(crypt.sha512Crypt)
+        .mockRejectedValue(new Error("crypto unavailable")),
+  },
+])("pending guard: set password when hashing $failure", ({ breakHash }) => {
+  it("sends nothing, shows the card error, and allows a retry", async () => {
+    breakHash();
+    const send = vi.mocked(client.setUserPassword);
+    send.mockResolvedValue(VIEW);
+    const onMutationError = vi.fn();
+    renderPasswordForm(onMutationError);
+    const setPassword = screen.getByRole("button", { name: "Set password" });
+
+    await act(async () => setPassword.click());
+
+    expect(send).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("Failed to set password. Please try again."),
+    ).toBeInTheDocument();
+    expect(onMutationError).not.toHaveBeenCalled();
+    expect(setPassword).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", { name: "Include alice" }),
+    ).toBeEnabled();
+
+    vi.mocked(crypt.sha512Crypt).mockResolvedValue("$6$salt$hash");
+    await act(async () => setPassword.click());
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("alice", "new", "$6$salt$hash");
+  });
+});
