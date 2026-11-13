@@ -110,6 +110,14 @@ runGuarded(key, () =>
   already showing, after a section switch, does not announce it again.
   Use one region per message: nesting a live region in an alert, or
   adding `role="alert"` to a live region, reads it twice.
+- **A form that can open with a failure is not the announcer.** A region
+  inserted with its content is not reliably announced, and a new-password
+  failure that lands after the operator closed the form opens the form
+  with the message already in it. The user card has one live region that
+  stays mounted with the card: it shows strategy and password-option
+  failures, and carries a visually hidden copy of the password form's
+  message (`inspectah-sr-only`, prefixed with the user name) while the
+  form is open. The form's own copy is plain error helper text, not live.
 - **Closing what shows a failure acknowledges it.** A failure that opens
   its form when the card mounts reopens it on every return unless
   dismissing it clears it. The user card clears a new-password failure
@@ -207,8 +215,9 @@ lands while the operator is away, until a successful retry clears it.
 The same file covers `historyChange` (a shown failure clears when the
 step changed the user, another user's failure stays, a held request that
 fails after the step records nothing) and checks that each failure lands
-in a polite live region that was in the page before it, with no second
-announcer around it.
+in the card's polite live region, which was in the page before it, that
+the card has no other announcer, and that a password failure landing
+after the form was closed is announced from that same region.
 `src/__tests__/UserFailures.reset.test.tsx` runs the reset case in a
 full `App`, so it also covers App bumping `resetCounter`, and
 `src/__tests__/UserFailures.history.test.tsx` runs Undo in a full `App`
