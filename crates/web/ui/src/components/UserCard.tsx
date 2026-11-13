@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { Label } from "@patternfly/react-core";
+import { HelperText, HelperTextItem, Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { UserDecision } from "../api/types";
 import { sha512Crypt } from "../utils/crypt";
@@ -284,18 +284,23 @@ export function UserCard({
         </div>
       )}
 
-      {cardFailure && (
-        <div
-          data-testid={`user-failure-${user.name}`}
-          style={{
-            fontSize: "var(--pf-t--global--font--size--sm)",
-            color: "var(--pf-t--global--color--status--danger--default)",
-            marginTop: "var(--pf-t--global--spacer--xs)",
-          }}
-        >
-          {cardFailure}
-        </div>
-      )}
+      {/* A failure can land while focus is elsewhere. The live region is
+          always in the page, so a screen reader announces the failure when
+          it appears, and only then: a card that mounts with a failure
+          already showing does not announce it again. */}
+      <HelperText
+        isLiveRegion
+        data-testid={`user-failure-${user.name}`}
+        style={
+          cardFailure
+            ? { marginTop: "var(--pf-t--global--spacer--xs)" }
+            : undefined
+        }
+      >
+        {cardFailure && (
+          <HelperTextItem variant="error">{cardFailure}</HelperTextItem>
+        )}
+      </HelperText>
 
       {/* Expanded details */}
       {expanded && (
@@ -569,18 +574,24 @@ export function UserCard({
                           marginBottom: "6px",
                         }}
                       />
-                      {(passwordError || passwordFailure) && (
-                        <div
-                          style={{
-                            fontSize: "var(--pf-t--global--font--size--xs)",
-                            color:
-                              "var(--pf-t--global--color--status--danger--default)",
-                            marginBottom: "6px",
-                          }}
-                        >
-                          {passwordError || passwordFailure}
-                        </div>
-                      )}
+                      {/* Always in the page while the form is open, so a
+                          failure that lands is announced (see the card's
+                          failure region above). */}
+                      <HelperText
+                        isLiveRegion
+                        data-testid={`user-password-error-${user.name}`}
+                        style={
+                          passwordError || passwordFailure
+                            ? { marginBottom: "6px" }
+                            : undefined
+                        }
+                      >
+                        {(passwordError || passwordFailure) && (
+                          <HelperTextItem variant="error">
+                            {passwordError || passwordFailure}
+                          </HelperTextItem>
+                        )}
+                      </HelperText>
                       <button
                         onClick={handleSetPassword}
                         disabled={isPending || isHashing || !newPassword}

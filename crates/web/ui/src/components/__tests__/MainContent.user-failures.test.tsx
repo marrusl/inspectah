@@ -368,3 +368,54 @@ describe.each([
     },
   );
 });
+
+/**
+ * A failure can land while the operator's focus is elsewhere, so each one
+ * is in a polite live region that is in the page before the failure is,
+ * which is what makes a screen reader announce the change. One region
+ * only, so the failure is announced once.
+ */
+describe("user failures are announced", () => {
+  /** The live regions and alerts the element sits in. */
+  function announcers(el: HTMLElement): Element[] {
+    const found: Element[] = [];
+    for (let at: Element | null = el; at; at = at.parentElement) {
+      const role = at.getAttribute("role");
+      if (at.hasAttribute("aria-live") || role === "alert" || role === "status")
+        found.push(at);
+    }
+    return found;
+  }
+
+  it("announces a new-password failure in the form's live region", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    render(<MainContent {...baseProps()} />);
+    await submitNewPassword();
+    const region = screen.getByTestId("user-password-error-alice");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveTextContent("");
+
+    await act(async () => held.fail());
+
+    const text = screen.getByText(PASSWORD_FAILURE);
+    expect(region).toContainElement(text);
+    expect(announcers(text)).toEqual([region]);
+  });
+
+  it("announces a strategy failure in the card's live region", async () => {
+    const message =
+      "Failed to change the Containerfile strategy. Please try again.";
+    const held = hold(vi.mocked(client.setUserStrategy));
+    render(<MainContent {...baseProps()} />);
+    const region = screen.getByTestId("user-failure-alice");
+    expect(region).toHaveAttribute("aria-live", "polite");
+    expect(region).toHaveTextContent("");
+
+    await act(async () => includeAlice().click());
+    await act(async () => held.fail());
+
+    const text = screen.getByText(message);
+    expect(region).toContainElement(text);
+    expect(announcers(text)).toEqual([region]);
+  });
+});
