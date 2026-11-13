@@ -23,7 +23,11 @@ export interface UserCardProps {
    * outlives this card, which unmounts on a section switch.
    */
   passwordFailure: string | undefined;
-  /** Clears `passwordFailure` at the owner. */
+  /**
+   * Clears `passwordFailure` at the owner: when the operator edits the
+   * form, picks another password option, or closes the card or form while
+   * it shows the failure, which acknowledges it.
+   */
   onClearPasswordFailure: () => void;
 }
 
@@ -72,6 +76,19 @@ export function UserCard({
   const clearPasswordFailure = useCallback(() => {
     if (passwordFailure) onClearPasswordFailure();
   }, [passwordFailure, onClearPasswordFailure]);
+
+  // Closing the card or the password form while it shows a failure is the
+  // operator acknowledging it, so the failure does not open them again
+  // when this card mounts after a section switch.
+  const toggleExpanded = useCallback(() => {
+    if (expanded) clearPasswordFailure();
+    setExpanded(!expanded);
+  }, [expanded, clearPasswordFailure]);
+
+  const togglePasswordExpanded = useCallback(() => {
+    if (passwordExpanded) clearPasswordFailure();
+    setPasswordExpanded(!passwordExpanded);
+  }, [passwordExpanded, clearPasswordFailure]);
 
   const isInteractive = user.classification === "interactive";
 
@@ -194,7 +211,7 @@ export function UserCard({
         </Label>
         <div style={{ marginLeft: "auto", flexShrink: 0 }}>
           <button
-            onClick={() => setExpanded((p) => !p)}
+            onClick={toggleExpanded}
             aria-expanded={expanded}
             aria-label={`${expanded ? "Collapse" : "Expand"} ${user.name} details`}
             style={{
@@ -316,7 +333,7 @@ export function UserCard({
           <div style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <button
-                onClick={() => setPasswordExpanded((p) => !p)}
+                onClick={togglePasswordExpanded}
                 style={{
                   background: "none",
                   border: "none",

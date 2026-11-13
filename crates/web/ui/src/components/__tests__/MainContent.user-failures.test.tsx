@@ -214,3 +214,54 @@ describe("user failures end with the user record", () => {
     expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
   });
 });
+
+/**
+ * A failure opens the card and its password form so the operator sees it.
+ * Closing either is the operator acknowledging it, so the failure must not
+ * open them again when the card mounts after a section switch.
+ */
+describe.each([
+  {
+    dismissal: "collapsing the card",
+    dismiss: () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: "Collapse alice details" }),
+      ),
+  },
+  {
+    dismissal: "collapsing the password options",
+    dismiss: () =>
+      fireEvent.click(
+        screen.getAllByRole("button", { name: /Password options/ })[0],
+      ),
+  },
+])("a failure dismissed by $dismissal", ({ dismiss }) => {
+  it("stays dismissed across a rerender and a section switch, and a new failure opens the form again", async () => {
+    const held = hold(vi.mocked(client.setUserPassword));
+    const props = baseProps();
+    const { rerender } = render(<MainContent {...props} />);
+    await submitNewPassword();
+    await act(async () => held.fail());
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+
+    dismiss();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+
+    rerender(<MainContent {...props} viewData={view([ALICE, BOB])} />);
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    rerender(<MainContent {...props} activeSection="packages" />);
+    rerender(<MainContent {...props} />);
+
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+    openPasswordForm();
+    expect(screen.queryByText(PASSWORD_FAILURE)).toBeNull();
+
+    await submitNewPassword();
+    dismiss();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    await act(async () => held.fail());
+
+    expect(screen.getByText(PASSWORD_FAILURE)).toBeVisible();
+  });
+});
