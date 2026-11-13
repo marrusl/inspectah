@@ -24,7 +24,16 @@ export interface UsersGroupsSectionProps {
    * The owner must outlive this section, which unmounts on a section switch.
    */
   pendingGuard: PendingGuard;
+  /**
+   * Set-password failures, by username, and the setter for them. Owned
+   * with the guard, so a failure that lands while this section is
+   * unmounted is still shown when it mounts again.
+   */
+  passwordFailures: ReadonlyMap<string, string>;
+  onPasswordFailure: (username: string, message: string | null) => void;
 }
+
+const PASSWORD_FAILURE_MESSAGE = "Failed to set password. Please try again.";
 
 export function UsersGroupsSection({
   users,
@@ -32,6 +41,8 @@ export function UsersGroupsSection({
   onViewUpdate,
   onMutationError,
   pendingGuard,
+  passwordFailures,
+  onPasswordFailure,
 }: UsersGroupsSectionProps) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const { pendingKeys, runGuarded } = pendingGuard;
@@ -50,9 +61,11 @@ export function UsersGroupsSection({
   /**
    * Sends the password choice. For a new password, `hashPassword` runs
    * inside the guard, so a second click while it hashes is dropped too.
-   * Returns the outcome (rejecting on failure, after `onMutationError` for a
-   * failed request), or `undefined` when the user already has a request in
-   * flight and this one was dropped.
+   * A new password that fails, in the hash or in the request, is recorded
+   * with `onPasswordFailure`; only a failed request is also reported to
+   * `onMutationError`. Returns the outcome (rejecting on failure), or
+   * `undefined` when the user already has a request in flight and this one
+   * was dropped.
    */
   const handlePasswordChange = useCallback(
     (
@@ -62,15 +75,23 @@ export function UsersGroupsSection({
     ): Promise<void> | undefined => {
       let outcome: Promise<void> | undefined;
       runGuarded(username, () => {
+        onPasswordFailure(username, null);
         outcome = (async () => {
-          const hash = hashPassword ? await hashPassword() : undefined;
           try {
-            const view = await setUserPassword(username, choice, hash);
-            onViewUpdate(view);
+            const hash = hashPassword ? await hashPassword() : undefined;
+            try {
+              const view = await setUserPassword(username, choice, hash);
+              onViewUpdate(view);
+            } catch (err) {
+              onMutationError(
+                err instanceof Error ? err : new Error(String(err)),
+              );
+              throw err;
+            }
           } catch (err) {
-            onMutationError(
-              err instanceof Error ? err : new Error(String(err)),
-            );
+            if (choice === "new") {
+              onPasswordFailure(username, PASSWORD_FAILURE_MESSAGE);
+            }
             throw err;
           }
         })();
@@ -80,7 +101,7 @@ export function UsersGroupsSection({
       });
       return outcome;
     },
-    [runGuarded, onViewUpdate, onMutationError],
+    [runGuarded, onViewUpdate, onMutationError, onPasswordFailure],
   );
 
   // Summarize which users are included via useradd. The full set of
@@ -177,6 +198,8 @@ export function UsersGroupsSection({
           isPending={pendingKeys.has(user.name)}
           onStrategyChange={handleStrategyChange}
           onPasswordChange={handlePasswordChange}
+          passwordFailure={passwordFailures.get(user.name)}
+          onClearPasswordFailure={() => onPasswordFailure(user.name, null)}
         />
       ))}
 

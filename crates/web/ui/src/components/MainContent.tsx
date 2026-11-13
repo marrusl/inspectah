@@ -296,6 +296,25 @@ export function MainContent({
   const tunedGuard = usePendingGuard();
   const usersGuard = usePendingGuard();
   const serviceGuard = usePendingGuard();
+  // Set-password failures, by username. Held here for the same reason as
+  // the guards: the card that shows the failure unmounts on a section
+  // switch, and a hash or request that fails while the operator is away
+  // must still be on the card when they come back.
+  const [passwordFailures, setPasswordFailures] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const setPasswordFailure = useCallback(
+    (username: string, message: string | null) => {
+      setPasswordFailures((prev) => {
+        if (message === null && !prev.has(username)) return prev;
+        const next = new Map(prev);
+        if (message === null) next.delete(username);
+        else next.set(username, message);
+        return next;
+      });
+    },
+    [],
+  );
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -659,6 +678,8 @@ export function MainContent({
         onViewUpdate={onViewUpdate}
         onMutationError={onMutationError}
         pendingGuard={usersGuard}
+        passwordFailures={passwordFailures}
+        onPasswordFailure={setPasswordFailure}
       />
     );
   }

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { UserDecision } from "../api/types";
@@ -18,6 +18,13 @@ export interface UserCardProps {
     choice: "none" | "preserve" | "new",
     hashPassword?: () => Promise<string>,
   ) => Promise<void> | undefined;
+  /**
+   * The last set-password failure for this user, kept by the owner so it
+   * outlives this card, which unmounts on a section switch.
+   */
+  passwordFailure: string | undefined;
+  /** Clears `passwordFailure` at the owner. */
+  onClearPasswordFailure: () => void;
 }
 
 /** Redact a crypt(3) hash, showing only the prefix. */
@@ -33,9 +40,13 @@ export function UserCard({
   isPending,
   onStrategyChange,
   onPasswordChange,
+  passwordFailure,
+  onClearPasswordFailure,
 }: UserCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [passwordExpanded, setPasswordExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(Boolean(passwordFailure));
+  const [passwordExpanded, setPasswordExpanded] = useState(
+    Boolean(passwordFailure),
+  );
   const [hashRevealed, setHashRevealed] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -45,8 +56,22 @@ export function UserCard({
     user.password_choice === "new",
   );
   const [passwordInputVisible, setPasswordInputVisible] = useState(
-    user.password_choice === "new",
+    user.password_choice === "new" || Boolean(passwordFailure),
   );
+
+  // A failure can land while this card is mounted but collapsed, or before
+  // it mounts again after a section switch: open the password form to it.
+  useEffect(() => {
+    if (passwordFailure) {
+      setExpanded(true);
+      setPasswordExpanded(true);
+      setPasswordInputVisible(true);
+    }
+  }, [passwordFailure]);
+
+  const clearPasswordFailure = useCallback(() => {
+    if (passwordFailure) onClearPasswordFailure();
+  }, [passwordFailure, onClearPasswordFailure]);
 
   const isInteractive = user.classification === "interactive";
 
@@ -62,6 +87,7 @@ export function UserCard({
 
   const handlePasswordChoice = useCallback(
     (choice: "none" | "preserve" | "new") => {
+      clearPasswordFailure();
       if (choice === "new") {
         setPasswordInputVisible(true);
         setPasswordSet(false);
@@ -77,7 +103,7 @@ export function UserCard({
       setPasswordError("");
       onPasswordChange(user.name, choice);
     },
-    [user.name, onPasswordChange],
+    [user.name, onPasswordChange, clearPasswordFailure],
   );
 
   const handleSetPassword = useCallback(async () => {
@@ -101,7 +127,8 @@ export function UserCard({
       setNewPassword("");
       setConfirmPassword("");
     } catch {
-      setPasswordError("Failed to set password. Please try again.");
+      // The owner records the failure as `passwordFailure`, which outlives
+      // this card if it unmounts before the outcome settles.
     } finally {
       setIsHashing(false);
     }
@@ -455,6 +482,7 @@ export function UserCard({
                         onChange={(e) => {
                           setNewPassword(e.target.value);
                           setPasswordError("");
+                          clearPasswordFailure();
                         }}
                         disabled={isPending || isHashing}
                         style={{
@@ -483,6 +511,7 @@ export function UserCard({
                         onChange={(e) => {
                           setConfirmPassword(e.target.value);
                           setPasswordError("");
+                          clearPasswordFailure();
                         }}
                         disabled={isPending || isHashing}
                         style={{
@@ -493,7 +522,7 @@ export function UserCard({
                           marginBottom: "6px",
                         }}
                       />
-                      {passwordError && (
+                      {(passwordError || passwordFailure) && (
                         <div
                           style={{
                             fontSize: "var(--pf-t--global--font--size--xs)",
@@ -502,7 +531,7 @@ export function UserCard({
                             marginBottom: "6px",
                           }}
                         >
-                          {passwordError}
+                          {passwordError || passwordFailure}
                         </div>
                       )}
                       <button

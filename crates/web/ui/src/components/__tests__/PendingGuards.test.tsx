@@ -699,3 +699,95 @@ describe.each([
     expect(send).toHaveBeenCalledWith("alice", "new", "$6$salt$hash");
   });
 });
+
+/**
+ * The card unmounts on a section switch, so a set-password failure that
+ * lands while the operator is elsewhere has to be kept by the owner, or
+ * the card comes back with no sign that the password was never set.
+ */
+describe.each([
+  {
+    failure: "the hash rejects",
+    arrange: () => {
+      let fail: (err: Error) => void = () => {};
+      vi.mocked(crypt.sha512Crypt).mockImplementation(
+        () =>
+          new Promise<string>((_resolve, reject) => {
+            fail = reject;
+          }),
+      );
+      return { fail: (err: Error) => fail(err), reportedAsRequest: false };
+    },
+  },
+  {
+    failure: "the request rejects",
+    arrange: () => {
+      const { fail } = holdRequests("setUserPassword");
+      return { fail, reportedAsRequest: true };
+    },
+  },
+])("set password failure while on another section: $failure", ({ arrange }) => {
+  it("shows the failure on return, releases the user, and allows a retry", async () => {
+    const { fail, reportedAsRequest } = arrange();
+    const onMutationError = vi.fn();
+    const props: MainContentProps = {
+      activeSection: "users_groups",
+      loading: false,
+      viewData: { ...VIEW, users_groups_decisions: [USER] } as ViewResponse,
+      sections: null,
+      onViewUpdate: vi.fn(),
+      onMutationError,
+      sectionSearchOpen: false,
+      onSectionSearchClose: vi.fn(),
+    };
+    const { rerender } = render(<MainContent {...props} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand alice details" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Password options/ }));
+    for (const label of ["Password", "Confirm password"]) {
+      fireEvent.change(screen.getByLabelText(label), {
+        target: { value: "hunter2" },
+      });
+    }
+    await act(async () =>
+      screen.getByRole("button", { name: "Set password" }).click(),
+    );
+
+    rerender(<MainContent {...props} activeSection="packages" />);
+    expect(screen.queryByTestId("user-card-alice")).toBeNull();
+    await act(async () => fail(new Error("connection reset")));
+    rerender(<MainContent {...props} />);
+
+    // Visible on return, without the operator having to open the card.
+    expect(
+      screen.getByText("Failed to set password. Please try again."),
+    ).toBeVisible();
+    expect(onMutationError).toHaveBeenCalledTimes(reportedAsRequest ? 1 : 0);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Include alice" }),
+      ).toBeEnabled(),
+    );
+
+    vi.mocked(crypt.sha512Crypt).mockResolvedValue("$6$salt$hash");
+    const send = vi.mocked(client.setUserPassword);
+    send.mockReset();
+    send.mockResolvedValue(VIEW);
+    for (const label of ["Password", "Confirm password"]) {
+      fireEvent.change(screen.getByLabelText(label), {
+        target: { value: "hunter2" },
+      });
+    }
+    // Editing the password clears the old failure, as before.
+    expect(
+      screen.queryByText("Failed to set password. Please try again."),
+    ).toBeNull();
+    const setPassword = screen.getByRole("button", { name: "Set password" });
+    expect(setPassword).toBeEnabled();
+    await act(async () => setPassword.click());
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("alice", "new", "$6$salt$hash");
+  });
+});
