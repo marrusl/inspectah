@@ -47,8 +47,10 @@ pub(super) enum ResolveError {
 enum Entry {
     Missing,
     Link(String),
-    /// A regular file and its content.
-    File(String),
+    /// A regular file, and whether it is exactly zero bytes long.
+    File {
+        empty: bool,
+    },
 }
 
 /// Resolve `name`: its own file under `/etc`, then under the vendor
@@ -61,16 +63,16 @@ pub(super) fn resolve(exec: &dyn Executor, name: &UnitName) -> Result<Resolved, 
         match entry(exec, &etc)? {
             Entry::Missing => {}
             Entry::Link(target) => return link_form(exec, &etc, target, &file, true),
-            Entry::File(content) if content.is_empty() => {
+            Entry::File { empty: true } => {
                 return Ok(Resolved::Masked {
                     hidden: hidden_fragment(exec, &file)?,
                 });
             }
-            Entry::File(_) => {
+            Entry::File { empty: false } => {
                 let vendor = format!("{VENDOR_UNIT_DIR}/{}", file.as_str());
                 let fragment = match entry(exec, &vendor)? {
                     Entry::Missing => UnitFragment::Local { file },
-                    Entry::Link(_) | Entry::File(_) => UnitFragment::Shadowed {
+                    Entry::Link(_) | Entry::File { .. } => UnitFragment::Shadowed {
                         file,
                         owning_package: None,
                     },
@@ -85,12 +87,12 @@ pub(super) fn resolve(exec: &dyn Executor, name: &UnitName) -> Result<Resolved, 
             Entry::Link(target) => return link_form(exec, &vendor, target, &file, false),
             // A zero-length vendor file is a mask the package ships, with
             // no file under it.
-            Entry::File(content) if content.is_empty() => {
+            Entry::File { empty: true } => {
                 return Ok(Resolved::Masked {
                     hidden: UnitFragment::Absent,
                 });
             }
-            Entry::File(_) => {
+            Entry::File { empty: false } => {
                 return Ok(Resolved::File {
                     fragment: UnitFragment::Vendor {
                         file,
@@ -177,10 +179,22 @@ fn entry(exec: &dyn Executor, path: &str) -> Result<Entry, ResolveError> {
         Ok(target) => Ok(Entry::Link(target)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Entry::Missing),
         // `EINVAL`: the path exists and is not a link.
-        Err(e) if e.kind() == io::ErrorKind::InvalidInput => exec
-            .read_file(Path::new(path))
-            .map(Entry::File)
-            .map_err(read_error),
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+            match exec.read_file(Path::new(path)) {
+                Ok(content) => Ok(Entry::File {
+                    empty: content.is_empty(),
+                }),
+                // Only zero length matters here, and `InvalidData` proves the
+                // file has bytes: the executor refuses a file over its size cap,
+                // or content that is not UTF-8, with that kind. systemd loads a
+                // unit whose comment or `Description=` holds Latin-1 bytes, so
+                // such a file is a unit, not a mask and not a read failure.
+                Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                    Ok(Entry::File { empty: false })
+                }
+                Err(e) => Err(read_error(e)),
+            }
+        }
         Err(e) => Err(read_error(e)),
     }
 }

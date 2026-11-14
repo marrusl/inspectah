@@ -1314,3 +1314,110 @@ fn unit_with_no_file_is_reported_not_dropped() {
         "{warnings:?}"
     );
 }
+
+/// systemd loads a unit file whose bytes are not UTF-8 (a Latin-1 comment
+/// or `Description=`), and the collector refuses a file over its size cap,
+/// both as `InvalidData`. Neither says the file is empty, so neither is a
+/// mask and neither loses the unit: an `/etc` unit is `Local`, a vendor
+/// unit is `Vendor`, and a mask over such a vendor file hides that file.
+/// The scan is not degraded (`scan` expects success).
+#[test]
+fn unit_file_that_is_not_text_keeps_its_state_change() {
+    let exec = listing_mock(&[
+        ("etc-latin1.service", "enabled"),
+        ("vendor-latin1.service", "enabled"),
+        ("masked-latin1.service", "masked"),
+    ])
+    .with_file_error(
+        "/etc/systemd/system/etc-latin1.service",
+        std::io::ErrorKind::InvalidData,
+    )
+    .with_file_error(
+        "/usr/lib/systemd/system/vendor-latin1.service",
+        std::io::ErrorKind::InvalidData,
+    )
+    .with_link("/etc/systemd/system/masked-latin1.service", "/dev/null")
+    .with_file_error(
+        "/usr/lib/systemd/system/masked-latin1.service",
+        std::io::ErrorKind::InvalidData,
+    )
+    .with_command(
+        "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/vendor-latin1.service \
+         /usr/lib/systemd/system/masked-latin1.service",
+        ExecResult {
+            stdout: "a\nb\n".into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    );
+    let (section, warnings) = scan(&exec);
+
+    assert_eq!(
+        fragment_of(&section, "etc-latin1.service"),
+        &UnitFragment::Local {
+            file: file("etc-latin1.service")
+        }
+    );
+    assert_eq!(
+        fragment_of(&section, "vendor-latin1.service"),
+        &UnitFragment::Vendor {
+            file: file("vendor-latin1.service"),
+            owning_package: Some("a".into()),
+        }
+    );
+    assert_eq!(
+        fragment_of(&section, "masked-latin1.service"),
+        &UnitFragment::Vendor {
+            file: file("masked-latin1.service"),
+            owning_package: Some("b".into()),
+        }
+    );
+    assert!(warnings.is_empty(), "no warnings: {warnings:?}");
+}
+
+/// A unit file that cannot be read for any other reason hides where the
+/// unit came from, so the scan is degraded and names the file. The same
+/// unit with a readable file is a state change and the scan succeeds.
+#[test]
+fn unreadable_unit_file_degrades_the_inspector() {
+    // Positive control: the readable twin.
+    let readable = listing_mock(&[("app.service", "enabled")])
+        .with_file("/etc/systemd/system/app.service", UNIT_FILE);
+    let (section, _) = scan(&readable);
+    assert_eq!(
+        fragment_of(&section, "app.service"),
+        &UnitFragment::Local {
+            file: file("app.service")
+        }
+    );
+
+    let unreadable = listing_mock(&[("app.service", "enabled")]).with_file_error(
+        "/etc/systemd/system/app.service",
+        std::io::ErrorKind::PermissionDenied,
+    );
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &unreadable,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    match ServicesInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, partial }) => {
+            assert!(
+                reason.starts_with("unit file read failures: ")
+                    && reason.contains("/etc/systemd/system/app.service"),
+                "the reason names the unreadable unit file: {reason}"
+            );
+            let SectionData::Units(section) = partial.section else {
+                panic!("expected the units section");
+            };
+            assert!(
+                section.state_changes.is_empty(),
+                "{:?}",
+                section.state_changes
+            );
+        }
+        other => panic!("expected Degraded for an unreadable unit file, got {other:?}"),
+    }
+}
