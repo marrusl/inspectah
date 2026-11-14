@@ -2636,3 +2636,232 @@ fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// § 10.4 and § 12 "The exception": runtime package updaters (T17, T18 (b)).
+// ---------------------------------------------------------------------
+
+/// Every name on the updater list, with the package that owns it.
+const UPDATERS: [(&str, &str); 5] = [
+    ("dnf-automatic.timer", "dnf-automatic"),
+    ("dnf-automatic-install.timer", "dnf-automatic"),
+    ("dnf-automatic-download.timer", "dnf-automatic"),
+    ("dnf-automatic-notifyonly.timer", "dnf-automatic"),
+    ("packagekit-offline-update.service", "PackageKit"),
+];
+
+/// A near miss and the positive control: the service the timers start is
+/// not on the list, and its enable is carried.
+const UPDATER_CONTROL: &str = "dnf-automatic.service";
+
+/// § 10.4's `# Omitted:` line for an excluded updater.
+fn updater_omitted(unit: &str) -> String {
+    format!(
+        "# Omitted: {unit} (updates packages in place, which an image-based host does not \
+         support; excluded by default)"
+    )
+}
+
+/// A host with every updater and the control `state` against the opposite
+/// preset, scanned against a base image so refine keeps the packages.
+fn updater_host(state: &str) -> UnitHost {
+    let preset = if state == "enabled" {
+        "disable"
+    } else {
+        "enable"
+    };
+    let mut host = UnitHost::new()
+        .base_package("glibc")
+        .package("dnf-automatic")
+        .package("PackageKit")
+        .unit(UPDATER_CONTROL, state)
+        .preset(&format!("{preset} *"))
+        .vendor_unit(UPDATER_CONTROL, VENDOR_SERVICE, Some("dnf-automatic"));
+    for (unit, owner) in UPDATERS {
+        let content = if unit.ends_with(".timer") {
+            "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n"
+        } else {
+            VENDOR_SERVICE
+        };
+        host = host
+            .unit(unit, state)
+            .vendor_unit(unit, content, Some(owner));
+    }
+    host
+}
+
+/// `session` exported to a tarball and opened again by the production
+/// refine loader, as `inspectah refine` opens a refined export.
+fn reopened(session: &RefineSession) -> RefineSession {
+    let packed = tempfile::tempdir().expect("tempdir");
+    let tarball = packed.path().join("refined.tar.gz");
+    session
+        .export_plan(session.generation())
+        .expect("the generation matches")
+        .render(&tarball)
+        .expect("the export writes");
+    inspectah_refine::tarball::from_tarball(&tarball).expect("refine opens the export")
+}
+
+/// T17: each updater enabled against its preset is a state change with
+/// `include: false`, the reason, and no lock; the Containerfile has
+/// § 10.4's `# Omitted:` line and no instruction naming it, while the near
+/// miss `dnf-automatic.service` on the same host is enabled. Through the
+/// production refine loader the row is still excluded and not locked;
+/// `SetInclude(true)` yields the enable and drops the line; the include
+/// survives an export and a reload.
+#[test]
+fn t17_a_runtime_updater_is_excluded_by_default_and_can_be_included() {
+    let snap = scan(updater_host("enabled"));
+    for (unit, _) in UPDATERS {
+        let row = change(&snap, unit);
+        assert!(!row.disposition.is_included(), "{unit}");
+        assert!(!row.locked, "{unit}");
+        assert_eq!(
+            row.attention_reason.as_deref(),
+            Some(inspectah_core::baseline::RUNTIME_UPDATER_REASON),
+            "{unit}"
+        );
+    }
+    assert!(change(&snap, UPDATER_CONTROL).disposition.is_included());
+
+    let mut session = session(&snap);
+    for (route, containerfile) in [
+        ("scan", containerfile_in(&render_export(&snap))),
+        ("refine", containerfile_in(&export_session(&session))),
+    ] {
+        for (unit, _) in UPDATERS {
+            assert_eq!(
+                omitted(&containerfile, unit),
+                Some(updater_omitted(unit).as_str()),
+                "{route}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route}, {unit}:\n{containerfile}"
+            );
+        }
+        assert!(
+            acts(&containerfile, "enable", UPDATER_CONTROL),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    for (unit, _) in UPDATERS {
+        let row = change(session.snapshot(), unit);
+        assert!(
+            !row.locked && !row.disposition.is_included(),
+            "{unit} through the loader: {row:?}"
+        );
+        session
+            .apply(set_include(unit_item(unit), true))
+            .unwrap_or_else(|e| panic!("SetInclude({unit}, true): {e:?}"));
+    }
+    let included = containerfile_in(&export_session(&session));
+    let reloaded = reopened(&session);
+    let after_reload = containerfile_in(&export_session(&reloaded));
+    for (step, containerfile) in [("included", &included), ("reloaded", &after_reload)] {
+        for (unit, _) in UPDATERS {
+            assert!(
+                acts(containerfile, "enable", unit),
+                "{step}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                omitted(containerfile, unit).is_none(),
+                "{step}, {unit}:\n{containerfile}"
+            );
+        }
+    }
+    for (unit, _) in UPDATERS {
+        assert!(
+            change(reloaded.snapshot(), unit).disposition.is_included(),
+            "{unit}: the include survives the reload"
+        );
+    }
+}
+
+/// § 10.4 names units, not commands: an updater disabled against an
+/// `enable` preset is excluded by default too, with the same reason and
+/// line, and including it yields the `disable`. Control: the near miss is
+/// disabled.
+#[test]
+fn t17_the_updater_default_applies_to_a_disable_too() {
+    let snap = scan(updater_host("disabled"));
+    let containerfile = containerfile_in(&render_export(&snap));
+    for (unit, _) in UPDATERS {
+        assert!(!change(&snap, unit).disposition.is_included(), "{unit}");
+        assert_eq!(
+            omitted(&containerfile, unit),
+            Some(updater_omitted(unit).as_str()),
+            "{unit}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{unit}:\n{containerfile}"
+        );
+    }
+    assert!(
+        acts(&containerfile, "disable", UPDATER_CONTROL),
+        "{containerfile}"
+    );
+    let included = exported_after(&snap, &[(unit_item("dnf-automatic.timer"), true)]);
+    let containerfile = containerfile_in(&included);
+    assert!(
+        acts(&containerfile, "disable", "dnf-automatic.timer"),
+        "{containerfile}"
+    );
+}
+
+/// T18 (b): two hosts with `dnf-automatic.timer` enabled, each excluded by
+/// the scan, merge to one excluded row with the reason; the merged
+/// Containerfile has the `# Omitted:` line and no instruction naming it,
+/// while the near miss is enabled. An explicit include in a refine session
+/// on the aggregate, with the owning package included, yields the enable.
+#[test]
+fn t18_b_a_runtime_updater_merges_excluded_and_can_be_included() {
+    const UNIT: &str = "dnf-automatic.timer";
+    let host = |hostname: &str| {
+        reload(&scan(
+            updater_host("enabled").file("/etc/hostname", &format!("{hostname}\n")),
+        ))
+    };
+    let (merged, _) =
+        merge_snapshots(vec![host("host-a"), host("host-b")], None, None).expect("merge");
+    let merged = reload(&merged);
+    assert!(merged.aggregate_meta.is_some(), "an aggregate");
+    let row = change(&merged, UNIT);
+    assert!(!row.disposition.is_included() && !row.locked, "{row:?}");
+    assert_eq!(
+        row.attention_reason.as_deref(),
+        Some(inspectah_core::baseline::RUNTIME_UPDATER_REASON)
+    );
+    let containerfile = containerfile_in(&render_export(&merged));
+    assert_eq!(
+        omitted(&containerfile, UNIT),
+        Some(updater_omitted(UNIT).as_str()),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+    assert!(
+        acts(&containerfile, "enable", UPDATER_CONTROL),
+        "{containerfile}"
+    );
+
+    // Refine on an aggregate starts the merged packages excluded, which
+    // would decline every enable of theirs by the presence tiers; the
+    // package is included first, and the near miss shows it is present.
+    let package = ItemId::Package {
+        name: "dnf-automatic".into(),
+        arch: "x86_64".into(),
+    };
+    let included = containerfile_in(&exported_after(
+        &merged,
+        &[(package, true), (unit_item(UNIT), true)],
+    ));
+    assert!(acts(&included, "enable", UNIT), "{included}");
+    assert!(omitted(&included, UNIT).is_none(), "{included}");
+    assert!(acts(&included, "enable", UPDATER_CONTROL), "{included}");
+}

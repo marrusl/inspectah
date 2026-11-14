@@ -124,7 +124,9 @@ pub struct IncompatibleServiceEntry {
 
 /// Systemd services incompatible with immutable /usr.
 ///
-/// These are package-manager services that assume a mutable /usr.
+/// These are package-manager services that assume a mutable /usr. A
+/// runtime package updater is not here: [`RUNTIME_UPDATERS`] is its one
+/// owner, so it can be included (§ 10.4 of the units spec).
 pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
     IncompatibleServiceEntry {
         unit: "dnf-makecache.service",
@@ -138,11 +140,48 @@ pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
         unit: "packagekit.service",
         reason: "package-manager service incompatible with immutable /usr",
     },
-    IncompatibleServiceEntry {
-        unit: "packagekit-offline-update.service",
-        reason: "package-manager service incompatible with immutable /usr",
-    },
 ];
+
+/// Units that change, or prepare to change, installed packages on a
+/// running host (§ 10.4 of the units spec). The target's `/usr` is
+/// read-only and its update path is a new image, so each is collected and
+/// excluded by default, and the operator can include one in refine. A `*`
+/// matches any run of characters; any other entry is a whole name.
+pub const RUNTIME_UPDATERS: &[&str] =
+    &["dnf-automatic*.timer", "packagekit-offline-update.service"];
+
+/// The attention reason [`apply_runtime_updater_default`] gives a runtime
+/// updater's row.
+pub const RUNTIME_UPDATER_REASON: &str = "This unit updates packages in place, which the \
+     target does not support: an image-based host is updated by a new image. \
+     bootc-fetch-apply-updates.timer is the equivalent there. Excluded by default; include it \
+     to carry it anyway.";
+
+/// Whether `unit` is on [`RUNTIME_UPDATERS`].
+pub fn is_runtime_updater(unit: &str) -> bool {
+    RUNTIME_UPDATERS
+        .iter()
+        .any(|entry| match entry.split_once('*') {
+            Some((prefix, suffix)) => {
+                unit.len() >= prefix.len() + suffix.len()
+                    && unit.starts_with(prefix)
+                    && unit.ends_with(suffix)
+            }
+            None => unit == *entry,
+        })
+}
+
+/// § 10.4's default for a runtime updater's row: excluded, with
+/// [`RUNTIME_UPDATER_REASON`], and not locked, so the operator can include
+/// it. Any other row is left as it is. Called on a fresh scan by the
+/// collector and on a fresh aggregate row by the fleet merge; never by
+/// refine's loader, so an operator's include survives export and reload.
+pub fn apply_runtime_updater_default(change: &mut crate::types::units::UnitStateChange) {
+    if is_runtime_updater(change.unit().name().as_str()) {
+        change.disposition = crate::types::FindingKind::excluded();
+        change.attention_reason = Some(RUNTIME_UPDATER_REASON.to_owned());
+    }
+}
 
 /// A unit a stock install leaves away from its preset with no administrator
 /// involved, and the state it is left in.
@@ -683,17 +722,105 @@ mod tests {
 
     #[test]
     fn incompatible_services_constant() {
-        assert_eq!(INCOMPATIBLE_SERVICES.len(), 4);
+        assert_eq!(INCOMPATIBLE_SERVICES.len(), 3);
 
         let unit_names: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|e| e.unit).collect();
         assert!(unit_names.contains(&"dnf-makecache.service"));
         assert!(unit_names.contains(&"dnf-makecache.timer"));
         assert!(unit_names.contains(&"packagekit.service"));
-        assert!(unit_names.contains(&"packagekit-offline-update.service"));
 
         for entry in INCOMPATIBLE_SERVICES {
             assert!(entry.reason.contains("package-manager"));
             assert!(entry.reason.contains("immutable /usr"));
+        }
+    }
+
+    /// § 10.4: the updater list is the glob and the one service, exactly.
+    #[test]
+    fn runtime_updaters_constant() {
+        assert_eq!(
+            RUNTIME_UPDATERS,
+            ["dnf-automatic*.timer", "packagekit-offline-update.service"]
+        );
+        assert!(RUNTIME_UPDATER_REASON.contains("bootc-fetch-apply-updates.timer"));
+    }
+
+    /// The two lists share no unit: a unit on both would be locked by the
+    /// refine loader and could never be included (§ 10.4). Each entry of
+    /// either is checked against the other's matcher.
+    #[test]
+    fn runtime_updaters_and_incompatible_services_share_no_unit() {
+        for entry in INCOMPATIBLE_SERVICES {
+            assert!(!is_runtime_updater(entry.unit), "{}", entry.unit);
+        }
+        for entry in RUNTIME_UPDATERS {
+            assert!(
+                INCOMPATIBLE_SERVICES
+                    .iter()
+                    .all(|i| i.unit != *entry && !is_runtime_updater(i.unit)),
+                "{entry}"
+            );
+        }
+        assert!(
+            !INCOMPATIBLE_SERVICES
+                .iter()
+                .any(|e| e.unit == "packagekit-offline-update.service")
+        );
+    }
+
+    /// The glob matches the timer and its variants, and nothing that only
+    /// shares a prefix or a suffix.
+    #[test]
+    fn runtime_updater_names_match_the_glob_or_the_whole_name() {
+        for (unit, updater) in [
+            ("dnf-automatic.timer", true),
+            ("dnf-automatic-install.timer", true),
+            ("dnf-automatic-download.timer", true),
+            ("dnf-automatic-notifyonly.timer", true),
+            ("packagekit-offline-update.service", true),
+            ("dnf-automatic.service", false),
+            ("dnf-automatic-install.service", false),
+            ("dnf-makecache.timer", false),
+            ("packagekit.service", false),
+            ("packagekit-offline-update.timer", false),
+            ("my-dnf-automatic.timer", false),
+        ] {
+            assert_eq!(is_runtime_updater(unit), updater, "{unit}");
+        }
+    }
+
+    /// `apply_runtime_updater_default` excludes an updater's row with the
+    /// reason, unlocked, whatever its state; any other row is untouched.
+    #[test]
+    fn the_updater_default_excludes_with_the_reason_and_no_lock() {
+        use crate::types::units::{CarriedUnit, UnitFragment, UnitStateChange, UnitSubject};
+        let change = |unit: &str, state| {
+            let name: crate::types::units::UnitName = unit.to_owned().try_into().unwrap();
+            let subject = UnitSubject::new(
+                name.clone(),
+                UnitFragment::Vendor {
+                    file: name,
+                    owning_package: Some("pkg".into()),
+                },
+            )
+            .unwrap();
+            UnitStateChange::new(CarriedUnit::try_from(subject).unwrap(), state, None).unwrap()
+        };
+        for state in [UnitState::Enabled, UnitState::Disabled, UnitState::Masked] {
+            let mut updater = change("dnf-automatic-notifyonly.timer", state);
+            apply_runtime_updater_default(&mut updater);
+            assert!(!updater.disposition.is_included(), "{state}");
+            assert!(!updater.locked, "{state}");
+            assert_eq!(
+                updater.attention_reason.as_deref(),
+                Some(RUNTIME_UPDATER_REASON),
+                "{state}"
+            );
+
+            let mut other = change("httpd.service", state);
+            let before = other.clone();
+            apply_runtime_updater_default(&mut other);
+            assert_eq!(other, before, "{state}");
         }
     }
 

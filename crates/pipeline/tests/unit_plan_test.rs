@@ -2923,3 +2923,55 @@ fn mount_advisories_render_as_comments_after_the_unit_state_section() {
         "only comments name srv.mount:\n{containerfile}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// § 10.4 runtime package updaters
+// ---------------------------------------------------------------------------
+
+/// An excluded runtime updater is not planned, and the section names it in
+/// § 10.4's `# Omitted:` line, whatever its verb. Controls: the same row
+/// included is planned with no line; an excluded row of a unit not on the
+/// list renders nothing, as every excluded row does.
+#[test]
+fn an_excluded_runtime_updater_is_named_in_an_omitted_line() {
+    let row = |unit: &str, state, include: bool| {
+        let mut change = change_with(unit, vendor(unit), state);
+        change.disposition = FindingKind::from_bool(include);
+        change
+    };
+    let omitted = |unit: &str| {
+        format!(
+            "# Omitted: {unit} (updates packages in place, which an image-based host does not \
+             support; excluded by default)"
+        )
+    };
+    for (unit, state, verb) in [
+        ("dnf-automatic.timer", UnitState::Enabled, "enable"),
+        (
+            "packagekit-offline-update.service",
+            UnitState::Disabled,
+            "disable",
+        ),
+    ] {
+        let snap = units_snapshot(vec![row(unit, state, false)], vec![]);
+        let plan = plan_units(&snap, &staged_writes(&snap));
+        assert!(plan.planned.is_empty(), "{unit}");
+        assert!(plan.declined.is_empty(), "{unit}: not a declined command");
+        assert_eq!(unit_state_lines(&plan), [omitted(unit)], "{unit}");
+
+        let snap = units_snapshot(vec![row(unit, state, true)], vec![]);
+        assert_eq!(
+            render(&snap).lines,
+            [
+                format!("RUN systemctl {verb} -- \\"),
+                format!("    '{unit}'")
+            ],
+            "{unit} included"
+        );
+    }
+    let other = units_snapshot(
+        vec![row("dnf-automatic.service", UnitState::Enabled, false)],
+        vec![],
+    );
+    assert!(render(&other).lines.is_empty());
+}

@@ -5,7 +5,7 @@
 //! share, live here too.
 
 use inspectah_core::baseline::{
-    TARGET_NEEDS_UNIT, TMP_MOUNT, target_needs_unit, target_needs_unit_text,
+    TARGET_NEEDS_UNIT, TMP_MOUNT, is_runtime_updater, target_needs_unit, target_needs_unit_text,
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
@@ -358,6 +358,10 @@ pub struct UnitPlan {
     /// Enables left to the Scheduled Tasks section, which copies and
     /// enables the timers it carries (§ 8).
     pub deferred: Vec<UnitName>,
+    /// Excluded rows of runtime package updaters (§ 10.4). Not planned, as
+    /// no excluded row is, and not declined: the row's exclusion decided
+    /// it. The section names each in [`excluded_updater_line`].
+    pub excluded_updaters: Vec<UnitName>,
 }
 
 /// Internal classification of whether a unit's package is in the image.
@@ -457,9 +461,24 @@ pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReaso
     }
 }
 
+/// § 10.4's reason for an excluded runtime package updater, after its name
+/// in the `# Omitted:` line.
+const RUNTIME_UPDATER_OMITTED: &str =
+    "updates packages in place, which an image-based host does not support; excluded by default";
+
+/// The `# Omitted:` line for an excluded runtime package updater (§ 10.4),
+/// one entry of [`UnitPlan::excluded_updaters`].
+pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
+    DeclinedLine {
+        marker: DeclinedMarker::Omitted,
+        text: format!("{} ({RUNTIME_UPDATER_OMITTED})", name.as_str()),
+    }
+}
+
 /// The unit state section's lines for `plan`: a line per declined command
-/// ([`declined_line`]), then [`systemctl_lines`], then the note naming the
-/// enables left to the Scheduled Tasks section.
+/// ([`declined_line`]), a line per excluded runtime updater
+/// ([`excluded_updater_line`]), then [`systemctl_lines`], then the note
+/// naming the enables left to the Scheduled Tasks section.
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
     // line is escaped here rather than inside `declined_line`, which refine
@@ -471,6 +490,11 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             escape_comment_text(&declined_line(name, *action, reason).comment())
         })
         .collect();
+    lines.extend(
+        plan.excluded_updaters
+            .iter()
+            .map(|name| excluded_updater_line(name).comment()),
+    );
     lines.extend(systemctl_lines(&plan.planned));
     if !plan.deferred.is_empty() {
         let names: Vec<&str> = plan.deferred.iter().map(UnitName::as_str).collect();
@@ -1056,6 +1080,14 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
     let ct_units = config_tree_units(snap);
     let presence = snap.rpm.as_ref().map(|rpm| Presence::new(snap, rpm));
 
+    plan.excluded_updaters = units
+        .state_changes
+        .iter()
+        .filter(|sc| !sc.disposition.is_included())
+        .map(|sc| sc.unit().name())
+        .filter(|name| is_runtime_updater(name.as_str()))
+        .cloned()
+        .collect();
     for sc in units
         .state_changes
         .iter()

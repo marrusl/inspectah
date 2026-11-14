@@ -560,14 +560,21 @@ mod tests {
         assert!(!services.state_changes[0].disposition.is_included()); // dnf-makecache.service
         assert!(!services.state_changes[1].disposition.is_included()); // dnf-makecache.timer
         assert!(!services.state_changes[2].disposition.is_included()); // packagekit.service
-        assert!(!services.state_changes[3].disposition.is_included()); // packagekit-offline-update.service
+        // A runtime updater is not locked here: the collector excludes it by
+        // default, and the operator can include it (§ 10.4).
+        assert!(services.state_changes[3].disposition.is_included()); // packagekit-offline-update.service
+        assert!(!services.state_changes[3].locked);
         assert!(services.state_changes[4].disposition.is_included()); // httpd.service
         assert!(services.state_changes[5].disposition.is_included()); // sshd.service
 
-        // inventory: only compatible enabled entries remain
+        // inventory: only the locked units' enabled entries are removed
         assert_eq!(
             enabled_names(services),
-            vec!["httpd.service", "sshd.service"]
+            vec![
+                "packagekit-offline-update.service",
+                "httpd.service",
+                "sshd.service"
+            ]
         );
     }
 

@@ -1530,11 +1530,16 @@ pub fn merge_service_sections(
         return None;
     }
 
-    let state_changes = merge_items(
+    let mut state_changes = merge_items(
         collect_items(&sections, |s| &s.state_changes),
         total_hosts,
         hostnames,
     );
+    // `merge_items` includes every row on every host, so a runtime updater
+    // each host excluded would come out included (§ 12 "The exception").
+    for change in &mut state_changes {
+        crate::baseline::apply_runtime_updater_default(change);
+    }
     let drop_ins = merge_items(
         collect_items(&sections, |s| &s.drop_ins),
         total_hosts,

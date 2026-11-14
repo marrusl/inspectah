@@ -3297,3 +3297,50 @@ fn test_carried_unit(
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
 }
+
+/// § 12 "The exception", T18 (b): `merge_items` includes every row on
+/// every host, so a runtime updater each host excluded would come out
+/// included. The merge applies the updater default after it: the merged
+/// `dnf-automatic.timer` row is excluded with the reason and not locked.
+/// Control: an ordinary unit excluded on both hosts merges included, as
+/// every merged row does today.
+#[test]
+fn a_runtime_updater_excluded_on_every_host_merges_excluded() {
+    use inspectah_core::baseline::{RUNTIME_UPDATER_REASON, apply_runtime_updater_default};
+    let make_sc = |unit: &str| {
+        let mut change = UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap();
+        apply_runtime_updater_default(&mut change);
+        change.disposition = FindingKind::excluded();
+        change
+    };
+    let section = || UnitSection {
+        state_changes: vec![make_sc("dnf-automatic.timer"), make_sc("httpd.service")],
+        inventory: vec![],
+        drop_ins: vec![],
+        mount_findings: Vec::new(),
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result =
+        merge_service_sections(vec![Some(section()), Some(section())], 2, &hostnames).unwrap();
+    let row = |unit: &str| {
+        result
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == unit)
+            .unwrap_or_else(|| panic!("no merged row for {unit}"))
+    };
+    let updater = row("dnf-automatic.timer");
+    assert!(!updater.disposition.is_included(), "{updater:?}");
+    assert!(!updater.locked, "{updater:?}");
+    assert_eq!(
+        updater.attention_reason.as_deref(),
+        Some(RUNTIME_UPDATER_REASON)
+    );
+    assert_eq!(updater.aggregate.as_ref().map(|a| a.count), Some(2));
+    assert!(row("httpd.service").disposition.is_included());
+}

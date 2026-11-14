@@ -1,4 +1,6 @@
-use inspectah_core::baseline::{STOCK_STATE, target_needs_unit, target_needs_unit_text};
+use inspectah_core::baseline::{
+    STOCK_STATE, apply_runtime_updater_default, target_needs_unit, target_needs_unit_text,
+};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
@@ -361,6 +363,8 @@ fn build_state_changes(
                 if target_needs_unit(name, action) {
                     change.attention_reason = Some(target_needs_unit_text(name, action));
                 }
+                // § 10.4: a runtime package updater starts excluded.
+                apply_runtime_updater_default(&mut change);
                 state_changes.push(change);
             }
             Err(e) => warnings.push(warn(&e.to_string())),
