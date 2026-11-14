@@ -108,8 +108,8 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../templates/report/security.html"),
     ),
     (
-        "report/services.html",
-        include_str!("../../templates/report/services.html"),
+        "report/units.html",
+        include_str!("../../templates/report/units.html"),
     ),
     (
         "report/source-info.html",
@@ -180,7 +180,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             match id {
                 InspectorId::Rpm => ("Packages", "packages"),
                 InspectorId::Config => ("Configuration Files", "config-files"),
-                InspectorId::Units => ("Service State Changes", "services"),
+                InspectorId::Units => ("Unit State Changes", "units"),
                 InspectorId::Storage => ("Storage", "storage"),
                 InspectorId::ScheduledTasks => ("Scheduled Tasks", "scheduled-tasks"),
                 InspectorId::KernelBoot => ("Kernel & Boot", "kernel-boot"),
@@ -228,7 +228,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             match id {
                 InspectorId::Rpm => ("Packages", "packages"),
                 InspectorId::Config => ("Configuration Files", "config-files"),
-                InspectorId::Units => ("Service State Changes", "services"),
+                InspectorId::Units => ("Unit State Changes", "units"),
                 InspectorId::Storage => ("Storage", "storage"),
                 InspectorId::ScheduledTasks => ("Scheduled Tasks", "scheduled-tasks"),
                 InspectorId::KernelBoot => ("Kernel & Boot", "kernel-boot"),
@@ -1892,7 +1892,7 @@ mod tests {
             "banner must label degraded sections"
         );
         assert!(
-            html.contains("Service State Changes"),
+            html.contains("Unit State Changes"),
             "banner must name the degraded section"
         );
     }
@@ -1920,7 +1920,7 @@ mod tests {
             "must show failed section name"
         );
         assert!(
-            html.contains("Service State Changes"),
+            html.contains("Unit State Changes"),
             "must show degraded section name"
         );
     }
@@ -2352,7 +2352,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Service State Changes section tests (T8)
+    // Unit State Changes section tests (T8)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -2378,8 +2378,8 @@ mod tests {
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
-            html.contains("Service State Changes"),
-            "report must contain Service State Changes section"
+            html.contains("Unit State Changes"),
+            "report must contain Unit State Changes section"
         );
         assert!(
             html.contains("firewalld.service"),
@@ -3611,7 +3611,7 @@ mod tests {
         let expected_mappings = vec![
             ("Packages", "packages"),
             ("System Configuration", "config-files"), // Group contains config, kernel, selinux
-            ("Services & Scheduling", "services"),    // Group contains services, scheduled_tasks
+            ("Services & Scheduling", "units"),       // Group contains units, scheduled_tasks
             ("Users & Identity", "users-groups"),
             ("Storage", "storage"),
             ("Software & Files", "nonrpm"),
@@ -3663,7 +3663,7 @@ mod tests {
         // elsewhere in the report and passes whether or not the drop-in
         // rendered as an advisory.
         let services_section = html
-            .split_once(r#"<details id="services">"#)
+            .split_once(r#"<details id="units">"#)
             .and_then(|(_, rest)| rest.split_once("</details>"))
             .map(|(body, _)| body)
             .expect("services section must render");

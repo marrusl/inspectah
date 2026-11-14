@@ -47,7 +47,7 @@
     {% endcall %}
 
     {% call group("services-scheduling", "Services & Scheduling", count=group_services_count, advisory_count=group_services_advisory) %}
-      {% include "report/services.html" %}
+      {% include "report/units.html" %}
       {% if has_scheduled or sched_state == "failed" %}
         {% include "report/scheduled.html" %}
       {% endif %}

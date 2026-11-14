@@ -1,6 +1,6 @@
 {% from "report/section.html" import section %}
 
-{% call section("services", "Service State Changes", count=svc_count, state=svc_state, extra_badge=svc_extra_badge) %}
+{% call section("units", "Unit State Changes", count=svc_count, state=svc_state, extra_badge=svc_extra_badge) %}
 
 {% if svc_count >= 10 %}
 <div class="report-filter">
