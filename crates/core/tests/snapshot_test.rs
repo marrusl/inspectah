@@ -3,7 +3,9 @@ use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, RpmSection};
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_core::types::units::{UnitNameError, UnitSection};
+use inspectah_core::types::units::{
+    UnitName, UnitNameError, UnitSection, UnitState, UnitStateChangeError,
+};
 use std::collections::BTreeSet;
 
 /// Keys that moved off `KernelBootSection` when the config walker took
@@ -104,8 +106,9 @@ const SCHEMA_27_SNAPSHOT: &str =
 
 /// The schema-27 payload moved to the current version with its `services`
 /// section renamed to `units` and its three unit name lists replaced by
-/// the one inventory that holds the same unit, and an empty
-/// `mount_findings` list added. Nothing else changes.
+/// the one inventory that holds the same unit, an empty
+/// `mount_findings` list added, and the state change's name and owner
+/// moved into a carried unit with a vendor fragment. Nothing else changes.
 fn schema_27_payload_as_current() -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_str(SCHEMA_27_SNAPSHOT).unwrap();
     let object = value.as_object_mut().unwrap();
@@ -119,6 +122,16 @@ fn schema_27_payload_as_current() -> serde_json::Value {
         serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
     );
     lists.insert("mount_findings".into(), serde_json::json!([]));
+    let change = &mut lists.get_mut("state_changes").unwrap()[0];
+    let owner = change
+        .as_object_mut()
+        .unwrap()
+        .remove("owning_package")
+        .expect("schema 27 state change has an owner");
+    change["unit"] = serde_json::json!({
+        "name": "httpd.service", "fragment": "vendor", "file": "httpd.service",
+        "owning_package": owner
+    });
     object.insert("units".into(), section);
     object.insert("schema_version".into(), SCHEMA_VERSION.into());
     value
@@ -136,7 +149,7 @@ fn schema_27_snapshot_is_refused() {
         .expect("the same section under `units` loads at the current version");
     let units = current.units.expect("the `units` section is present");
     assert_eq!(units.state_changes.len(), 1);
-    assert_eq!(units.state_changes[0].unit.as_str(), "httpd.service");
+    assert_eq!(units.state_changes[0].unit.name().as_str(), "httpd.service");
 
     match InspectionSnapshot::load(SCHEMA_27_SNAPSHOT) {
         Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 27),
@@ -152,7 +165,7 @@ fn state_change_unit_name_is_parsed_on_load() {
     let mut payload = schema_27_payload_as_current();
     InspectionSnapshot::load(&payload.to_string()).expect("a valid unit name loads");
 
-    payload["units"]["state_changes"][0]["unit"] = "httpd daemon.service".into();
+    payload["units"]["state_changes"][0]["unit"]["name"] = "httpd daemon.service".into();
     let err = InspectionSnapshot::load(&payload.to_string())
         .expect_err("a unit name with a space must fail the load")
         .to_string();
@@ -197,6 +210,131 @@ fn mount_finding_unit_is_classified_on_load() {
             "{name}: error must name classify: {err}"
         );
     }
+}
+
+/// The schema-28 payload with its one state change replaced by `unit`
+/// in `state`, as JSON text.
+fn payload_with_state_change(unit: serde_json::Value, state: &str) -> String {
+    let mut payload = schema_27_payload_as_current();
+    let change = &mut payload["units"]["state_changes"][0];
+    change["unit"] = unit;
+    change["current_state"] = state.into();
+    payload.to_string()
+}
+
+/// The wire form of a unit subject.
+fn subject(name: &str, fragment: &str, owner: Option<&str>) -> serde_json::Value {
+    let mut value = serde_json::json!({"name": name, "fragment": fragment});
+    if fragment != "absent" {
+        value["file"] = name.into();
+    }
+    if matches!(fragment, "vendor" | "shadowed") {
+        value["owning_package"] = owner.into();
+    }
+    value
+}
+
+/// T2, `state_changes`: for each storage kind, only a vendor file with a
+/// known owner can be a state change. Every other fragment fails the load
+/// naming `classify`, in the `masked` state so that no state rule refuses
+/// it first.
+#[test]
+fn state_change_storage_unit_is_classified_on_load() {
+    for name in [
+        "tmp.mount",
+        "proc-sys-fs-binfmt_misc.automount",
+        "dev-zram0.swap",
+    ] {
+        let owned = payload_with_state_change(subject(name, "vendor", Some("systemd")), "masked");
+        let snap = InspectionSnapshot::load(&owned)
+            .unwrap_or_else(|err| panic!("{name} vendor with an owner loads: {err}"));
+        let units = snap.units.expect("units present");
+        assert_eq!(units.state_changes[0].unit.name().as_str(), name);
+        assert_eq!(
+            units.state_changes[0].unit.owning_package(),
+            Some("systemd")
+        );
+
+        for (fragment, owner) in [
+            ("local", None),
+            ("shadowed", Some("systemd")),
+            ("absent", None),
+            ("vendor", None),
+        ] {
+            let json = payload_with_state_change(subject(name, fragment, owner), "masked");
+            let err = InspectionSnapshot::load(&json)
+                .expect_err("an administrator's storage unit is not a state change")
+                .to_string();
+            assert!(
+                err.contains(&format!("classify places {name}")),
+                "{name} {fragment}: error must name classify: {err}"
+            );
+        }
+    }
+}
+
+/// T2, `state_changes`: a template and a unit with no file load masked
+/// and fail in any other state, naming the rule.
+#[test]
+fn state_change_template_and_absent_unit_are_masked_only() {
+    let unit_name = |n: &str| UnitName::try_from(n.to_owned()).unwrap();
+    let cases = [
+        (
+            subject("getty@.service", "vendor", Some("systemd")),
+            UnitStateChangeError::TemplateNotMasked {
+                unit: unit_name("getty@.service"),
+                state: UnitState::Enabled,
+            },
+        ),
+        (
+            subject("gone.service", "absent", None),
+            UnitStateChangeError::AbsentNotMasked {
+                unit: unit_name("gone.service"),
+                state: UnitState::Enabled,
+            },
+        ),
+    ];
+    for (unit, refusal) in cases {
+        let name = unit["name"].as_str().unwrap().to_owned();
+        InspectionSnapshot::load(&payload_with_state_change(unit.clone(), "masked"))
+            .unwrap_or_else(|err| panic!("{name} masked loads: {err}"));
+        let err = InspectionSnapshot::load(&payload_with_state_change(unit, "enabled"))
+            .expect_err("only a mask is allowed")
+            .to_string();
+        assert!(
+            err.contains(&refusal.to_string()),
+            "{name}: error must carry `{refusal}`: {err}"
+        );
+    }
+}
+
+/// T2, `state_changes`: a fragment file that is neither the unit nor its
+/// template fails the load. The instance's template file loads.
+#[test]
+fn state_change_file_must_be_the_unit_or_its_template() {
+    let unit = |file: &str| {
+        serde_json::json!({
+            "name": "getty@tty1.service", "fragment": "vendor", "file": file,
+            "owning_package": "systemd"
+        })
+    };
+    InspectionSnapshot::load(&payload_with_state_change(
+        unit("getty@.service"),
+        "enabled",
+    ))
+    .expect("an instance loads from its template's file");
+    let err = InspectionSnapshot::load(&payload_with_state_change(
+        unit("serial-getty@.service"),
+        "enabled",
+    ))
+    .expect_err("another unit's file fails")
+    .to_string();
+    assert!(
+        err.contains(
+            "unit file serial-getty@.service is neither getty@tty1.service nor its template"
+        ),
+        "{err}"
+    );
 }
 
 /// A snapshot JSON whose sysctl section holds `runtime` and

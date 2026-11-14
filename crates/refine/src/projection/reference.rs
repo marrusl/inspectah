@@ -101,7 +101,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let divergent_set: HashSet<&str> = svc
         .state_changes
         .iter()
-        .map(|sc| sc.unit.as_str())
+        .map(|sc| sc.unit.name().as_str())
         .collect();
     let enabled = || {
         svc.inventory
@@ -150,16 +150,16 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     // 1. Divergent items (from state_changes)
     let mut divergent = Vec::new();
     for sc in &svc.state_changes {
-        if omitted_units.contains(sc.unit.as_str()) {
+        if omitted_units.contains(sc.unit.name().as_str()) {
             continue;
         }
         divergent.push(RefServiceItem {
-            unit: sc.unit.as_str().to_owned(),
+            unit: sc.unit.name().as_str().to_owned(),
             current_state: sc.current_state,
             default_state: sc.default_state,
-            owning_package: sc.owning_package.clone(),
+            owning_package: sc.unit.owning_package().map(str::to_owned),
             dropin_contents: dropin_by_unit
-                .get(sc.unit.as_str())
+                .get(sc.unit.name().as_str())
                 .cloned()
                 .unwrap_or_default(),
         });
@@ -937,6 +937,20 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::FindingKind;
@@ -1072,12 +1086,14 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        Some("firewalld".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -1269,12 +1285,14 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "httpd.service".to_owned().try_into().unwrap(),
+                        Some("httpd".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -1316,12 +1334,14 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        Some("firewalld".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -1409,12 +1429,14 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "cups.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "cups.service".to_owned().try_into().unwrap(),
+                        Some("cups".into()),
+                    ),
                     current_state: UnitState::Masked,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],

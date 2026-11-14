@@ -108,12 +108,11 @@ fn contract_snapshot() -> InspectionSnapshot {
 
     snap.units = Some(UnitSection {
         state_changes: vec![UnitStateChange {
-            unit: "httpd.service".to_owned().try_into().unwrap(),
+            unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::excluded(),
             locked: false,
-            owning_package: None,
             aggregate: None,
             attention_reason: None,
         }],
@@ -859,4 +858,18 @@ fn a_populated_section_has_no_empty_reason() {
         empty.is_empty(),
         "the contract fixture populates all eight sections, got {empty:?}"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

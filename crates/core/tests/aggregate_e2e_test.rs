@@ -84,12 +84,11 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
     let changes = units
         .iter()
         .map(|unit| UnitStateChange {
-            unit: unit.to_string().try_into().unwrap(),
+            unit: test_carried_unit(unit.to_string().try_into().unwrap(), None),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: None,
             aggregate: None,
             attention_reason: None,
         })
@@ -217,7 +216,7 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
     let httpd_svc = services
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "httpd.service")
+        .find(|s| s.unit.name().as_str() == "httpd.service")
         .expect("httpd.service should be in merged services");
     let httpd_svc_agg = httpd_svc.aggregate.as_ref().unwrap();
     assert_eq!(httpd_svc_agg.count, 3);
@@ -226,7 +225,7 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
     let pg_svc = services
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "postgresql.service")
+        .find(|s| s.unit.name().as_str() == "postgresql.service")
         .expect("postgresql.service should be in merged services");
     let pg_svc_agg = pg_svc.aggregate.as_ref().unwrap();
     assert_eq!(pg_svc_agg.count, 1);
@@ -389,7 +388,7 @@ fn test_e2e_host_missing_services_still_counted_in_aggregate() {
     let httpd = services
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "httpd.service")
+        .find(|s| s.unit.name().as_str() == "httpd.service")
         .unwrap();
     let agg = httpd.aggregate.as_ref().unwrap();
     assert_eq!(agg.count, 1);
@@ -584,13 +583,16 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
             .iter()
             .find(|s| s.unit == sc_fwd.unit)
             .unwrap_or_else(|| {
-                panic!("service {} missing in reversed merge", sc_fwd.unit.as_str())
+                panic!(
+                    "service {} missing in reversed merge",
+                    sc_fwd.unit.name().as_str()
+                )
             });
         assert_eq!(
             sc_fwd.aggregate,
             sc_rev.aggregate,
             "prevalence for {} should match",
-            sc_fwd.unit.as_str()
+            sc_fwd.unit.name().as_str()
         );
     }
 
@@ -731,7 +733,7 @@ fn test_e2e_heterogeneous_section_coverage() {
     let httpd_svc = services
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "httpd.service")
+        .find(|s| s.unit.name().as_str() == "httpd.service")
         .unwrap();
     assert_eq!(httpd_svc.aggregate.as_ref().unwrap().count, 2);
     assert_eq!(httpd_svc.aggregate.as_ref().unwrap().total, 3);
@@ -739,7 +741,7 @@ fn test_e2e_heterogeneous_section_coverage() {
     let crond = services
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "crond.service")
+        .find(|s| s.unit.name().as_str() == "crond.service")
         .unwrap();
     assert_eq!(crond.aggregate.as_ref().unwrap().count, 1);
     assert_eq!(crond.aggregate.as_ref().unwrap().total, 3);
@@ -778,4 +780,18 @@ fn test_e2e_validation_empty_snapshot_rejected() {
         AggregateValidationError::EmptySnapshot { hostname }
         if hostname == "host-a"
     )));
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

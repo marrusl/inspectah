@@ -155,6 +155,20 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroup> {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
@@ -170,12 +184,14 @@ mod tests {
             rpm: Some(RpmSection::default()),
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "httpd.service".to_owned().try_into().unwrap(),
+                        Some("httpd".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -200,7 +216,10 @@ mod tests {
         let proj = project_decisions(&session);
 
         assert_eq!(proj.unit_states.len(), 1);
-        assert_eq!(proj.unit_states[0].entry.unit.as_str(), "httpd.service");
+        assert_eq!(
+            proj.unit_states[0].entry.unit.name().as_str(),
+            "httpd.service"
+        );
     }
 
     #[test]
@@ -285,12 +304,14 @@ mod tests {
             }),
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("openssh-server".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],

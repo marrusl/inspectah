@@ -1,29 +1,37 @@
 ---
-source: crates/collect/tests/services_test.rs
+source: crates/collect/tests/units_test.rs
 expression: section
 ---
 {
   "state_changes": [
     {
-      "unit": "bluetooth.service",
+      "unit": {
+        "name": "bluetooth.service",
+        "fragment": "vendor",
+        "file": "bluetooth.service",
+        "owning_package": null
+      },
       "current_state": "enabled",
       "default_state": "disable",
       "disposition": {
         "kind": "actionable",
         "include": true
       },
-      "owning_package": null,
       "aggregate": null
     },
     {
-      "unit": "gdm.service",
+      "unit": {
+        "name": "gdm.service",
+        "fragment": "vendor",
+        "file": "gdm.service",
+        "owning_package": null
+      },
       "current_state": "disabled",
       "default_state": "enable",
       "disposition": {
         "kind": "actionable",
         "include": true
       },
-      "owning_package": null,
       "aggregate": null
     }
   ],

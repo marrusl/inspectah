@@ -21,7 +21,7 @@ use std::sync::atomic::AtomicBool;
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
-use inspectah_collect::inspectors::services::ServicesInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -428,7 +428,7 @@ fn only_a_preset_diverging_unit_gets_a_state_change_row() {
     let changed: Vec<&str> = services
         .state_changes
         .iter()
-        .map(|s| s.unit.as_str())
+        .map(|s| s.unit.name().as_str())
         .collect();
     assert_eq!(
         changed,

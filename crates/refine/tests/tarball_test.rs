@@ -273,6 +273,16 @@ fn schema_27_snapshot_is_refused() {
         serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
     );
     lists.insert("mount_findings".into(), serde_json::json!([]));
+    let change = &mut lists.get_mut("state_changes").unwrap()[0];
+    let owner = change
+        .as_object_mut()
+        .unwrap()
+        .remove("owning_package")
+        .expect("schema 27 state change has an owner");
+    change["unit"] = serde_json::json!({
+        "name": "httpd.service", "fragment": "vendor", "file": "httpd.service",
+        "owning_package": owner
+    });
     object.insert("units".into(), section);
     object.insert(
         "schema_version".into(),
@@ -287,7 +297,7 @@ fn schema_27_snapshot_is_refused() {
         .units
         .as_ref()
         .expect("the `units` section is present");
-    assert_eq!(units.state_changes[0].unit.as_str(), "httpd.service");
+    assert_eq!(units.state_changes[0].unit.name().as_str(), "httpd.service");
 
     let dir = tempdir().unwrap();
     let tarball = write_flat_tarball(dir.path(), schema_27);

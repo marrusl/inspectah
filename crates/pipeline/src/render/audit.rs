@@ -1002,7 +1002,7 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
             };
             lines.push(format!(
                 "| {} | {} | {} | {} |",
-                sc.unit.as_str(),
+                sc.unit.name().as_str(),
                 state_str,
                 default_str,
                 action_str

@@ -57,8 +57,8 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
-use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::traits::executor::ExecResult;
@@ -276,6 +276,8 @@ fn host_mock() -> MockExecutor {
         )
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
+        .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
+        .with_file("/usr/lib/systemd/system/rhcd.service", "[Unit]\n")
         .with_command(
             "rpm -qf --queryformat %{NAME}\n \
              /usr/lib/systemd/system/httpd.service /usr/lib/systemd/system/rhcd.service",

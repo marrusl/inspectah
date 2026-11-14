@@ -133,10 +133,11 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
     // When degraded, Tier 3 (noise exclusion) is unsafe because we
     // can't rule out that the package has a promotable service/config
     // we simply failed to attribute.
-    let has_unattributed_services = snap
-        .units
-        .as_ref()
-        .is_some_and(|svc| svc.state_changes.iter().any(|s| s.owning_package.is_none()));
+    let has_unattributed_services = snap.units.as_ref().is_some_and(|svc| {
+        svc.state_changes
+            .iter()
+            .any(|s| s.unit.owning_package().is_none())
+    });
     let has_orphaned_modified_configs = has_config
         && snap.config.as_ref().is_some_and(|config| {
             let owned_paths: std::collections::HashSet<&str> = snap
@@ -252,9 +253,9 @@ fn build_user_enabled_service_set(snap: &InspectionSnapshot) -> std::collections
         for svc in &services.state_changes {
             if svc.current_state == UnitState::Enabled
                 && svc.default_state != Some(PresetDefault::Enable)
-                && let Some(pkg) = &svc.owning_package
+                && let Some(pkg) = svc.unit.owning_package()
             {
-                set.insert(pkg.as_str());
+                set.insert(pkg);
             }
         }
     }
@@ -566,7 +567,7 @@ pub fn classify_services(
 }
 
 fn classify_service(change: &UnitStateChange) -> TriageTag {
-    if change.owning_package.is_none() {
+    if change.unit.owning_package().is_none() {
         return TriageTag {
             triage: Triage::SingleHost(TriageBucket::Investigate),
             primary_reason: TriageReason::ServiceUnknownOrigin,
@@ -1543,6 +1544,20 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::needless_update)]
 mod anaconda_classification {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
     use inspectah_core::types::config::{
@@ -1761,11 +1776,13 @@ mod anaconda_classification {
             vec![anaconda_pkg("firewalld")],
             Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        Some("firewalld".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
-                    owning_package: Some("firewalld".into()),
                     locked: false,
                     aggregate: None,
                     attention_reason: None,
@@ -2088,11 +2105,10 @@ mod anaconda_classification {
             vec![anaconda_pkg("kernel-tools"), anaconda_pkg("cronie")],
             Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "mystery.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    owning_package: None, // degraded — missing attribution
+                    disposition: FindingKind::included(), // degraded — missing attribution
                     locked: false,
                     aggregate: None,
                     attention_reason: None,
@@ -2144,11 +2160,13 @@ mod anaconda_classification {
             vec![anaconda_pkg("kernel-tools")],
             Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
-                    owning_package: Some("openssh-server".into()),
                     locked: false,
                     aggregate: None,
                     attention_reason: None,
@@ -2179,6 +2197,20 @@ mod anaconda_classification {
 
 #[cfg(test)]
 mod service_classification {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::units::{
         PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
@@ -2196,12 +2228,14 @@ mod service_classification {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("openssh-server".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -2225,12 +2259,14 @@ mod service_classification {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        Some("firewalld".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -2252,12 +2288,11 @@ mod service_classification {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "mystery.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
                     current_state: UnitState::Enabled,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: None,
                     aggregate: None,
                     attention_reason: None,
                 }],

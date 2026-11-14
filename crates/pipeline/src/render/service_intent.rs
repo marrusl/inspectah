@@ -363,7 +363,7 @@ fn classify_service_presence(
     not_carried: &std::collections::HashSet<String>,
     baseline_unavailable: bool,
 ) -> PresenceDecision {
-    let pkg_name = match &sc.owning_package {
+    let pkg_name = match sc.unit.owning_package() {
         Some(name) => name,
         // Tier 1: unknown owner — always emit conservatively
         None => {
@@ -403,7 +403,7 @@ fn classify_service_presence(
                 reasons.push(AdvisoryReason::BaselineUnavailable);
             }
             return PresenceDecision::Emit {
-                advisory_reasons: Some((pkg_name.clone(), reasons)),
+                advisory_reasons: Some((pkg_name.to_owned(), reasons)),
             };
         }
 
@@ -427,12 +427,15 @@ fn classify_service_presence(
     if baseline_unavailable {
         // Tier 6: can't prove absence without baseline
         PresenceDecision::Emit {
-            advisory_reasons: Some((pkg_name.clone(), vec![AdvisoryReason::BaselineUnavailable])),
+            advisory_reasons: Some((
+                pkg_name.to_owned(),
+                vec![AdvisoryReason::BaselineUnavailable],
+            )),
         }
     } else {
         // Tier 7: baseline available and package not in it — proven absent
         PresenceDecision::Omit {
-            owning_package: pkg_name.clone(),
+            owning_package: pkg_name.to_owned(),
             reason: OmissionReason::NotInTargetImage,
         }
     }
@@ -455,7 +458,7 @@ fn excluded_owner(
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
 ) -> Option<PresenceDecision> {
-    let pkg_name = sc.owning_package.as_ref()?;
+    let pkg_name = sc.unit.owning_package()?;
     let mut entries = rpm
         .packages_added
         .iter()
@@ -470,7 +473,7 @@ fn excluded_owner(
         OmissionReason::PackageExcluded
     };
     Some(PresenceDecision::Omit {
-        owning_package: pkg_name.clone(),
+        owning_package: pkg_name.to_owned(),
         reason,
     })
 }
@@ -559,7 +562,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = sc.unit.as_str();
+        let u = sc.unit.name().as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;
@@ -683,7 +686,7 @@ fn render_without_rpm(
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = sc.unit.as_str();
+        let u = sc.unit.name().as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;

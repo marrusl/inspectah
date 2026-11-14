@@ -31,7 +31,7 @@ use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
-use inspectah_collect::inspectors::services::ServicesInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;

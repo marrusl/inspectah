@@ -477,6 +477,19 @@ impl CarriedUnit {
             Self::PackagedStorage(unit) => unit.name.as_unit_name(),
         }
     }
+
+    /// The package known to own the unit's vendor file: `None` for a local
+    /// unit, a unit with no file, or a vendor file whose owner is unknown.
+    pub fn owning_package(&self) -> Option<&str> {
+        match self {
+            Self::Ordinary(unit) => match &unit.fragment {
+                UnitFragment::Vendor { owning_package, .. }
+                | UnitFragment::Shadowed { owning_package, .. } => owning_package.as_deref(),
+                UnitFragment::Local { .. } | UnitFragment::Absent => None,
+            },
+            Self::PackagedStorage(unit) => Some(&unit.owning_package),
+        }
+    }
 }
 
 /// An ordinary unit and its fragment, whatever the fragment is.
@@ -744,9 +757,16 @@ impl std::fmt::Display for UnitAction {
     }
 }
 
+/// A unit whose state on the source host differs from what the image would
+/// have. The fragment inside `unit` says where the unit file came from and
+/// which package owns it.
+///
+/// Loaded through [`UnitStateChange::new`], which refuses a state a unit of
+/// that name and fragment cannot have.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "UnitStateChangeWire")]
 pub struct UnitStateChange {
-    pub unit: UnitName,
+    pub unit: CarriedUnit,
     pub current_state: UnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
@@ -754,10 +774,96 @@ pub struct UnitStateChange {
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub locked: bool,
-    pub owning_package: Option<String>,
     pub aggregate: Option<AggregatePrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+}
+
+/// The unchecked wire form [`UnitStateChange`] is deserialized through.
+#[derive(Deserialize)]
+struct UnitStateChangeWire {
+    unit: CarriedUnit,
+    current_state: UnitState,
+    #[serde(deserialize_with = "require_explicit_null")]
+    default_state: Option<PresetDefault>,
+    #[serde(default)]
+    disposition: FindingKind,
+    #[serde(default)]
+    locked: bool,
+    aggregate: Option<AggregatePrevalence>,
+    #[serde(default)]
+    attention_reason: Option<String>,
+}
+
+impl TryFrom<UnitStateChangeWire> for UnitStateChange {
+    type Error = UnitStateChangeError;
+
+    fn try_from(wire: UnitStateChangeWire) -> Result<Self, Self::Error> {
+        let mut change = Self::new(wire.unit, wire.current_state, wire.default_state)?;
+        change.disposition = wire.disposition;
+        change.locked = wire.locked;
+        change.aggregate = wire.aggregate;
+        change.attention_reason = wire.attention_reason;
+        Ok(change)
+    }
+}
+
+/// Why a unit cannot have the state a state change gives it. Each variant
+/// names the rule that refused it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UnitStateChangeError {
+    /// A bare template can only be masked: enabling or disabling it means
+    /// nothing without an instance.
+    #[error(
+        "{} is a template and is {state}: a template can be masked and nothing else",
+        unit.as_str()
+    )]
+    TemplateNotMasked { unit: UnitName, state: UnitState },
+    /// A unit with no file can only be masked.
+    #[error(
+        "{} has no unit file and is {state}: a unit with no file can be masked and \
+         nothing else",
+        unit.as_str()
+    )]
+    AbsentNotMasked { unit: UnitName, state: UnitState },
+}
+
+impl UnitStateChange {
+    /// A state change for `unit`, included, unlocked and with no aggregate.
+    /// Refused when the unit is a template or has no file and the state is
+    /// not `Masked`.
+    pub fn new(
+        unit: CarriedUnit,
+        current_state: UnitState,
+        default_state: Option<PresetDefault>,
+    ) -> Result<Self, UnitStateChangeError> {
+        if current_state != UnitState::Masked {
+            let name = unit.name();
+            if name.is_template() {
+                return Err(UnitStateChangeError::TemplateNotMasked {
+                    unit: name.clone(),
+                    state: current_state,
+                });
+            }
+            if let CarriedUnit::Ordinary(ordinary) = &unit
+                && *ordinary.fragment() == UnitFragment::Absent
+            {
+                return Err(UnitStateChangeError::AbsentNotMasked {
+                    unit: name.clone(),
+                    state: current_state,
+                });
+            }
+        }
+        Ok(Self {
+            unit,
+            current_state,
+            default_state,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+            attention_reason: None,
+        })
+    }
 }
 
 fn require_explicit_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -1034,27 +1140,38 @@ mod tests {
         UnitName::try_from(name.to_owned()).expect("test unit names are valid")
     }
 
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(name: UnitName, owning_package: Option<String>) -> CarriedUnit {
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     #[test]
     fn test_service_state_change_roundtrip_uses_typed_enums() {
         let section = UnitSection {
             state_changes: vec![
                 UnitStateChange {
-                    unit: unit_name("firewalld.service"),
+                    unit: test_carried_unit(
+                        unit_name("firewalld.service"),
+                        Some("firewalld".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
                 },
                 UnitStateChange {
-                    unit: unit_name("cups.service"),
+                    unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
                     current_state: UnitState::Masked,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
                 },
@@ -1077,32 +1194,29 @@ mod tests {
     #[test]
     fn test_implied_action_derives_from_current_state() {
         let enabled = UnitStateChange {
-            unit: unit_name("firewalld.service"),
+            unit: test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("firewalld".into()),
             aggregate: None,
             attention_reason: None,
         };
         let disabled = UnitStateChange {
-            unit: unit_name("sshd.service"),
+            unit: test_carried_unit(unit_name("sshd.service"), Some("openssh-server".into())),
             current_state: UnitState::Disabled,
             default_state: Some(PresetDefault::Enable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("openssh-server".into()),
             aggregate: None,
             attention_reason: None,
         };
         let masked = UnitStateChange {
-            unit: unit_name("cups.service"),
+            unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
             current_state: UnitState::Masked,
             default_state: None,
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("cups".into()),
             aggregate: None,
             attention_reason: None,
         };
@@ -1115,12 +1229,11 @@ mod tests {
     #[test]
     fn test_option_preset_default_serde_roundtrip() {
         let with_preset = UnitStateChange {
-            unit: unit_name("firewalld.service"),
+            unit: test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("firewalld".into()),
             aggregate: None,
             attention_reason: None,
         };
@@ -1129,12 +1242,11 @@ mod tests {
         assert_eq!(parsed.default_state, Some(PresetDefault::Disable));
 
         let without_preset = UnitStateChange {
-            unit: unit_name("cups.service"),
+            unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
             current_state: UnitState::Masked,
             default_state: None,
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("cups".into()),
             aggregate: None,
             attention_reason: None,
         };
@@ -1143,11 +1255,10 @@ mod tests {
         assert_eq!(parsed.default_state, None);
 
         let null_json = r#"{
-            "unit":"cups.service",
+            "unit":{"name":"cups.service","fragment":"vendor","file":"cups.service","owning_package":"cups"},
             "current_state":"masked",
             "default_state":null,
             "include":true,
-            "owning_package":"cups",
             "aggregate":null
         }"#;
         let parsed: UnitStateChange = serde_json::from_str(null_json).unwrap();
@@ -1214,10 +1325,9 @@ mod tests {
     #[test]
     fn test_missing_default_state_does_not_deserialize() {
         let json = r#"{
-            "unit":"firewalld.service",
+            "unit":{"name":"firewalld.service","fragment":"vendor","file":"firewalld.service","owning_package":"firewalld"},
             "current_state":"enabled",
             "include":true,
-            "owning_package":"firewalld",
             "aggregate":null
         }"#;
 
@@ -1233,7 +1343,7 @@ mod tests {
 
     #[test]
     fn service_without_include_deserializes_as_true() {
-        let json = r#"{"unit":"test.service","current_state":"enabled","default_state":null}"#;
+        let json = r#"{"unit":{"name":"test.service","fragment":"vendor","file":"test.service","owning_package":null},"current_state":"enabled","default_state":null}"#;
         let sc: UnitStateChange = serde_json::from_str(json).unwrap();
         assert!(
             sc.disposition.is_included(),
@@ -1253,7 +1363,7 @@ mod tests {
 
     #[test]
     fn service_state_change_without_shadow_deserializes() {
-        let json = r#"{"unit":"sshd.service","current_state":"enabled","default_state":null,"disposition":{"kind":"actionable","include":true}}"#;
+        let json = r#"{"unit":{"name":"sshd.service","fragment":"vendor","file":"sshd.service","owning_package":null},"current_state":"enabled","default_state":null,"disposition":{"kind":"actionable","include":true}}"#;
         let ssc: UnitStateChange = serde_json::from_str(json).unwrap();
         assert_eq!(ssc.current_state, UnitState::Enabled);
     }
@@ -1404,6 +1514,45 @@ mod tests {
                 .expect_err("a file that is neither the unit nor its template fails")
                 .to_string();
             assert!(err.contains(&expected), "{name}/{file}: {err}");
+        }
+    }
+
+    #[test]
+    fn state_change_constructor_refuses_unmasked_template_and_absent_unit() {
+        let carried = |name: &str, fragment: UnitFragment| {
+            CarriedUnit::try_from(UnitSubject::new(unit_name(name), fragment).unwrap()).unwrap()
+        };
+        let template = || test_carried_unit(unit_name("getty@.service"), Some("systemd".into()));
+        let absent = || carried("gone.service", UnitFragment::Absent);
+
+        // Positive controls: both are fine masked, and an ordinary vendor
+        // unit is fine in every state.
+        UnitStateChange::new(template(), UnitState::Masked, None).expect("a masked template");
+        UnitStateChange::new(absent(), UnitState::Masked, None).expect("a masked absent unit");
+        for state in [UnitState::Enabled, UnitState::Disabled, UnitState::Masked] {
+            UnitStateChange::new(
+                test_carried_unit(unit_name("sshd.service"), None),
+                state,
+                None,
+            )
+            .expect("an ordinary vendor unit takes any state");
+        }
+
+        for state in [UnitState::Enabled, UnitState::Disabled] {
+            assert_eq!(
+                UnitStateChange::new(template(), state, None).unwrap_err(),
+                UnitStateChangeError::TemplateNotMasked {
+                    unit: unit_name("getty@.service"),
+                    state,
+                }
+            );
+            assert_eq!(
+                UnitStateChange::new(absent(), state, None).unwrap_err(),
+                UnitStateChangeError::AbsentNotMasked {
+                    unit: unit_name("gone.service"),
+                    state,
+                }
+            );
         }
     }
 

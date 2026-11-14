@@ -544,11 +544,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         _ => (String::new(), String::new()),
                     };
                     let shadow_rat = shadow_rationales
-                        .get(s.unit.as_str())
+                        .get(s.unit.name().as_str())
                         .cloned()
                         .unwrap_or_default();
                     Value::from_serialize(serde_json::json!({
-                        "unit": s.unit,
+                        "unit": s.unit.name(),
                         "current_state": s.current_state.to_string(),
                         "default_state": default_str,
                         "include": s.disposition.is_included(),
@@ -569,8 +569,11 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     // advisory semantics, matching how the audit report lists full shadows.
     let mut orphan_shadow_advisories = 0usize;
     if let Some(svc) = snap.units.as_ref() {
-        let state_change_units: std::collections::HashSet<&str> =
-            svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
+        let state_change_units: std::collections::HashSet<&str> = svc
+            .state_changes
+            .iter()
+            .map(|s| s.unit.name().as_str())
+            .collect();
         for d in &svc.drop_ins {
             if !matches!(d.shadow_type, Some(ShadowType::FullShadow)) {
                 continue;
@@ -1659,6 +1662,20 @@ fn not_carried_runs(file: &NotCarried) -> Vec<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{
@@ -2361,12 +2378,14 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                unit: "firewalld.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "firewalld.service".to_owned().try_into().unwrap(),
+                    Some("firewalld".into()),
+                ),
                 current_state: inspectah_core::types::units::UnitState::Enabled,
                 default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: Some("firewalld".into()),
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -2401,12 +2420,14 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                unit: "sshd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "sshd.service".to_owned().try_into().unwrap(),
+                    Some("openssh-server".into()),
+                ),
                 current_state: inspectah_core::types::units::UnitState::Disabled,
                 default_state: Some(inspectah_core::types::units::PresetDefault::Enable),
                 disposition: FindingKind::excluded(),
                 locked: false,
-                owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -2470,22 +2491,23 @@ mod tests {
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
                 inspectah_core::types::units::UnitStateChange {
-                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        None,
+                    ),
                     current_state: inspectah_core::types::units::UnitState::Enabled,
                     default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: None,
                     aggregate: None,
                     attention_reason: None,
                 },
                 inspectah_core::types::units::UnitStateChange {
-                    unit: "cups.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
                     current_state: inspectah_core::types::units::UnitState::Masked,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: None,
                     aggregate: None,
                     attention_reason: None,
                 },
@@ -3508,12 +3530,11 @@ mod tests {
 
         snap.units = Some(UnitSection {
             state_changes: vec![UnitStateChange {
-                unit: "httpd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
                 current_state: UnitState::Enabled,
                 default_state: None,
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -3652,12 +3673,11 @@ mod tests {
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: (0..ROWS)
                 .map(|i| inspectah_core::types::units::UnitStateChange {
-                    unit: format!("unit{i}.service").try_into().unwrap(),
+                    unit: test_carried_unit(format!("unit{i}.service").try_into().unwrap(), None),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: None,
                     aggregate: None,
                     attention_reason: None,
                 })

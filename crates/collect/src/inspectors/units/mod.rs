@@ -8,12 +8,16 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
-    UnitStateChange,
+    Classified, PresetDefault, SystemdDropIn, UnitFragment, UnitInventoryEntry, UnitName,
+    UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::HashSet;
 use std::path::Path;
+
+mod resolve;
+
+use resolve::{ResolveError, Resolved, VENDOR_UNIT_DIR};
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
 const SECRET_PATTERNS: &[&str] = &["PASSWORD", "SECRET", "TOKEN", "KEY", "CREDENTIAL"];
@@ -121,17 +125,39 @@ fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefa
 
 const OWNING_PACKAGE_QUERY: &str = "%{NAME}\n";
 
-/// Populate `owning_package` on each `UnitStateChange` via a batch
-/// `rpm -qf` lookup on `/usr/lib/systemd/system/<unit>`. Falls back to
-/// per-unit queries when the batch fails or line count mismatches.
-fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [UnitStateChange]) {
-    if state_changes.is_empty() {
+/// The `owning_package` of each `Vendor` and `Shadowed` fragment, which
+/// holds the vendor file's name: `Local` and `Absent` have no vendor file.
+fn vendor_owner_slot(fragment: &mut UnitFragment) -> Option<(&UnitName, &mut Option<String>)> {
+    match fragment {
+        UnitFragment::Vendor {
+            file,
+            owning_package,
+        }
+        | UnitFragment::Shadowed {
+            file,
+            owning_package,
+        } => Some((file, owning_package)),
+        UnitFragment::Local { .. } | UnitFragment::Absent => None,
+    }
+}
+
+/// Fill in the owning package of every `Vendor` and `Shadowed` fragment
+/// via a batch `rpm -qf` lookup on the vendor file the fragment names.
+/// Falls back to per-file queries when the batch fails or line count
+/// mismatches. An empty or unrecognized answer leaves the owner unknown.
+///
+/// Runs before any unit is classified, so a vendor mount unit whose query
+/// fails is advisory, not carried (§ 7.8 of the units spec).
+fn populate_owning_packages(exec: &dyn Executor, fragments: &mut [UnitFragment]) {
+    let mut slots: Vec<(&UnitName, &mut Option<String>)> =
+        fragments.iter_mut().filter_map(vendor_owner_slot).collect();
+    if slots.is_empty() {
         return;
     }
 
-    let batch_paths: Vec<String> = state_changes
+    let batch_paths: Vec<String> = slots
         .iter()
-        .map(|sc| format!("/usr/lib/systemd/system/{}", sc.unit.as_str()))
+        .map(|(file, _)| format!("{VENDOR_UNIT_DIR}/{}", file.as_str()))
         .collect();
 
     let batch_args: Vec<&str> = std::iter::once("-qf")
@@ -143,46 +169,114 @@ fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [UnitStateC
     let result = exec.run("rpm", &batch_args);
     let batch_lines: Vec<&str> = result.stdout.lines().collect();
 
-    if result.success() && batch_lines.len() == state_changes.len() {
-        for (sc, owner) in state_changes.iter_mut().zip(batch_lines) {
-            let trimmed = owner.trim();
-            if !trimmed.is_empty() && !trimmed.contains(' ') {
-                sc.owning_package = Some(trimmed.to_string());
-            }
+    if result.success() && batch_lines.len() == slots.len() {
+        for ((_, owner), line) in slots.iter_mut().zip(batch_lines) {
+            **owner = package_name(line);
         }
         return;
     }
 
-    // Batch failed or line count mismatch — fall back to per-unit queries.
-    for sc in state_changes.iter_mut() {
-        sc.owning_package = query_owning_package(exec, sc.unit.as_str());
+    // Batch failed or line count mismatch: fall back to per-file queries.
+    for ((_, owner), path) in slots.iter_mut().zip(&batch_paths) {
+        **owner = query_owning_package(exec, path);
     }
 }
 
-/// Query the owning RPM package for a single unit file. Checks
-/// `/usr/lib/systemd/system/<unit>` first, then `/etc/systemd/system/<unit>`.
-fn query_owning_package(exec: &dyn Executor, unit: &str) -> Option<String> {
-    for path in [
-        format!("/usr/lib/systemd/system/{unit}"),
-        format!("/etc/systemd/system/{unit}"),
-    ] {
-        let result = exec.run(
-            "rpm",
-            &["-qf", "--queryformat", OWNING_PACKAGE_QUERY, &path],
-        );
-        if result.success() {
-            let pkg = result
-                .stdout
-                .lines()
-                .next()
-                .map(|line| line.trim().to_string())
-                .unwrap_or_default();
-            if !pkg.is_empty() && !pkg.contains(' ') {
-                return Some(pkg);
+/// A package name from one line of `rpm -qf` output: `None` for an empty
+/// line or a message such as "file ... is not owned by any package".
+fn package_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    (!trimmed.is_empty() && !trimmed.contains(' ')).then(|| trimmed.to_string())
+}
+
+/// Query the owning RPM package for one vendor unit file.
+fn query_owning_package(exec: &dyn Executor, path: &str) -> Option<String> {
+    let result = exec.run("rpm", &["-qf", "--queryformat", OWNING_PACKAGE_QUERY, path]);
+    if !result.success() {
+        return None;
+    }
+    result.stdout.lines().next().and_then(package_name)
+}
+
+/// A unit the collector found evidence of administrator intent for, before
+/// its file is resolved.
+struct Candidate {
+    name: UnitName,
+    /// The state word `systemctl` printed, for warnings.
+    raw_state: String,
+    state: UnitState,
+    default_state: Option<PresetDefault>,
+}
+
+/// Resolve each candidate's unit file, look up the owners, then classify
+/// and build the state changes. A candidate that cannot become a state
+/// change is reported through `warnings`; a unit file that could not be
+/// read goes to `read_failures`.
+fn build_state_changes(
+    exec: &dyn Executor,
+    candidates: Vec<Candidate>,
+    warnings: &mut Vec<Warning>,
+    read_failures: &mut Vec<String>,
+) -> Vec<UnitStateChange> {
+    let mut found = Vec::new();
+    let mut fragments = Vec::new();
+    for candidate in candidates {
+        let warn =
+            |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
+        match resolve::resolve(exec, &candidate.name) {
+            Ok(Resolved::File { fragment }) | Ok(Resolved::Masked { hidden: fragment }) => {
+                fragments.push(fragment);
+                found.push(candidate);
+            }
+            Ok(Resolved::AliasOf(target)) => warnings.push(warn(&format!(
+                "unit is an alias of {}; its state is not carried on its own",
+                target.as_str()
+            ))),
+            Ok(Resolved::NotFound) => warnings.push(warn(
+                "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
+            )),
+            // Today's warning for a `linked` unit.
+            Err(ResolveError::Linked { .. }) => warnings.push(service_warning(
+                candidate.name.as_str(),
+                "linked",
+                "linked unit requires manual handling",
+            )),
+            Err(ResolveError::Read { path, error }) => {
+                read_failures.push(format!("{path}: {error}"));
             }
         }
     }
-    None
+
+    populate_owning_packages(exec, &mut fragments);
+
+    let mut state_changes = Vec::new();
+    for (candidate, fragment) in found.into_iter().zip(fragments) {
+        let warn =
+            |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
+        let subject = match UnitSubject::new(candidate.name.clone(), fragment) {
+            Ok(subject) => subject,
+            Err(e) => {
+                warnings.push(warn(&e.to_string()));
+                continue;
+            }
+        };
+        let unit = match subject.classify() {
+            Classified::Carried(unit) => unit,
+            // An administrator's storage unit is a mount finding, which a
+            // later step records; until then it is reported here.
+            Classified::Advisory(_) => {
+                warnings.push(warn(
+                    "an administrator's mount, automount or swap unit is not carried",
+                ));
+                continue;
+            }
+        };
+        match UnitStateChange::new(unit, candidate.state, candidate.default_state) {
+            Ok(change) => state_changes.push(change),
+            Err(e) => warnings.push(warn(&e.to_string())),
+        }
+    }
+    state_changes
 }
 
 /// Inspects systemd service state: enabled/disabled vs. preset defaults,
@@ -306,7 +400,7 @@ impl Inspector for ServicesInspector {
         // evidence the operator explicitly acted. Non-durable states
         // (static, alias, indirect, generated) are silently dropped;
         // runtime/linked/bad/unknown states emit structured warnings.
-        let mut state_changes = Vec::new();
+        let mut candidates = Vec::new();
         let mut inventory = Vec::new();
         let mut inventoried = HashSet::new();
         let mut warnings = Vec::new();
@@ -360,15 +454,11 @@ impl Inspector for ServicesInspector {
             // Signal 1: Masked services — unambiguous operator intent.
             // Always capture regardless of preset state.
             if current_state == UnitState::Masked {
-                state_changes.push(UnitStateChange {
-                    unit: name,
-                    current_state,
+                candidates.push(Candidate {
+                    name,
+                    raw_state: unit.state.clone(),
+                    state: current_state,
                     default_state: preset,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
                 });
                 continue;
             }
@@ -389,23 +479,26 @@ impl Inspector for ServicesInspector {
             };
 
             if diverges {
-                state_changes.push(UnitStateChange {
-                    unit: name,
-                    current_state,
+                candidates.push(Candidate {
+                    name,
+                    raw_state: unit.state.clone(),
+                    state: current_state,
                     default_state,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    owning_package: None,
-                    aggregate: None,
-                    attention_reason: None,
                 });
             }
             // State matches preset, or no matching preset rule → no
             // evidence of operator action. The inventory entry records it.
         }
 
-        // 4b. Resolve owning packages for state_changes entries.
-        populate_owning_packages(exec, &mut state_changes);
+        // 4b. Resolve each candidate's unit file and owning package, then
+        //     build the state changes.
+        let mut unit_file_read_failures = Vec::new();
+        let state_changes = build_state_changes(
+            exec,
+            candidates,
+            &mut warnings,
+            &mut unit_file_read_failures,
+        );
 
         // Emit metric for progress rendering
         progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
@@ -426,11 +519,12 @@ impl Inspector for ServicesInspector {
                 drop_ins.iter().map(|d| d.unit.as_str()).collect();
             let mut shadow_entries = Vec::new();
             for sc in &state_changes {
-                if dropin_units.contains(sc.unit.as_str()) {
+                let unit = sc.unit.name().as_str();
+                if dropin_units.contains(unit) {
                     continue;
                 }
-                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, sc.unit.as_str()) {
-                    let etc_path = format!("/etc/systemd/system/{}", sc.unit.as_str());
+                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, unit) {
+                    let etc_path = format!("/etc/systemd/system/{unit}");
                     let content = match exec.read_file(Path::new(&etc_path)) {
                         Ok(c) => c,
                         Err(_) => {
@@ -439,7 +533,7 @@ impl Inspector for ServicesInspector {
                         }
                     };
                     shadow_entries.push(SystemdDropIn {
-                        unit: sc.unit.as_str().to_owned(),
+                        unit: unit.to_owned(),
                         path: etc_path,
                         content,
                         disposition: FindingKind::included(),
@@ -524,6 +618,23 @@ impl Inspector for ServicesInspector {
             let reason = format!(
                 "preset file read failures: {}",
                 preset_read_failures.join("; ")
+            );
+            return Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::Units(section),
+                    warnings,
+                    redaction_hints,
+                }),
+                reason,
+            });
+        }
+
+        // A unit file that could not be read hides where the unit came from
+        // and who owns it, so its state change is missing.
+        if !unit_file_read_failures.is_empty() {
+            let reason = format!(
+                "unit file read failures: {}",
+                unit_file_read_failures.join("; ")
             );
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
@@ -1257,7 +1368,8 @@ mod tests {
                  enable dbus-org.freedesktop.timedate1.service\n\
                  disable *\n",
             )
-            .with_dir("/etc/systemd/system", vec![]);
+            .with_dir("/etc/systemd/system", vec![])
+            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -1276,14 +1388,14 @@ mod tests {
             assert!(
                 svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str() == "httpd.service"),
+                    .any(|sc| sc.unit.name().as_str() == "httpd.service"),
                 "httpd.service must be in state_changes"
             );
             // D-Bus aliases must NOT appear — no operator evidence
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str().starts_with("dbus-")),
+                    .any(|sc| sc.unit.name().as_str().starts_with("dbus-")),
                 "D-Bus aliases must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1313,7 +1425,9 @@ mod tests {
                 "/usr/lib/systemd/system-preset/90-default.preset",
                 "enable sshd.service\nenable cups.service\ndisable *\n",
             )
-            .with_dir("/etc/systemd/system", vec![]);
+            .with_dir("/etc/systemd/system", vec![])
+            .with_file("/usr/lib/systemd/system/cups.service", "[Unit]\n")
+            .with_link("/etc/systemd/system/cups.service", "/dev/null");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -1332,14 +1446,14 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str() == "sshd.service"),
+                    .any(|sc| sc.unit.name().as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // cups is masked — operator intent, must be captured
             let cups = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit.as_str() == "cups.service");
+                .find(|sc| sc.unit.name().as_str() == "cups.service");
             assert!(
                 cups.is_some(),
                 "masked cups.service must be in state_changes"
@@ -1381,7 +1495,8 @@ mod tests {
                 "/usr/lib/systemd/system-preset/90-default.preset",
                 "enable firewalld.service\ndisable *\n",
             )
-            .with_dir("/etc/systemd/system", vec![]);
+            .with_dir("/etc/systemd/system", vec![])
+            .with_file("/usr/lib/systemd/system/firewalld.service", "[Unit]\n");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -1399,7 +1514,7 @@ mod tests {
             let fw = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit.as_str() == "firewalld.service");
+                .find(|sc| sc.unit.name().as_str() == "firewalld.service");
             assert!(
                 fw.is_some(),
                 "operator-disabled firewalld must be in state_changes"
@@ -1456,7 +1571,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str().starts_with("sssd")),
+                    .any(|sc| sc.unit.name().as_str().starts_with("sssd")),
                 "untouched SSSD services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1509,7 +1624,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str().contains("sysupdate")),
+                    .any(|sc| sc.unit.name().as_str().contains("sysupdate")),
                 "sysupdate services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1569,7 +1684,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str() == "some-obscure.service"),
+                    .any(|sc| sc.unit.name().as_str() == "some-obscure.service"),
                 "service matching preset via wildcard must not be in state_changes"
             );
         } else {
@@ -1935,7 +2050,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.as_str() == "sshd.service"),
+                    .any(|sc| sc.unit.name().as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // sshd must be a preset-matched inventory entry
@@ -2026,6 +2141,70 @@ mod tests {
             }
             Ok(_) => panic!("expected Degraded error for unreadable shadow file"),
             Err(e) => panic!("expected Degraded, got: {e:?}"),
+        }
+    }
+
+    /// A storage candidate, enabled against a disable preset.
+    fn storage_candidate(unit: &str) -> Candidate {
+        Candidate {
+            name: UnitName::try_from(unit.to_owned()).unwrap(),
+            raw_state: "enabled".into(),
+            state: UnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+        }
+    }
+
+    /// § 7.8: a storage unit's owner is looked up before it is classified.
+    /// A vendor `tmp.mount` whose owner is found is a carried state change;
+    /// the same unit whose lookup fails, or answers with an empty line, is
+    /// the administrator's and becomes no state change, with a warning.
+    #[test]
+    fn storage_unit_owner_is_looked_up_before_classification() {
+        let rpm = |stdout: &str, exit_code: i32| ExecResult {
+            stdout: stdout.into(),
+            exit_code,
+            ..Default::default()
+        };
+        let query = "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/tmp.mount";
+        let vendor =
+            || MockExecutor::new().with_file("/usr/lib/systemd/system/tmp.mount", "[Mount]\n");
+
+        let owned = vendor().with_command(query, rpm("systemd\n", 0));
+        let (mut warnings, mut failures) = (Vec::new(), Vec::new());
+        let changes = build_state_changes(
+            &owned,
+            vec![storage_candidate("tmp.mount")],
+            &mut warnings,
+            &mut failures,
+        );
+        assert!(
+            warnings.is_empty() && failures.is_empty(),
+            "{warnings:?} {failures:?}"
+        );
+        assert_eq!(changes.len(), 1);
+        assert!(
+            matches!(&changes[0].unit, inspectah_core::types::units::CarriedUnit::PackagedStorage(u)
+                if u.owning_package() == "systemd"),
+            "{:?}",
+            changes[0].unit
+        );
+
+        for answer in [rpm("file is not owned by any package\n", 1), rpm("\n", 0)] {
+            let unowned = vendor().with_command(query, answer);
+            let mut warnings = Vec::new();
+            let changes = build_state_changes(
+                &unowned,
+                vec![storage_candidate("tmp.mount")],
+                &mut warnings,
+                &mut failures,
+            );
+            assert!(changes.is_empty(), "{changes:?}");
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.message.contains("tmp.mount") && w.message.contains("not carried")),
+                "{warnings:?}"
+            );
         }
     }
 }

@@ -76,12 +76,11 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
         state_changes: vec![UnitStateChange {
-            unit: "httpd.service".to_owned().try_into().unwrap(),
+            unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: None,
             aggregate: None,
             attention_reason: None,
         }],
@@ -1211,4 +1210,18 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
         }
         // Ok or Degraded are both acceptable — the point is it's not Failed.
     }
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

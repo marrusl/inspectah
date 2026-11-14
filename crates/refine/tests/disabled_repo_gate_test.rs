@@ -220,12 +220,11 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
     }
     let unit = |name: &str, owner: &str| UnitStateChange {
-        unit: name.to_owned().try_into().unwrap(),
+        unit: test_carried_unit(name.to_owned().try_into().unwrap(), Some(owner.into())),
         current_state: UnitState::Enabled,
         default_state: Some(PresetDefault::Disable),
         disposition: FindingKind::included(),
         locked: false,
-        owning_package: Some(owner.into()),
         aggregate: None,
         attention_reason: None,
     };
@@ -445,4 +444,18 @@ fn extract_containerfile(tarball: &std::path::Path) -> String {
         }
     }
     panic!("no Containerfile in the export tarball");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

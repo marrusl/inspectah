@@ -23,12 +23,14 @@ fn state_change(
     owning_package: Option<&str>,
 ) -> UnitStateChange {
     UnitStateChange {
-        unit: unit.to_owned().try_into().unwrap(),
+        unit: test_carried_unit(
+            unit.to_owned().try_into().unwrap(),
+            owning_package.map(str::to_string),
+        ),
         current_state,
         default_state,
         disposition: FindingKind::included(),
         locked: false,
-        owning_package: owning_package.map(str::to_string),
         aggregate: None,
         attention_reason: None,
     }
@@ -1477,4 +1479,18 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             );
         }
     }
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

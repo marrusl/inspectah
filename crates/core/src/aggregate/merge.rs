@@ -146,7 +146,7 @@ use crate::types::units::{SystemdDropIn, UnitStateChange};
 
 impl AggregateMergeable for UnitStateChange {
     fn identity_key(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.unit.as_str())
+        Cow::Borrowed(self.unit.name().as_str())
     }
 
     fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {

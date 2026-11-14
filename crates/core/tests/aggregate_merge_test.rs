@@ -1213,12 +1213,11 @@ fn test_merge_service_sections_all_none() {
 #[test]
 fn test_merge_service_sections_dedup_units() {
     let make_sc = |unit: &str| UnitStateChange {
-        unit: unit.to_owned().try_into().unwrap(),
+        unit: test_carried_unit(unit.to_owned().try_into().unwrap(), None),
         current_state: UnitState::Enabled,
         default_state: None,
         disposition: FindingKind::excluded(),
         locked: false,
-        owning_package: None,
         aggregate: None,
         attention_reason: None,
     };
@@ -3282,4 +3281,18 @@ fn test_aggregate_degraded_state_json_contract() {
         json["leaf_total_hosts"], 2,
         "total hosts must reflect aggregate size"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

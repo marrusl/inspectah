@@ -310,7 +310,7 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
         ItemId::Unit { unit } => snapshot
             .units
             .as_ref()
-            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit == *unit))
+            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit.name() == unit))
             .map(|sc| sc.locked)
             .unwrap_or(false),
         ItemId::DropIn { path } => snapshot
@@ -2071,7 +2071,7 @@ impl RefineSession {
                             .original
                             .units
                             .as_ref()
-                            .map(|s| s.state_changes.iter().any(|sc| sc.unit == *unit))
+                            .map(|s| s.state_changes.iter().any(|sc| sc.unit.name() == unit))
                             .unwrap_or(false);
                         if !found {
                             return Err(RefineError::UnknownTarget(unit.as_str().to_owned()));
@@ -2113,7 +2113,7 @@ impl RefineSession {
                                     svc_section.drop_ins.iter().find(|d| d.path == *path)
                             {
                                 let parent_excluded = svc_section.state_changes.iter().any(|s| {
-                                    s.unit.as_str() == dropin.unit
+                                    s.unit.name().as_str() == dropin.unit
                                         && matches!(
                                             s.disposition,
                                             FindingKind::Actionable { include: false }
@@ -2799,8 +2799,10 @@ impl RefineSession {
                             }
                             ItemId::Unit { unit } => {
                                 if let Some(ref mut services) = snap.units {
-                                    if let Some(svc) =
-                                        services.state_changes.iter_mut().find(|s| s.unit == *unit)
+                                    if let Some(svc) = services
+                                        .state_changes
+                                        .iter_mut()
+                                        .find(|s| s.unit.name() == unit)
                                     {
                                         svc.disposition = FindingKind::from_bool(*include);
                                     }
@@ -4561,6 +4563,20 @@ fn sanitize_path_for_log(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use crate::types::UserPasswordOp;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
@@ -5198,22 +5214,26 @@ mod tests {
             units: Some(UnitSection {
                 state_changes: vec![
                     UnitStateChange {
-                        unit: "httpd.service".to_owned().try_into().unwrap(),
+                        unit: test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
                         current_state: UnitState::Enabled,
                         default_state: Some(PresetDefault::Disable),
                         disposition: FindingKind::included(),
                         locked: false,
-                        owning_package: Some("httpd".into()),
                         aggregate: None,
                         attention_reason: None,
                     },
                     UnitStateChange {
-                        unit: "sshd.service".to_owned().try_into().unwrap(),
+                        unit: test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
                         current_state: UnitState::Enabled,
                         default_state: Some(PresetDefault::Enable),
                         disposition: FindingKind::included(),
                         locked: false,
-                        owning_package: Some("openssh-server".into()),
                         aggregate: None,
                         attention_reason: None,
                     },
@@ -5281,7 +5301,7 @@ mod tests {
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -5301,7 +5321,7 @@ mod tests {
         let sshd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "sshd.service")
+            .find(|s| s.unit.name().as_str() == "sshd.service")
             .unwrap();
         assert!(
             sshd.disposition.is_included(),
@@ -5340,7 +5360,7 @@ mod tests {
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             httpd.disposition.is_included(),
@@ -5377,7 +5397,7 @@ mod tests {
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             httpd.disposition.is_included(),
@@ -5871,12 +5891,14 @@ mod tests {
             rpm: Some(RpmSection::default()),
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "httpd.service".to_owned().try_into().unwrap(),
+                        Some("httpd".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
-                    owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -5898,7 +5920,10 @@ mod tests {
         // decisions() should return without panic and contain the service
         let dec = session.decisions();
         assert_eq!(dec.unit_states.len(), 1);
-        assert_eq!(dec.unit_states[0].entry.unit.as_str(), "httpd.service");
+        assert_eq!(
+            dec.unit_states[0].entry.unit.name().as_str(),
+            "httpd.service"
+        );
 
         // reference() should return without panic
         let _ref_proj = session.reference();
@@ -5950,12 +5975,14 @@ mod tests {
             }),
             units: Some(UnitSection {
                 state_changes: vec![UnitStateChange {
-                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    unit: test_carried_unit(
+                        "httpd.service".to_owned().try_into().unwrap(),
+                        Some("httpd".into()),
+                    ),
                     current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::excluded(),
                     locked: false,
-                    owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
                 }],
@@ -5982,7 +6009,7 @@ mod tests {
             dec_before
                 .unit_states
                 .iter()
-                .any(|s| s.entry.unit.as_str() == "httpd.service"
+                .any(|s| s.entry.unit.name().as_str() == "httpd.service"
                     && !s.entry.disposition.is_included()),
             "httpd.service should start excluded"
         );
@@ -6003,7 +6030,7 @@ mod tests {
             dec_after
                 .unit_states
                 .iter()
-                .any(|s| s.entry.unit.as_str() == "httpd.service"
+                .any(|s| s.entry.unit.name().as_str() == "httpd.service"
                     && s.entry.disposition.is_included()),
             "httpd.service should now be included"
         );
@@ -6057,7 +6084,7 @@ mod tests {
         let httpd = svc
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6101,7 +6128,7 @@ mod tests {
                 .unwrap()
                 .state_changes
                 .iter()
-                .find(|s| s.unit.as_str() == "httpd.service")
+                .find(|s| s.unit.name().as_str() == "httpd.service")
                 .unwrap()
                 .disposition
                 .is_included(),
@@ -6128,7 +6155,7 @@ mod tests {
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6154,7 +6181,7 @@ mod tests {
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "httpd.service")
+            .find(|s| s.unit.name().as_str() == "httpd.service")
             .unwrap();
         assert!(
             !httpd.disposition.is_included(),
@@ -6168,7 +6195,7 @@ mod tests {
             .unwrap()
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == "sshd.service")
+            .find(|s| s.unit.name().as_str() == "sshd.service")
             .unwrap();
         assert!(
             sshd.disposition.is_included(),
@@ -7425,12 +7452,14 @@ mod tests {
         // Provide services + config evidence so anaconda classifier runs
         snap.units = Some(UnitSection {
             state_changes: vec![UnitStateChange {
-                unit: "sshd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "sshd.service".to_owned().try_into().unwrap(),
+                    Some("openssh-server".into()),
+                ),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -7508,12 +7537,14 @@ mod tests {
 
         snap.units = Some(UnitSection {
             state_changes: vec![UnitStateChange {
-                unit: "sshd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "sshd.service".to_owned().try_into().unwrap(),
+                    Some("openssh-server".into()),
+                ),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -7565,12 +7596,14 @@ mod tests {
         };
         snap.units = Some(UnitSection {
             state_changes: vec![UnitStateChange {
-                unit: "sshd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "sshd.service".to_owned().try_into().unwrap(),
+                    Some("openssh-server".into()),
+                ),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
             }],

@@ -28,22 +28,20 @@ fn snapshot_with_services() -> InspectionSnapshot {
     snap.units = Some(UnitSection {
         state_changes: vec![
             UnitStateChange {
-                unit: "httpd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             },
             UnitStateChange {
-                unit: "cups.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
                 current_state: UnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             },
@@ -2791,4 +2789,18 @@ fn the_conflict_sentence_reaches_all_three_surfaces() {
         html_of(&snap).contains(&html_escape(cause)),
         "the HTML report does not carry {cause:?}"
     );
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

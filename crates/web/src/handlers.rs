@@ -888,7 +888,7 @@ pub async fn batch_toggle_group(
                     }
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {
                         item_id: inspectah_refine::types::ItemId::Unit {
-                            unit: sc.unit.clone(),
+                            unit: sc.unit.name().clone(),
                         },
                         include: payload.include,
                     });
@@ -1139,6 +1139,20 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
@@ -1770,12 +1784,14 @@ mod tests {
         let mut snap = empty_snapshot();
         snap.units = Some(SvcSection {
             state_changes: vec![UnitStateChange {
-                unit: "sshd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "sshd.service".to_owned().try_into().unwrap(),
+                    Some("openssh-server".into()),
+                ),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
             }],

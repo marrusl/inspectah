@@ -6,8 +6,8 @@
 
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
-use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector};
 use inspectah_core::traits::progress::NullProgress;
@@ -57,26 +57,34 @@ const TUNED_FIXTURE: &str = include_str!("../../../testdata/fixtures/kernelboot/
 // ── Mock builders ───────────────────────────────────────────────────
 
 fn services_mock() -> MockExecutor {
-    MockExecutor::new()
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ExecResult {
-                stdout: SYSTEMCTL_FIXTURE.into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
-        .with_file(
-            "/usr/lib/systemd/system-preset/90-default.preset",
-            PRESET_FIXTURE,
-        )
-        .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
-        .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
-        .with_file(
-            "/etc/systemd/system/httpd.service.d/override.conf",
-            DROPIN_FIXTURE,
-        )
+    // A vendor unit file for every listed unit, as its package installs it.
+    let mut exec = MockExecutor::new();
+    for unit in SYSTEMCTL_FIXTURE
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| name.ends_with(".service"))
+    {
+        exec = exec.with_file(&format!("/usr/lib/systemd/system/{unit}"), "[Unit]\n");
+    }
+    exec.with_command(
+        "systemctl list-unit-files --type=service --no-pager",
+        ExecResult {
+            stdout: SYSTEMCTL_FIXTURE.into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+    .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+    .with_file(
+        "/usr/lib/systemd/system-preset/90-default.preset",
+        PRESET_FIXTURE,
+    )
+    .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+    .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
+    .with_file(
+        "/etc/systemd/system/httpd.service.d/override.conf",
+        DROPIN_FIXTURE,
+    )
 }
 
 fn storage_mock() -> MockExecutor {
@@ -186,7 +194,7 @@ fn test_services_inspector_correctness() {
     );
     for sc in &section.state_changes {
         assert!(
-            !sc.unit.as_str().is_empty(),
+            !sc.unit.name().as_str().is_empty(),
             "state_change unit must not be empty"
         );
         // current_state is a typed enum — the fact that it deserialized proves

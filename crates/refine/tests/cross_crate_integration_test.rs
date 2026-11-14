@@ -200,22 +200,23 @@ fn service_surface_agreement() {
     snap.units = Some(UnitSection {
         state_changes: vec![
             UnitStateChange {
-                unit: "dnf-makecache.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit(
+                    "dnf-makecache.service".to_owned().try_into().unwrap(),
+                    None,
+                ),
                 current_state: inspectah_core::types::units::UnitState::Enabled,
                 default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             },
             UnitStateChange {
-                unit: "httpd.service".to_owned().try_into().unwrap(),
+                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
                 current_state: inspectah_core::types::units::UnitState::Enabled,
                 default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             },
@@ -251,7 +252,7 @@ fn service_surface_agreement() {
     let dnf_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit.as_str() == "dnf-makecache.service")
+        .find(|sc| sc.unit.name().as_str() == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
     assert!(
         !dnf_sc.disposition.is_included(),
@@ -262,7 +263,7 @@ fn service_surface_agreement() {
     let httpd_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit.as_str() == "httpd.service")
+        .find(|sc| sc.unit.name().as_str() == "httpd.service")
         .expect("httpd.service must be in state_changes");
     assert!(
         httpd_sc.disposition.is_included(),
@@ -381,4 +382,18 @@ fn baseline_summary_count_stability() {
     // Image ref must match
     assert_eq!(s1.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     assert_eq!(s1.image_digest, "sha256:deadbeef1234");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

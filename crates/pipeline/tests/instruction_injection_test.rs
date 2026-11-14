@@ -723,12 +723,11 @@ fn service(unit: &str, state: UnitState) -> String {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
         state_changes: vec![UnitStateChange {
-            unit: unit.to_owned().try_into().unwrap(),
+            unit: test_carried_unit(unit.to_owned().try_into().unwrap(), None),
             current_state: state,
             default_state: None,
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: None,
             aggregate: None,
             attention_reason: None,
         }],
@@ -1415,4 +1414,18 @@ fn repo_copy_needs_a_staged_repo_file() {
     let output = materialized_containerfile(&snap);
     assert!(output.contains(REPO_COPY), "{output}");
     assert!(output.contains("Custom Repositories (1)"), "{output}");
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }

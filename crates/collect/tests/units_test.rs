@@ -1,14 +1,16 @@
 //! Integration tests for the Services inspector.
 
 use inspectah_collect::executor::mock::MockExecutor;
-use inspectah_collect::inspectors::services::ServicesInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
-use inspectah_core::types::units::{PresetDefault, UnitAction, UnitSection, UnitState};
+use inspectah_core::types::units::{
+    CarriedUnit, PresetDefault, UnitAction, UnitFragment, UnitSection, UnitState,
+};
 
 /// Standard fixture: `systemctl list-unit-files` output.
 const SYSTEMCTL_FIXTURE: &str =
@@ -22,6 +24,27 @@ const PRESET_FIXTURE: &str =
 const DROPIN_FIXTURE: &str =
     include_str!("../../../testdata/fixtures/services/dropin-httpd-override.conf");
 
+/// A minimal unit file body.
+const UNIT_FILE: &str = "[Unit]\nDescription=test unit\n";
+
+/// Register a unit file under the vendor directory for each name, as a
+/// package installs it.
+fn with_vendor_units(mut exec: MockExecutor, units: &[&str]) -> MockExecutor {
+    for unit in units {
+        exec = exec.with_file(&format!("/usr/lib/systemd/system/{unit}"), UNIT_FILE);
+    }
+    exec
+}
+
+/// The names `systemctl list-unit-files` output lists.
+fn listed_units(listing: &str) -> Vec<&str> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| name.contains(".service"))
+        .collect()
+}
+
 fn pkg_source() -> SourceSystem {
     SourceSystem::PackageBased {
         os_release: OsRelease {
@@ -33,10 +56,11 @@ fn pkg_source() -> SourceSystem {
     }
 }
 
-/// Build a MockExecutor with the full fixture set: systemctl output,
-/// one preset directory with the default preset, and one drop-in directory.
+/// Build a MockExecutor with the full fixture set: systemctl output, a
+/// vendor unit file for every listed unit, one preset directory with the
+/// default preset, and one drop-in directory.
 fn full_mock() -> MockExecutor {
-    MockExecutor::new()
+    with_vendor_units(MockExecutor::new(), &listed_units(SYSTEMCTL_FIXTURE))
         .with_command(
             "systemctl list-unit-files --type=service --no-pager",
             ExecResult {
@@ -93,7 +117,7 @@ fn happy_path_state_changes() {
     let bluetooth = section
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "bluetooth.service")
+        .find(|s| s.unit.name().as_str() == "bluetooth.service")
         .expect("bluetooth should have state change");
     assert_eq!(bluetooth.current_state, UnitState::Enabled);
     assert_eq!(bluetooth.default_state, Some(PresetDefault::Disable));
@@ -103,7 +127,7 @@ fn happy_path_state_changes() {
     let gdm = section
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "gdm.service")
+        .find(|s| s.unit.name().as_str() == "gdm.service")
         .expect("gdm should have state change");
     assert_eq!(gdm.current_state, UnitState::Disabled);
     assert_eq!(gdm.default_state, Some(PresetDefault::Enable));
@@ -114,7 +138,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.as_str() != "httpd.service"),
+            .all(|s| s.unit.name().as_str() != "httpd.service"),
         "httpd has no preset rule, should not appear in state_changes"
     );
 
@@ -123,7 +147,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.as_str() != "libvirtd.service"),
+            .all(|s| s.unit.name().as_str() != "libvirtd.service"),
         "libvirtd has no preset rule, should not appear in state_changes"
     );
 
@@ -132,7 +156,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.as_str() != "auditd.service"),
+            .all(|s| s.unit.name().as_str() != "auditd.service"),
         "auditd state matches preset, should not appear in state_changes"
     );
 
@@ -142,7 +166,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.as_str() != "cups.service"),
+            .all(|s| s.unit.name().as_str() != "cups.service"),
         "cups should not appear in state_changes"
     );
 
@@ -293,7 +317,9 @@ fn inventory_records_masked_units() {
             "/usr/lib/systemd/system-preset/90-default.preset",
             "enable cups.service\nenable sshd.service\n",
         )
-        .with_dir("/etc/systemd/system", vec![]);
+        .with_dir("/etc/systemd/system", vec![])
+        .with_link("/etc/systemd/system/cups.service", "/dev/null");
+    let exec = with_vendor_units(exec, &["cups.service", "sshd.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -323,7 +349,7 @@ fn inventory_records_masked_units() {
         section
             .state_changes
             .iter()
-            .any(|s| s.unit.as_str() == "cups.service"),
+            .any(|s| s.unit.name().as_str() == "cups.service"),
         "a masked unit is a state change as well as an inventory entry"
     );
 }
@@ -359,6 +385,7 @@ fn preset_first_match_wins() {
             "/usr/lib/systemd/system-preset/90-default.preset",
             "enable sshd.service\n",
         );
+    let exec = with_vendor_units(exec, &["sshd.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -380,7 +407,7 @@ fn preset_first_match_wins() {
     let sshd = section
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "sshd.service")
+        .find(|s| s.unit.name().as_str() == "sshd.service")
         .expect("sshd should diverge from first-match preset");
     assert_eq!(sshd.default_state, Some(PresetDefault::Disable));
     assert_eq!(sshd.current_state, UnitState::Enabled);
@@ -408,6 +435,7 @@ fn preset_glob_matching() {
             "/usr/lib/systemd/system-preset/99-catchall.preset",
             "enable *\n",
         );
+    let exec = with_vendor_units(exec, &["custom-app.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -429,7 +457,7 @@ fn preset_glob_matching() {
     let app = section
         .state_changes
         .iter()
-        .find(|s| s.unit.as_str() == "custom-app.service")
+        .find(|s| s.unit.name().as_str() == "custom-app.service")
         .expect("custom-app should diverge from glob preset");
     assert_eq!(app.default_state, Some(PresetDefault::Enable));
     assert_eq!(app.current_state, UnitState::Disabled);
@@ -960,6 +988,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
             },
         )
         .with_dir("/etc/systemd/system", vec![]);
+    let exec = with_vendor_units(exec, &["httpd.service", "firewalld.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -978,69 +1007,12 @@ fn test_owning_package_batch_query_populates_state_changes() {
     };
 
     assert_eq!(
-        section.state_changes[0].owning_package.as_deref(),
+        section.state_changes[0].unit.owning_package(),
         Some("httpd")
     );
     assert_eq!(
-        section.state_changes[1].owning_package.as_deref(),
+        section.state_changes[1].unit.owning_package(),
         Some("firewalld")
-    );
-}
-
-#[test]
-fn test_owning_package_fallback_checks_etc_systemd_path() {
-    let exec = MockExecutor::new()
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ExecResult {
-                stdout: "UNIT FILE                                  STATE           PRESET\n\
-                         custom-local.service                       enabled         disabled\n\
-                         \n\
-                         1 unit files listed.\n"
-                    .into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
-        .with_file("/usr/lib/systemd/system-preset/90-default.preset", "disable *\n")
-        .with_command(
-            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/custom-local.service",
-            ExecResult {
-                stdout: "file /usr/lib/systemd/system/custom-local.service is not owned by any package\n".into(),
-                exit_code: 1,
-                ..Default::default()
-            },
-        )
-        .with_command(
-            "rpm -qf --queryformat %{NAME}\n /etc/systemd/system/custom-local.service",
-            ExecResult {
-                stdout: "custom-local\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        )
-        .with_dir("/etc/systemd/system", vec![]);
-
-    let source = pkg_source();
-    let ctx = InspectionContext {
-        source_system: &source,
-        executor: &exec,
-        rpm_state: None,
-        baseline_data: None,
-    };
-
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
-    let section = match &output.section {
-        SectionData::Units(s) => s,
-        other => panic!("expected Services section, got {other:?}"),
-    };
-
-    assert_eq!(
-        section.state_changes[0].owning_package.as_deref(),
-        Some("custom-local")
     );
 }
 
@@ -1090,6 +1062,7 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
             },
         )
         .with_dir("/etc/systemd/system", vec![]);
+    let exec = with_vendor_units(exec, &["httpd.service", "firewalld.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -1108,65 +1081,236 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
     };
 
     assert_eq!(
-        section.state_changes[0].owning_package.as_deref(),
+        section.state_changes[0].unit.owning_package(),
         Some("httpd")
     );
     assert_eq!(
-        section.state_changes[1].owning_package.as_deref(),
+        section.state_changes[1].unit.owning_package(),
         Some("firewalld")
     );
 }
 
-#[test]
-fn test_unowned_unit_keeps_owning_package_none() {
-    let exec = MockExecutor::new()
+/// The section a scan of `exec` produces, with its warnings.
+fn scan(exec: &MockExecutor) -> (UnitSection, Vec<String>) {
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the scan succeeds");
+    let SectionData::Units(section) = output.section else {
+        panic!("expected the units section");
+    };
+    let warnings = output.warnings.into_iter().map(|w| w.message).collect();
+    (section, warnings)
+}
+
+/// A mock listing `units` (name, state) against a preset that disables
+/// every unit, with an empty `/etc/systemd/system` listing.
+fn listing_mock(units: &[(&str, &str)]) -> MockExecutor {
+    let mut listing =
+        String::from("UNIT FILE                                  STATE           PRESET\n");
+    for (unit, state) in units {
+        listing.push_str(&format!("{unit} {state} disabled\n"));
+    }
+    listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
+    MockExecutor::new()
         .with_command(
             "systemctl list-unit-files --type=service --no-pager",
             ExecResult {
-                stdout: "UNIT FILE                                  STATE           PRESET\n\
-                         custom-local.service                       enabled         disabled\n\
-                         \n\
-                         1 unit files listed.\n"
-                    .into(),
+                stdout: listing,
                 exit_code: 0,
                 ..Default::default()
             },
         )
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
-        .with_file("/usr/lib/systemd/system-preset/90-default.preset", "disable *\n")
-        .with_command(
-            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/custom-local.service",
-            ExecResult {
-                stdout: "file /usr/lib/systemd/system/custom-local.service is not owned by any package\n".into(),
-                exit_code: 1,
-                ..Default::default()
-            },
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "disable *\n",
         )
-        .with_command(
-            "rpm -qf --queryformat %{NAME}\n /etc/systemd/system/custom-local.service",
-            ExecResult {
-                stdout: "file /etc/systemd/system/custom-local.service is not owned by any package\n".into(),
-                exit_code: 1,
-                ..Default::default()
+        .with_dir("/etc/systemd/system", vec![])
+}
+
+/// The fragment of the state change for `unit`.
+fn fragment_of<'a>(section: &'a UnitSection, unit: &str) -> &'a UnitFragment {
+    let change = section
+        .state_changes
+        .iter()
+        .find(|s| s.unit.name().as_str() == unit)
+        .unwrap_or_else(|| panic!("{unit} should be a state change"));
+    match &change.unit {
+        CarriedUnit::Ordinary(ordinary) => ordinary.fragment(),
+        other => panic!("{unit} is not an ordinary unit: {other:?}"),
+    }
+}
+
+fn file(name: &str) -> inspectah_core::types::units::UnitName {
+    name.to_owned().try_into().unwrap()
+}
+
+/// T5, collector half: a unit only under `/etc` is `Local` and no owner is
+/// asked for it; a vendor unit whose owner lookup fails is `Vendor` with no
+/// owner. The two fragments differ, which is what render tells apart.
+#[test]
+fn local_unit_and_unowned_vendor_unit_get_different_fragments() {
+    let exec = listing_mock(&[
+        ("custom-local.service", "enabled"),
+        ("unowned.service", "enabled"),
+    ])
+    .with_file("/etc/systemd/system/custom-local.service", UNIT_FILE)
+    .with_file("/usr/lib/systemd/system/unowned.service", UNIT_FILE)
+    .with_command(
+        "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/unowned.service",
+        ExecResult {
+            stdout: "file /usr/lib/systemd/system/unowned.service is not owned by any package\n"
+                .into(),
+            exit_code: 1,
+            ..Default::default()
+        },
+    );
+    let (section, _) = scan(&exec);
+
+    assert_eq!(
+        fragment_of(&section, "custom-local.service"),
+        &UnitFragment::Local {
+            file: file("custom-local.service")
+        }
+    );
+    assert_eq!(
+        fragment_of(&section, "unowned.service"),
+        &UnitFragment::Vendor {
+            file: file("unowned.service"),
+            owning_package: None,
+        }
+    );
+    // Only the vendor file is looked up; the local one has no owner to find.
+    let rpm_queries: Vec<String> = exec
+        .command_log()
+        .into_iter()
+        .filter(|c| c.starts_with("rpm -qf"))
+        .collect();
+    assert!(
+        rpm_queries.iter().all(|c| !c.contains("custom-local")),
+        "no owner query for a local unit: {rpm_queries:?}"
+    );
+    assert!(
+        rpm_queries.iter().any(|c| c.contains("unowned.service")),
+        "the vendor unit's owner is asked for: {rpm_queries:?}"
+    );
+}
+
+/// A mask over a vendor unit, as a link to `/dev/null`, a zero-length file,
+/// or a link to a link to `/dev/null`, is a masked state change whose
+/// fragment is the vendor file under the mask. A file of comments only is
+/// not a mask: it is a unit file that replaces the vendor one.
+#[test]
+fn masks_and_a_comment_only_file_resolve_by_form() {
+    let exec = listing_mock(&[
+        ("nulled.service", "masked"),
+        ("empty.service", "masked"),
+        ("hop.service", "masked"),
+        ("comment.service", "enabled"),
+    ])
+    .with_link("/etc/systemd/system/nulled.service", "/dev/null")
+    .with_file("/etc/systemd/system/empty.service", "")
+    .with_link("/etc/systemd/system/hop.service", "/etc/alternatives/hop")
+    .with_link("/etc/alternatives/hop", "/dev/null")
+    .with_file("/etc/systemd/system/comment.service", "# replaced\n\n");
+    let exec = with_vendor_units(
+        exec,
+        &[
+            "nulled.service",
+            "empty.service",
+            "hop.service",
+            "comment.service",
+        ],
+    )
+    .with_command(
+        "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/nulled.service \
+         /usr/lib/systemd/system/empty.service /usr/lib/systemd/system/hop.service \
+         /usr/lib/systemd/system/comment.service",
+        ExecResult {
+            stdout: "a\nb\nc\nd\n".into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    );
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "no warnings: {warnings:?}");
+
+    for (unit, owner) in [
+        ("nulled.service", "a"),
+        ("empty.service", "b"),
+        ("hop.service", "c"),
+    ] {
+        assert_eq!(
+            fragment_of(&section, unit),
+            &UnitFragment::Vendor {
+                file: file(unit),
+                owning_package: Some(owner.into()),
             },
-        )
-        .with_dir("/etc/systemd/system", vec![]);
+            "{unit}"
+        );
+    }
+    assert_eq!(
+        fragment_of(&section, "comment.service"),
+        &UnitFragment::Shadowed {
+            file: file("comment.service"),
+            owning_package: Some("d".into()),
+        }
+    );
+}
 
-    let source = pkg_source();
-    let ctx = InspectionContext {
-        source_system: &source,
-        executor: &exec,
-        rpm_state: None,
-        baseline_data: None,
-    };
+/// A link to a file outside both unit directories is `linked`: no state
+/// change, and today's warning. The same unit as a vendor file is a state
+/// change.
+#[test]
+fn link_outside_the_unit_directories_is_excluded_with_a_warning() {
+    // Positive control.
+    let exec = with_vendor_units(
+        listing_mock(&[("app.service", "enabled")]),
+        &["app.service"],
+    );
+    let (section, _) = scan(&exec);
+    assert_eq!(section.state_changes.len(), 1);
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
-    let section = match &output.section {
-        SectionData::Units(s) => s,
-        other => panic!("expected Services section, got {other:?}"),
-    };
+    let exec = listing_mock(&[("app.service", "enabled")])
+        .with_file("/opt/app/app.service", UNIT_FILE)
+        .with_link("/etc/systemd/system/app.service", "/opt/app/app.service");
+    let (section, warnings) = scan(&exec);
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w
+                == "unit app.service has state 'linked' - linked unit requires manual handling"),
+        "today's linked warning: {warnings:?}"
+    );
+}
 
-    assert_eq!(section.state_changes[0].owning_package, None);
+/// A unit with no file in either directory is reported and has no state
+/// change; the same unit with a vendor file is a state change.
+#[test]
+fn unit_with_no_file_is_reported_not_dropped() {
+    let exec = with_vendor_units(
+        listing_mock(&[("app.service", "enabled")]),
+        &["app.service"],
+    );
+    assert_eq!(scan(&exec).0.state_changes.len(), 1);
+
+    let (section, warnings) = scan(&listing_mock(&[("app.service", "enabled")]));
+    assert!(section.state_changes.is_empty());
+    assert!(
+        warnings.iter().any(|w| w.contains("app.service")
+            && w.contains("no unit file under /etc/systemd/system or /usr/lib/systemd/system")),
+        "{warnings:?}"
+    );
 }

@@ -1825,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_collect_skips_wave2_when_cancelled_between_waves() {
-        use inspectah_collect::inspectors::services::ServicesInspector;
+        use inspectah_collect::inspectors::units::ServicesInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {
@@ -1866,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_collect_no_cancellation_runs_normally() {
-        use inspectah_collect::inspectors::services::ServicesInspector;
+        use inspectah_collect::inspectors::units::ServicesInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {

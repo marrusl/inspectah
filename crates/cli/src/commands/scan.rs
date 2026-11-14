@@ -27,9 +27,9 @@ use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
-use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::subscription::SubscriptionInspector;
+use inspectah_collect::inspectors::units::ServicesInspector;
 use inspectah_collect::inspectors::users::{
     NON_SYSTEM_UID_MAX, NON_SYSTEM_UID_MIN, UserGroupOptions, UsersGroupsInspector,
 };

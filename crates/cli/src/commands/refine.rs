@@ -221,6 +221,20 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::redaction::RedactionState;
@@ -347,12 +361,14 @@ mod tests {
         let mut snap = redacted_snapshot();
         snap.units = Some(UnitSection {
             state_changes: vec![UnitStateChange {
-                unit: UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                unit: test_carried_unit(
+                    UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                    None,
+                ),
                 current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
-                owning_package: None,
                 aggregate: None,
                 attention_reason: None,
             }],
@@ -442,7 +458,7 @@ mod tests {
         let row = units
             .state_changes
             .iter()
-            .find(|s| s.unit.as_str() == STATE_ROW_UNIT)
+            .find(|s| s.unit.name().as_str() == STATE_ROW_UNIT)
             .expect("the state row is present");
         assert!(
             !row.disposition.is_included(),

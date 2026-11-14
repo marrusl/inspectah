@@ -251,7 +251,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 
     // Lock incompatible services
     for sc in &mut services.state_changes {
-        if incompatible_units.contains(&sc.unit.as_str()) {
+        if incompatible_units.contains(&sc.unit.name().as_str()) {
             sc.disposition = FindingKind::excluded();
             sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
@@ -400,6 +400,20 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 
 #[cfg(test)]
 mod tests {
+    /// A carried unit from the vendor directory, owned as given.
+    fn test_carried_unit(
+        name: inspectah_core::types::units::UnitName,
+        owning_package: Option<String>,
+    ) -> inspectah_core::types::units::CarriedUnit {
+        use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+        let fragment = UnitFragment::Vendor {
+            file: name.clone(),
+            owning_package,
+        };
+        CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+            .expect("a test unit is carried")
+    }
+
     use super::*;
     use inspectah_core::types::units::{
         SystemdDropIn, UnitInventoryEntry, UnitSection, UnitStateChange,
@@ -443,12 +457,11 @@ mod tests {
     fn sc(unit: &str, include: bool) -> UnitStateChange {
         use inspectah_core::types::units::{PresetDefault, UnitState};
         UnitStateChange {
-            unit: unit.to_string().try_into().unwrap(),
+            unit: test_carried_unit(unit.to_string().try_into().unwrap(), None),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::from_bool(include),
             locked: false,
-            owning_package: None,
             aggregate: None,
             attention_reason: None,
         }

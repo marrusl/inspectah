@@ -2069,12 +2069,11 @@ fn full_shadow_snapshot() -> InspectionSnapshot {
     snap.baseline = Some(empty_baseline());
     snap.units = Some(UnitSection {
         state_changes: vec![UnitStateChange {
-            unit: name(CHANGED_UNIT),
+            unit: test_carried_unit(name(CHANGED_UNIT), Some("httpd".into())),
             current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
-            owning_package: Some("httpd".into()),
             aggregate: None,
             attention_reason: None,
         }],
@@ -2148,7 +2147,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     let session_rows: Vec<&str> = decisions
         .unit_states
         .iter()
-        .map(|s| s.entry.unit.as_str())
+        .map(|s| s.entry.unit.name().as_str())
         .collect();
     assert_eq!(
         session_rows,
@@ -2159,7 +2158,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     let projected_rows: Vec<&str> = projected
         .state_changes
         .iter()
-        .map(|s| s.unit.as_str())
+        .map(|s| s.unit.name().as_str())
         .collect();
     assert_eq!(
         projected_rows,
@@ -2254,12 +2253,14 @@ fn a_full_shadow_with_a_real_state_change_keeps_its_systemctl_line() {
     let mut snap = full_shadow_snapshot();
     let units = snap.units.as_mut().unwrap();
     units.state_changes.push(UnitStateChange {
-        unit: UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
+        unit: test_carried_unit(
+            UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
+            Some("openssh-server".into()),
+        ),
         current_state: UnitState::Enabled,
         default_state: Some(PresetDefault::Disable),
         disposition: FindingKind::included(),
         locked: false,
-        owning_package: Some("openssh-server".into()),
         aggregate: None,
         attention_reason: None,
     });
@@ -2349,7 +2350,7 @@ fn the_decision_view_serializes_unit_keys_and_no_service_keys() {
         .as_array()
         .expect("the view must carry `unit_states` as an array");
     assert_eq!(states.len(), 1, "one state row, got {states:?}");
-    assert_eq!(states[0]["entry"]["unit"], CHANGED_UNIT);
+    assert_eq!(states[0]["entry"]["unit"]["name"], CHANGED_UNIT);
     let dropins = view["unit_dropins"]
         .as_array()
         .expect("the view must carry `unit_dropins` as an array");
@@ -2384,12 +2385,11 @@ fn cascade_snapshot() -> InspectionSnapshot {
     };
 
     let change = |unit: &str| UnitStateChange {
-        unit: UnitName::try_from(unit.to_string()).unwrap(),
+        unit: test_carried_unit(UnitName::try_from(unit.to_string()).unwrap(), None),
         current_state: UnitState::Enabled,
         default_state: Some(PresetDefault::Disable),
         disposition: FindingKind::included(),
         locked: false,
-        owning_package: None,
         aggregate: None,
         attention_reason: None,
     };
@@ -2442,7 +2442,12 @@ fn unit_inclusion(session: &RefineSession) -> (Inclusion, Inclusion) {
     let states = units
         .state_changes
         .iter()
-        .map(|s| (s.unit.as_str().to_string(), s.disposition.is_included()))
+        .map(|s| {
+            (
+                s.unit.name().as_str().to_string(),
+                s.disposition.is_included(),
+            )
+        })
         .collect();
     let dropins = units
         .drop_ins
@@ -2551,4 +2556,18 @@ fn mark_viewed_takes_the_units_section_and_refuses_services() {
         other => panic!("`services` must be refused as a BadRequest, got {other:?}"),
     }
     assert!(!session.is_viewed("services:sshd.service"));
+}
+
+/// A carried unit from the vendor directory, owned as given.
+fn test_carried_unit(
+    name: inspectah_core::types::units::UnitName,
+    owning_package: Option<String>,
+) -> inspectah_core::types::units::CarriedUnit {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: name.clone(),
+        owning_package,
+    };
+    CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
+        .expect("a test unit is carried")
 }
