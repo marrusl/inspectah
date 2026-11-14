@@ -398,27 +398,71 @@ pub fn systemctl_lines(units: &[PlannedUnit]) -> Vec<String> {
     lines
 }
 
-/// The unit state section's lines for `plan`: a line per declined command,
-/// a `# FIXME:` for [`OmissionReason::TargetNeedsUnit`] (§ 10.3) and an
-/// `# Omitted:` line for every other reason, then [`systemctl_lines`], then
-/// the note naming the enables left to the Scheduled Tasks section.
+/// How the Containerfile marks a declined command's line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclinedMarker {
+    /// `# Omitted:`, for a command the export cannot carry as it stands.
+    Omitted,
+    /// `# FIXME:`, for a command the target refuses (§ 10.3).
+    Fixme,
+}
+
+impl DeclinedMarker {
+    /// The comment prefix, with its trailing space.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Omitted => "# Omitted: ",
+            Self::Fixme => "# FIXME: ",
+        }
+    }
+}
+
+/// A declined command's line: its marker and the text after the marker.
+/// The text is not escaped: package names in it come from the snapshot, so
+/// each surface escapes the finished line for itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclinedLine {
+    pub marker: DeclinedMarker,
+    pub text: String,
+}
+
+impl DeclinedLine {
+    /// The Containerfile comment, before escaping.
+    pub fn comment(&self) -> String {
+        format!("{}{}", self.marker.prefix(), self.text)
+    }
+}
+
+/// The line for one entry of [`UnitPlan::declined`]: the one place the
+/// marker and the text are chosen, for the Containerfile and refine alike.
+/// [`OmissionReason::TargetNeedsUnit`] is a FIXME with § 10.3's sentence
+/// ([`target_needs_unit_text`]); every other reason is an `# Omitted:` line
+/// naming the unit, then [`OmissionReason::describe`] in parentheses.
+pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedLine {
+    match reason {
+        OmissionReason::TargetNeedsUnit => DeclinedLine {
+            marker: DeclinedMarker::Fixme,
+            text: target_needs_unit_text(name.as_str(), action),
+        },
+        _ => DeclinedLine {
+            marker: DeclinedMarker::Omitted,
+            text: format!("{} ({})", name.as_str(), reason.describe()),
+        },
+    }
+}
+
+/// The unit state section's lines for `plan`: a line per declined command
+/// ([`declined_line`]), then [`systemctl_lines`], then the note naming the
+/// enables left to the Scheduled Tasks section.
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
-    // line is escaped here rather than inside `describe`, which refine
+    // line is escaped here rather than inside `declined_line`, which refine
     // also calls and escapes for its own surface.
     let mut lines: Vec<String> = plan
         .declined
         .iter()
         .map(|(name, action, reason)| {
-            escape_comment_text(&match reason {
-                OmissionReason::TargetNeedsUnit => {
-                    format!(
-                        "# FIXME: {}",
-                        target_needs_unit_text(name.as_str(), *action)
-                    )
-                }
-                _ => format!("# Omitted: {} ({})", name.as_str(), reason.describe()),
-            })
+            escape_comment_text(&declined_line(name, *action, reason).comment())
         })
         .collect();
     lines.extend(systemctl_lines(&plan.planned));

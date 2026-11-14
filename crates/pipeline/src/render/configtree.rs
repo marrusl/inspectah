@@ -157,7 +157,8 @@ pub struct StagedWrites<'a> {
     /// what lands: a generated unit written beside a collected file, or
     /// two generated units of one name, where the first is here and the
     /// last lands. A reader that needs the landed content or source
-    /// consults `beside` too. `is_staged` stays a correct yes or no.
+    /// consults `beside` too, as `is_staged` does: a `beside` write can be
+    /// the only file at a destination whose collected offer is withheld.
     pub writes: BTreeMap<Destination, StagedWrite<'a>>,
     /// Interim: generated units (`GeneratedUnit`, `FlatpakService`)
     /// written at a destination that another offer also has, in offer
@@ -743,9 +744,15 @@ pub(crate) fn stages_config_unit_dir(staged: &StagedWrites<'_>) -> bool {
     })
 }
 
-/// Whether the export writes a file at `path`, by [`staged_writes`].
+/// Whether the export writes a file at `path`, by [`staged_writes`]: in
+/// `writes`, or in `beside`, which also lands. A generated unit in `beside`
+/// can be the only file at a destination whose collected offer is withheld
+/// (a zero-length file at a unit path), and a `mask` there would still meet
+/// it.
 pub(crate) fn is_staged(staged: &StagedWrites<'_>, path: &str) -> bool {
-    Destination::new(path).is_ok_and(|dest| staged.writes.contains_key(&dest))
+    Destination::new(path).is_ok_and(|dest| {
+        staged.writes.contains_key(&dest) || staged.beside.iter().any(|(d, _)| *d == dest)
+    })
 }
 
 /// The remote, application id and branch of a flatpak `install` line,

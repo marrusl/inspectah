@@ -1978,7 +1978,9 @@ fn t11_a_storage_mask_is_carried_only_over_a_package_file() {
 }
 
 /// T11: a comment-only file over a vendor unit is a full shadow, staged by
-/// the drop-in writer, and no `mask` names its unit.
+/// the drop-in writer, and no `mask` names its unit. Control: the
+/// zero-length form of the same file over the same unit is a mask, in the
+/// `mask` line, with no file staged.
 #[test]
 fn t11_a_comment_only_shadow_is_staged_and_not_masked() {
     const UNIT: &str = "quiet.service";
@@ -2000,6 +2002,17 @@ fn t11_a_comment_only_shadow_is_staged_and_not_masked() {
         in_no_systemctl_instruction(&containerfile, UNIT),
         "{containerfile}"
     );
+
+    let zero_length = scan(
+        UnitHost::new()
+            .unit(UNIT, "masked")
+            .vendor_unit(UNIT, VENDOR_SERVICE, Some("quietpkg"))
+            .etc_unit(UNIT, ""),
+    );
+    let tree = render_export(&zero_length);
+    assert!(!staged_at(&tree, &etc_path(UNIT)), "no file is staged");
+    let containerfile = containerfile_in(&tree);
+    assert!(acts(&containerfile, "mask", UNIT), "{containerfile}");
 }
 
 // ---------------------------------------------------------------------

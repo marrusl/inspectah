@@ -13,8 +13,9 @@ use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::unit_plan::{
-    AdvisoryReason, OmissionReason, ServiceAdvisory, effective_target_packages,
-    is_package_installable, plan_units, pulled_in_by_included, unit_state_lines,
+    AdvisoryReason, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan, declined_line,
+    effective_target_packages, is_package_installable, plan_units, pulled_in_by_included,
+    unit_state_lines,
 };
 
 // ---------------------------------------------------------------------------
@@ -1031,6 +1032,60 @@ fn not_carried_describes_the_class_in_the_shared_wording() {
         .describe(),
         RHC_NOT_CARRIED
     );
+}
+
+/// One function gives a declined command's marker and full text, and the
+/// unit state section renders exactly that: a FIXME for a refusal the
+/// target needs (with `tmp.mount`'s own sentence for its mask), an
+/// `# Omitted:` line naming the unit for every other reason.
+#[test]
+fn a_declined_command_renders_from_one_line_function() {
+    let name = |unit: &str| -> UnitName { unit.to_owned().try_into().expect("a unit name") };
+    let cases = [
+        (
+            name("tmp.mount"),
+            UnitAction::Mask,
+            OmissionReason::TargetNeedsUnit,
+            DeclinedMarker::Fixme,
+            "tmp.mount is masked on the source host, where /tmp is then a directory on the root \
+             filesystem. Not carried: the bootc base image mounts /tmp from this unit, and \
+             without it /tmp is read-only."
+                .to_owned(),
+        ),
+        (
+            name("ostree-remount.service"),
+            UnitAction::Disable,
+            OmissionReason::TargetNeedsUnit,
+            DeclinedMarker::Fixme,
+            "ostree-remount.service is disabled on the source host. Not carried: the image \
+             needs this unit."
+                .to_owned(),
+        ),
+        (
+            name("rhcd.service"),
+            UnitAction::Enable,
+            OmissionReason::NotCarried {
+                package: "rhc".into(),
+            },
+            DeclinedMarker::Omitted,
+            format!("rhcd.service ({RHC_NOT_CARRIED})"),
+        ),
+    ];
+    for (unit, action, reason, marker, text) in cases {
+        let line = declined_line(&unit, action, &reason);
+        assert_eq!(line.marker, marker, "{unit:?}");
+        assert_eq!(line.text, text, "{unit:?}");
+        let prefix = match marker {
+            DeclinedMarker::Fixme => "# FIXME: ",
+            DeclinedMarker::Omitted => "# Omitted: ",
+        };
+        assert_eq!(line.comment(), format!("{prefix}{text}"), "{unit:?}");
+        let plan = UnitPlan {
+            declined: vec![(unit.clone(), action, reason)],
+            ..Default::default()
+        };
+        assert_eq!(unit_state_lines(&plan), [line.comment()], "{unit:?}");
+    }
 }
 
 fn added(name: &str, arch: &str, disposition: FindingKind) -> PackageEntry {
@@ -2298,7 +2353,8 @@ fn t16_a_mask_needs_its_path_free() {
 /// package-owned storage mask with a file at its name is rule 2's, not
 /// rule 4's; a protected unit's mask with a file at its name is rule 3's,
 /// not rule 4's; a protected unit's `disable` whose recorded file is not
-/// staged is rule 3's, not rule 5's.
+/// staged is rule 3's, not rule 5's; a masked package-owned `tmp.mount`
+/// with a file at its name is rule 2's, not rule 3's.
 #[test]
 fn the_first_failing_rule_decides() {
     let storage = units_snapshot(
@@ -2350,5 +2406,97 @@ fn the_first_failing_rule_decides() {
             UnitAction::Disable,
             OmissionReason::TargetNeedsUnit
         )]
+    );
+    let storage_mask_with_file = units_snapshot(
+        vec![change_with(
+            "tmp.mount",
+            owned("tmp.mount", "systemd"),
+            UnitState::Masked,
+        )],
+        vec![("/etc/systemd/system/tmp.mount", "[Mount]\nWhere=/tmp\n")],
+    );
+    assert_eq!(
+        declined_of(&storage_mask_with_file),
+        [(
+            "tmp.mount".to_owned(),
+            UnitAction::Mask,
+            OmissionReason::StorageFileStaged {
+                path: "/etc/systemd/system/tmp.mount".into()
+            }
+        )],
+        "rule 2 decides before rule 3"
+    );
+}
+
+/// Rule 4 reads what lands: a zero-length masked `cron-backup.timer` is
+/// withheld, and a generated timer of the same name is written at that
+/// path. The mask is then declined with `MaskPathOccupied` and the
+/// generated file lands, never a mask and a file together. Control: the
+/// same mask with no generated timer is planned and nothing lands there.
+#[test]
+fn rule_4_sees_a_generated_unit_where_a_withheld_mask_file_was() {
+    use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
+    use inspectah_pipeline::render::configtree::{Destination, StagedFileKind};
+    const UNIT: &str = "cron-backup.timer";
+    const PATH: &str = "/etc/systemd/system/cron-backup.timer";
+    let masked = || {
+        units_snapshot(
+            vec![change_with(UNIT, UnitFragment::Absent, UnitState::Masked)],
+            vec![(PATH, "")],
+        )
+    };
+    let dest = Destination::new(PATH).expect("a destination");
+    let lands_at = |snap: &InspectionSnapshot| -> Vec<StagedFileKind> {
+        let staged = staged_writes(snap);
+        staged
+            .writes
+            .get(&dest)
+            .map(|w| w.source)
+            .into_iter()
+            .chain(
+                staged
+                    .beside
+                    .iter()
+                    .filter(|(d, _)| *d == dest)
+                    .map(|(_, w)| w.source),
+            )
+            .collect()
+    };
+
+    let mut with_generated = masked();
+    with_generated.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-backup".into(),
+            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+            service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    assert_eq!(
+        lands_at(&with_generated),
+        [StagedFileKind::GeneratedUnit],
+        "the generated timer lands at the path"
+    );
+    let lines = render(&with_generated).lines;
+    assert!(in_no_systemctl_instruction(&lines, UNIT), "{lines:?}");
+    assert_eq!(
+        declined_of(&with_generated),
+        [(
+            UNIT.to_owned(),
+            UnitAction::Mask,
+            OmissionReason::MaskPathOccupied { path: PATH.into() }
+        )]
+    );
+
+    let control = masked();
+    assert_eq!(lands_at(&control), [], "nothing lands at the path");
+    assert_eq!(
+        render(&control).lines,
+        [
+            "RUN systemctl mask -- \\".to_owned(),
+            format!("    '{UNIT}'")
+        ]
     );
 }
