@@ -2529,6 +2529,18 @@ fn var_symlink_line(top: &str) -> String {
          for the resolved path (for /srv: var-srv.mount with Where=/var/srv)."
     )
 }
+/// The rename line for an automount, which keeps its suffix and has a
+/// matching mount unit (decided by the project owner, 2026-11-14).
+fn automount_var_symlink_line(top: &str) -> String {
+    format!(
+        "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
+         for the resolved path (for /srv: var-srv.automount with Where=/var/srv), and so must \
+         its matching mount unit (var-srv.mount)."
+    )
+}
+/// The line for a finding merged from more than one host.
+const MERGED_LINE: &str =
+    "#   This describes one host's copy of the unit; the copy staged may differ.";
 fn opt_line(path: &str) -> String {
     format!(
         "#   /opt is a directory of the read-only image in the RHEL bootc base image, not a link \
@@ -2538,8 +2550,9 @@ fn opt_line(path: &str) -> String {
 }
 const TMP_MOUNT_LINE: &str = "#   The bootc base image starts tmp.mount from a link it ships, \
      so this file replaces the unit that mounts /tmp on the target.";
-const NOFAIL_LINE: &str = "#   No nofail option. If the unit is started at boot and its device \
-     is missing, units that require it fail, and boot can stop in emergency mode.";
+const NOFAIL_LINE: &str = "#   No nofail option in the unit file. If the unit is started at \
+     boot and its device is missing, units that require it fail, and boot can stop in emergency \
+     mode.";
 fn carry_line(verb: &str, unit: &str) -> String {
     format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
 }
@@ -2712,7 +2725,9 @@ fn mount_advisory_lines_follow_the_table() {
             ],
         ),
         (
-            // An automount has no `Options=`: no `nofail` line.
+            // An automount has no `Options=`: no `nofail` line. Its rename
+            // line keeps the `.automount` suffix and names its matching
+            // mount unit, not the mount unit's line.
             mount_finding(
                 "srv-data.automount",
                 local("srv-data.automount"),
@@ -2722,6 +2737,21 @@ fn mount_advisory_lines_follow_the_table() {
             ),
             vec![
                 advisory_fact("srv-data.automount", "enabled"),
+                automount_var_symlink_line("/srv"),
+            ],
+        ),
+        (
+            // The control: a mount unit at the same mount point gets the
+            // mount unit's rename line.
+            mount_finding(
+                "srv-data.mount",
+                local("srv-data.mount"),
+                Some(Enabled),
+                Some("/srv/data"),
+                true,
+            ),
+            vec![
+                advisory_fact("srv-data.mount", "enabled"),
                 var_symlink_line("/srv"),
             ],
         ),
@@ -3094,6 +3124,63 @@ fn mount_advisory_lines_follow_the_table() {
     assert!(
         mount_advisory_lines(&data, &nothing_staged, &[other]).contains(&NOFAIL_LINE.to_owned())
     );
+}
+
+/// A finding more than one host recorded says, directly after its first
+/// line, that it describes one host's copy. A finding with no fleet counts
+/// (a single-host scan), or one host's finding on an aggregate, does not:
+/// its copy is the only one.
+#[test]
+fn a_finding_more_than_one_host_recorded_says_so() {
+    use inspectah_core::types::aggregate::AggregatePrevalence;
+    let on_hosts = |hosts: &[&str]| {
+        let mut finding = mount_finding(
+            "srv.mount",
+            local("srv.mount"),
+            Some(UnitState::Enabled),
+            Some("/srv"),
+            false,
+        );
+        finding.aggregate = Some(AggregatePrevalence {
+            count: hosts.len() as i32,
+            total: 2,
+            hosts: hosts.iter().map(|h| (*h).to_owned()).collect(),
+            ..Default::default()
+        });
+        finding
+    };
+    let empty = InspectionSnapshot::new();
+    let nothing_staged = staged_writes(&empty);
+    assert_eq!(
+        mount_advisory_lines(&on_hosts(&["host-a", "host-b"]), &nothing_staged, &[]),
+        [
+            advisory_fact("srv.mount", "enabled"),
+            MERGED_LINE.into(),
+            var_symlink_line("/srv"),
+            NOFAIL_LINE.into(),
+        ]
+    );
+    let one_host = mount_finding(
+        "srv.mount",
+        local("srv.mount"),
+        Some(UnitState::Enabled),
+        Some("/srv"),
+        false,
+    );
+    for (case, finding) in [
+        ("single-host scan", one_host),
+        ("one host of an aggregate", on_hosts(&["host-a"])),
+    ] {
+        assert_eq!(
+            mount_advisory_lines(&finding, &nothing_staged, &[]),
+            [
+                advisory_fact("srv.mount", "enabled"),
+                var_symlink_line("/srv"),
+                NOFAIL_LINE.into(),
+            ],
+            "{case}"
+        );
+    }
 }
 
 /// The unit state section header.

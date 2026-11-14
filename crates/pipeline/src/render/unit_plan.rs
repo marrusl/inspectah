@@ -562,9 +562,14 @@ const MOUNT_BOOTC_OWNED: &str = "#   bootc and ostree own this mount point on th
 const MOUNT_TMP_FILE_STAGED: &str = "#   The bootc base image starts tmp.mount from a link it \
      ships, so this file replaces the unit that mounts /tmp on the target.";
 
+/// A finding more than one host recorded, merged into one host's finding.
+const MOUNT_MERGED_FROM_HOSTS: &str =
+    "#   This describes one host's copy of the unit; the copy staged may differ.";
+
 /// A mount or swap with `nofail` absent.
-const MOUNT_NO_NOFAIL: &str = "#   No nofail option. If the unit is started at boot and its \
-     device is missing, units that require it fail, and boot can stop in emergency mode.";
+const MOUNT_NO_NOFAIL: &str = "#   No nofail option in the unit file. If the unit is started \
+     at boot and its device is missing, units that require it fail, and boot can stop in \
+     emergency mode.";
 
 /// Whether `path` is `top` or a path under it, by whole components.
 fn is_or_is_under(path: &str, top: &str) -> bool {
@@ -593,12 +598,17 @@ fn normal_mount_point(mount_point: &str) -> String {
 ///
 /// - Always, the first line. A finding with no state change names the
 ///   unit `not enabled`.
+/// - The merged line, when the finding's fleet counts show more than one
+///   host recorded the unit: the finding is one host's, and the unit file
+///   staged may be another's. Never on a single-host scan, which has no
+///   fleet counts.
 /// - The file line, when `staged` writes the unit's file at
 ///   `/etc/systemd/system/<unit>` ([`is_staged`]), so it follows the
 ///   config row's toggle.
 /// - From `mount_point`, when there is one and the unit is not masked:
 ///   under `/usr`; one of [`BOOTC_OWNED_MOUNT_POINTS`]; under one of
-///   [`BASE_VAR_SYMLINKS`] (naming that top-level directory); under one of
+///   [`BASE_VAR_SYMLINKS`] (naming that top-level directory, and for an
+///   automount its matching mount unit too); under one of
 ///   [`BASE_IMAGE_DIRECTORIES`]. Each is matched against the mount point in
 ///   normal form ([`normal_mount_point`]), and a line that shows the path
 ///   shows that form. A masked unit does not mount, so the layout of its
@@ -636,6 +646,13 @@ pub fn mount_advisory_lines(
         "# Advisory: {} is {state_text} on the source host. {MOUNT_ADVISORY_FACT}",
         unit.as_str()
     )];
+    // A merged finding is the whole finding of one host (`merge_items` in
+    // `inspectah_core::aggregate::merge`); the unit file staged may be
+    // another host's variant. A finding one host recorded, on a single
+    // host or an aggregate, has no other copy to differ from.
+    if finding.aggregate.as_ref().is_some_and(|a| a.count > 1) {
+        lines.push(MOUNT_MERGED_FROM_HOSTS.to_owned());
+    }
     let file_staged = is_staged(staged, &etc_unit_path(unit));
     if file_staged {
         lines.push(MOUNT_FILE_STAGED.to_owned());
@@ -661,11 +678,22 @@ pub fn mount_advisory_lines(
             .iter()
             .find(|top| is_or_is_under(path, top))
         {
-            lines.push(format!(
-                "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must \
-                 be renamed for the resolved path (for /srv: var-srv.mount with \
-                 Where=/var/srv)."
-            ));
+            // An automount keeps its suffix, and its matching mount unit
+            // is renamed with it (systemd.automount(5): an automount unit
+            // needs a mount unit of the same name).
+            lines.push(if name.kind() == StorageKind::Automount {
+                format!(
+                    "#   {top} is a symlink into /var in the RHEL bootc base image. The unit \
+                     must be renamed for the resolved path (for /srv: var-srv.automount with \
+                     Where=/var/srv), and so must its matching mount unit (var-srv.mount)."
+                )
+            } else {
+                format!(
+                    "#   {top} is a symlink into /var in the RHEL bootc base image. The unit \
+                     must be renamed for the resolved path (for /srv: var-srv.mount with \
+                     Where=/var/srv)."
+                )
+            });
             renamed = true;
         }
         if let Some(top) = BASE_IMAGE_DIRECTORIES

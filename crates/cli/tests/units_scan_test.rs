@@ -2539,6 +2539,18 @@ fn var_symlink_line(top: &str) -> String {
          for the resolved path (for /srv: var-srv.mount with Where=/var/srv)."
     )
 }
+/// The rename line for an automount, which keeps its suffix and has a
+/// matching mount unit (decided by the project owner, 2026-11-14).
+fn automount_var_symlink_line(top: &str) -> String {
+    format!(
+        "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
+         for the resolved path (for /srv: var-srv.automount with Where=/var/srv), and so must \
+         its matching mount unit (var-srv.mount)."
+    )
+}
+/// The line for a finding merged from more than one host.
+const MERGED_LINE: &str =
+    "#   This describes one host's copy of the unit; the copy staged may differ.";
 fn opt_line(path: &str) -> String {
     format!(
         "#   /opt is a directory of the read-only image in the RHEL bootc base image, not a link \
@@ -2548,8 +2560,9 @@ fn opt_line(path: &str) -> String {
 }
 const TMP_MOUNT_LINE: &str = "#   The bootc base image starts tmp.mount from a link it ships, \
      so this file replaces the unit that mounts /tmp on the target.";
-const NOFAIL_LINE: &str = "#   No nofail option. If the unit is started at boot and its device \
-     is missing, units that require it fail, and boot can stop in emergency mode.";
+const NOFAIL_LINE: &str = "#   No nofail option in the unit file. If the unit is started at \
+     boot and its device is missing, units that require it fail, and boot can stop in emergency \
+     mode.";
 fn carry_line(verb: &str, unit: &str) -> String {
     format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
 }
@@ -2805,7 +2818,7 @@ fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
             vec![
                 advisory_fact("srv-data.automount", "enabled"),
                 FILE_STAGED_LINE.to_owned(),
-                var_symlink_line("/srv"),
+                automount_var_symlink_line("/srv"),
             ],
         ),
         (
@@ -2956,7 +2969,9 @@ fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
             None,
         ));
         let mut expected = vec![advisory_fact(unit, "enabled")];
-        if under_srv {
+        if under_srv && unit.ends_with(".automount") {
+            expected.push(automount_var_symlink_line("/srv"));
+        } else if under_srv {
             expected.push(var_symlink_line("/srv"));
         }
         if has_options {
@@ -3435,6 +3450,8 @@ fn t18_a_case(package_hostname: &str, copy_hostname: &str) {
     // Current behavior, recorded for the project owner, not a requirement:
     // the merged finding's advisory still renders beside the enable the
     // plan now writes. Only its unit-file line follows the excluded file.
+    // The finding is one host's, the only host that recorded the unit, so
+    // the advisory has no line saying the staged copy may differ.
     let advisory = advisory_for(&containerfile, UNIT);
     assert_eq!(
         advisory,
@@ -3621,8 +3638,9 @@ fn a_mount_unit_with_drop_ins_gets_no_nofail_line() {
 /// merged finding is the first host's mask. While the file's config row is
 /// included, the advisory gives no mask recipe, since `systemctl mask`
 /// fails on the occupied path; excluded (the default, as the file is on
-/// one host of two), the recipe is there. Through `merge_snapshots`, a
-/// refine session and its export.
+/// one host of two), the recipe is there. Both hosts recorded the unit, so
+/// the advisory says the staged copy may differ from the one it describes.
+/// Through `merge_snapshots`, a refine session and its export.
 #[test]
 fn a_merged_mask_finding_beside_a_staged_file_gets_no_mask_recipe() {
     const UNIT: &str = "data.mount";
@@ -3653,7 +3671,11 @@ fn a_merged_mask_finding_beside_a_staged_file_gets_no_mask_recipe() {
     assert!(!staged_at(&tree, &path), "the file starts excluded");
     assert_eq!(
         advisory_for(&containerfile, UNIT),
-        [advisory_fact(UNIT, "masked"), carry_line("mask", UNIT)],
+        [
+            advisory_fact(UNIT, "masked"),
+            MERGED_LINE.to_owned(),
+            carry_line("mask", UNIT)
+        ],
         "{containerfile}"
     );
 
@@ -3665,7 +3687,11 @@ fn a_merged_mask_finding_beside_a_staged_file_gets_no_mask_recipe() {
     assert!(staged_at(&tree, &path), "the file is staged");
     assert_eq!(
         advisory_for(&containerfile, UNIT),
-        [advisory_fact(UNIT, "masked"), FILE_STAGED_LINE.to_owned()],
+        [
+            advisory_fact(UNIT, "masked"),
+            MERGED_LINE.to_owned(),
+            FILE_STAGED_LINE.to_owned()
+        ],
         "{containerfile}"
     );
     assert!(only_comments_name(&containerfile, UNIT), "{containerfile}");
@@ -3674,7 +3700,9 @@ fn a_merged_mask_finding_beside_a_staged_file_gets_no_mask_recipe() {
 /// § 12: two hosts with the same administrator's mount unit merge to one
 /// finding counted on both, and the aggregate's Containerfile shows its
 /// advisory once, on the scan and the refine route. No instruction names
-/// the unit.
+/// the unit. The advisory says, after its first line, that it describes
+/// one host's copy, and the refine view's row carries the same lines. The
+/// control, a single-host scan with no such line, is T9.
 #[test]
 fn an_aggregate_shows_a_shared_mount_advisory_once() {
     const UNIT: &str = "srv.mount";
@@ -3697,14 +3725,23 @@ fn an_aggregate_shows_a_shared_mount_advisory_once() {
         findings[0].aggregate.as_ref().map(|a| (a.count, a.total)),
         Some((2, 2))
     );
+    let expected = [
+        advisory_fact(UNIT, "enabled"),
+        MERGED_LINE.to_owned(),
+        FILE_STAGED_LINE.to_owned(),
+        var_symlink_line("/srv"),
+    ];
+    let refine = session(&merged);
+    let rows = &refine.decisions().mount_findings;
+    let row = rows
+        .iter()
+        .find(|r| r.unit.as_str() == UNIT)
+        .unwrap_or_else(|| panic!("no row for {UNIT}: {rows:?}"));
+    assert_eq!(row.advisories, expected, "the refine view's row");
     for (route, containerfile) in both_routes(&merged) {
         assert_eq!(
             advisory_for(&containerfile, UNIT),
-            [
-                advisory_fact(UNIT, "enabled"),
-                FILE_STAGED_LINE.to_owned(),
-                var_symlink_line("/srv"),
-            ],
+            expected,
             "{route}:\n{containerfile}"
         );
         let first = format!("# Advisory: {UNIT} is ");
@@ -3729,9 +3766,11 @@ fn an_aggregate_shows_a_shared_mount_advisory_once() {
 /// to one finding, `host-a`'s whole finding (the two tie, and the tie goes
 /// to the first host by hostname). The advisory describes that finding
 /// whichever config variant is staged, so with `host-b`'s file staged it
-/// still has no line warning that the file lacks `nofail`. Control: with
-/// the hostnames swapped, the finding is the host without `nofail` and the
-/// line is there.
+/// still has no line warning that the file lacks `nofail`. The limit
+/// remains; the advisory now discloses it, with a line after its first
+/// saying it describes one host's copy and the copy staged may differ.
+/// Control: with the hostnames swapped, the finding is the host without
+/// `nofail` and the line is there.
 #[test]
 fn a_merged_mount_finding_describes_one_hosts_file_whatever_variant_is_staged() {
     const UNIT: &str = "srv.mount";
@@ -3789,6 +3828,7 @@ fn a_merged_mount_finding_describes_one_hosts_file_whatever_variant_is_staged() 
             advisory_for(&containerfile, UNIT),
             [
                 advisory_fact(UNIT, "enabled"),
+                MERGED_LINE.to_owned(),
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
             ],
