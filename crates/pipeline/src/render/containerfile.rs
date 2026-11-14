@@ -27,8 +27,8 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::configtree::{
-    StagedFileKind, UnstagedWhy, is_staged, staged_unit_file, staged_writes, unstaged_files,
-    validate_path,
+    StagedFileKind, UnstagedWhy, is_staged, staged_count, staged_unit_file, staged_writes,
+    stages_config_unit_dir, unstaged_files, validate_path,
 };
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
@@ -1228,16 +1228,10 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 // --- Service Drop-ins section ---
 
 fn drop_ins_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let services = match &snap.units {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-
-    let included_count = services
-        .drop_ins
-        .iter()
-        .filter(|d| d.disposition.is_included())
-        .count();
+    // Counted from what the stager writes under `drop-ins/`: a drop-in it
+    // withholds is named in the config section's FIXME, and with none
+    // written there is no tree to copy.
+    let included_count = staged_count(&staged_writes(snap), StagedFileKind::DropIn);
     if included_count == 0 {
         return Vec::new();
     }
@@ -1349,7 +1343,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut body = Vec::new();
 
-    if !local_timers.is_empty() || !included_timers.is_empty() {
+    // Only when the stager writes something there: a local timer's file
+    // may be carried by a drop-in row under `drop-ins/` instead.
+    if (!local_timers.is_empty() || !included_timers.is_empty())
+        && stages_config_unit_dir(&staged_writes(snap))
+    {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 

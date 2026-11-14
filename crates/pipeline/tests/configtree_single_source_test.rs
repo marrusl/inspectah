@@ -195,6 +195,11 @@ fn export(snap: &InspectionSnapshot) -> (TempDir, String) {
     (dir, containerfile)
 }
 
+/// The drop-ins section's `COPY` line.
+const DROP_INS_COPY: &str = "COPY drop-ins/etc/systemd/system/ /etc/systemd/system/";
+/// The scheduled section's `COPY` line.
+const SCHEDULED_COPY: &str = "COPY config/etc/systemd/system/ /etc/systemd/system/";
+
 /// The FIXME line that names `path`, if any.
 fn fixme_naming<'a>(containerfile: &'a str, path: &str) -> Option<&'a str> {
     containerfile
@@ -438,7 +443,37 @@ fn t12_a_zero_length_unit_file_is_withheld_from_every_offer() {
             fixme_naming(&containerfile, UNIT).is_some(),
             "{label}:\n{containerfile}"
         );
+        // Nothing was written under `drop-ins/`, so nothing copies it.
+        assert!(
+            !containerfile.contains(DROP_INS_COPY),
+            "{label}: a COPY of a drop-in tree the export did not write:\n{containerfile}"
+        );
     }
+
+    // Reversed control: the withheld drop-in beside one that is staged.
+    // The COPY is back, and the count is the staged one.
+    let snap = staged_snapshot(
+        vec![],
+        vec![
+            drop_in("kdump.service", UNIT, ""),
+            drop_in(
+                "sshd.service",
+                "/etc/systemd/system/sshd.service.d/override.conf",
+                "[Service]\nNice=5\n",
+            ),
+        ],
+    );
+    let (dir, containerfile) = export(&snap);
+    assert!(
+        dir.path()
+            .join("drop-ins/etc/systemd/system/sshd.service.d/override.conf")
+            .is_file()
+    );
+    assert!(containerfile.contains(DROP_INS_COPY), "{containerfile}");
+    assert!(
+        containerfile.contains("# 1 service drop-in(s)"),
+        "the count is what the export writes:\n{containerfile}"
+    );
 
     // Positive controls: the same offers with content, and empty files
     // that are not unit files.
@@ -491,4 +526,47 @@ fn a_write_into_a_read_only_directory_fails_the_export() {
         err.to_string().contains("etc/app"),
         "the error names the path: {err}"
     );
+}
+
+/// A local timer whose file a drop-in row carries (an administrator's copy
+/// of a vendor timer): the file is staged under `drop-ins/` and nothing is
+/// written under `config/etc/systemd/system/`, so the scheduled section
+/// does not copy that directory. Reversed control: without the drop-in
+/// row the local timer's file is written there and the `COPY` is present.
+#[test]
+fn the_scheduled_copy_follows_what_the_export_writes() {
+    use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+    const TIMER: &str = "/etc/systemd/system/backup.timer";
+    const BODY: &str = "[Timer]\nOnCalendar=daily\n";
+    let with_timer = |mut snap: InspectionSnapshot| {
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            systemd_timers: vec![SystemdTimer {
+                name: "backup".into(),
+                source: "local".into(),
+                path: TIMER.into(),
+                timer_content: BODY.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap
+    };
+
+    let snap = with_timer(staged_snapshot(
+        vec![],
+        vec![drop_in("backup.timer", TIMER, BODY)],
+    ));
+    let (dir, containerfile) = export(&snap);
+    assert!(dir.path().join("drop-ins").join(&TIMER[1..]).is_file());
+    assert!(!dir.path().join("config/etc/systemd/system").exists());
+    assert!(
+        !containerfile.contains(SCHEDULED_COPY),
+        "a COPY of a directory the export did not write:\n{containerfile}"
+    );
+
+    let snap = with_timer(staged_snapshot(vec![], vec![]));
+    let (dir, containerfile) = export(&snap);
+    assert!(dir.path().join("config").join(&TIMER[1..]).is_file());
+    assert!(containerfile.contains(SCHEDULED_COPY), "{containerfile}");
 }

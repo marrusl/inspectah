@@ -636,6 +636,25 @@ pub(crate) fn unstaged_files(snap: &InspectionSnapshot) -> Vec<Unstaged> {
     refused.chain(withheld).collect()
 }
 
+/// How many files of `kind` the export writes, by [`staged_writes`].
+pub(crate) fn staged_count(staged: &StagedWrites<'_>, kind: StagedFileKind) -> usize {
+    staged.writes.values().filter(|w| w.source == kind).count()
+}
+
+/// Whether the export writes any file under `config/etc/systemd/system/`,
+/// the directory the scheduled section copies, by [`staged_writes`].
+pub(crate) fn stages_config_unit_dir(staged: &StagedWrites<'_>) -> bool {
+    staged.writes.iter().any(|(dest, write)| {
+        !matches!(
+            write.source,
+            StagedFileKind::DropIn | StagedFileKind::FlatpakService
+        ) && dest
+            .as_str()
+            .strip_prefix(ETC_UNIT_DIR)
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
 /// Whether the export writes a file at `path`, by [`staged_writes`].
 pub(crate) fn is_staged(staged: &StagedWrites<'_>, path: &str) -> bool {
     Destination::new(path).is_ok_and(|dest| staged.writes.contains_key(&dest))
