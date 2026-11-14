@@ -35,6 +35,7 @@ function makeService(
     fragment: "vendor",
     triage: TRIAGE,
     include: true,
+    locked: false,
     current_state: "enabled",
     ...overrides,
   };
@@ -48,6 +49,7 @@ function makeDropin(
     path: ORPHAN_PATH,
     triage: TRIAGE,
     include: true,
+    locked: false,
     ...overrides,
   };
 }

@@ -46,6 +46,7 @@ function makeService(
     fragment: "vendor",
     triage: makeTriage("site"),
     include: true,
+    locked: false,
     current_state: "enabled",
     ...overrides,
   };
@@ -59,6 +60,7 @@ function makeDropin(
     path: "/etc/systemd/system/httpd.service.d/override.conf",
     triage: makeTriage("site"),
     include: true,
+    locked: false,
     ...overrides,
   };
 }

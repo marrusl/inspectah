@@ -37,6 +37,7 @@ function dropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionDto {
     path: DROPIN_PATH,
     triage: TRIAGE,
     include: true,
+    locked: false,
     ...overrides,
   };
 }

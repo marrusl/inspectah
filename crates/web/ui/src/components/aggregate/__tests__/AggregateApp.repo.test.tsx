@@ -94,6 +94,7 @@ function makeMemberItem(name: string, include: boolean): AggregateItem {
   return {
     item_id: { kind: "Package", key: { name, arch: "x86_64" } },
     include,
+    locked: false,
     triage: { bucket: "universal", prevalence: { count: 3, total: 3 } },
     prevalence: { count: 3, total: 3 },
     source_repo: "vendor",

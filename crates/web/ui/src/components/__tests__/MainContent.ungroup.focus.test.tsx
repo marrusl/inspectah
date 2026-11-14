@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MainContent } from "../MainContent";
 import type { ViewResponse, GroupInfo, GroupMemberInfo } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the API client
 vi.mock("../../api/client", () => ({
@@ -10,26 +11,9 @@ vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
 }));
 
-/** Minimal ViewResponse that renders without crashing. */
-function makeViewData(
-  groups: GroupInfo[],
-  generation = 1,
-): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: groups,
-    generation,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-  };
+/** A view whose only content is its package groups. */
+function makeViewData(groups: GroupInfo[], generation = 1): ViewResponse {
+  return emptyView({ package_groups: groups, generation });
 }
 
 describe("MainContent undo focus restoration", () => {
@@ -62,14 +46,14 @@ describe("MainContent undo focus restoration", () => {
     const onSetUndoFocusTarget = vi.fn();
 
     vi.mocked(client.ungroupGroup).mockResolvedValue(
-      updatedView as ViewResponse,
+      updatedView,
     );
 
     render(
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={mockViewData as ViewResponse}
+        viewData={mockViewData}
         sections={null}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
@@ -116,14 +100,14 @@ describe("MainContent undo focus restoration", () => {
     const onSetUndoFocusTarget = vi.fn();
 
     vi.mocked(client.ungroupGroup).mockResolvedValue(
-      updatedView as ViewResponse,
+      updatedView,
     );
 
     render(
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={mockViewData as ViewResponse}
+        viewData={mockViewData}
         sections={null}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}

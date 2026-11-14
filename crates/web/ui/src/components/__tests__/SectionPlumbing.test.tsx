@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainContent } from "../MainContent";
 import type { ViewResponse } from "../../api/types";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the API client (required by MainContent internals)
 vi.mock("../../api/client", () => ({
@@ -10,26 +11,9 @@ vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
 }));
 
-/** Minimal ViewResponse that renders without crashing for non-package sections. */
-function makeViewData(
-  overrides: Partial<ViewResponse> = {},
-): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: [],
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-    ...overrides,
-  };
+/** An empty view with a test's fields over it. */
+function makeViewData(overrides: Partial<ViewResponse> = {}): ViewResponse {
+  return emptyView(overrides);
 }
 
 const langPkgFixture: ViewResponse["language_packages"] = [
@@ -114,7 +98,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -129,7 +113,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -146,7 +130,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -168,7 +152,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -187,7 +171,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         revealItemId="pip:/opt/myapp/venv"
@@ -205,7 +189,7 @@ describe("MainContent — Language Packages section", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         onToggleLangEnv={onToggleLangEnv}
@@ -232,7 +216,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -247,7 +231,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -264,7 +248,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -288,7 +272,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -308,7 +292,7 @@ describe("MainContent — Unmanaged Files section", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         onToggleUnmanagedFile={onToggleUnmanagedFile}
@@ -335,7 +319,7 @@ describe("MainContent — Focus management", () => {
         viewData={
           makeViewData({
             language_packages: langPkgFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -358,7 +342,7 @@ describe("MainContent — Focus management", () => {
         viewData={
           makeViewData({
             unmanaged_files: unmanagedFixture,
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
         sectionSearchOpen={true}
@@ -391,6 +375,7 @@ describe("MainContent: unit section", () => {
       fragment: "vendor",
       triage,
       include: true,
+      locked: false,
       current_state: "disabled",
       default_state: "enable",
     },
@@ -404,6 +389,7 @@ describe("MainContent: unit section", () => {
       path: "/etc/systemd/system/sshd.service",
       triage,
       include: true,
+      locked: false,
       shadow_type: "full_shadow",
       shadow_rationale: "Full unit override replaces vendor sshd.service",
     },
@@ -412,6 +398,7 @@ describe("MainContent: unit section", () => {
       path: "/etc/systemd/system/kdump.service.d/override.conf",
       triage,
       include: true,
+      locked: false,
       shadow_type: "drop_in",
     },
   ];
@@ -425,7 +412,7 @@ describe("MainContent: unit section", () => {
             unit_states: unitStates,
             unit_dropins: [],
             mount_findings: [],
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,
@@ -445,7 +432,7 @@ describe("MainContent: unit section", () => {
             unit_states: unitStates,
             unit_dropins: unitDropins,
             mount_findings: [],
-          }) as ViewResponse
+          })
         }
         {...defaultProps}
       />,

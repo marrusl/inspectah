@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MainContent } from "../MainContent";
 import type { ViewResponse, ReferenceSection } from "../../api/types";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the API client
 vi.mock("../../api/client", () => ({
@@ -9,23 +10,9 @@ vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
 }));
 
-/** Minimal ViewResponse that renders without crashing. */
-function makeViewData(): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: [],
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-  };
+/** A view with nothing in it. */
+function makeViewData(): ViewResponse {
+  return emptyView();
 }
 
 /** Minimal ReferenceSection for network. */
@@ -56,7 +43,7 @@ describe("MainContent ifcfg deprecation banner", () => {
       <MainContent
         activeSection="network"
         loading={false}
-        viewData={viewData as ViewResponse}
+        viewData={viewData}
         sections={sections}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
@@ -81,7 +68,7 @@ describe("MainContent ifcfg deprecation banner", () => {
       <MainContent
         activeSection="network"
         loading={false}
-        viewData={viewData as ViewResponse}
+        viewData={viewData}
         sections={sections}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}
@@ -101,7 +88,7 @@ describe("MainContent ifcfg deprecation banner", () => {
       <MainContent
         activeSection="network"
         loading={false}
-        viewData={viewData as ViewResponse}
+        viewData={viewData}
         sections={sections}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}

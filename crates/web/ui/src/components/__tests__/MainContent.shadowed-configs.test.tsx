@@ -69,6 +69,7 @@ const DROPIN: DropInDecisionDto = {
   path: DROPIN_PATH,
   triage: TRIAGE,
   include: false,
+  locked: false,
 };
 
 const props = {

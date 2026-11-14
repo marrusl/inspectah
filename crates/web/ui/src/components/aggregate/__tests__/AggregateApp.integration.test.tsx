@@ -97,6 +97,7 @@ function mockAggregateItem(overrides?: Partial<AggregateItem>): AggregateItem {
   return {
     item_id: { kind: "Package", key: { name: "httpd", arch: "x86_64" } },
     include: true,
+    locked: false,
     triage: {
       bucket: "universal" as const,
       prevalence: { count: 3, total: 3 },

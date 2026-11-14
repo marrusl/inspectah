@@ -128,6 +128,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
         annotations: [],
       },
       include: true,
+      locked: false,
       current_state: "enabled",
     },
   ],
@@ -276,6 +277,7 @@ describe("Sidebar", () => {
         annotations: [],
       },
       include: true,
+      locked: false,
     };
     const { rerender } = render(
       <Sidebar
@@ -394,6 +396,7 @@ describe("Sidebar", () => {
             path: "/etc/systemd/system/sshd.service",
             triage: TRIAGE,
             include: true,
+            locked: false,
             shadow_type: "full_shadow",
             shadow_rationale: null,
           },
@@ -416,6 +419,7 @@ describe("Sidebar", () => {
             fragment: "vendor",
             triage: TRIAGE,
             include: true,
+            locked: false,
             current_state: "enabled",
           },
         ],
@@ -425,6 +429,7 @@ describe("Sidebar", () => {
             path: "/etc/systemd/system/httpd.service.d/override.conf",
             triage: TRIAGE,
             include: true,
+            locked: false,
             shadow_type: "drop_in",
           },
         ],
@@ -434,6 +439,21 @@ describe("Sidebar", () => {
         screen.queryByText("Services: 0 decisions remaining"),
       ).not.toBeInTheDocument();
     });
+
+    it.each(["unit_states", "unit_dropins"])(
+      "fails on a view without %s instead of counting it as empty",
+      (field) => {
+        // The tests above show the same view counted when the field is
+        // present. A required field the server stops sending must not read
+        // as an empty section.
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        const view = { ...MOCK_VIEW_DATA } as Record<string, unknown>;
+        delete view[field];
+        expect(() => renderUnits(view as unknown as ViewResponse)).toThrow(
+          TypeError,
+        );
+      },
+    );
 
     it("does not count a mount finding, which has no toggle", () => {
       // The count beside it above shows a row with a toggle is counted.

@@ -15,6 +15,7 @@ function makeItem(overrides?: Partial<AggregateItem>): AggregateItem {
   return {
     item_id: configItemId,
     include: true,
+    locked: false,
     triage: {
       bucket: "universal" as const,
       prevalence: { count: 3, total: 3 },

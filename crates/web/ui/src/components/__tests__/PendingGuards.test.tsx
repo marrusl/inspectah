@@ -35,6 +35,7 @@ import type {
   ViewResponse,
 } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 import * as crypt from "../../utils/crypt";
 
 vi.mock("../../api/client", () => ({
@@ -94,31 +95,11 @@ const PACKAGE = {
   },
 } as RefinedPackage;
 
-const VIEW = {
+const VIEW: ViewResponse = emptyView({
   packages: [PACKAGE],
-  config_files: [],
   repo_groups: [VENDOR],
   package_groups: [GROUP],
-  generation: 1,
-  stats: {
-    sections: [],
-    needs_review_count: 0,
-    ops_applied: 0,
-    can_undo: false,
-    can_redo: false,
-    baseline_available: false,
-  },
-  version_changes: [],
-  unit_states: [],
-  unit_dropins: [],
-  mount_findings: [],
-  quadlets: [],
-  flatpaks: [],
-  sysctl: { state: "unavailable", reason: "not collected" },
-  tuned: [],
-  users_groups_decisions: [],
-  session_is_sensitive: false,
-} as unknown as ViewResponse;
+});
 
 const QUADLET: QuadletDecisionDto = {
   path: "/etc/containers/systemd/myapp.container",
@@ -130,6 +111,7 @@ const QUADLET: QuadletDecisionDto = {
     annotations: [],
   },
   include: true,
+  locked: false,
 };
 
 const FLATPAK: FlatpakDecisionDto = {
@@ -142,6 +124,7 @@ const FLATPAK: FlatpakDecisionDto = {
     annotations: [],
   },
   include: true,
+  locked: false,
   lifecycle: "first_boot",
 };
 
@@ -154,6 +137,7 @@ const TUNED: TunedDecisionDto = {
     annotations: [],
   } as TunedDecisionDto["triage"],
   include: true,
+  locked: false,
 };
 
 const SERVICE: ServiceDecisionDto = {
@@ -166,6 +150,7 @@ const SERVICE: ServiceDecisionDto = {
     annotations: [],
   } as ServiceDecisionDto["triage"],
   include: true,
+  locked: false,
   current_state: "enabled",
 };
 
@@ -174,6 +159,7 @@ const DROPIN: DropInDecisionDto = {
   path: "/etc/systemd/system/httpd.service.d/override.conf",
   triage: SERVICE.triage,
   include: true,
+  locked: false,
 };
 
 const USER: UserDecision = {
@@ -201,7 +187,7 @@ function renderSection(
     <MainContent
       activeSection={activeSection}
       loading={false}
-      viewData={{ ...VIEW, ...view } as ViewResponse}
+      viewData={{ ...VIEW, ...view }}
       sections={null}
       onViewUpdate={vi.fn()}
       onMutationError={onMutationError}
@@ -586,7 +572,7 @@ describe.each(LIFETIME_CASES)(
       const props: MainContentProps = {
         activeSection: c.section,
         loading: false,
-        viewData: { ...VIEW, ...c.view } as ViewResponse,
+        viewData: { ...VIEW, ...c.view },
         sections: null,
         onViewUpdate: vi.fn(),
         onMutationError: vi.fn(),
@@ -736,7 +722,7 @@ describe.each([
     const props: MainContentProps = {
       activeSection: "users_groups",
       loading: false,
-      viewData: { ...VIEW, users_groups_decisions: [USER] } as ViewResponse,
+      viewData: { ...VIEW, users_groups_decisions: [USER] },
       sections: null,
       onViewUpdate: vi.fn(),
       onMutationError,

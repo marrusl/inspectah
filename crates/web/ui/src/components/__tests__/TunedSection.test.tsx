@@ -43,6 +43,7 @@ function makeTuned(
     custom_profiles: [],
     triage: makeTriage("site"),
     include: true,
+    locked: false,
     ...overrides,
   };
 }

@@ -59,6 +59,7 @@ function makeDivergentItem(path: string, include = true): AggregateItem {
   return {
     item_id: { kind: "Config", key: { path } },
     include,
+    locked: false,
     triage: { bucket: "divergent", prevalence: { count: 1, total: 3 } },
     prevalence: { count: 1, total: 3 },
     source_repo: "",
@@ -186,6 +187,7 @@ describe("AggregateApp divergent review tracking", () => {
     const serviceItem: AggregateItem = {
       item_id: { kind: "Unit", key: { unit: "httpd.service" } },
       include: true,
+      locked: false,
       triage: { bucket: "universal", prevalence: { count: 3, total: 3 } },
       prevalence: { count: 3, total: 3 },
       source_repo: "",

@@ -82,6 +82,7 @@ function makeAggregateView(
               key: { name: "httpd", arch: "x86_64" },
             },
             include: true,
+            locked: false,
             triage: { bucket: "divergent", prevalence: { count: 2, total: 3 } },
             prevalence: { count: 2, total: 3 },
             source_repo: "appstream",
@@ -254,6 +255,7 @@ describe("AggregateSidebar", () => {
             key: { name: "httpd", arch: "x86_64" },
           },
           include: true,
+          locked: false,
           triage: {
             bucket: "divergent" as const,
             prevalence: { count: 2, total: 3 },
@@ -358,6 +360,7 @@ describe("AggregateSidebar", () => {
                   key: { ecosystem: "pip", path: "/usr/lib/python3/requirements.txt" },
                 },
                 include: true,
+                locked: false,
                 triage: {
                   bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
@@ -377,6 +380,7 @@ describe("AggregateSidebar", () => {
                   key: { ecosystem: "npm", path: "/opt/app/package.json" },
                 },
                 include: false,
+                locked: false,
                 triage: {
                   bucket: "divergent" as const,
                   prevalence: { count: 1, total: 3 },
@@ -431,6 +435,7 @@ describe("AggregateSidebar", () => {
                   key: { path: "/opt/app/data.db" },
                 },
                 include: true,
+                locked: false,
                 triage: {
                   bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
@@ -444,6 +449,7 @@ describe("AggregateSidebar", () => {
                   key: { path: "/var/log/custom.log" },
                 },
                 include: false,
+                locked: false,
                 triage: {
                   bucket: "universal" as const,
                   prevalence: { count: 3, total: 3 },
@@ -463,6 +469,7 @@ describe("AggregateSidebar", () => {
                   key: { path: "/etc/custom.conf" },
                 },
                 include: true,
+                locked: false,
                 triage: {
                   bucket: "divergent" as const,
                   prevalence: { count: 1, total: 3 },

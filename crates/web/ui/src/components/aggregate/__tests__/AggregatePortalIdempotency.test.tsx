@@ -104,6 +104,7 @@ function configItemWithVariants(): AggregateItem {
   return {
     item_id: { kind: "Config", key: { path: "/etc/httpd/conf/httpd.conf" } },
     include: true,
+    locked: false,
     triage: {
       bucket: "divergent" as const,
       prevalence: { count: 2, total: 3 },

@@ -89,21 +89,18 @@ function decisionCount(
   // including a full shadow whose unit has no state row.
   if (id === "units") {
     if (!viewData) return "...";
-    return String(
-      (viewData.unit_states?.length ?? 0) +
-        (viewData.unit_dropins?.length ?? 0),
-    );
+    // Required fields, read without a fallback: one the server stops
+    // sending fails here instead of counting as an empty section.
+    return String(viewData.unit_states.length + viewData.unit_dropins.length);
   }
   // Tuned rows only: the sysctl panel holds no decisions.
   if (id === "system_tuning") {
     if (!viewData) return "...";
-    return String(viewData.tuned?.length ?? 0);
+    return String(viewData.tuned.length);
   }
   if (id === "containers") {
     if (!viewData) return "...";
-    return String(
-      (viewData.quadlets?.length ?? 0) + (viewData.flatpaks?.length ?? 0),
-    );
+    return String(viewData.quadlets.length + viewData.flatpaks.length);
   }
   if (id === "language_packages") {
     if (!viewData) return "...";

@@ -37,6 +37,7 @@ function makeTuned(
     custom_profiles: [],
     triage: makeTunedTriage(),
     include: true,
+    locked: false,
     ...overrides,
   };
 }

@@ -17,6 +17,7 @@ const DROPIN: DropInDecisionDto = {
   path: DROPIN_PATH,
   triage: TRIAGE,
   include: true,
+  locked: false,
 };
 
 function renderSearch(onNavigate = vi.fn()) {

@@ -42,6 +42,7 @@ const mockAggregateView: AggregateViewResponse = {
                 key: { name: "httpd", arch: "x86_64" },
               },
               include: true,
+              locked: false,
               triage: {
                 bucket: "investigate" as const,
                 prevalence: { count: 4, total: 5 },

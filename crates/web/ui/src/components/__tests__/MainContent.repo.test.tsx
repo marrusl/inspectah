@@ -33,6 +33,7 @@ import type {
 } from "../../api/types";
 import { ApiError } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 
 vi.mock("../../api/client", () => ({
   ungroupGroup: vi.fn(),
@@ -82,30 +83,10 @@ function makeMemberPackage(
 }
 
 function makeView(repo: RepoGroupInfo): ViewResponse {
-  return {
+  return emptyView({
     packages: [makeMemberPackage("a", true), makeMemberPackage("b", true)],
-    config_files: [],
     repo_groups: [repo],
-    package_groups: [],
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-    version_changes: [],
-    unit_states: [],
-    unit_dropins: [],
-    quadlets: [],
-    flatpaks: [],
-    sysctl: { state: "unavailable", reason: "not collected" },
-    tuned: [],
-    users_groups_decisions: [],
-    session_is_sensitive: false,
-  } as unknown as ViewResponse;
+  });
 }
 
 // --- Stateful fake for applyOp: § 3.2's Repo arm, in one line ---

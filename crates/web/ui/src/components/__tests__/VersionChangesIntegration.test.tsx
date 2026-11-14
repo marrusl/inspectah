@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MainContent } from "../MainContent";
 import { VersionChangesTable } from "../VersionChangesTable";
+import { emptyView } from "../../test-utils/emptyView";
 import type {
   ViewResponse,
   ReferenceSection,
@@ -33,26 +34,9 @@ const upgrade: VersionChangeEntry = {
   direction: "upgrade",
 };
 
-/** Minimal ViewResponse that renders for version_changes. */
-function makeViewData(
-  versionChanges: VersionChangeEntry[],
-): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: [],
-    version_changes: versionChanges,
-    generation: 1,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-  };
+/** A view whose only content is its version changes. */
+function makeViewData(versionChanges: VersionChangeEntry[]): ViewResponse {
+  return emptyView({ version_changes: versionChanges });
 }
 
 /** Minimal sections array with a version_changes entry. */
@@ -89,7 +73,7 @@ describe("VersionChanges integration in MainContent", () => {
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={viewData as ViewResponse}
+        viewData={viewData}
         sections={sections}
         onViewUpdate={vi.fn()}
         onMutationError={vi.fn()}

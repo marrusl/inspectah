@@ -511,7 +511,7 @@ export interface ServiceDecisionDto {
   declined?: DeclinedView;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   owning_package?: string | null;
   default_state?: string | null;
@@ -524,7 +524,7 @@ export interface DropInDecisionDto {
   path: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   /** Shadow type (e.g. "full_shadow", "drop_in"). */
   shadow_type?: string | null;
@@ -692,7 +692,7 @@ export interface TunedDecisionDto {
   custom_profiles: string[];
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
 }
 
 // --- Container decision types (inspectah-web/src/handlers.rs) ---
@@ -704,7 +704,7 @@ export interface QuadletDecisionDto {
   image: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   content?: string | null;
 }
 
@@ -715,7 +715,7 @@ export interface FlatpakDecisionDto {
   branch: string;
   triage: TriageTag;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   lifecycle: string;
 }
 
@@ -1197,7 +1197,7 @@ export interface AggregateItemPrevalence {
 export interface AggregateItem {
   item_id: ItemId;
   include: boolean;
-  locked?: boolean;
+  locked: boolean;
   attention_reason?: string | null;
   triage: AggregateTriageDto;
   /** @deprecated Use triage.prevalence instead. */

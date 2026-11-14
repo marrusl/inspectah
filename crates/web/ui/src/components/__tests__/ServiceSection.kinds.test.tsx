@@ -35,6 +35,7 @@ function makeUnit(overrides: Partial<ServiceDecisionDto> = {}): ServiceDecisionD
     fragment: "vendor",
     triage: TRIAGE,
     include: true,
+    locked: false,
     current_state: "enabled",
     ...overrides,
   };
@@ -46,6 +47,7 @@ function makeDropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionD
     path: "/etc/systemd/system/httpd.service.d/override.conf",
     triage: TRIAGE,
     include: true,
+    locked: false,
     kind: "service",
     ...overrides,
   };

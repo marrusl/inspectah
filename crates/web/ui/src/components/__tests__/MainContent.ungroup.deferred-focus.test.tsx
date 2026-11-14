@@ -9,6 +9,7 @@ import {
 import { MainContent } from "../MainContent";
 import type { ViewResponse, GroupInfo, GroupMemberInfo } from "../../api/types";
 import * as client from "../../api/client";
+import { emptyView } from "../../test-utils/emptyView";
 
 // Mock the API client
 vi.mock("../../api/client", () => ({
@@ -16,26 +17,9 @@ vi.mock("../../api/client", () => ({
   applyOp: vi.fn(),
 }));
 
-/** Minimal ViewResponse that renders without crashing. */
-function makeViewData(
-  groups: GroupInfo[],
-  generation = 1,
-): Partial<ViewResponse> {
-  return {
-    packages: [],
-    config_files: [],
-    repo_groups: [],
-    package_groups: groups,
-    generation,
-    stats: {
-      sections: [],
-      needs_review_count: 0,
-      ops_applied: 0,
-      can_undo: false,
-      can_redo: false,
-      baseline_available: false,
-    },
-  };
+/** A view whose only content is its package groups. */
+function makeViewData(groups: GroupInfo[], generation = 1): ViewResponse {
+  return emptyView({ package_groups: groups, generation });
 }
 
 /** ViewResponse with real package entries (name.arch canonical form). */
@@ -43,7 +27,7 @@ function makeViewDataWithPackages(
   groups: GroupInfo[],
   packageNames: string[],
   generation = 1,
-): Partial<ViewResponse> {
+): ViewResponse {
   const base = makeViewData(groups, generation);
   base.packages = packageNames.map((nameArch) => {
     const dotIdx = nameArch.lastIndexOf(".");
@@ -106,14 +90,14 @@ describe("Deferred post-ungroup focus", () => {
     const onViewUpdate = vi.fn();
 
     vi.mocked(client.ungroupGroup).mockResolvedValue(
-      postUngroupView as ViewResponse,
+      postUngroupView,
     );
 
     const { rerender } = render(
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={initialView as ViewResponse}
+        viewData={initialView}
         sections={null}
         onViewUpdate={onViewUpdate}
         onMutationError={vi.fn()}
@@ -140,7 +124,7 @@ describe("Deferred post-ungroup focus", () => {
         <MainContent
           activeSection="packages"
           loading={false}
-          viewData={postUngroupView as ViewResponse}
+          viewData={postUngroupView}
           sections={null}
           onViewUpdate={onViewUpdate}
           onMutationError={vi.fn()}
@@ -198,14 +182,14 @@ describe("Deferred post-ungroup focus", () => {
     const onViewUpdate = vi.fn();
 
     vi.mocked(client.ungroupGroup).mockResolvedValue(
-      postUngroupView as ViewResponse,
+      postUngroupView,
     );
 
     const { rerender } = render(
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={initialView as ViewResponse}
+        viewData={initialView}
         sections={null}
         onViewUpdate={onViewUpdate}
         onMutationError={vi.fn()}
@@ -231,7 +215,7 @@ describe("Deferred post-ungroup focus", () => {
         <MainContent
           activeSection="packages"
           loading={false}
-          viewData={postUngroupView as ViewResponse}
+          viewData={postUngroupView}
           sections={null}
           onViewUpdate={onViewUpdate}
           onMutationError={vi.fn()}
@@ -290,14 +274,14 @@ describe("Deferred post-ungroup focus", () => {
     const onViewUpdate = vi.fn();
 
     vi.mocked(client.ungroupGroup).mockResolvedValue(
-      postUngroupView as ViewResponse,
+      postUngroupView,
     );
 
     const { rerender } = render(
       <MainContent
         activeSection="packages"
         loading={false}
-        viewData={initialView as ViewResponse}
+        viewData={initialView}
         sections={null}
         onViewUpdate={onViewUpdate}
         onMutationError={vi.fn()}
@@ -323,7 +307,7 @@ describe("Deferred post-ungroup focus", () => {
         <MainContent
           activeSection="packages"
           loading={false}
-          viewData={postUngroupView as ViewResponse}
+          viewData={postUngroupView}
           sections={null}
           onViewUpdate={onViewUpdate}
           onMutationError={vi.fn()}
