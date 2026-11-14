@@ -357,7 +357,9 @@ mod tests {
         // state private, so this pattern cannot name them here. Its guard
         // is in the type's own module, `crates/core/src/types/units.rs`
         // (`every_field_of_a_unit_state_change_is_classified`), with the
-        // same rule: no `..`, every field classified.
+        // same rule: no `..`, every field classified. The unit types nested
+        // in it and in `MountUnitFinding` are classified field by field
+        // there too (`every_field_of_a_nested_unit_type_is_classified`).
 
         // `units.inventory[]`. No `Default`, so the pattern sits in a
         // function that is never called, as the sysctl ones below.
@@ -375,7 +377,10 @@ mod tests {
         // file's config entry, which the config pass scrubs.
         fn _classify_mount_unit_finding(finding: MountUnitFinding) {
             let MountUnitFinding {
-                unit: _,         // exempt: a proved unit name, and the owning package's name
+                // exempt: a proved unit name, and the owning package's name.
+                // Every field inside is classified in `units.rs`
+                // (`every_field_of_a_nested_unit_type_is_classified`).
+                unit: _,
                 state_change: _, // exempt: a state and a preset
                 // EXEMPT, pinned by SENTINEL-MOUNT-POINT in the sweep below:
                 // an identifier, an absolute path from `Where=`.

@@ -1053,6 +1053,86 @@ mod tests {
         }
     }
 
+    /// The nested half of the redaction field guard: the outer patterns
+    /// (above, and in `crates/pipeline/src/render/mod.rs`) classify a row's
+    /// `unit` whole, so every type a `unit` field holds is destructured
+    /// here, where its private fields can be named: each enum matched with
+    /// no wildcard arm, each struct with no `..`. A field or variant added
+    /// to any of them stops the build here until it is classified.
+    #[test]
+    fn every_field_of_a_nested_unit_type_is_classified() {
+        fn _classify_carried_unit(unit: CarriedUnit) {
+            match unit {
+                CarriedUnit::Ordinary(OrdinaryUnit {
+                    name: _,     // exempt: a proved unit name
+                    fragment: _, // classified in `_classify_unit_fragment`
+                }) => {}
+                CarriedUnit::PackagedStorage(PackagedStorageUnit {
+                    name: _,           // exempt: a proved unit name
+                    owning_package: _, // exempt: an rpm package name
+                }) => {}
+            }
+        }
+
+        fn _classify_advisory_unit(unit: AdvisoryUnit) {
+            let AdvisoryUnit {
+                name: _, // exempt: a proved unit name
+                fragment,
+            } = unit;
+            match fragment {
+                AdminStorageFragment::Local => {}
+                AdminStorageFragment::Shadowed {
+                    owning_package: _, // exempt: an rpm package name
+                } => {}
+                AdminStorageFragment::UnownedVendor => {}
+                AdminStorageFragment::MaskOnly => {}
+            }
+        }
+
+        fn _classify_target_unit(unit: TargetUnit) {
+            let TargetUnit {
+                name: _,     // exempt: a proved unit name
+                fragment: _, // classified in `_classify_unit_fragment`
+            } = unit;
+        }
+
+        fn _classify_unit_subject(subject: UnitSubject) {
+            let UnitSubject {
+                name: _,     // exempt: a proved unit name
+                fragment: _, // classified in `_classify_unit_fragment`
+            } = subject;
+        }
+
+        fn _classify_unit_fragment(fragment: UnitFragment) {
+            match fragment {
+                UnitFragment::Vendor {
+                    file: _,           // exempt: a proved unit name
+                    owning_package: _, // exempt: an rpm package name
+                } => {}
+                UnitFragment::Local {
+                    file: _, // exempt: a proved unit name
+                } => {}
+                UnitFragment::Shadowed {
+                    file: _,           // exempt: a proved unit name
+                    owning_package: _, // exempt: an rpm package name
+                } => {}
+                UnitFragment::Absent => {}
+            }
+        }
+
+        fn _classify_unit_names(
+            name: UnitName,
+            ordinary: OrdinaryUnitName,
+            storage: StorageUnitName,
+            target: TargetUnitName,
+        ) {
+            let UnitName(_) = name; // exempt: a proved unit name
+            let OrdinaryUnitName(_) = ordinary; // exempt: a proved unit name
+            let StorageUnitName(_, _) = storage; // exempt: a proved unit name and its kind
+            let TargetUnitName(_) = target; // exempt: a proved unit name
+        }
+    }
+
     /// Expected outcome of parsing one name in the table test.
     enum Expect {
         Kind(UnitKind),
