@@ -132,6 +132,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -183,6 +184,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -220,6 +222,7 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -258,6 +261,7 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     // Make this unit also a config-tree timer unit
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
@@ -333,6 +337,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
         ],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -375,6 +380,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -414,6 +420,7 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
         systemd_timers: vec![inspectah_core::types::scheduled::SystemdTimer {
@@ -469,6 +476,7 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
         systemd_timers: vec![inspectah_core::types::scheduled::SystemdTimer {
@@ -541,6 +549,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -592,6 +601,7 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         )],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
 
     let plan = render_service_intent(&snap);
@@ -651,6 +661,7 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
             )],
             inventory: vec![],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
         snap
     };
@@ -913,6 +924,7 @@ fn test_service_presence_tiers_table() {
                 )],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             });
 
             let plan = render_service_intent(&snap);
@@ -996,6 +1008,7 @@ fn leaf_snapshot(
         state_changes: changes,
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap
 }
@@ -1388,6 +1401,7 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             state_changes: vec![change()],
             inventory: vec![],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         };
 
         let mut excluded = InspectionSnapshot::new();

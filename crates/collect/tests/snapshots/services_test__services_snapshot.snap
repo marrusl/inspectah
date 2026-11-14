@@ -101,5 +101,6 @@ expression: section
       "variant_selection": "Only",
       "aggregate": null
     }
-  ]
+  ],
+  "mount_findings": []
 }

@@ -2101,6 +2101,7 @@ fn full_shadow_snapshot() -> InspectionSnapshot {
             shadow_rationale: Some("replaces the vendor unit".into()),
             ..Default::default()
         }],
+        mount_findings: Vec::new(),
     });
     snap
 }
@@ -2415,6 +2416,7 @@ fn cascade_snapshot() -> InspectionSnapshot {
             drop_in(OTHER_UNIT, OTHER_DROP_IN),
             drop_in(DROP_IN_ONLY_UNIT, DROP_IN_ONLY_PATH),
         ],
+        mount_findings: Vec::new(),
     });
     snap
 }

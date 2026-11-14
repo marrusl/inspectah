@@ -74,6 +74,7 @@ fn snapshot() -> InspectionSnapshot {
         }],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap
 }

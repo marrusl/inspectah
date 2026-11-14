@@ -413,6 +413,7 @@ fn units_snapshot() -> InspectionSnapshot {
             shadow_type: Some(ShadowType::FullShadow),
             ..Default::default()
         }],
+        mount_findings: Vec::new(),
     });
     snap
 }

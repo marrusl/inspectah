@@ -497,6 +497,7 @@ fn incompatible_units_are_locked_out_and_others_left_alone() {
                 ..Default::default()
             })
             .collect(),
+        mount_findings: Vec::new(),
     });
 
     normalize_incompatible_services(&mut snap);

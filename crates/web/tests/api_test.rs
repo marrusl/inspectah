@@ -569,6 +569,7 @@ fn units_view_state() -> Arc<AppState> {
             },
         ],
         inventory: vec![],
+        mount_findings: Vec::new(),
     });
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
@@ -1139,6 +1140,7 @@ fn rich_snapshot() -> InspectionSnapshot {
                 preset: None,
             },
         ],
+        mount_findings: Vec::new(),
     });
 
     snap.containers = Some(ContainerSection {
@@ -2237,6 +2239,7 @@ fn service_subsection_state() -> Arc<AppState> {
         ],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap.warnings.push(Warning {
         inspector: "units".into(),
@@ -2432,6 +2435,7 @@ fn locked_package_state() -> Arc<AppState> {
         state_changes: vec![],
         inventory: vec![],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     });
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {

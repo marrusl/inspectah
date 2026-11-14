@@ -5254,6 +5254,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         }
@@ -5888,6 +5889,7 @@ mod tests {
                     preset: None,
                 }],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -5966,6 +5968,7 @@ mod tests {
                     preset: None,
                 }],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -6385,6 +6388,7 @@ mod tests {
                 state_changes: vec![],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             config: Some(ConfigSection { files: vec![] }),
             ..Default::default()

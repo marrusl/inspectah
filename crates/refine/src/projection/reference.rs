@@ -1090,6 +1090,7 @@ mod tests {
                     preset: None,
                 }],
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1130,6 +1131,7 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1167,6 +1169,7 @@ mod tests {
                     preset: Some(PresetDefault::Enable),
                 }],
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1203,6 +1206,7 @@ mod tests {
                     },
                 ],
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1241,6 +1245,7 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1289,6 +1294,7 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1346,6 +1352,7 @@ mod tests {
                     },
                 ],
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1370,6 +1377,7 @@ mod tests {
                 state_changes: Vec::new(),
                 inventory: Vec::new(),
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             warnings: vec![
                 Warning {
@@ -1412,6 +1420,7 @@ mod tests {
                 }],
                 inventory: Vec::new(),
                 drop_ins: Vec::new(),
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         };

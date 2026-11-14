@@ -1634,6 +1634,7 @@ mod anaconda_classification {
             state_changes: vec![],
             inventory: vec![],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         }
     }
 
@@ -1771,6 +1772,7 @@ mod anaconda_classification {
                 }],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             Some(ConfigSection {
                 files: vec![ConfigFileEntry {
@@ -2097,6 +2099,7 @@ mod anaconda_classification {
                 }],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {
@@ -2152,6 +2155,7 @@ mod anaconda_classification {
                 }],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {

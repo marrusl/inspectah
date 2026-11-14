@@ -208,6 +208,446 @@ impl<'a> InstanceName<'a> {
     }
 }
 
+/// A [`UnitName`] proved to be of an ordinary kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrdinaryUnitName(UnitName);
+
+impl OrdinaryUnitName {
+    /// The proved name.
+    pub fn as_unit_name(&self) -> &UnitName {
+        &self.0
+    }
+}
+
+/// A [`UnitName`] proved to be a mount, automount or swap unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageUnitName(UnitName);
+
+impl StorageUnitName {
+    /// The proved name.
+    pub fn as_unit_name(&self) -> &UnitName {
+        &self.0
+    }
+}
+
+/// A [`UnitName`] proved to be a `.target`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetUnitName(UnitName);
+
+impl TargetUnitName {
+    /// The proved name.
+    pub fn as_unit_name(&self) -> &UnitName {
+        &self.0
+    }
+}
+
+/// The unit file behind a name on the source host (§ 7.2 of the units
+/// spec). `file` is the name of the file that loads: the unit's own name,
+/// or its template's for an instance that has no file of its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "fragment", rename_all = "snake_case")]
+pub enum UnitFragment {
+    /// Under `/usr/lib/systemd/system` only. `owning_package` is `None`
+    /// when no package owns the file or the RPM query failed.
+    Vendor {
+        file: UnitName,
+        owning_package: Option<String>,
+    },
+    /// Under `/etc/systemd/system` only: a file the administrator wrote.
+    Local { file: UnitName },
+    /// Both. The `/etc` file replaces the vendor one.
+    Shadowed {
+        file: UnitName,
+        owning_package: Option<String>,
+    },
+    /// No unit file at all. Only a masked name can have this.
+    Absent,
+}
+
+impl UnitFragment {
+    /// The name of the file that loads, when there is one.
+    pub fn file(&self) -> Option<&UnitName> {
+        match self {
+            Self::Vendor { file, .. } | Self::Local { file } | Self::Shadowed { file, .. } => {
+                Some(file)
+            }
+            Self::Absent => None,
+        }
+    }
+}
+
+/// Why a unit and its fragment cannot be the value asked for. Each variant
+/// names the rule that refused it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum UnitSubjectError {
+    /// The fragment's file is not the unit's own name or its template's.
+    #[error(
+        "unit file {} is neither {} nor its template",
+        file.as_str(),
+        name.as_str()
+    )]
+    FileNotUnitOrTemplate { name: UnitName, file: UnitName },
+    /// `classify` placed the unit as advisory where a carried unit was asked
+    /// for.
+    #[error(
+        "classify places {} ({fragment}) as advisory, not carried: a mount, automount \
+         or swap unit is carried only under the vendor directory with a known owning package",
+        name.as_str()
+    )]
+    AdvisoryNotCarried {
+        name: UnitName,
+        fragment: AdminStorageFragment,
+    },
+    /// `classify` placed the unit as carried where an advisory unit was asked
+    /// for.
+    #[error(
+        "classify places {} as carried, not advisory: an ordinary unit, or a mount, \
+         automount or swap unit under the vendor directory with a known owning package, \
+         is a state change and not a mount finding",
+        name.as_str()
+    )]
+    CarriedNotAdvisory { name: UnitName },
+    /// The unit is not a `.target`, the only operand `set-default` takes.
+    #[error(
+        "{} is not a .target unit: set-default takes a target only",
+        name.as_str()
+    )]
+    NotTarget { name: UnitName },
+}
+
+/// The wire form of a unit and its fragment:
+/// `{"name": "tmp.mount", "fragment": "vendor", "file": "tmp.mount",
+///   "owning_package": "systemd"}`.
+///
+/// The fields are private: [`UnitSubject::new`] checks the fragment's file
+/// against the name, and [`UnitSubject::classify`] trusts that check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "UnitSubjectWire")]
+pub struct UnitSubject {
+    name: UnitName,
+    #[serde(flatten)]
+    fragment: UnitFragment,
+}
+
+/// The unchecked wire form [`UnitSubject`] is deserialized through.
+#[derive(Deserialize)]
+struct UnitSubjectWire {
+    name: UnitName,
+    #[serde(flatten)]
+    fragment: UnitFragment,
+}
+
+impl TryFrom<UnitSubjectWire> for UnitSubject {
+    type Error = UnitSubjectError;
+
+    fn try_from(wire: UnitSubjectWire) -> Result<Self, Self::Error> {
+        Self::new(wire.name, wire.fragment)
+    }
+}
+
+impl UnitSubject {
+    /// A unit and its fragment, refused when the fragment's file is
+    /// neither the unit's name nor its template's.
+    pub fn new(name: UnitName, fragment: UnitFragment) -> Result<Self, UnitSubjectError> {
+        if let Some(file) = fragment.file() {
+            let is_template = name
+                .instance()
+                .is_some_and(|parts| parts.template() == *file);
+            if *file != name && !is_template {
+                return Err(UnitSubjectError::FileNotUnitOrTemplate {
+                    name,
+                    file: file.clone(),
+                });
+            }
+        }
+        Ok(Self { name, fragment })
+    }
+
+    /// The unit's name.
+    pub fn name(&self) -> &UnitName {
+        &self.name
+    }
+
+    /// The unit file behind the name.
+    pub fn fragment(&self) -> &UnitFragment {
+        &self.fragment
+    }
+
+    /// Total: every name and fragment is exactly one of the two. This is
+    /// the one place the rule in § 2 of the units spec is written: a mount,
+    /// automount or swap unit is carried only under the vendor directory
+    /// with a known owning package.
+    pub fn classify(self) -> Classified {
+        let Self { name, fragment } = self;
+        let UnitKind::Storage(_) = name.kind() else {
+            return Classified::Carried(CarriedUnit::Ordinary(OrdinaryUnit {
+                name: OrdinaryUnitName(name),
+                fragment,
+            }));
+        };
+        let name = StorageUnitName(name);
+        let fragment = match fragment {
+            UnitFragment::Vendor {
+                owning_package: Some(owning_package),
+                ..
+            } => {
+                return Classified::Carried(CarriedUnit::PackagedStorage(PackagedStorageUnit {
+                    name,
+                    owning_package,
+                }));
+            }
+            UnitFragment::Vendor {
+                owning_package: None,
+                ..
+            } => AdminStorageFragment::UnownedVendor,
+            UnitFragment::Local { .. } => AdminStorageFragment::Local,
+            UnitFragment::Shadowed { owning_package, .. } => {
+                AdminStorageFragment::Shadowed { owning_package }
+            }
+            UnitFragment::Absent => AdminStorageFragment::MaskOnly,
+        };
+        Classified::Advisory(AdvisoryUnit { name, fragment })
+    }
+}
+
+/// The outcome of [`UnitSubject::classify`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Classified {
+    Carried(CarriedUnit),
+    Advisory(AdvisoryUnit),
+}
+
+/// A unit inspectah may consider for a `systemctl` line. The only subject
+/// a state change holds, and the only input the action plan accepts
+/// (§ 10.2 of the units spec).
+///
+/// Each variant wraps a type with private fields, so a `CarriedUnit` is
+/// built only by [`UnitSubject::classify`], after the file check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "UnitSubject", into = "UnitSubject")]
+pub enum CarriedUnit {
+    /// Any fragment: a local service is carried with its file.
+    Ordinary(OrdinaryUnit),
+    /// A storage unit under the vendor directory with a known owner.
+    PackagedStorage(PackagedStorageUnit),
+}
+
+impl CarriedUnit {
+    /// The unit's name.
+    pub fn name(&self) -> &UnitName {
+        match self {
+            Self::Ordinary(unit) => unit.name.as_unit_name(),
+            Self::PackagedStorage(unit) => unit.name.as_unit_name(),
+        }
+    }
+}
+
+/// An ordinary unit and its fragment, whatever the fragment is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrdinaryUnit {
+    name: OrdinaryUnitName,
+    fragment: UnitFragment,
+}
+
+impl OrdinaryUnit {
+    /// The unit's name.
+    pub fn name(&self) -> &OrdinaryUnitName {
+        &self.name
+    }
+
+    /// The unit file behind the name.
+    pub fn fragment(&self) -> &UnitFragment {
+        &self.fragment
+    }
+}
+
+/// A storage unit under the vendor directory with a known owner. There is
+/// no field here that could hold an `/etc` path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackagedStorageUnit {
+    name: StorageUnitName,
+    owning_package: String,
+}
+
+impl PackagedStorageUnit {
+    /// The unit's name.
+    pub fn name(&self) -> &StorageUnitName {
+        &self.name
+    }
+
+    /// The package that owns the vendor file.
+    pub fn owning_package(&self) -> &str {
+        &self.owning_package
+    }
+}
+
+impl TryFrom<UnitSubject> for CarriedUnit {
+    type Error = UnitSubjectError;
+
+    fn try_from(subject: UnitSubject) -> Result<Self, Self::Error> {
+        match subject.classify() {
+            Classified::Carried(unit) => Ok(unit),
+            Classified::Advisory(AdvisoryUnit { name, fragment }) => {
+                Err(UnitSubjectError::AdvisoryNotCarried {
+                    name: name.0,
+                    fragment,
+                })
+            }
+        }
+    }
+}
+
+impl From<CarriedUnit> for UnitSubject {
+    fn from(unit: CarriedUnit) -> Self {
+        match unit {
+            CarriedUnit::Ordinary(OrdinaryUnit { name, fragment }) => Self {
+                name: name.0,
+                fragment,
+            },
+            CarriedUnit::PackagedStorage(PackagedStorageUnit {
+                name,
+                owning_package,
+            }) => Self {
+                fragment: UnitFragment::Vendor {
+                    file: name.0.clone(),
+                    owning_package: Some(owning_package),
+                },
+                name: name.0,
+            },
+        }
+    }
+}
+
+/// A [`CarriedUnit`] proved to be a `.target`: the only operand
+/// `set-default` takes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "UnitSubject", into = "UnitSubject")]
+pub struct TargetUnit {
+    name: TargetUnitName,
+    fragment: UnitFragment,
+}
+
+impl TargetUnit {
+    /// The target's name.
+    pub fn name(&self) -> &TargetUnitName {
+        &self.name
+    }
+
+    /// The unit file behind the name, kept for the file check.
+    pub fn fragment(&self) -> &UnitFragment {
+        &self.fragment
+    }
+}
+
+impl TryFrom<UnitSubject> for TargetUnit {
+    type Error = UnitSubjectError;
+
+    fn try_from(subject: UnitSubject) -> Result<Self, Self::Error> {
+        match CarriedUnit::try_from(subject)? {
+            CarriedUnit::Ordinary(OrdinaryUnit { name, fragment })
+                if name.0.kind() == UnitKind::Ordinary(OrdinaryKind::Target) =>
+            {
+                Ok(Self {
+                    name: TargetUnitName(name.0),
+                    fragment,
+                })
+            }
+            other => Err(UnitSubjectError::NotTarget {
+                name: other.name().clone(),
+            }),
+        }
+    }
+}
+
+impl From<TargetUnit> for UnitSubject {
+    fn from(unit: TargetUnit) -> Self {
+        Self {
+            name: unit.name.0,
+            fragment: unit.fragment,
+        }
+    }
+}
+
+/// Why a storage unit counts as the administrator's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminStorageFragment {
+    /// Under `/etc/systemd/system` only.
+    Local,
+    /// A vendor file with a full copy in `/etc/systemd/system`.
+    Shadowed { owning_package: Option<String> },
+    /// Under the vendor directory, with no package known to own it.
+    UnownedVendor,
+    /// A mask on a name that has no unit file anywhere.
+    MaskOnly,
+}
+
+impl std::fmt::Display for AdminStorageFragment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Local => "local fragment",
+            Self::Shadowed { .. } => "shadowed fragment",
+            Self::UnownedVendor => "vendor fragment with no known owning package",
+            Self::MaskOnly => "absent fragment, a mask only",
+        };
+        f.write_str(s)
+    }
+}
+
+/// A storage unit inspectah reports and never acts on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "UnitSubject", into = "UnitSubject")]
+pub struct AdvisoryUnit {
+    name: StorageUnitName,
+    fragment: AdminStorageFragment,
+}
+
+impl AdvisoryUnit {
+    /// The unit's name.
+    pub fn name(&self) -> &StorageUnitName {
+        &self.name
+    }
+
+    /// Why the unit is the administrator's.
+    pub fn fragment(&self) -> &AdminStorageFragment {
+        &self.fragment
+    }
+}
+
+impl TryFrom<UnitSubject> for AdvisoryUnit {
+    type Error = UnitSubjectError;
+
+    fn try_from(subject: UnitSubject) -> Result<Self, Self::Error> {
+        match subject.classify() {
+            Classified::Advisory(unit) => Ok(unit),
+            Classified::Carried(unit) => Err(UnitSubjectError::CarriedNotAdvisory {
+                name: unit.name().clone(),
+            }),
+        }
+    }
+}
+
+impl From<AdvisoryUnit> for UnitSubject {
+    fn from(unit: AdvisoryUnit) -> Self {
+        let file = unit.name.0.clone();
+        let fragment = match unit.fragment {
+            AdminStorageFragment::Local => UnitFragment::Local { file },
+            AdminStorageFragment::Shadowed { owning_package } => UnitFragment::Shadowed {
+                file,
+                owning_package,
+            },
+            AdminStorageFragment::UnownedVendor => UnitFragment::Vendor {
+                file,
+                owning_package: None,
+            },
+            AdminStorageFragment::MaskOnly => UnitFragment::Absent,
+        };
+        Self {
+            name: unit.name.0,
+            fragment,
+        }
+    }
+}
+
 /// Durable systemd unit states that represent administrator intent.
 /// Only these three states produce migration-worthy `UnitStateChange` entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,6 +787,21 @@ impl UnitInventoryEntry {
     }
 }
 
+/// An administrator's mount, automount or swap unit: reported, never acted
+/// on. It holds no `What=`, which can carry a credential; refine links the
+/// row to the unit file's config entry instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MountUnitFinding {
+    pub unit: AdvisoryUnit,
+    /// Present when the unit is enabled or masked.
+    pub state_change: Option<(UnitState, Option<PresetDefault>)>,
+    /// `Where=` for a mount or automount, when it is an absolute path.
+    pub mount_point: Option<String>,
+    /// Whether `Options=` holds `nofail`.
+    pub nofail: bool,
+    pub aggregate: Option<AggregatePrevalence>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnitSection {
     /// Units whose state differs from what the image would have.
@@ -354,6 +809,8 @@ pub struct UnitSection {
     /// Every unit with a durable state, changed or not, once each.
     pub inventory: Vec<UnitInventoryEntry>,
     pub drop_ins: Vec<SystemdDropIn>,
+    /// The administrator's mount, automount and swap units.
+    pub mount_findings: Vec<MountUnitFinding>,
 }
 
 #[cfg(test)]
@@ -571,6 +1028,7 @@ mod tests {
                 preset: Some(PresetDefault::Disable),
             }],
             drop_ins: vec![],
+            mount_findings: vec![],
         };
 
         let json = serde_json::to_string(&section).unwrap();
@@ -686,6 +1144,7 @@ mod tests {
                 },
             ],
             drop_ins: Vec::new(),
+            mount_findings: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: UnitSection = serde_json::from_str(&json).unwrap();
@@ -704,10 +1163,10 @@ mod tests {
     fn test_missing_field_fails_deserialization() {
         // A missing inventory must fail, not silently backfill. The same
         // payload with the field loads.
-        let with_field = r#"{"state_changes":[],"inventory":[],"drop_ins":[]}"#;
+        let with_field = r#"{"state_changes":[],"inventory":[],"drop_ins":[],"mount_findings":[]}"#;
         serde_json::from_str::<UnitSection>(with_field).expect("complete section loads");
 
-        let json = r#"{"state_changes":[],"drop_ins":[]}"#;
+        let json = r#"{"state_changes":[],"drop_ins":[],"mount_findings":[]}"#;
         let err = serde_json::from_str::<UnitSection>(json).unwrap_err();
         assert!(
             err.to_string().contains("inventory"),
@@ -760,5 +1219,246 @@ mod tests {
         let json = r#"{"unit":"sshd.service","current_state":"enabled","default_state":null,"disposition":{"kind":"actionable","include":true}}"#;
         let ssc: UnitStateChange = serde_json::from_str(json).unwrap();
         assert_eq!(ssc.current_state, UnitState::Enabled);
+    }
+
+    // -- Carried and advisory units (T2, on the types) ------------------------
+
+    /// One name of each storage kind.
+    const STORAGE_NAMES: &[&str] = &[
+        "tmp.mount",
+        "proc-sys-fs-binfmt_misc.automount",
+        "dev-zram0.swap",
+    ];
+
+    /// The wire form of a unit subject.
+    fn subject_json(name: &str, fragment: &str, owner: Option<&str>) -> serde_json::Value {
+        let mut value = serde_json::json!({"name": name, "fragment": fragment});
+        if fragment != "absent" {
+            value["file"] = name.into();
+        }
+        if matches!(fragment, "vendor" | "shadowed") {
+            value["owning_package"] = owner.into();
+        }
+        value
+    }
+
+    #[test]
+    fn carried_unit_refuses_an_administrators_storage_unit() {
+        let refused: &[(&str, Option<&str>)] = &[
+            ("local", None),
+            ("shadowed", Some("systemd")),
+            ("shadowed", None),
+            ("absent", None),
+            ("vendor", None),
+        ];
+        for name in STORAGE_NAMES {
+            // Positive control: the same name, vendor with an owner, loads.
+            let owned = subject_json(name, "vendor", Some("systemd"));
+            let carried: CarriedUnit = serde_json::from_value(owned.clone())
+                .unwrap_or_else(|err| panic!("{name} vendor with an owner: {err}"));
+            match &carried {
+                CarriedUnit::PackagedStorage(unit) => {
+                    assert_eq!(unit.name().as_unit_name().as_str(), *name);
+                    assert_eq!(unit.owning_package(), "systemd");
+                }
+                other => panic!("{name} classified as {other:?}"),
+            }
+            assert_eq!(serde_json::to_value(&carried).unwrap(), owned);
+
+            for (fragment, owner) in refused {
+                let value = subject_json(name, fragment, *owner);
+                let err = serde_json::from_value::<CarriedUnit>(value)
+                    .expect_err("an administrator's storage unit must not be carried")
+                    .to_string();
+                assert!(
+                    err.contains(&format!("classify places {name}")) && err.contains("advisory"),
+                    "{name} {fragment}: error must name classify: {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn advisory_unit_refuses_a_packaged_storage_unit() {
+        for name in STORAGE_NAMES {
+            // Positive control: the same name with a local fragment is advisory.
+            let local = subject_json(name, "local", None);
+            let advisory: AdvisoryUnit = serde_json::from_value(local.clone()).unwrap();
+            assert_eq!(advisory.fragment(), &AdminStorageFragment::Local);
+            assert_eq!(serde_json::to_value(&advisory).unwrap(), local);
+
+            let owned = subject_json(name, "vendor", Some("systemd"));
+            let err = serde_json::from_value::<AdvisoryUnit>(owned)
+                .expect_err("a package-owned storage unit is not advisory")
+                .to_string();
+            assert!(
+                err.contains(&format!("classify places {name} as carried")),
+                "{name}: error must name classify: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_unit_is_carried_with_any_fragment() {
+        for (fragment, owner) in [
+            ("local", None),
+            ("shadowed", None),
+            ("absent", None),
+            ("vendor", None),
+        ] {
+            let value = subject_json("sshd.service", fragment, owner);
+            let carried: CarriedUnit = serde_json::from_value(value.clone())
+                .unwrap_or_else(|err| panic!("sshd.service {fragment}: {err}"));
+            assert!(matches!(carried, CarriedUnit::Ordinary(_)));
+            assert_eq!(serde_json::to_value(&carried).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn target_unit_takes_a_target_only() {
+        let target = subject_json("multi-user.target", "vendor", Some("systemd"));
+        let parsed: TargetUnit = serde_json::from_value(target.clone()).expect("a target loads");
+        assert_eq!(parsed.name().as_unit_name().as_str(), "multi-user.target");
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), target);
+
+        for value in [
+            subject_json("cockpit.socket", "vendor", Some("cockpit-ws")),
+            subject_json("tmp.mount", "vendor", Some("systemd")),
+        ] {
+            let name = value["name"].as_str().unwrap().to_owned();
+            let err = serde_json::from_value::<TargetUnit>(value)
+                .expect_err("set-default takes a target only")
+                .to_string();
+            assert!(
+                err.contains(&format!("{name} is not a .target")),
+                "{name}: error must name the target rule: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn subject_file_must_be_the_unit_or_its_template() {
+        // Positive controls: the unit's own file, and an instance's template.
+        for (name, file) in [
+            ("sshd.service", "sshd.service"),
+            ("getty@tty1.service", "getty@.service"),
+            ("getty@tty1.service", "getty@tty1.service"),
+        ] {
+            let value = serde_json::json!({"name": name, "fragment": "local", "file": file});
+            serde_json::from_value::<CarriedUnit>(value)
+                .unwrap_or_else(|err| panic!("{name} with file {file}: {err}"));
+        }
+
+        for (name, file) in [
+            ("sshd.service", "httpd.service"),
+            ("getty@tty1.service", "serial-getty@.service"),
+            ("getty@.service", "getty@tty1.service"),
+            ("tmp.mount", "var.mount"),
+        ] {
+            let value = serde_json::json!({
+                "name": name, "fragment": "vendor", "file": file, "owning_package": "systemd"
+            });
+            let expected = UnitSubjectError::FileNotUnitOrTemplate {
+                name: unit_name(name),
+                file: unit_name(file),
+            }
+            .to_string();
+            let err = serde_json::from_value::<CarriedUnit>(value)
+                .expect_err("a file that is neither the unit nor its template fails")
+                .to_string();
+            assert!(err.contains(&expected), "{name}/{file}: {err}");
+        }
+    }
+
+    mod classify_props {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        /// Every suffix that has a variant.
+        const SUFFIXES: &[&str] = &[
+            "service",
+            "socket",
+            "path",
+            "timer",
+            "target",
+            "slice",
+            "mount",
+            "automount",
+            "swap",
+        ];
+
+        /// A proved name, and whether its file is the template's.
+        fn subject() -> impl Strategy<Value = UnitSubject> {
+            let stem = "[a-z0-9:_.\\\\-]{1,20}";
+            let instance = proptest::option::of("[a-z0-9:_.@\\\\-]{0,12}");
+            let owner = proptest::option::of("[a-z0-9-]{1,12}");
+            (
+                stem,
+                instance,
+                proptest::sample::select(SUFFIXES),
+                0..4u8,
+                owner,
+                any::<bool>(),
+            )
+                .prop_map(|(stem, instance, suffix, variant, owner, use_template)| {
+                    let raw = match instance {
+                        Some(instance) => format!("{stem}@{instance}.{suffix}"),
+                        None => format!("{stem}.{suffix}"),
+                    };
+                    let name = UnitName::try_from(raw).expect("generated names are valid");
+                    let file = match name.instance() {
+                        Some(parts) if use_template => parts.template(),
+                        _ => name.clone(),
+                    };
+                    let fragment = match variant {
+                        0 => UnitFragment::Vendor {
+                            file,
+                            owning_package: owner,
+                        },
+                        1 => UnitFragment::Local { file },
+                        2 => UnitFragment::Shadowed {
+                            file,
+                            owning_package: owner,
+                        },
+                        _ => UnitFragment::Absent,
+                    };
+                    UnitSubject::new(name, fragment).expect("file is the unit or its template")
+                })
+        }
+
+        proptest! {
+            /// `classify` returns one of the two for every subject, the
+            /// wire form loads as that one and is refused as the other, and
+            /// the loaded value classifies the same again.
+            #[test]
+            fn classify_is_total_and_stable(subject in subject()) {
+                let name = subject.name().clone();
+                let wire = serde_json::to_value(&subject).unwrap();
+                let reloaded: UnitSubject = serde_json::from_value(wire.clone()).unwrap();
+                prop_assert_eq!(&reloaded, &subject);
+
+                match subject.classify() {
+                    Classified::Carried(unit) => {
+                        prop_assert_eq!(unit.name(), &name);
+                        let json = serde_json::to_value(&unit).unwrap();
+                        let again: CarriedUnit = serde_json::from_value(json.clone()).unwrap();
+                        prop_assert_eq!(&again, &unit);
+                        prop_assert!(serde_json::from_value::<AdvisoryUnit>(json.clone()).is_err());
+                        let subject: UnitSubject = serde_json::from_value(json).unwrap();
+                        prop_assert_eq!(subject.classify(), Classified::Carried(unit));
+                    }
+                    Classified::Advisory(unit) => {
+                        prop_assert_eq!(unit.name().as_unit_name(), &name);
+                        prop_assert!(matches!(name.kind(), UnitKind::Storage(_)));
+                        let json = serde_json::to_value(&unit).unwrap();
+                        let again: AdvisoryUnit = serde_json::from_value(json.clone()).unwrap();
+                        prop_assert_eq!(&again, &unit);
+                        prop_assert!(serde_json::from_value::<CarriedUnit>(json.clone()).is_err());
+                        let subject: UnitSubject = serde_json::from_value(json).unwrap();
+                        prop_assert_eq!(subject.classify(), Classified::Advisory(unit));
+                    }
+                }
+            }
+        }
     }
 }

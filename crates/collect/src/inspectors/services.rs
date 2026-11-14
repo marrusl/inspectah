@@ -288,6 +288,7 @@ impl Inspector for ServicesInspector {
                             state_changes: Vec::new(),
                             inventory,
                             drop_ins: Vec::new(),
+                            mount_findings: Vec::new(),
                         }),
                         warnings,
                         redaction_hints: Vec::new(),
@@ -513,6 +514,7 @@ impl Inspector for ServicesInspector {
             state_changes,
             inventory,
             drop_ins,
+            mount_findings: Vec::new(),
         };
 
         // Preset file read failures are correctness-bearing — a missing

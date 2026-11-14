@@ -1790,6 +1790,7 @@ mod tests {
                 ..Default::default()
             }],
             inventory: vec![],
+            mount_findings: Vec::new(),
         });
 
         let session = RefineSession::new(snap);

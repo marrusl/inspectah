@@ -1546,6 +1546,8 @@ pub fn merge_service_sections(
         state_changes,
         inventory,
         drop_ins,
+        // Not merged yet: no collector records a mount finding so far.
+        mount_findings: Vec::new(),
     })
 }
 

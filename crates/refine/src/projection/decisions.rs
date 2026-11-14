@@ -188,6 +188,7 @@ mod tests {
                     preset: None,
                 }],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             }),
             ..Default::default()
         }

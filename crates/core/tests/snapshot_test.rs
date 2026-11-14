@@ -104,7 +104,8 @@ const SCHEMA_27_SNAPSHOT: &str =
 
 /// The schema-27 payload moved to the current version with its `services`
 /// section renamed to `units` and its three unit name lists replaced by
-/// the one inventory that holds the same unit. Nothing else changes.
+/// the one inventory that holds the same unit, and an empty
+/// `mount_findings` list added. Nothing else changes.
 fn schema_27_payload_as_current() -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_str(SCHEMA_27_SNAPSHOT).unwrap();
     let object = value.as_object_mut().unwrap();
@@ -117,6 +118,7 @@ fn schema_27_payload_as_current() -> serde_json::Value {
         "inventory".into(),
         serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
     );
+    lists.insert("mount_findings".into(), serde_json::json!([]));
     object.insert("units".into(), section);
     object.insert("schema_version".into(), SCHEMA_VERSION.into());
     value
@@ -156,6 +158,38 @@ fn state_change_unit_name_is_parsed_on_load() {
         .to_string();
     let rule = UnitNameError::InvalidCharacter { ch: ' ' }.to_string();
     assert!(err.contains(&rule), "error must carry `{rule}`: {err}");
+}
+
+/// A mount finding is an administrator's storage unit: a local
+/// `tmp.mount` loads in `mount_findings`, and the same unit as a vendor
+/// file with an owning package fails the load, with the error naming
+/// `classify`.
+#[test]
+fn mount_finding_unit_is_classified_on_load() {
+    let mut payload = schema_27_payload_as_current();
+    payload["units"]["mount_findings"] = serde_json::json!([{
+        "unit": {"name": "tmp.mount", "fragment": "local", "file": "tmp.mount"},
+        "state_change": ["enabled", null],
+        "mount_point": "/tmp",
+        "nofail": false,
+        "aggregate": null
+    }]);
+    let snap = InspectionSnapshot::load(&payload.to_string()).expect("a local mount unit loads");
+    let findings = &snap.units.expect("units present").mount_findings;
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].unit.name().as_unit_name().as_str(), "tmp.mount");
+
+    payload["units"]["mount_findings"][0]["unit"] = serde_json::json!({
+        "name": "tmp.mount", "fragment": "vendor", "file": "tmp.mount",
+        "owning_package": "systemd"
+    });
+    let err = InspectionSnapshot::load(&payload.to_string())
+        .expect_err("a package-owned mount unit is not a mount finding")
+        .to_string();
+    assert!(
+        err.contains("classify places tmp.mount as carried"),
+        "error must name classify: {err}"
+    );
 }
 
 /// A snapshot JSON whose sysctl section holds `runtime` and
@@ -317,7 +351,7 @@ const RPM_SECTION_KEYS: &[&str] = &[
 ];
 
 /// The serialized keys of a `UnitSection`.
-const UNIT_SECTION_KEYS: &[&str] = &["drop_ins", "inventory", "state_changes"];
+const UNIT_SECTION_KEYS: &[&str] = &["drop_ins", "inventory", "mount_findings", "state_changes"];
 
 fn serialized_keys<T: serde::Serialize>(value: &T) -> BTreeSet<String> {
     serde_json::to_value(value)

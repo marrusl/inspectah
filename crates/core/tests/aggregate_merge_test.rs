@@ -1230,6 +1230,7 @@ fn test_merge_service_sections_dedup_units() {
             inv("firewalld.service", UnitState::Disabled, None),
         ],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     };
     let s2 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
@@ -1238,6 +1239,7 @@ fn test_merge_service_sections_dedup_units() {
             inv("crond.service", UnitState::Enabled, None),
         ],
         drop_ins: vec![],
+        mount_findings: Vec::new(),
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();

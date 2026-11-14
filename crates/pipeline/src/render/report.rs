@@ -2379,6 +2379,7 @@ mod tests {
                 preset: None,
             }],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2418,6 +2419,7 @@ mod tests {
                 preset: None,
             }],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2449,6 +2451,7 @@ mod tests {
             state_changes: vec![],
             inventory: vec![],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2496,6 +2499,7 @@ mod tests {
                 preset: None,
             }],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -3720,6 +3724,7 @@ mod tests {
                 shadow_rationale: Some("Full shadow: overrides vendor unit".to_string()),
                 ..Default::default()
             }],
+            mount_findings: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
 

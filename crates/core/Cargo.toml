@@ -15,4 +15,5 @@ time = { version = "0.3", features = ["serde", "serde-well-known", "parsing", "f
 toml = "0.8"
 
 [dev-dependencies]
+proptest = "1"
 tempfile = "3.10"

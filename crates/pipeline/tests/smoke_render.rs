@@ -74,6 +74,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
             locked: false,
             ..Default::default()
         }],
+        mount_findings: Vec::new(),
     });
     snap
 }

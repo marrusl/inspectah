@@ -272,6 +272,7 @@ fn schema_27_snapshot_is_refused() {
         "inventory".into(),
         serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
     );
+    lists.insert("mount_findings".into(), serde_json::json!([]));
     object.insert("units".into(), section);
     object.insert(
         "schema_version".into(),

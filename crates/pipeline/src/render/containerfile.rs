@@ -2711,6 +2711,7 @@ mod tests {
                 }],
                 inventory: vec![],
                 drop_ins: vec![],
+                mount_findings: Vec::new(),
             });
             snap
         };
@@ -3311,6 +3312,7 @@ mod tests {
             }],
             inventory: vec![],
             drop_ins: vec![],
+            mount_findings: Vec::new(),
         });
 
         let output = render_containerfile(&snap, None, None);
