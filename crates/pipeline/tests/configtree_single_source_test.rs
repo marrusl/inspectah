@@ -1256,3 +1256,44 @@ fn two_paths_the_staging_filesystem_treats_as_one_never_overwrite() {
         }
     }
 }
+
+// --- A path longer than a filesystem allows ------------------------------
+
+/// A path longer than Linux's `PATH_MAX`, or with a component longer than
+/// `NAME_MAX`, is refused by `Destination::new` naming the rule, so the
+/// offer shows as refused and never reaches the ancestor walk or a write.
+/// Control: an ordinary path, and the longest accepted component, are
+/// destinations.
+#[test]
+fn a_path_longer_than_a_filesystem_allows_is_refused() {
+    // Roughly 1 MiB of `/a` components: quadratic work in the ancestor walk
+    // if it got there.
+    let deep = "/a".repeat(512 * 1024);
+    let long_name = format!("/etc/{}", "n".repeat(256));
+    for (path, rule) in [(&deep, "TooLong"), (&long_name, "ComponentTooLong")] {
+        // Not `expect_err`: its message would print the whole path.
+        let Err(err) = Destination::new(path) else {
+            panic!("{rule}: a {}-byte path is a destination", path.len());
+        };
+        assert_eq!(err.name(), rule);
+
+        let snap = staged_snapshot(vec![config_entry(path, "x\n")], vec![]);
+        let staged = staged_writes(&snap);
+        assert!(
+            staged.writes.is_empty() && staged.withheld.is_empty(),
+            "{rule}"
+        );
+        assert_eq!(
+            staged
+                .refused
+                .iter()
+                .map(|(kind, p, e)| (*kind, p.len(), e.name()))
+                .collect::<Vec<_>>(),
+            vec![(StagedFileKind::ConfigFile, path.len(), rule)],
+        );
+    }
+
+    assert!(Destination::new("/etc/app/app.conf").is_ok());
+    let longest_name = format!("/etc/{}", "n".repeat(255));
+    assert!(Destination::new(&longest_name).is_ok());
+}

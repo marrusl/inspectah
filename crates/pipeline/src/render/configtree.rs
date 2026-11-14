@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::safety::{BareWord, has_line_break_or_control, operator_kargs};
+use super::safety::{BareWord, MAX_EXPORT_PATH_LEN, has_line_break_or_control, operator_kargs};
 use crate::build::extract::is_single_normal_component;
 
 /// Path prefix for quadlet unit files — excluded from config tree copy.
@@ -31,6 +31,11 @@ const QUADLET_PREFIX: &str = "/etc/containers/systemd/";
 /// The directory systemd reads the administrator's unit files from. A
 /// zero-length unit file directly in it is a mask.
 pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
+
+/// The longest path component a Linux filesystem holds (`NAME_MAX`), in
+/// bytes. A path's whole length is held to [`MAX_EXPORT_PATH_LEN`],
+/// Linux's `PATH_MAX`, the export's existing path-length policy.
+const MAX_PATH_COMPONENT_LEN: usize = 255;
 
 /// The provisioning service inspectah generates for flatpak applications.
 pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
@@ -44,8 +49,10 @@ pub(crate) const KARGS_PATH: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.t
 /// The one constructor, [`Destination::new`], drops empty and `.`
 /// components, so `/etc/systemd/./system//x.timer`, a trailing separator
 /// and a path given without its leading `/` are all one destination. It
-/// refuses `..`, a NUL byte and a control character, and a path that names
-/// no file. The reading is lexical: the staging directory is created
+/// refuses `..`, a NUL byte and a control character, a path that names no
+/// file, and a path or component longer than a Linux filesystem holds
+/// (checked first, so a pathological imported path costs no more than
+/// one pass). The reading is lexical: the staging directory is created
 /// empty by the export and only the stager writes into it, so no symlink
 /// sits on a path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -54,6 +61,9 @@ pub struct Destination(String);
 impl Destination {
     /// The normalized form of `path`, or the rule it breaks.
     pub fn new(path: &str) -> Result<Self, PathError> {
+        if path.len() > MAX_EXPORT_PATH_LEN {
+            return Err(PathError::TooLong);
+        }
         if path.contains('\0') {
             return Err(PathError::NulByte);
         }
@@ -65,6 +75,9 @@ impl Destination {
             match component {
                 "" | "." => {}
                 ".." => return Err(PathError::Traversal),
+                name if name.len() > MAX_PATH_COMPONENT_LEN => {
+                    return Err(PathError::ComponentTooLong);
+                }
                 name => {
                     normal.push('/');
                     normal.push_str(name);
@@ -265,6 +278,10 @@ pub enum PathError {
     SymlinkEscape,
     #[error("path names no file")]
     NoFileName,
+    #[error("path is longer than {MAX_EXPORT_PATH_LEN} bytes")]
+    TooLong,
+    #[error("a path component is longer than {MAX_PATH_COMPONENT_LEN} bytes")]
+    ComponentTooLong,
 }
 
 impl PathError {
@@ -278,6 +295,8 @@ impl PathError {
             Self::Traversal => "Traversal",
             Self::SymlinkEscape => "SymlinkEscape",
             Self::NoFileName => "NoFileName",
+            Self::TooLong => "TooLong",
+            Self::ComponentTooLong => "ComponentTooLong",
         }
     }
 }
