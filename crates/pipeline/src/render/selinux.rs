@@ -28,6 +28,26 @@ use inspectah_core::types::selinux::{
 /// support.
 pub const VAR_SYMLINKED_TOPLEVELS: &[(&str, &str)] = &[("/srv", "/var/srv")];
 
+/// Top-level directories that are symlinks into `/var` on both RHEL bootc
+/// base images, aliased by the policy or not (measured; § 10.6 of the units
+/// spec). A mount unit for a path under one must be renamed for the
+/// resolved path. A fedora-bootc or centos-bootc base creates a different
+/// set and is not covered.
+pub const BASE_VAR_SYMLINKS: &[&str] = &["/home", "/mnt", "/root", "/srv"];
+
+/// Top-level directories that are real directories of the image on both
+/// RHEL bootc base images, not links into `/var` (measured; § 10.6 of the
+/// units spec). `/usr/local` is one too, and is covered by the `/usr` line
+/// of the mount advisory, so only `/opt` is listed here.
+pub const BASE_IMAGE_DIRECTORIES: &[&str] = &["/opt"];
+
+/// Mount points bootc and ostree own on the target (§ 10.6 of the units
+/// spec), each matched as a whole path.
+pub const BOOTC_OWNED_MOUNT_POINTS: &[&str] = &["/", "/boot", "/boot/efi", "/sysroot", "/var"];
+
+/// The top level of the read-only image on the target.
+pub const IMAGE_USR: &str = "/usr";
+
 /// § 3.1's install precondition: `semanage` is not in the bootc base, and
 /// every command this block emits needs it.
 ///

@@ -4,8 +4,8 @@ use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    CarriedUnit, PresetDefault, UnitAction, UnitFragment, UnitName, UnitSection, UnitState,
-    UnitStateChange, UnitSubject,
+    AdvisoryUnit, CarriedUnit, MountUnitFinding, PresetDefault, UnitAction, UnitFragment, UnitName,
+    UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::staged_writes;
@@ -14,8 +14,8 @@ use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::unit_plan::{
     AdvisoryReason, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan, declined_line,
-    effective_target_packages, is_package_installable, plan_units, pulled_in_by_included,
-    unit_state_lines,
+    effective_target_packages, is_package_installable, mount_advisory_lines, plan_units,
+    pulled_in_by_included, unit_state_lines,
 };
 
 // ---------------------------------------------------------------------------
@@ -2498,5 +2498,428 @@ fn rule_4_sees_a_generated_unit_where_a_withheld_mask_file_was() {
             "RUN systemctl mask -- \\".to_owned(),
             format!("    '{UNIT}'")
         ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// § 10.6 mount, automount and swap advisories
+// ---------------------------------------------------------------------------
+
+/// § 10.6's lines, verbatim. The first two take the unit, its state and
+/// (for the carry line) the verb; the layout lines take a path.
+fn advisory_fact(unit: &str, state: &str) -> String {
+    format!(
+        "# Advisory: {unit} is {state} on the source host. inspectah does not enable, disable \
+         or mask a mount, automount or swap unit the administrator wrote."
+    )
+}
+const FILE_STAGED_LINE: &str = "#   Its unit file is copied into the image. No enable line is \
+     written, but the unit still starts if another unit requires it or names its mount point \
+     in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.";
+fn usr_line(path: &str) -> String {
+    format!(
+        "#   /usr is part of the read-only image on the target. The mount point must already \
+         exist in the image, and a mount there hides the image's own content under {path}."
+    )
+}
+const BOOTC_OWNED_LINE: &str = "#   bootc and ostree own this mount point on the target.";
+fn var_symlink_line(top: &str) -> String {
+    format!(
+        "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
+         for the resolved path (for /srv: var-srv.mount with Where=/var/srv)."
+    )
+}
+fn opt_line(path: &str) -> String {
+    format!(
+        "#   /opt is a directory of the read-only image in the RHEL bootc base image, not a link \
+         into /var. The unit keeps its name. The mount point must already exist in the image, \
+         and a mount there hides the image's own content under {path}."
+    )
+}
+const TMP_MOUNT_LINE: &str = "#   The bootc base image starts tmp.mount from a link it ships, \
+     so this file replaces the unit that mounts /tmp on the target.";
+const NOFAIL_LINE: &str = "#   No nofail option. If the unit is started at boot and its device \
+     is missing, units that require it fail, and boot can stop in emergency mode.";
+fn carry_line(verb: &str, unit: &str) -> String {
+    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
+}
+
+/// A finding for `unit` as the collector records one.
+fn mount_finding(
+    unit: &str,
+    fragment: UnitFragment,
+    state: Option<UnitState>,
+    mount_point: Option<&str>,
+    nofail: bool,
+) -> MountUnitFinding {
+    let name: UnitName = unit.to_owned().try_into().expect("a unit name");
+    let subject = UnitSubject::new(name, fragment).expect("a subject");
+    MountUnitFinding {
+        unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
+        state_change: state.map(|s| (s, None)),
+        mount_point: mount_point.map(str::to_owned),
+        nofail,
+        aggregate: None,
+    }
+}
+
+fn shadowed(unit: &str) -> UnitFragment {
+    UnitFragment::Shadowed {
+        file: unit.to_owned().try_into().expect("a unit name"),
+        owning_package: Some("systemd".into()),
+    }
+}
+
+/// § 10.6's table, row by row, over findings as the collector records
+/// them. The file line and the `tmp.mount` line follow `staged_writes`:
+/// each case is checked with the unit file staged by a config entry and
+/// without it. A masked finding takes the mount-point lines the table
+/// gives, since the table's conditions do not read the state; the `nofail`
+/// line is not given for a mask with no unit file, which has no options to
+/// read.
+#[test]
+fn mount_advisory_lines_follow_the_table() {
+    use UnitState::{Disabled, Enabled, Masked};
+    let unowned = |unit: &str| UnitFragment::Vendor {
+        file: unit.to_owned().try_into().expect("a unit name"),
+        owning_package: None,
+    };
+    let cases: Vec<(MountUnitFinding, Vec<String>)> = vec![
+        (
+            mount_finding(
+                "srv.mount",
+                local("srv.mount"),
+                Some(Enabled),
+                Some("/srv"),
+                false,
+            ),
+            vec![
+                advisory_fact("srv.mount", "enabled"),
+                var_symlink_line("/srv"),
+                NOFAIL_LINE.into(),
+                carry_line("enable", "srv.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "home-alice.mount",
+                local("home-alice.mount"),
+                Some(Enabled),
+                Some("/home/alice"),
+                true,
+            ),
+            vec![
+                advisory_fact("home-alice.mount", "enabled"),
+                var_symlink_line("/home"),
+                carry_line("enable", "home-alice.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "opt-vendor.mount",
+                local("opt-vendor.mount"),
+                Some(Enabled),
+                Some("/opt/vendor"),
+                true,
+            ),
+            vec![
+                advisory_fact("opt-vendor.mount", "enabled"),
+                opt_line("/opt/vendor"),
+                carry_line("enable", "opt-vendor.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "usr-share-data.mount",
+                local("usr-share-data.mount"),
+                Some(Enabled),
+                Some("/usr/share/data"),
+                true,
+            ),
+            vec![
+                advisory_fact("usr-share-data.mount", "enabled"),
+                usr_line("/usr/share/data"),
+                carry_line("enable", "usr-share-data.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "usr-local.mount",
+                local("usr-local.mount"),
+                Some(Enabled),
+                Some("/usr/local"),
+                true,
+            ),
+            vec![
+                advisory_fact("usr-local.mount", "enabled"),
+                usr_line("/usr/local"),
+                carry_line("enable", "usr-local.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "var.mount",
+                local("var.mount"),
+                Some(Enabled),
+                Some("/var"),
+                true,
+            ),
+            vec![
+                advisory_fact("var.mount", "enabled"),
+                BOOTC_OWNED_LINE.into(),
+                carry_line("enable", "var.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "boot-efi.mount",
+                local("boot-efi.mount"),
+                None,
+                Some("/boot/efi"),
+                true,
+            ),
+            vec![
+                advisory_fact("boot-efi.mount", "not enabled"),
+                BOOTC_OWNED_LINE.into(),
+            ],
+        ),
+        (
+            // A path under a bootc-owned mount point is not the mount
+            // point, and `/srvdata` is not under `/srv`.
+            mount_finding(
+                "var-lib-data.mount",
+                local("var-lib-data.mount"),
+                Some(Enabled),
+                Some("/var/lib/data"),
+                true,
+            ),
+            vec![
+                advisory_fact("var-lib-data.mount", "enabled"),
+                carry_line("enable", "var-lib-data.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "srvdata.mount",
+                local("srvdata.mount"),
+                Some(Enabled),
+                Some("/srvdata"),
+                true,
+            ),
+            vec![
+                advisory_fact("srvdata.mount", "enabled"),
+                carry_line("enable", "srvdata.mount"),
+            ],
+        ),
+        (
+            // An automount has no `Options=`: no `nofail` line.
+            mount_finding(
+                "srv-data.automount",
+                local("srv-data.automount"),
+                Some(Enabled),
+                Some("/srv/data"),
+                false,
+            ),
+            vec![
+                advisory_fact("srv-data.automount", "enabled"),
+                var_symlink_line("/srv"),
+                carry_line("enable", "srv-data.automount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "dev-vdb1.swap",
+                local("dev-vdb1.swap"),
+                Some(Enabled),
+                None,
+                false,
+            ),
+            vec![
+                advisory_fact("dev-vdb1.swap", "enabled"),
+                NOFAIL_LINE.into(),
+                carry_line("enable", "dev-vdb1.swap"),
+            ],
+        ),
+        (
+            mount_finding(
+                "dev-vdb2.swap",
+                local("dev-vdb2.swap"),
+                Some(Enabled),
+                None,
+                true,
+            ),
+            vec![
+                advisory_fact("dev-vdb2.swap", "enabled"),
+                carry_line("enable", "dev-vdb2.swap"),
+            ],
+        ),
+        (
+            mount_finding(
+                "data.mount",
+                unowned("data.mount"),
+                Some(Masked),
+                Some("/srv/data"),
+                false,
+            ),
+            vec![
+                advisory_fact("data.mount", "masked"),
+                var_symlink_line("/srv"),
+                NOFAIL_LINE.into(),
+                carry_line("mask", "data.mount"),
+            ],
+        ),
+        (
+            mount_finding(
+                "ghost.mount",
+                UnitFragment::Absent,
+                Some(Masked),
+                None,
+                false,
+            ),
+            vec![
+                advisory_fact("ghost.mount", "masked"),
+                carry_line("mask", "ghost.mount"),
+            ],
+        ),
+        (
+            mount_finding("tmp.mount", UnitFragment::Absent, Some(Masked), None, false),
+            vec![advisory_fact("tmp.mount", "masked")],
+        ),
+        (
+            mount_finding(
+                "tmp.mount",
+                unowned("tmp.mount"),
+                Some(Enabled),
+                Some("/tmp"),
+                true,
+            ),
+            vec![
+                advisory_fact("tmp.mount", "enabled"),
+                carry_line("enable", "tmp.mount"),
+            ],
+        ),
+        (
+            mount_finding("old.mount", local("old.mount"), Some(Disabled), None, true),
+            vec![advisory_fact("old.mount", "disabled")],
+        ),
+    ];
+    let empty = InspectionSnapshot::new();
+    let nothing_staged = staged_writes(&empty);
+    for (finding, expected) in &cases {
+        let unit = finding.unit.name().as_unit_name().as_str();
+        assert_eq!(
+            &mount_advisory_lines(finding, &nothing_staged),
+            expected,
+            "{unit}, file not staged"
+        );
+    }
+
+    // With the unit file staged, the file line follows the first line,
+    // and for `tmp.mount` the `tmp.mount` line follows the layout lines.
+    let tmp = mount_finding(
+        "tmp.mount",
+        shadowed("tmp.mount"),
+        None,
+        Some("/tmp"),
+        false,
+    );
+    let srv = &cases[0].0;
+    let staged_snap = units_snapshot(
+        vec![],
+        vec![
+            ("/etc/systemd/system/srv.mount", "[Mount]\nWhere=/srv\n"),
+            ("/etc/systemd/system/tmp.mount", "[Mount]\nWhere=/tmp\n"),
+        ],
+    );
+    let staged = staged_writes(&staged_snap);
+    assert_eq!(
+        mount_advisory_lines(srv, &staged),
+        [
+            advisory_fact("srv.mount", "enabled"),
+            FILE_STAGED_LINE.into(),
+            var_symlink_line("/srv"),
+            NOFAIL_LINE.into(),
+            carry_line("enable", "srv.mount"),
+        ]
+    );
+    assert_eq!(
+        mount_advisory_lines(&tmp, &staged),
+        [
+            advisory_fact("tmp.mount", "not enabled"),
+            FILE_STAGED_LINE.into(),
+            TMP_MOUNT_LINE.into(),
+            NOFAIL_LINE.into(),
+        ]
+    );
+    assert_eq!(
+        mount_advisory_lines(&tmp, &nothing_staged),
+        [
+            advisory_fact("tmp.mount", "not enabled"),
+            NOFAIL_LINE.into(),
+        ],
+        "tmp.mount, file not staged"
+    );
+}
+
+/// The advisory is comment text in the Containerfile, in its own section
+/// after the unit state section, and no instruction names the unit. The
+/// control on the same snapshot: a package-owned mount unit is in
+/// `RUN systemctl enable`.
+#[test]
+fn mount_advisories_render_as_comments_after_the_unit_state_section() {
+    let mut snap = units_snapshot(
+        vec![change_with(
+            "var-lib-pkg.mount",
+            owned("var-lib-pkg.mount", "pkgmount"),
+            UnitState::Enabled,
+        )],
+        vec![("/etc/systemd/system/srv.mount", "[Mount]\nWhere=/srv\n")],
+    );
+    snap.units
+        .as_mut()
+        .expect("a units section")
+        .mount_findings
+        .push(mount_finding(
+            "srv.mount",
+            local("srv.mount"),
+            Some(UnitState::Enabled),
+            Some("/srv"),
+            true,
+        ));
+    let containerfile = render_containerfile(&snap, None, None);
+    let lines: Vec<&str> = containerfile.lines().collect();
+    let state = lines
+        .iter()
+        .position(|l| *l == "# === Systemd Unit State ===")
+        .unwrap_or_else(|| panic!("no unit state section:\n{containerfile}"));
+    let advisories = lines
+        .iter()
+        .position(|l| *l == "# === Mount, Automount and Swap Advisories ===")
+        .unwrap_or_else(|| panic!("no advisory section:\n{containerfile}"));
+    assert!(state < advisories, "{containerfile}");
+    assert_eq!(
+        lines[advisories + 1..]
+            .iter()
+            .take_while(|l| !l.is_empty())
+            .map(|l| (*l).to_owned())
+            .collect::<Vec<_>>(),
+        [
+            advisory_fact("srv.mount", "enabled"),
+            FILE_STAGED_LINE.to_owned(),
+            var_symlink_line("/srv"),
+            carry_line("enable", "srv.mount"),
+        ]
+    );
+    let owned_lines: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+    assert!(
+        acted_on(&owned_lines, "var-lib-pkg.mount"),
+        "{containerfile}"
+    );
+    assert!(
+        lines
+            .iter()
+            .filter(|l| l.contains("srv.mount"))
+            .all(|l| l.starts_with('#')),
+        "only comments name srv.mount:\n{containerfile}"
     );
 }

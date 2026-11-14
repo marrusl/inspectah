@@ -2128,3 +2128,482 @@ fn the_readme_explains_carried_unit_states_when_there_are_any() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 10.6: mount, automount and swap advisories, through the scan (T8's
+// advisory cases, T9, and T11's unowned storage masks).
+// ---------------------------------------------------------------------
+
+/// § 10.6's lines, verbatim.
+fn advisory_fact(unit: &str, state: &str) -> String {
+    format!(
+        "# Advisory: {unit} is {state} on the source host. inspectah does not enable, disable \
+         or mask a mount, automount or swap unit the administrator wrote."
+    )
+}
+const FILE_STAGED_LINE: &str = "#   Its unit file is copied into the image. No enable line is \
+     written, but the unit still starts if another unit requires it or names its mount point \
+     in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.";
+fn usr_line(path: &str) -> String {
+    format!(
+        "#   /usr is part of the read-only image on the target. The mount point must already \
+         exist in the image, and a mount there hides the image's own content under {path}."
+    )
+}
+fn var_symlink_line(top: &str) -> String {
+    format!(
+        "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must be renamed \
+         for the resolved path (for /srv: var-srv.mount with Where=/var/srv)."
+    )
+}
+fn opt_line(path: &str) -> String {
+    format!(
+        "#   /opt is a directory of the read-only image in the RHEL bootc base image, not a link \
+         into /var. The unit keeps its name. The mount point must already exist in the image, \
+         and a mount there hides the image's own content under {path}."
+    )
+}
+const TMP_MOUNT_LINE: &str = "#   The bootc base image starts tmp.mount from a link it ships, \
+     so this file replaces the unit that mounts /tmp on the target.";
+const NOFAIL_LINE: &str = "#   No nofail option. If the unit is started at boot and its device \
+     is missing, units that require it fail, and boot can stop in emergency mode.";
+fn carry_line(verb: &str, unit: &str) -> String {
+    format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
+}
+
+/// The advisory for `unit`: its `# Advisory:` line and the indented lines
+/// after it. Empty when there is none.
+fn advisory_for(containerfile: &str, unit: &str) -> Vec<String> {
+    let first = format!("# Advisory: {unit} is ");
+    let mut lines = containerfile.lines().skip_while(|l| !l.starts_with(&first));
+    let Some(head) = lines.next() else {
+        return Vec::new();
+    };
+    std::iter::once(head)
+        .chain(lines.take_while(|l| l.starts_with("#   ")))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether every line of `containerfile` that names `unit` is a comment,
+/// so no instruction (`RUN`, `COPY` or any other) names it.
+fn only_comments_name(containerfile: &str, unit: &str) -> bool {
+    containerfile
+        .lines()
+        .filter(|l| l.contains(unit))
+        .all(|l| l.trim_start().starts_with('#'))
+}
+
+/// A mount unit file with `Where=` and, when given, `Options=`.
+fn mount_file(mount_point: &str, options: Option<&str>) -> String {
+    let options = options
+        .map(|o| format!("Options={o}\n"))
+        .unwrap_or_default();
+    format!(
+        "[Mount]\nWhat=/dev/vdb\nWhere={mount_point}\n{options}\
+         [Install]\nWantedBy=local-fs.target\n"
+    )
+}
+
+/// The control every advisory host carries: a package-owned mount unit
+/// enabled against its preset, which is in `RUN systemctl enable`.
+const PACKAGED_MOUNT: &str = "var-lib-pkg.mount";
+
+/// A host with the package-owned control and `disable *` as its preset,
+/// scanned against a base image so refine keeps the package included.
+fn advisory_host() -> UnitHost {
+    UnitHost::new()
+        .base_package("glibc")
+        .package("pkgmount")
+        .unit(PACKAGED_MOUNT, "enabled")
+        .preset("disable *")
+        .vendor_unit(
+            PACKAGED_MOUNT,
+            &mount_file("/var/lib/pkg", None),
+            Some("pkgmount"),
+        )
+}
+
+/// The scan's and a refine session's Containerfile for `snap`.
+fn both_routes(snap: &InspectionSnapshot) -> [(&'static str, String); 2] {
+    [
+        ("scan", containerfile_in(&render_export(snap))),
+        ("refine", containerfile_in(&export_session(&session(snap)))),
+    ]
+}
+
+/// T9: a local `srv.mount` gets the `/var` rename line; `Where=/opt/vendor`
+/// the `/opt` line and no rename line; a mount under `/usr` the `/usr`
+/// line. Each local unit file is staged, so each gets the file line. No
+/// instruction names any of them, while the package-owned control on the
+/// same host is enabled. The section sits after the unit state section.
+#[test]
+fn t9_the_mount_advisory_text_through_the_scan() {
+    let snap = scan(
+        advisory_host()
+            .unit("srv.mount", "enabled")
+            .unit("opt-vendor.mount", "enabled")
+            .unit("usr-share-data.mount", "enabled")
+            .etc_unit("srv.mount", &mount_file("/srv", None))
+            .etc_unit(
+                "opt-vendor.mount",
+                &mount_file("/opt/vendor", Some("nofail")),
+            )
+            .etc_unit(
+                "usr-share-data.mount",
+                &mount_file("/usr/share/data", Some("defaults,nofail")),
+            ),
+    );
+    let expected = [
+        (
+            "srv.mount",
+            vec![
+                advisory_fact("srv.mount", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                var_symlink_line("/srv"),
+                NOFAIL_LINE.to_owned(),
+                carry_line("enable", "srv.mount"),
+            ],
+        ),
+        (
+            "opt-vendor.mount",
+            vec![
+                advisory_fact("opt-vendor.mount", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                opt_line("/opt/vendor"),
+                carry_line("enable", "opt-vendor.mount"),
+            ],
+        ),
+        (
+            "usr-share-data.mount",
+            vec![
+                advisory_fact("usr-share-data.mount", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                usr_line("/usr/share/data"),
+                carry_line("enable", "usr-share-data.mount"),
+            ],
+        ),
+    ];
+    for (route, containerfile) in both_routes(&snap) {
+        for (unit, lines) in &expected {
+            assert_eq!(
+                &advisory_for(&containerfile, unit),
+                lines,
+                "{route}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                only_comments_name(&containerfile, unit),
+                "{route}, {unit}:\n{containerfile}"
+            );
+        }
+        assert!(
+            acts(&containerfile, "enable", PACKAGED_MOUNT),
+            "{route}: the control:\n{containerfile}"
+        );
+        let headers = section_headers(&containerfile);
+        let state = headers.iter().position(|h| *h == UNIT_SECTION);
+        let advisories = headers
+            .iter()
+            .position(|h| *h == "# === Mount, Automount and Swap Advisories ===");
+        assert!(
+            state.is_some() && advisories == state.map(|s| s + 1),
+            "{route}: {headers:?}"
+        );
+    }
+}
+
+/// T9: the file line follows the unit file's config row. Excluding the row
+/// through `RefineSession` alone removes the staged file and the line;
+/// including it again restores both. The rest of the advisory stays, and
+/// no instruction names the unit either way.
+#[test]
+fn t9_the_file_line_follows_the_config_row() {
+    const UNIT: &str = "srv.mount";
+    let path = etc_path(UNIT);
+    let snap = scan(
+        advisory_host()
+            .unit(UNIT, "enabled")
+            .etc_unit(UNIT, &mount_file("/srv", Some("nofail"))),
+    );
+    let without_file = vec![
+        advisory_fact(UNIT, "enabled"),
+        var_symlink_line("/srv"),
+        carry_line("enable", UNIT),
+    ];
+    let mut with_file = without_file.clone();
+    with_file.insert(1, FILE_STAGED_LINE.to_owned());
+
+    let mut session = session(&snap);
+    for (step, include, lines) in [
+        ("at scan", None, &with_file),
+        ("excluded", Some(false), &without_file),
+        ("included again", Some(true), &with_file),
+    ] {
+        if let Some(include) = include {
+            session
+                .apply(set_include(config_item(&path), include))
+                .unwrap_or_else(|e| panic!("{step}: {e:?}"));
+        }
+        let tree = export_session(&session);
+        let containerfile = containerfile_in(&tree);
+        assert_eq!(
+            staged_at(&tree, &path),
+            include != Some(false),
+            "{step}: the staged file"
+        );
+        assert_eq!(
+            &advisory_for(&containerfile, UNIT),
+            lines,
+            "{step}:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, UNIT),
+            "{step}:\n{containerfile}"
+        );
+    }
+}
+
+/// T8, advisory cases: a local unit of each storage kind, enabled, and a
+/// vendor mount unit whose owner lookup fails, enabled: each gets the
+/// advisory and no instruction. A mount without `nofail` and a swap
+/// without it get the `nofail` line; a swap with it and an automount do
+/// not. The package-owned control is enabled.
+#[test]
+fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
+    let snap = scan(
+        advisory_host()
+            .unit("srv-data.mount", "enabled")
+            .unit("srv-data.automount", "enabled")
+            .unit("dev-vdb1.swap", "enabled")
+            .unit("dev-vdb2.swap", "enabled")
+            .unit("data-vendor.mount", "enabled")
+            .etc_unit("srv-data.mount", &mount_file("/srv/data", None))
+            .etc_unit(
+                "srv-data.automount",
+                "[Automount]\nWhere=/srv/data\n[Install]\nWantedBy=local-fs.target\n",
+            )
+            .etc_unit(
+                "dev-vdb1.swap",
+                "[Swap]\nWhat=/dev/vdb1\n[Install]\nWantedBy=swap.target\n",
+            )
+            .etc_unit(
+                "dev-vdb2.swap",
+                "[Swap]\nWhat=/dev/vdb2\nOptions=nofail\n[Install]\nWantedBy=swap.target\n",
+            )
+            .vendor_unit(
+                "data-vendor.mount",
+                &mount_file("/data/vendor", Some("nofail")),
+                None,
+            ),
+    );
+    let expected = [
+        (
+            "srv-data.mount",
+            vec![
+                advisory_fact("srv-data.mount", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                var_symlink_line("/srv"),
+                NOFAIL_LINE.to_owned(),
+                carry_line("enable", "srv-data.mount"),
+            ],
+        ),
+        (
+            "srv-data.automount",
+            vec![
+                advisory_fact("srv-data.automount", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                var_symlink_line("/srv"),
+                carry_line("enable", "srv-data.automount"),
+            ],
+        ),
+        (
+            "dev-vdb1.swap",
+            vec![
+                advisory_fact("dev-vdb1.swap", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                NOFAIL_LINE.to_owned(),
+                carry_line("enable", "dev-vdb1.swap"),
+            ],
+        ),
+        (
+            "dev-vdb2.swap",
+            vec![
+                advisory_fact("dev-vdb2.swap", "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                carry_line("enable", "dev-vdb2.swap"),
+            ],
+        ),
+        (
+            "data-vendor.mount",
+            vec![
+                advisory_fact("data-vendor.mount", "enabled"),
+                carry_line("enable", "data-vendor.mount"),
+            ],
+        ),
+    ];
+    for (route, containerfile) in both_routes(&snap) {
+        for (unit, lines) in &expected {
+            assert_eq!(
+                &advisory_for(&containerfile, unit),
+                lines,
+                "{route}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route}, {unit}:\n{containerfile}"
+            );
+            assert!(
+                only_comments_name(&containerfile, unit),
+                "{route}, {unit}:\n{containerfile}"
+            );
+        }
+        assert!(
+            acts(&containerfile, "enable", PACKAGED_MOUNT),
+            "{route}: the control:\n{containerfile}"
+        );
+    }
+}
+
+/// T8: a `tmp.mount` with a full copy in `/etc` over the vendor file gets
+/// the advisory with the `tmp.mount` line, and its file is a config entry
+/// whose toggle, through `RefineSession` alone, removes and restores the
+/// staged file and, with it, the file and `tmp.mount` lines. No
+/// instruction names it at any step.
+#[test]
+fn t8_a_tmp_mount_copy_in_etc_gets_the_tmp_mount_line() {
+    const UNIT: &str = "tmp.mount";
+    let path = etc_path(UNIT);
+    let vendor = "[Mount]\nWhat=tmpfs\nWhere=/tmp\nOptions=mode=1777,strictatime\n";
+    let snap = scan(
+        advisory_host()
+            .unit(UNIT, "static")
+            .vendor_unit(UNIT, vendor, Some("systemd"))
+            .etc_unit(
+                UNIT,
+                "[Mount]\nWhat=tmpfs\nWhere=/tmp\nOptions=mode=1777,size=2G\n",
+            ),
+    );
+    let entry = snap
+        .config
+        .as_ref()
+        .expect("a config section")
+        .files
+        .iter()
+        .find(|f| f.path == path);
+    assert!(entry.is_some(), "the copy is a config entry");
+    let staged_lines = vec![
+        advisory_fact(UNIT, "not enabled"),
+        FILE_STAGED_LINE.to_owned(),
+        TMP_MOUNT_LINE.to_owned(),
+        NOFAIL_LINE.to_owned(),
+    ];
+    let unstaged_lines = vec![advisory_fact(UNIT, "not enabled"), NOFAIL_LINE.to_owned()];
+
+    let mut session = session(&snap);
+    for (step, include, lines) in [
+        ("at scan", None, &staged_lines),
+        ("excluded", Some(false), &unstaged_lines),
+        ("included again", Some(true), &staged_lines),
+    ] {
+        if let Some(include) = include {
+            session
+                .apply(set_include(config_item(&path), include))
+                .unwrap_or_else(|e| panic!("{step}: {e:?}"));
+        }
+        let tree = export_session(&session);
+        let containerfile = containerfile_in(&tree);
+        assert_eq!(
+            staged_at(&tree, &path),
+            include != Some(false),
+            "{step}: the staged file"
+        );
+        assert_eq!(
+            &advisory_for(&containerfile, UNIT),
+            lines,
+            "{step}:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, UNIT),
+            "{step}:\n{containerfile}"
+        );
+        assert!(
+            acts(&containerfile, "enable", PACKAGED_MOUNT),
+            "{step}: the control:\n{containerfile}"
+        );
+    }
+}
+
+/// T11, unowned storage masks: for each storage kind and both mask forms,
+/// an unowned vendor file or none gives the advisory with state `masked`,
+/// the `To carry it` line with `mask`, and no instruction. The zero-length
+/// form is withheld, so no file line. The `nofail` line needs a unit file
+/// to read: an unowned mount or swap file with no `Options=` gets it, a
+/// mask with no file does not. A masked `tmp.mount` gets no `To carry it`
+/// line, since § 10.3 refuses that mask. Control: the same mask over a
+/// package-owned file is a `mask` command and has no advisory.
+#[test]
+fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
+    for unit in [
+        "srv-data.mount",
+        "srv-data.automount",
+        "dev-vdb1.swap",
+        "tmp.mount",
+    ] {
+        let has_options = !unit.ends_with(".automount");
+        for form in MASK_FORMS {
+            for owner in ["owned", "unowned", "no vendor file"] {
+                let label = format!("{unit}, {form}, {owner}");
+                let host = UnitHost::new().unit(unit, "masked");
+                let host = match owner {
+                    "owned" => host.vendor_unit(unit, "[Unit]\n", Some("pkg")),
+                    "unowned" => host.vendor_unit(unit, "[Unit]\n", None),
+                    _ => host,
+                };
+                let snap = scan(masked_by(host, unit, form));
+                let tree = render_export(&snap);
+                assert!(!staged_at(&tree, &etc_path(unit)), "{label}");
+                let containerfile = containerfile_in(&tree);
+                if owner == "owned" {
+                    if unit == "tmp.mount" {
+                        assert_eq!(
+                            fixme_for(&containerfile, unit),
+                            Some(TMP_MOUNT_FIXME),
+                            "{label}"
+                        );
+                    } else {
+                        assert!(
+                            acts(&containerfile, "mask", unit),
+                            "{label}:\n{containerfile}"
+                        );
+                    }
+                    assert!(advisory_for(&containerfile, unit).is_empty(), "{label}");
+                    continue;
+                }
+                let mut expected = vec![advisory_fact(unit, "masked")];
+                if owner == "unowned" && has_options {
+                    expected.push(NOFAIL_LINE.to_owned());
+                }
+                if unit != "tmp.mount" {
+                    expected.push(carry_line("mask", unit));
+                }
+                assert_eq!(
+                    advisory_for(&containerfile, unit),
+                    expected,
+                    "{label}:\n{containerfile}"
+                );
+                assert!(
+                    in_no_systemctl_instruction(&containerfile, unit),
+                    "{label}:\n{containerfile}"
+                );
+                assert!(
+                    only_comments_name(&containerfile, unit),
+                    "{label}:\n{containerfile}"
+                );
+            }
+        }
+    }
+}

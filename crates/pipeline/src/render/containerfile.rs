@@ -26,6 +26,7 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
+use super::comment::escape_comment_text;
 use super::configtree::{
     FLATPAK_SERVICE, StagedFileKind, UnstagedWhy, is_staged, staged_count, staged_unit_file,
     staged_writes, stages_config_unit_dir, unstaged_files, validate_path,
@@ -39,7 +40,8 @@ use super::safety::{
     shell_operand_refusal, single_quote,
 };
 use super::unit_plan::{
-    is_package_installable, manual_follow_up_line, plan_units, unit_state_lines,
+    is_package_installable, manual_follow_up_line, mount_advisory_lines, plan_units,
+    unit_state_lines,
 };
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
@@ -206,6 +208,10 @@ fn render_containerfile_inner(
     //     collected unit (drop-ins and shadows, the config tree), so each
     //     command acts on the file the image loads (§ 10.7).
     lines.extend(unit_state_section_lines(snap));
+
+    // 5c. Mount, automount and swap advisories: comments only (§ 10.6),
+    //     after the configuration COPY their carry lines refer to.
+    lines.extend(mount_advisory_section_lines(snap));
 
     // 6. Non-RPM software
     if is_degraded(&snap.completeness, InspectorId::NonRpmSoftware) {
@@ -1232,6 +1238,23 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
 pub(crate) fn unit_state_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let plan = plan_units(snap, &staged_writes(snap));
     section("Systemd Unit State", unit_state_lines(&plan))
+}
+
+/// The mount advisory section (§ 10.6): [`mount_advisory_lines`] for each
+/// mount finding, against the files the export stages. Comment lines only:
+/// no instruction names an administrator's storage unit.
+fn mount_advisory_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+    let Some(units) = &snap.units else {
+        return Vec::new();
+    };
+    let staged = staged_writes(snap);
+    let body = units
+        .mount_findings
+        .iter()
+        .flat_map(|finding| mount_advisory_lines(finding, &staged))
+        .map(|line| escape_comment_text(&line))
+        .collect();
+    section("Mount, Automount and Swap Advisories", body)
 }
 
 // --- Service Drop-ins section ---

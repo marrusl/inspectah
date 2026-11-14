@@ -4,11 +4,14 @@
 //! it uses, and the package installability helpers the package sections
 //! share, live here too.
 
-use inspectah_core::baseline::{TARGET_NEEDS_UNIT, target_needs_unit, target_needs_unit_text};
+use inspectah_core::baseline::{
+    TARGET_NEEDS_UNIT, TMP_MOUNT, target_needs_unit, target_needs_unit_text,
+};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    CarriedUnit, UnitAction, UnitFragment, UnitName, UnitStateChange,
+    AdminStorageFragment, CarriedUnit, MountUnitFinding, StorageKind, UnitAction, UnitFragment,
+    UnitName, UnitState, UnitStateChange,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -19,6 +22,9 @@ use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
 use super::safety::single_quote;
+use super::selinux::{
+    BASE_IMAGE_DIRECTORIES, BASE_VAR_SYMLINKS, BOOTC_OWNED_MOUNT_POINTS, IMAGE_USR,
+};
 
 // ---------------------------------------------------------------------------
 // Package installability helpers (unchanged from prior tasks)
@@ -472,6 +478,133 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             "# {} unit(s) deferred to Scheduled Tasks section: {}",
             names.len(),
             names.join(", ")
+        ));
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// § 10.6 mount, automount and swap advisories
+// ---------------------------------------------------------------------------
+
+/// The advisory's first line, after `<unit> is <state> on the source host.`
+const MOUNT_ADVISORY_FACT: &str = "inspectah does not enable, disable or mask a mount, \
+     automount or swap unit the administrator wrote.";
+
+/// The state the first line names for a finding with no state change: an
+/// `/etc` unit file that is neither enabled nor masked. It may be disabled
+/// or static; the collector does not record which.
+const MOUNT_STATE_NOT_RECORDED: &str = "not enabled";
+
+/// The unit's file is in `staged_writes`.
+const MOUNT_FILE_STAGED: &str = "#   Its unit file is copied into the image. No enable line is \
+     written, but the unit still starts if another unit requires it or names its mount point \
+     in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.";
+
+/// `mount_point` is one of [`BOOTC_OWNED_MOUNT_POINTS`].
+const MOUNT_BOOTC_OWNED: &str = "#   bootc and ostree own this mount point on the target.";
+
+/// The unit is `tmp.mount` and its file is in `staged_writes`.
+const MOUNT_TMP_FILE_STAGED: &str = "#   The bootc base image starts tmp.mount from a link it \
+     ships, so this file replaces the unit that mounts /tmp on the target.";
+
+/// A mount or swap with `nofail` absent.
+const MOUNT_NO_NOFAIL: &str = "#   No nofail option. If the unit is started at boot and its \
+     device is missing, units that require it fail, and boot can stop in emergency mode.";
+
+/// Whether `path` is `top` or a path under it, by whole components.
+fn is_or_is_under(path: &str, top: &str) -> bool {
+    path.strip_prefix(top)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// The comment lines of § 10.6 for one mount finding, in the table's
+/// order: the one source for the Containerfile and the view response. The
+/// lines are the spec's text with the unit, its state, the path and the
+/// verb filled in, `#` included, and are not escaped: `mount_point` comes
+/// from a host file, so each surface escapes the finished line for itself.
+///
+/// - Always, the first line. A finding with no state change names the
+///   unit `not enabled`.
+/// - The file line, when `staged` writes the unit's file at
+///   `/etc/systemd/system/<unit>` ([`is_staged`]), so it follows the
+///   config row's toggle.
+/// - From `mount_point`, when there is one: under `/usr`; one of
+///   [`BOOTC_OWNED_MOUNT_POINTS`]; under one of [`BASE_VAR_SYMLINKS`]
+///   (naming that top-level directory); under one of
+///   [`BASE_IMAGE_DIRECTORIES`]. The table does not read the state, so a
+///   masked finding with a mount point gets these too.
+/// - The `tmp.mount` line, when that unit's file is staged.
+/// - The `nofail` line, for a mount or swap whose `nofail` is false. Not
+///   for a mask with no unit file, which has no `Options=` to read.
+///   Drop-ins are not read, so `nofail` set only in a drop-in still gets
+///   the line.
+/// - The `To carry it` line, for an enabled or masked unit, except a
+///   masked `tmp.mount` (§ 10.3).
+pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_>) -> Vec<String> {
+    let name = finding.unit.name();
+    let unit = name.as_unit_name();
+    let state = finding.state_change.map(|(state, _)| state);
+    let state_text = state.map_or_else(|| MOUNT_STATE_NOT_RECORDED.to_owned(), |s| s.to_string());
+    let mut lines = vec![format!(
+        "# Advisory: {} is {state_text} on the source host. {MOUNT_ADVISORY_FACT}",
+        unit.as_str()
+    )];
+    let file_staged = is_staged(staged, &etc_unit_path(unit));
+    if file_staged {
+        lines.push(MOUNT_FILE_STAGED.to_owned());
+    }
+    if let Some(path) = finding.mount_point.as_deref() {
+        if is_or_is_under(path, IMAGE_USR) {
+            lines.push(format!(
+                "#   /usr is part of the read-only image on the target. The mount point must \
+                 already exist in the image, and a mount there hides the image's own content \
+                 under {path}."
+            ));
+        }
+        if BOOTC_OWNED_MOUNT_POINTS.contains(&path) {
+            lines.push(MOUNT_BOOTC_OWNED.to_owned());
+        }
+        if let Some(top) = BASE_VAR_SYMLINKS
+            .iter()
+            .find(|top| is_or_is_under(path, top))
+        {
+            lines.push(format!(
+                "#   {top} is a symlink into /var in the RHEL bootc base image. The unit must \
+                 be renamed for the resolved path (for /srv: var-srv.mount with \
+                 Where=/var/srv)."
+            ));
+        }
+        if let Some(top) = BASE_IMAGE_DIRECTORIES
+            .iter()
+            .find(|top| is_or_is_under(path, top))
+        {
+            lines.push(format!(
+                "#   {top} is a directory of the read-only image in the RHEL bootc base image, \
+                 not a link into /var. The unit keeps its name. The mount point must already \
+                 exist in the image, and a mount there hides the image's own content under \
+                 {path}."
+            ));
+        }
+    }
+    let is_tmp_mount = unit.as_str() == TMP_MOUNT;
+    if is_tmp_mount && file_staged {
+        lines.push(MOUNT_TMP_FILE_STAGED.to_owned());
+    }
+    let has_options = matches!(name.kind(), StorageKind::Mount | StorageKind::Swap);
+    let has_file = *finding.unit.fragment() != AdminStorageFragment::MaskOnly;
+    if has_options && has_file && !finding.nofail {
+        lines.push(MOUNT_NO_NOFAIL.to_owned());
+    }
+    let verb = match state {
+        Some(UnitState::Enabled) => Some(UnitAction::Enable),
+        Some(UnitState::Masked) if !is_tmp_mount => Some(UnitAction::Mask),
+        Some(UnitState::Masked | UnitState::Disabled) | None => None,
+    };
+    if let Some(verb) = verb {
+        lines.push(format!(
+            "#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- {}",
+            single_quote(unit.as_str())
         ));
     }
     lines
