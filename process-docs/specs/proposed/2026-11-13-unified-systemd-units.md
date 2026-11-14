@@ -2063,7 +2063,10 @@ makes exactly the one link.
 
 ### 11.1 Data contract
 
-The view response carries, in place of `service_states`:
+The view response carries, in place of `service_states`, the fields
+below. **They describe the single-host view response (`ViewResponse`,
+§ 9.1). The `declined` and `withheld` reasons are a requirement of that
+view only; the fleet view is left as it is. (Mark Russell, 2026-11-14)**
 
 | Field | Content |
 |---|---|
@@ -2214,6 +2217,11 @@ each is decided by § 10.2 from the files the operator leaves selected.
 Teaching the merge to reconcile them would be the aggregation redesign § 3
 rules out, and would still miss a snapshot edited or imported after the
 merge.
+
+**A fleet refine row shows the unit and its toggle, and no `declined` or
+`withheld` reason.** The plan runs on the aggregate export all the same,
+and its reasons are in the Containerfile's `# Omitted:`, FIXME and
+advisory comments, which is where a fleet user reads them (§ 11.1).
 
 One aggregate defect closes as a side effect: a local timer present on some
 hosts was excluded by both of its owners and written anyway, because the
@@ -2458,8 +2466,8 @@ Phase 4 (the `/etc/systemd/system` scan):
   version of one package ships an unmodified
   `/etc/systemd/system/timer.d/10-install.conf` with an `[Install]`
   section, no `bundle` unit, and no row for the helper. Merged, with the
-  bundle row included: an advisory with `FleetAggregate` on the refine
-  row. Host A alone: the enable is carried. (k) A vendor
+  bundle row included: an advisory with `FleetAggregate` in the plan and
+  in the Containerfile. Host A alone: the enable is carried. (k) A vendor
   `bundle.service.d/10-members.conf` with `[Install]` and
   `Also=helper.service`, and an `/etc` drop-in of the same file name that
   holds only `[Service]`, so the recorded list is empty: with the `/etc`
@@ -2723,7 +2731,9 @@ own design pass. Grouping and presentation only. It is not on the feature
 branch: it starts once the design pass is done and lands on `main` after
 the merge, as its own change. It reads the view response of § 11.1, which
 phases 1 to 5 complete, and changes no serialized snapshot type, so it
-needs no schema version of its own.
+needs no schema version of its own. Its design pass is where showing the
+plan's reasons in the fleet view would be taken up (§ 17). That is not a
+requirement of this phase.
 
 **Real-host runs.** What is left (§ 13) happens on the branch, before the
 merge, and results go into `process-docs/skills/real-host-validation-runs.md`
@@ -2779,6 +2789,12 @@ Other objections worth weighing:
   effect nobody recorded, silently. The spec does not close it: comparing
   against the target image is a non-goal (§ 3), and no version check is
   made.
+- **The fleet view does not say why a command was not written.** The
+  `declined` and `withheld` reasons are on single-host rows only (§ 11.1,
+  § 12). Every `Also=` command on a fleet aggregate is an advisory, so a
+  fleet user meets this for common packaged units, sees an included row
+  with no command behind it, and has to read the Containerfile to learn
+  why. It is left for fleet work or for the section design pass (§ 15).
 - **Five limits are stated and not closed.** On a fleet aggregate, a row
   without `Also=` is compared against a snapshot that may lack another
   host's package-owned, unmodified install drop-in, so a carried `enable`
