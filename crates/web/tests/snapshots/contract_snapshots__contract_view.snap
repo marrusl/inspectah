@@ -101,6 +101,7 @@ expression: json
       "system_site_packages": false
     }
   ],
+  "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
   "package_groups": [],
@@ -196,7 +197,9 @@ expression: json
     {
       "current_state": "enabled",
       "default_state": "disable",
+      "fragment": "vendor",
       "include": false,
+      "kind": "service",
       "locked": false,
       "triage": {
         "primary_reason": "service_unknown_origin",

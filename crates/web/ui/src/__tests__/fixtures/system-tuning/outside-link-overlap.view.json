@@ -31,6 +31,7 @@
   "flatpaks": [],
   "generation": 0,
   "has_unmanaged_scan": false,
+  "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
   "package_groups": [],

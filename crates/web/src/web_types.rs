@@ -11,8 +11,12 @@ use inspectah_core::types::sysctl::SysctlDir;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::projection::NotCarriedRow;
-use inspectah_refine::types::{ItemId, RefinedView, RepoProvenance, RepoTier, TriageTag};
+use inspectah_refine::projection::{
+    DeclinedView, FragmentView, MountFindingView, NotCarriedRow, WithheldView,
+};
+use inspectah_refine::types::{
+    ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoProvenance, RepoTier, TriageTag,
+};
 use serde::Serialize;
 
 // -- Non-RPM DTOs (language packages + unmanaged files for the frontend) ----
@@ -178,10 +182,24 @@ pub struct RepoGroupInfo {
     pub enabled: bool,
 }
 
-/// A classified service state change, projected for the view response.
+/// A classified unit state change, projected for the view response
+/// (§ 11.1). The name keeps "Service" from before units of every kind.
 #[derive(Serialize, Clone, Debug)]
 pub struct ServiceDecisionDto {
     pub unit: String,
+    /// The type suffix, lowercase (`service`, `socket`, `mount`, ...).
+    pub kind: String,
+    /// The template, when the unit is an instance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_of: Option<String>,
+    pub fragment: FragmentView,
+    /// The `/etc` unit file, for a local or shadowed fragment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_file_path: Option<String>,
+    /// Present when the export writes no command for the row: how the
+    /// Containerfile renders it, the reason's name and its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declined: Option<DeclinedView>,
     pub triage: TriageTag,
     pub include: bool,
     pub locked: bool,
@@ -211,6 +229,24 @@ pub struct DropInDecisionDto {
     /// Rationale text for the shadow override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow_rationale: Option<String>,
+    /// The parent unit's kind, lowercase; absent when the parent's name is
+    /// not a unit name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Present when the export does not write the file this row offers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
+}
+
+/// A config row for the view response: the refined row as before, and
+/// why the export does not write the file it offers, when it does not
+/// (§ 11.1).
+#[derive(Serialize, Clone, Debug)]
+pub struct ConfigFileDto {
+    #[serde(flatten)]
+    pub row: RefinedConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
 }
 
 /// A classified quadlet unit, projected for the view response.
@@ -519,15 +555,25 @@ pub struct PackageProvenance {
     pub group_name: String,
 }
 
+/// The `/api/view` body. The first five fields are `RefinedView`'s wire
+/// fields, listed here so each config row can carry its `withheld`; the
+/// adapter destructures `RefinedView` whole, so a field added there does
+/// not compile until it is placed here.
 #[derive(Serialize)]
 pub struct ViewResponse {
-    #[serde(flatten)]
-    pub view: RefinedView,
+    pub packages: Vec<RefinedPackage>,
+    pub config_files: Vec<ConfigFileDto>,
+    pub containerfile_preview: String,
+    pub stats: RefineStats,
+    pub generation: u64,
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
     pub unit_states: Vec<ServiceDecisionDto>,
     pub unit_dropins: Vec<DropInDecisionDto>,
+    /// The administrator's mount, automount and swap units. No `include`:
+    /// these rows have no toggle.
+    pub mount_findings: Vec<MountFindingView>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
     /// The read-only sysctl panel. Always present.

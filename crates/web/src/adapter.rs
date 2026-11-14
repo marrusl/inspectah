@@ -27,15 +27,15 @@ use inspectah_refine::projection::{
     RefVarDirectory, RefVersionChanges, ReferenceProjection, config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::ItemId;
+use inspectah_refine::types::{ItemId, RefinedView};
 
 use crate::sysctl_view::project_sysctl;
 use crate::web_types::{
-    ContextAdvisory, ContextDecision, ContextItem, ContextSubsection, DropInDecisionDto,
-    FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto, LanguagePackageEnvDto,
-    PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto, ReferenceSection, RepoGroupInfo,
-    ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto, UnmanagedFileItemDto,
-    VersionChangeEntry, ViewResponse,
+    ConfigFileDto, ContextAdvisory, ContextDecision, ContextItem, ContextSubsection,
+    DropInDecisionDto, FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto,
+    LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto,
+    ReferenceSection, RepoGroupInfo, ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto,
+    UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -133,6 +133,11 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .iter()
         .map(|s| ServiceDecisionDto {
             unit: s.unit.as_str().to_owned(),
+            kind: s.kind.clone(),
+            instance_of: s.instance_of.as_ref().map(|t| t.as_str().to_owned()),
+            fragment: s.fragment,
+            unit_file_path: s.unit_file_path.clone(),
+            declined: s.declined.clone(),
             triage: s.triage.clone(),
             include: s.include,
             locked: s.locked,
@@ -160,6 +165,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                 .and_then(|st| serde_json::to_value(st).ok())
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             shadow_rationale: d.entry.shadow_rationale.clone(),
+            kind: d.kind.clone(),
+            withheld: d.withheld.clone(),
         })
         .collect();
 
@@ -475,13 +482,50 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .unwrap_or_default();
 
+    let RefinedView {
+        packages,
+        config_files,
+        containerfile_preview,
+        stats,
+        repo_effective: _,
+        generation,
+    } = view;
+    // `config_withheld` holds one entry per included config row, found by
+    // the row's own `path`, and its value depends on that path alone (the
+    // stager decides by destination). So an included row takes the entry
+    // at its path, and an excluded row, which offers no file, takes none,
+    // even when an included variant shares its path.
+    let config_files = config_files
+        .into_iter()
+        .map(|row| {
+            let withheld = row
+                .entry
+                .disposition
+                .is_included()
+                .then(|| {
+                    decisions
+                        .config_withheld
+                        .iter()
+                        .find(|c| c.path == row.entry.path)
+                        .map(|c| c.withheld.clone())
+                })
+                .flatten();
+            ConfigFileDto { row, withheld }
+        })
+        .collect();
+
     ViewResponse {
-        view,
+        packages,
+        config_files,
+        containerfile_preview,
+        stats,
+        generation,
         repo_groups,
         baseline_summary: decisions.baseline_summary.clone(),
         version_changes,
         unit_states,
         unit_dropins,
+        mount_findings: decisions.mount_findings.clone(),
         quadlets,
         flatpaks,
         sysctl: project_sysctl(&session.snapshot_projected()),

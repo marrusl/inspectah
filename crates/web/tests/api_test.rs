@@ -1,3 +1,6 @@
+#[path = "../../cli/tests/support/unit_hosts.rs"]
+mod unit_hosts;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
@@ -4276,4 +4279,282 @@ fn test_carried_unit(
     };
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
+}
+
+// ---------------------------------------------------------------------
+// Every unit kind and its reasons on `/api/view` (§ 11.1).
+// ---------------------------------------------------------------------
+
+/// A token the secret pattern matches, planted in a local mount unit's
+/// `What=` (T10).
+const MOUNT_TOKEN: &str = "t10-mount-source-7f3a";
+const MOUNT_UNIT: &str = "srv-data.mount";
+const MOUNT_UNIT_PATH: &str = "/etc/systemd/system/srv-data.mount";
+/// A protected unit masked on the host: the plan declines its mask.
+const PROTECTED_UNIT: &str = "ostree-remount.service";
+/// T15's pair of imported config entries, a file and a file under it.
+const CONFLICT_FILE: &str = "/etc/app/conf";
+const CONFLICT_CHILD: &str = "/etc/app/conf/x";
+/// An imported zero-length unit file, its path spelled with an interior
+/// `.`: the stager withholds it, and its row is found by that spelling.
+const ZERO_LENGTH_UNIT: &str = "/etc/systemd/system/./zero.service";
+/// An imported config entry the export writes: the control.
+const WRITTEN_CONFIG: &str = "/etc/app.d/written.conf";
+
+/// A host, through the scan against a base image (so refine keeps the
+/// socket's owner included), with a socket enabled against its preset, a
+/// masked protected unit and an administrator's mount unit whose `What=`
+/// holds a credential; then the config entries above added as an imported
+/// snapshot would carry them, since the collector cannot produce them.
+fn every_kind_state() -> Arc<AppState> {
+    let service = "[Service]\nExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target\n";
+    let mut snap = unit_hosts::scan(
+        unit_hosts::UnitHost::new()
+            .base_package("glibc")
+            .package("cockpit-ws")
+            .unit("cockpit.socket", "enabled")
+            .unit(PROTECTED_UNIT, "masked")
+            .unit(MOUNT_UNIT, "enabled")
+            .preset("disable *")
+            .vendor_unit(
+                "cockpit.socket",
+                "[Socket]\nListenStream=9090\n[Install]\nWantedBy=sockets.target\n",
+                Some("cockpit-ws"),
+            )
+            .vendor_unit(PROTECTED_UNIT, service, Some("ostree"))
+            .mask(PROTECTED_UNIT)
+            .etc_unit(
+                MOUNT_UNIT,
+                &format!(
+                    "[Unit]\nDescription=Data volume\n\n[Mount]\n\
+                     What=https://files.example/volume?token={MOUNT_TOKEN}\n\
+                     Where=/srv/data\nOptions=defaults,nofail\n\n\
+                     [Install]\nWantedBy=multi-user.target\n"
+                ),
+            ),
+    );
+    let files = &mut snap.config.as_mut().expect("a config section").files;
+    for (path, content) in [
+        (CONFLICT_FILE, "a=1\n"),
+        (CONFLICT_CHILD, "b=2\n"),
+        (ZERO_LENGTH_UNIT, ""),
+        (WRITTEN_CONFIG, "c=3\n"),
+    ] {
+        files.push(ConfigFileEntry {
+            path: path.into(),
+            category: ConfigCategory::Other,
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    }
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    })
+}
+
+/// The row of `rows` whose `key` is `value`.
+fn row_by<'a>(rows: &'a serde_json::Value, key: &str, value: &str) -> &'a serde_json::Value {
+    rows.as_array()
+        .expect("an array")
+        .iter()
+        .find(|r| r[key] == value)
+        .unwrap_or_else(|| panic!("no row with {key} {value}: {rows}"))
+}
+
+/// § 11.1 through the production handlers: a socket row has its kind and
+/// no `declined` until its owner is excluded, then the plan's reason with
+/// the Containerfile's own text and no `attention_reason`; a protected
+/// unit's row has its FIXME,
+/// the config rows that offered a withheld file say so (and a written one
+/// does not), and the mount finding is a row with its advisories and no
+/// `include` key at all.
+#[tokio::test]
+async fn the_view_serves_unit_kinds_reasons_and_mount_findings() {
+    let app = app(every_kind_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let preview = json["containerfile_preview"].as_str().expect("a preview");
+
+    let socket = row_by(&json["unit_states"], "unit", "cockpit.socket");
+    assert_eq!(socket["kind"], "socket", "{socket}");
+    assert_eq!(socket["fragment"], "vendor", "{socket}");
+    assert!(socket.get("declined").is_none(), "{socket}");
+
+    let protected = row_by(&json["unit_states"], "unit", PROTECTED_UNIT);
+    assert_eq!(protected["kind"], "service");
+    assert_eq!(protected["declined"]["renders"], "fixme", "{protected}");
+    assert_eq!(protected["declined"]["reason"], "TargetNeedsUnit");
+    let text = protected["declined"]["text"].as_str().expect("a text");
+    assert!(
+        preview.contains(&format!("# FIXME: {text}")),
+        "the row's text is the Containerfile's line: {text}\n{preview}"
+    );
+
+    // Excluding the socket's owner declines its enable, on a row whose
+    // `attention_reason` is null: `declined` stands on its own.
+    set_package_include(&app, "cockpit-ws", "x86_64", false).await;
+    let (_, after) = get_json(&app, "/api/view").await;
+    let socket = row_by(&after["unit_states"], "unit", "cockpit.socket");
+    assert!(socket.get("attention_reason").is_none(), "{socket}");
+    assert_eq!(
+        socket["declined"],
+        serde_json::json!({
+            "renders": "omitted",
+            "reason": "PackageExcluded",
+            "text": "cockpit.socket (package 'cockpit-ws' was excluded)",
+        })
+    );
+    let after_preview = after["containerfile_preview"].as_str().expect("a preview");
+    assert!(
+        after_preview.contains("# Omitted: cockpit.socket (package 'cockpit-ws' was excluded)"),
+        "{after_preview}"
+    );
+
+    let config = |path: &str| -> serde_json::Value {
+        json["config_files"]
+            .as_array()
+            .expect("config_files")
+            .iter()
+            .find(|c| c["entry"]["path"] == path)
+            .unwrap_or_else(|| panic!("no config row {path}"))
+            .clone()
+    };
+    let conflict = |other: &str| {
+        serde_json::json!({
+            "outcome": "withheld",
+            "why": "Conflict",
+            "text": format!(
+                "{other} is also staged, and one of the two paths is a directory of the \
+                 other; exclude one of the two"
+            ),
+        })
+    };
+    assert_eq!(config(CONFLICT_FILE)["withheld"], conflict(CONFLICT_CHILD));
+    assert_eq!(config(CONFLICT_CHILD)["withheld"], conflict(CONFLICT_FILE));
+    assert_eq!(
+        config(ZERO_LENGTH_UNIT)["withheld"]["why"],
+        "ZeroLengthUnitFile",
+        "the row is found by its own spelling"
+    );
+    // Control: a config row the export writes has no `withheld` key.
+    assert!(config(WRITTEN_CONFIG).get("withheld").is_none());
+    assert!(config(WRITTEN_CONFIG).get("entry").is_some());
+
+    let finding = row_by(&json["mount_findings"], "unit", MOUNT_UNIT);
+    assert_eq!(finding["kind"], "mount", "{finding}");
+    assert_eq!(finding["state"], "enabled");
+    assert_eq!(finding["mount_point"], "/srv/data");
+    assert_eq!(finding["fragment"], "local");
+    assert_eq!(finding["unit_file_path"], MOUNT_UNIT_PATH);
+    let advisories = finding["advisories"].as_array().expect("advisories");
+    assert!(!advisories.is_empty(), "{finding}");
+    for line in advisories {
+        let line = line.as_str().expect("a string");
+        assert!(preview.contains(line), "{line}\n{preview}");
+    }
+    // Presence of a toggle key on the unit rows first, then its absence.
+    assert!(socket.get("include").is_some());
+    for row in json["mount_findings"].as_array().expect("an array") {
+        assert!(row.get("include").is_none(), "{row}");
+    }
+}
+
+/// T10 on the wire: the finding row exists with its mount point and
+/// advisories, and the planted mount source is nowhere in `/api/view`.
+#[tokio::test]
+async fn the_mount_source_is_nowhere_in_the_view_response() {
+    let app = app(every_kind_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let finding = row_by(&json["mount_findings"], "unit", MOUNT_UNIT);
+    assert_eq!(finding["mount_point"], "/srv/data");
+    assert!(
+        !finding["advisories"]
+            .as_array()
+            .expect("advisories")
+            .is_empty()
+    );
+    let body = json.to_string();
+    assert!(body.contains(MOUNT_UNIT_PATH), "presence first");
+    assert!(!body.contains(MOUNT_TOKEN), "the mount source leaked");
+}
+
+/// Two aggregate variants at one unit path, the selected one with content
+/// and the alternative zero-length. The projection's `config_withheld`
+/// lists one entry per included row at the path; the view puts each on
+/// an included row at that path and never on an excluded one. Excluding
+/// the path (which reaches the first variant) leaves the zero-length
+/// alternative as the one included row, and only it carries `withheld`.
+#[test]
+fn withheld_lands_on_the_included_variant_rows_only() {
+    use inspectah_core::types::aggregate::VariantSelection;
+    use inspectah_refine::types::{ItemId, RefinementOp};
+    const PATH: &str = "/etc/systemd/system/variant.service";
+    let variant = |content: &str, selection| ConfigFileEntry {
+        path: PATH.into(),
+        kind: ConfigFileKind::Unowned,
+        category: ConfigCategory::Other,
+        content: content.into(),
+        disposition: FindingKind::included(),
+        variant_selection: selection,
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![
+            variant("[Unit]\n", VariantSelection::Selected),
+            variant("", VariantSelection::Alternative),
+        ],
+    });
+    let mut session = RefineSession::new(snap);
+    // (content, included, withheld) per config row, in view order.
+    let rows = |session: &RefineSession| -> Vec<(String, bool, Option<serde_json::Value>)> {
+        let json = serde_json::to_value(inspectah_web::adapter::build_web_view(session))
+            .expect("the view serializes");
+        json["config_files"]
+            .as_array()
+            .expect("config_files")
+            .iter()
+            .map(|c| {
+                (
+                    c["entry"]["content"].as_str().expect("content").to_owned(),
+                    c["entry"]["disposition"]["include"] == true,
+                    c.get("withheld").cloned(),
+                )
+            })
+            .collect()
+    };
+
+    let both = rows(&session);
+    assert!(both.iter().all(|(_, included, _)| *included), "{both:?}");
+    let listed: Vec<serde_json::Value> = session
+        .decisions()
+        .config_withheld
+        .iter()
+        .filter(|c| c.path == PATH)
+        .map(|c| serde_json::to_value(&c.withheld).expect("serializes"))
+        .collect();
+    let carried: Vec<serde_json::Value> = both.iter().filter_map(|(_, _, w)| w.clone()).collect();
+    assert_eq!(listed.len(), 2, "both included variants offer the file");
+    assert_eq!(carried, listed);
+
+    session
+        .apply(RefinementOp::SetInclude {
+            item_id: ItemId::Config { path: PATH.into() },
+            include: false,
+        })
+        .expect("the config row toggles");
+    let one = rows(&session);
+    assert_eq!(
+        one.iter()
+            .map(|(content, included, w)| (content.as_str(), *included, w.is_some()))
+            .collect::<Vec<_>>(),
+        [("[Unit]\n", false, false), ("", true, true)],
+        "{one:?}"
+    );
+    assert_eq!(
+        one[1].2.as_ref().expect("withheld")["why"],
+        "ZeroLengthUnitFile"
+    );
 }
