@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `94099a0a`. The spec is the contract. Section numbers (§) and test ids (T1 to T29) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `864a9404`. The spec is the contract. Section numbers (§) and test ids (T1 to T32) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -574,20 +574,20 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 
 **Interfaces (Produces):** `pub(crate) fn compare_install(effective: &InstallRead, vendor: &InstallRead) -> InstallDifference`, where `InstallDifference` is `Same`, `Additive`, `NotAdditive { host_only, vendor_only, also_host_only, also_vendor_only }` or `VendorUndetermined`. It is internal to the collector and is not stored.
 
-- [ ] **Step 1: Failing tests first,** T30 (a) to (h) through the real inspectors, asserting the state change or its absence, the fragment, `install_drop_ins`, the attention note, and each `ManualLink` with its relation and cause. A unit test on `compare_install`: reordered values are `Same`; an added `Alias=` is `Additive`; equal links with a differing `Also=` name are `NotAdditive`; an `Undetermined` vendor section is `VendorUndetermined`.
+- [ ] **Step 1: Failing tests first,** T30 (a) to (h) through the real inspectors, asserting the state change or its absence, the fragment, `install_drop_ins`, the attention note, and each `ManualLink` with its relation, cause and `install_files`. A unit test on `compare_install`: reordered values are `Same`; an added `Alias=` is `Additive`; equal links with a differing `Also=` name are `NotAdditive`; an `Undetermined` vendor section is `VendorUndetermined`.
 - [ ] **Step 2-4:** run (fails: no row and no link finding for any divergent unit), implement, gate. **Step 5: Commit** `feat(collect): compare a unit's /etc [Install] with its package's`.
 
 **Acceptance:** T30 passes. A shadow that leaves `[Install]` alone produces no row and no finding.
 
 ### Task 4.5b: The added links carried, the changed ones advised (Rust lane, M)
 
-**Spec:** § 7.4 "An additive row is planned like any other" (rule 5 on the shadow or the drop-ins, rule 7 if the unit has members); § 10.9 the `HostInstallOnly` and `VendorInstallOnly` rows, the `add-wants` line for the first, the `rm` line for the second, the alias and `Also` wording; § 11.1 `manual_links[]` with the new relation and causes; § 12 the install-difference causes merging by relation, parent and unit; § 11.3 "The command, which is the exception"; T31, T32.
+**Spec:** § 7.4 "An additive row is planned like any other" (rule 5 on the shadow or the drop-ins, rule 7 if the unit has members); § 7.4 "An install-difference advisory holds only while the files that cause it are in the export" (`ManualLink.install_files`, read through `Destination`); § 10.9 the `HostInstallOnly` and `VendorInstallOnly` rows, the `add-wants` line for the first, the `rm` line for the second, the alias and `Also` wording; § 11.1 `manual_links[]` with the new relation and causes, and `not_applied`; § 6.7 row for `install_files`; § 12 the install-difference causes merging by relation, parent and unit; § 11.3 "The command, which is the exception"; T31, T32.
 
 **Needs:** Task 4.5a; Task 4.3 (rule 5's drop-in half); Task 4.5 (the link advisory renderer).
 
 **Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/refine/src/projection/`, `crates/core/src/aggregate/merge.rs` (no new rule: a test that the existing triple merge covers the new causes). Test: `crates/cli/tests/units_scan_test.rs`, `crates/pipeline/tests/unit_plan_test.rs`, `crates/core/tests/aggregate_merge_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T31: the units of T30 (b), (c) and (e) are in `RUN systemctl enable` after the configuration `COPY`; with the drop-in of (b) or the shadow of (c) excluded, `InstallEvidenceChanged` and no enable; the unit of (a) is in no `systemctl` line. T32: for (d), the `HostInstallOnly` block with its `add-wants` line, the `VendorInstallOnly` block with its `rm` line, no `systemctl` instruction naming the unit, and two refine rows with no include field; for (f), the removal line; for (g), the `Also` text and no command line; a `VendorInstallOnly` alias names `/etc/systemd/system/<alias>`. Two hosts with the same `VendorInstallOnly` link merge to one row with prevalence.
+- [ ] **Step 1: Failing tests first,** T31: the units of T30 (b), (c) and (e) are in `RUN systemctl enable` after the configuration `COPY`; with the drop-in of (b) or the shadow of (c) excluded, `InstallEvidenceChanged` and no enable; the unit of (a) is in no `systemctl` line. T32: for (d), the `HostInstallOnly` block with its `add-wants` line, the `VendorInstallOnly` block with its `rm` line, no `systemctl` instruction naming the unit, and two refine rows with no include field; for (f), the removal line; for (g), the `Also` text and no command line; a `VendorInstallOnly` alias names `/etc/systemd/system/<alias>`. With the replacing shadow of (d) excluded: no `rm` line, no `add-wants` line, no command for the unit, and the two refine rows marked `not_applied` with the shadow's path; included again, both blocks return. Two hosts with the same `VendorInstallOnly` link merge to one row with prevalence.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): carry added [Install] links and advise changed ones`.
 
 **Acceptance:** T31 and T32 pass. No `systemctl` verb other than `enable`, `disable`, `mask` and `set-default` is rendered.
@@ -888,4 +888,4 @@ Each test, and each lettered case, in the task that carries it. Every task liste
 | T29 | 5.2 |
 | T30 | 4.5a |
 | T31 | 4.5b |
-| T32 | render 4.5b; rows 4.11 |
+| T32 | render and the excluded-file case 4.5b; rows 4.11 |
