@@ -548,4 +548,20 @@ pub struct GenericRefItem {
     pub summary: Option<String>,
     pub content: Option<String>,
     pub tags: Vec<String>,
+    /// On a scheduled timer row only: the unit the timer is, so the row can
+    /// link to its control. `None` on every other row, and on a timer
+    /// whose `<name>.timer` is not a unit name.
+    pub unit_link: Option<TimerUnitLink>,
+}
+
+/// The unit a scheduled timer row describes (§ 11.1). The row has no
+/// include flag: the timer's state is its unit row's, when it has one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerUnitLink {
+    /// `<name>.timer`.
+    pub unit: UnitName,
+    /// Whether `unit_states` holds a row for `unit`: one row per state
+    /// change, so this is whether the snapshot records a state change for
+    /// the timer.
+    pub unit_row: bool,
 }

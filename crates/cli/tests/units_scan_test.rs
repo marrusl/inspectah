@@ -4401,3 +4401,64 @@ fn a_local_or_shadowed_updater_timer_keeps_the_updater_default() {
         assert!(acts(&included, "enable", UPDATER), "{label}:\n{included}");
     }
 }
+
+/// The scheduled row of `name`'s timer in `session`'s reference view.
+fn scheduled_timer_row(
+    session: &RefineSession,
+    name: &str,
+) -> inspectah_refine::projection::GenericRefItem {
+    session
+        .reference()
+        .scheduled_tasks
+        .into_iter()
+        .find(|row| row.id == name && row.tags.iter().any(|t| t == "timer"))
+        .unwrap_or_else(|| panic!("no scheduled timer row for {name}"))
+}
+
+/// § 11.1 and T20, refine half: a scheduled timer row names its unit and
+/// says whether `unit_states` holds a row for it, where its control is.
+/// An enabled local timer is a state change, so its row links to a unit
+/// row that keeps its include flag and accepts a `SetInclude`; the same
+/// timer `disabled` is no state change, so its row says there is no unit
+/// row to link to.
+#[test]
+fn a_scheduled_timer_row_links_to_its_unit_row() {
+    use inspectah_refine::projection::TimerUnitLink;
+    let unit: inspectah_core::types::units::UnitName =
+        "report.timer".to_owned().try_into().expect("a unit name");
+
+    let mut enabled = session(&scan(t19_host("enabled")));
+    assert_eq!(
+        scheduled_timer_row(&enabled, "report").unit_link,
+        Some(TimerUnitLink {
+            unit: unit.clone(),
+            unit_row: true
+        })
+    );
+    let include = |s: &RefineSession| {
+        s.decisions()
+            .unit_states
+            .iter()
+            .find(|row| row.unit == unit)
+            .map(|row| row.include)
+    };
+    let before = include(&enabled).expect("the timer's unit_states row");
+    enabled
+        .apply(set_include(unit_item("report.timer"), !before))
+        .expect("the unit row's toggle applies");
+    assert_eq!(
+        include(&enabled),
+        Some(!before),
+        "the unit row keeps its flag"
+    );
+
+    let disabled = session(&scan(t19_host("disabled")));
+    assert_eq!(include(&disabled), None, "no unit_states row");
+    assert_eq!(
+        scheduled_timer_row(&disabled, "report").unit_link,
+        Some(TimerUnitLink {
+            unit,
+            unit_row: false
+        })
+    );
+}

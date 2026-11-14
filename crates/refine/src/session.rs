@@ -2178,7 +2178,6 @@ impl RefineSession {
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
                     | ItemId::CronJob { .. }
-                    | ItemId::SystemdTimer { .. }
                     | ItemId::AtJob { .. }
                     | ItemId::GeneratedTimer { .. }
                     | ItemId::SelinuxPort { .. }

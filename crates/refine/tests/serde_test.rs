@@ -103,3 +103,33 @@ fn item_id_unit_refuses_an_invalid_unit_name() {
         "the refusal must name the refused unit, got: {err}"
     );
 }
+
+/// § 11.1: `ItemId::SystemdTimer` is removed. A timer's description row
+/// controls nothing, so a request or a saved op naming that kind is
+/// refused when it is read, and the refusal names the kind. The same key
+/// under the `GeneratedTimer` kind, a timer row that still has a control,
+/// is the positive control.
+#[test]
+fn item_id_systemd_timer_kind_is_refused() {
+    let err = serde_json::from_value::<RefinementOp>(serde_json::json!({
+        "op": "SetInclude",
+        "target": {
+            "item_id": {"kind": "SystemdTimer", "key": {"name": "backup"}},
+            "include": false
+        }
+    }))
+    .expect_err("an op naming the `SystemdTimer` kind must be refused");
+    assert!(
+        err.to_string().contains("`SystemdTimer`"),
+        "the refusal must name the refused kind, got: {err}"
+    );
+
+    serde_json::from_value::<RefinementOp>(serde_json::json!({
+        "op": "SetInclude",
+        "target": {
+            "item_id": {"kind": "GeneratedTimer", "key": {"name": "backup"}},
+            "include": false
+        }
+    }))
+    .expect("the same key under the `GeneratedTimer` kind must be accepted");
+}

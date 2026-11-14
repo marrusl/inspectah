@@ -114,9 +114,8 @@ pub enum ItemId {
     CronJob {
         path: String,
     },
-    SystemdTimer {
-        name: String,
-    },
+    // A collected systemd timer has no item here: its row describes it, its
+    // state is a `Unit` row and a local file a `Config` row (§ 8, § 11.1).
     AtJob {
         file: String,
     },

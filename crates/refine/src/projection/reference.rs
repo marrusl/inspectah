@@ -5,7 +5,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
-use inspectah_core::types::units::UnitState;
+use inspectah_core::types::units::{UnitName, UnitState};
 use inspectah_pipeline::render::configtree::staged_writes;
 use inspectah_pipeline::render::unit_plan::plan_units;
 use inspectah_pipeline::render::var_dirs::effective_var_backing;
@@ -18,7 +18,7 @@ use super::types::{
     RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
     RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
     RefServices, RefStaticRoute, RefStorage, RefVarDirectory, RefVersionChangeItem,
-    RefVersionChanges, ReferenceProjection,
+    RefVersionChanges, ReferenceProjection, TimerUnitLink,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -598,11 +598,25 @@ pub fn project_ref_storage(snap: &InspectionSnapshot) -> RefStorage {
     }
 }
 
+/// The unit a collected timer `name` is, and whether the units section
+/// records a state change for it, which is what puts a row in
+/// `unit_states` (§ 11.1). `None` when `<name>.timer` is not a unit name.
+fn timer_unit_link(snap: &InspectionSnapshot, name: &str) -> Option<TimerUnitLink> {
+    let unit = UnitName::try_from(format!("{name}.timer")).ok()?;
+    let unit_row = snap.units.as_ref().is_some_and(|units| {
+        units
+            .state_changes
+            .iter()
+            .any(|change| *change.unit().name() == unit)
+    });
+    Some(TimerUnitLink { unit, unit_row })
+}
+
 /// Project scheduled tasks from snapshot into generic reference items.
 ///
 /// Maps four task types to `GenericRefItem`:
 /// - **CronJob**: key = file basename, summary = source, tags = `["cron"]`
-/// - **SystemdTimer**: key = timer name, summary = on_calendar, content = description + exec_start, tags = `["timer"]`
+/// - **SystemdTimer**: key = timer name, summary = on_calendar, content = description + exec_start, tags = `["timer"]`, and the unit it links to (`unit_link`)
 /// - **AtJob**: key = file name, summary = `user: command`, content = working_dir, tags = `["at"]`
 /// - **GeneratedTimerUnit**: key = unit name, summary = cron_expr, content = source_path + command, tags = `["generated-timer"]`
 fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
@@ -628,6 +642,7 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             },
             content: None,
             tags: vec!["cron".into(), cj.path.clone()],
+            unit_link: None,
         });
     }
 
@@ -653,6 +668,7 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(content_parts.join("\n"))
             },
             tags: vec!["timer".into()],
+            unit_link: timer_unit_link(snap, &st.name),
         });
     }
 
@@ -667,6 +683,7 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(aj.working_dir.clone())
             },
             tags: vec!["at".into()],
+            unit_link: None,
         });
     }
 
@@ -692,6 +709,7 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
                 Some(content_parts.join("\n"))
             },
             tags: vec!["generated-timer".into()],
+            unit_link: None,
         });
     }
 
@@ -749,6 +767,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(subtitle),
             content: detail,
             tags,
+            unit_link: None,
         });
     }
 
@@ -774,6 +793,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
                 Some(ef.content.clone())
             },
             tags: vec!["env-file".into(), ef.path.clone()],
+            unit_link: None,
         });
     }
 
@@ -810,6 +830,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(se.mode.clone()),
             content: None,
             tags: vec!["mode".into()],
+            unit_link: None,
         });
     }
 
@@ -822,6 +843,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(fips_label.into()),
             content: None,
             tags: vec!["fips".into()],
+            unit_link: None,
         });
     }
 
@@ -834,6 +856,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(pl.label_type.clone()),
             content: None,
             tags: vec!["port-label".into()],
+            unit_link: None,
         });
     }
 
@@ -855,6 +878,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(value),
             content: None,
             tags: vec!["boolean".into()],
+            unit_link: None,
         });
     }
 
@@ -866,6 +890,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some("custom module".into()),
             content: None,
             tags: vec!["module".into()],
+            unit_link: None,
         });
     }
 
@@ -888,6 +913,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some("fcontext".into()),
             content: None,
             tags: vec!["fcontext".into()],
+            unit_link: None,
         });
     }
 
@@ -908,6 +934,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             summary: Some(DECIDED_UNDER_CONFIG_FILES.into()),
             content: None,
             tags: vec![tag.into()],
+            unit_link: None,
         });
     }
 
