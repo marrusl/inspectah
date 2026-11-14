@@ -17,7 +17,7 @@ use inspectah_core::types::units::{
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::comment::escape_comment_text;
-use super::configtree::{Destination, ETC_UNIT_DIR, StagedWrites, is_staged};
+use super::configtree::{Destination, ETC_UNIT_DIR, PathError, StagedWrites, is_staged};
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
@@ -362,6 +362,10 @@ pub struct UnitPlan {
     /// no excluded row is, and not declined: the row's exclusion decided
     /// it. The section names each in [`excluded_updater_line`].
     pub excluded_updaters: Vec<UnitName>,
+    /// § 10.6's comment lines, one block per mount finding
+    /// ([`mount_advisory_lines`]), unescaped. Not commands: the section
+    /// writes them after its `systemctl` lines (§ 10.1).
+    pub mount_advisories: Vec<Vec<String>>,
 }
 
 /// Internal classification of whether a unit's package is in the image.
@@ -475,10 +479,13 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
     }
 }
 
-/// The unit state section's lines for `plan`: a line per declined command
-/// ([`declined_line`]), a line per excluded runtime updater
-/// ([`excluded_updater_line`]), then [`systemctl_lines`], then the note
-/// naming the enables left to the Scheduled Tasks section.
+/// The unit state section's lines for `plan`, in § 10.1's order: a line per
+/// declined command ([`declined_line`]), a line per excluded runtime
+/// updater ([`excluded_updater_line`]), then [`systemctl_lines`], then the
+/// note naming the enables left to the Scheduled Tasks section, then the
+/// comment-only mount advisory blocks ([`UnitPlan::mount_advisories`]),
+/// one after another. Each block starts with its `# Advisory:` line, so
+/// no line separates them.
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
     // line is escaped here rather than inside `declined_line`, which refine
@@ -504,6 +511,13 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             names.join(", ")
         ));
     }
+    // A mount point comes from a host file: escaped here, as above.
+    lines.extend(
+        plan.mount_advisories
+            .iter()
+            .flatten()
+            .map(|line| escape_comment_text(line)),
+    );
     lines
 }
 
@@ -542,6 +556,19 @@ fn is_or_is_under(path: &str, top: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// `mount_point` in normal form, as [`Destination::new`] makes one: empty
+/// and `.` components dropped, so `/var/` is `/var` and `/srv//data` is
+/// `/srv/data`. An absolute path with no other component is `/`. A path
+/// `Destination` refuses for another reason (a `..` component, a control
+/// character) is returned as written.
+fn normal_mount_point(mount_point: &str) -> String {
+    match Destination::new(mount_point) {
+        Ok(path) => path.as_str().to_owned(),
+        Err(PathError::NoFileName) if mount_point.starts_with('/') => "/".to_owned(),
+        Err(_) => mount_point.to_owned(),
+    }
+}
+
 /// The comment lines of § 10.6 for one mount finding, in the table's
 /// order: the one source for the Containerfile and the view response. The
 /// lines are the spec's text with the unit, its state, the path and the
@@ -553,22 +580,31 @@ fn is_or_is_under(path: &str, top: &str) -> bool {
 /// - The file line, when `staged` writes the unit's file at
 ///   `/etc/systemd/system/<unit>` ([`is_staged`]), so it follows the
 ///   config row's toggle.
-/// - From `mount_point`, when there is one: under `/usr`; one of
-///   [`BOOTC_OWNED_MOUNT_POINTS`]; under one of [`BASE_VAR_SYMLINKS`]
-///   (naming that top-level directory); under one of
-///   [`BASE_IMAGE_DIRECTORIES`]. The table does not read the state, so a
-///   masked finding with a mount point gets these too.
+/// - From `mount_point`, when there is one and the unit is not masked:
+///   under `/usr`; one of [`BOOTC_OWNED_MOUNT_POINTS`]; under one of
+///   [`BASE_VAR_SYMLINKS`] (naming that top-level directory); under one of
+///   [`BASE_IMAGE_DIRECTORIES`]. Each is matched against the mount point in
+///   normal form ([`normal_mount_point`]), and a line that shows the path
+///   shows that form. A masked unit does not mount, so the layout of its
+///   mount point does not bear on it.
 /// - The `tmp.mount` line, when that unit's file is staged.
-/// - The `nofail` line, for a mount or swap whose `nofail` is false. Not
-///   for a mask with no unit file, which has no `Options=` to read.
-///   Drop-ins are not read, so `nofail` set only in a drop-in still gets
-///   the line.
+/// - The `nofail` line, for a mount or swap whose `nofail` is false, when
+///   the unit is not masked and its file was read. A mask with no unit file
+///   has no `Options=` to read. A mount unit with no `mount_point` was not
+///   read (or has no absolute `Where=` in its `[Mount]` section; the
+///   finding cannot tell the two apart), so it gets no line. A swap has no
+///   `mount_point` either way, so an unreadable swap file still gets the
+///   line: telling it apart would need a field the finding does not have.
+///   The collector reads only the unit file itself: `nofail` set in a
+///   drop-in, or on a line continued with a trailing `\`, is not seen, and
+///   such a unit still gets the line.
 /// - The `To carry it` line, for an enabled or masked unit, except a
 ///   masked `tmp.mount` (§ 10.3).
 pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_>) -> Vec<String> {
     let name = finding.unit.name();
     let unit = name.as_unit_name();
     let state = finding.state_change.map(|(state, _)| state);
+    let masked = state == Some(UnitState::Masked);
     let state_text = state.map_or_else(|| MOUNT_STATE_NOT_RECORDED.to_owned(), |s| s.to_string());
     let mut lines = vec![format!(
         "# Advisory: {} is {state_text} on the source host. {MOUNT_ADVISORY_FACT}",
@@ -578,7 +614,12 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
     if file_staged {
         lines.push(MOUNT_FILE_STAGED.to_owned());
     }
-    if let Some(path) = finding.mount_point.as_deref() {
+    let mount_point = finding
+        .mount_point
+        .as_deref()
+        .filter(|_| !masked)
+        .map(normal_mount_point);
+    if let Some(path) = mount_point.as_deref() {
         if is_or_is_under(path, IMAGE_USR) {
             lines.push(format!(
                 "#   /usr is part of the read-only image on the target. The mount point must \
@@ -615,9 +656,12 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
     if is_tmp_mount && file_staged {
         lines.push(MOUNT_TMP_FILE_STAGED.to_owned());
     }
-    let has_options = matches!(name.kind(), StorageKind::Mount | StorageKind::Swap);
-    let has_file = *finding.unit.fragment() != AdminStorageFragment::MaskOnly;
-    if has_options && has_file && !finding.nofail {
+    let nofail_read = match name.kind() {
+        StorageKind::Mount => finding.mount_point.is_some(),
+        StorageKind::Swap => *finding.unit.fragment() != AdminStorageFragment::MaskOnly,
+        StorageKind::Automount => false,
+    };
+    if nofail_read && !masked && !finding.nofail {
         lines.push(MOUNT_NO_NOFAIL.to_owned());
     }
     let verb = match state {
@@ -1071,7 +1115,8 @@ impl<'a> Presence<'a> {
 /// 6. An `enable` of a unit the Scheduled Tasks section carries is left to
 ///    that section and recorded in `deferred`.
 ///
-/// Every other command is planned.
+/// Every other command is planned. Each mount finding gets its § 10.6
+/// advisory lines against `staged`, in `mount_advisories`.
 pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitPlan {
     let mut plan = UnitPlan::default();
     let Some(units) = &snap.units else {
@@ -1135,5 +1180,10 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         }
         plan.planned.push(PlannedUnit { name, action });
     }
+    plan.mount_advisories = units
+        .mount_findings
+        .iter()
+        .map(|finding| mount_advisory_lines(finding, staged))
+        .collect();
     plan
 }

@@ -2099,8 +2099,8 @@ const README_DISABLE: &str = "A `disable` removes the administrator's links and 
 /// § 10.1: the README states both sentences when the unit state section
 /// carries a command. Controls: a host whose only unit is a vendor unit at
 /// its preset has no unit state section, and a host whose only line there
-/// is a refused command has a section that carries nothing; neither README
-/// has either sentence.
+/// is a refused command, or a mount advisory, has a section that carries
+/// nothing; no such README has either sentence.
 #[test]
 fn the_readme_explains_carried_unit_states_when_there_are_any() {
     let readme = |tree: &tempfile::TempDir| {
@@ -2154,6 +2154,32 @@ fn the_readme_explains_carried_unit_states_when_there_are_any() {
         assert!(
             !text.contains(sentence),
             "{sentence:?} with nothing carried:\n{text}"
+        );
+    }
+
+    // A section that holds only a mount advisory (§ 10.1, § 10.6) carries
+    // nothing either.
+    let advisory_only = render_export(&scan(
+        UnitHost::new()
+            .unit("srv.mount", "enabled")
+            .etc_unit("srv.mount", &mount_file("/srv", Some("nofail"))),
+    ));
+    let containerfile = containerfile_in(&advisory_only);
+    assert_eq!(
+        unit_lines(&containerfile),
+        [
+            advisory_fact("srv.mount", "enabled"),
+            FILE_STAGED_LINE.to_owned(),
+            var_symlink_line("/srv"),
+            carry_line("enable", "srv.mount"),
+        ],
+        "{containerfile}"
+    );
+    let text = readme(&advisory_only);
+    for sentence in [README_FIRST_BOOT, README_DISABLE] {
+        assert!(
+            !text.contains(sentence),
+            "{sentence:?} with only an advisory:\n{text}"
         );
     }
 }
@@ -2265,7 +2291,8 @@ fn both_routes(snap: &InspectionSnapshot) -> [(&'static str, String); 2] {
 /// the `/opt` line and no rename line; a mount under `/usr` the `/usr`
 /// line. Each local unit file is staged, so each gets the file line. No
 /// instruction names any of them, while the package-owned control on the
-/// same host is enabled. The section sits after the unit state section.
+/// same host is enabled. The advisories sit in the unit state section,
+/// after its commands (§ 10.1).
 #[test]
 fn t9_the_mount_advisory_text_through_the_scan() {
     let snap = scan(
@@ -2333,13 +2360,24 @@ fn t9_the_mount_advisory_text_through_the_scan() {
             acts(&containerfile, "enable", PACKAGED_MOUNT),
             "{route}: the control:\n{containerfile}"
         );
-        let headers = section_headers(&containerfile);
-        let state = headers.iter().position(|h| *h == UNIT_SECTION);
-        let advisories = headers
-            .iter()
-            .position(|h| *h == "# === Mount, Automount and Swap Advisories ===");
+        // § 10.1: the advisories are in the unit state section, after its
+        // last command line, with no section header of their own.
+        let section = unit_lines(&containerfile);
+        let last_command = section.iter().rposition(|l| !l.starts_with('#'));
+        let first_advisory = section.iter().position(|l| l.starts_with("# Advisory: "));
         assert!(
-            state.is_some() && advisories == state.map(|s| s + 1),
+            last_command.is_some() && first_advisory > last_command,
+            "{route}: {section:?}"
+        );
+        for (unit, lines) in &expected {
+            assert!(
+                section.windows(lines.len()).any(|w| w == lines.as_slice()),
+                "{route}, {unit}: not in the unit state section: {section:?}"
+            );
+        }
+        let headers = section_headers(&containerfile);
+        assert!(
+            headers.iter().all(|h| !h.contains("Mount")),
             "{route}: {headers:?}"
         );
     }
@@ -2569,27 +2607,54 @@ fn t8_a_tmp_mount_copy_in_etc_gets_the_tmp_mount_line() {
 /// T11, unowned storage masks: for each storage kind and both mask forms,
 /// an unowned vendor file or none gives the advisory with state `masked`,
 /// the `To carry it` line with `mask`, and no instruction. The zero-length
-/// form is withheld, so no file line. The `nofail` line needs a unit file
-/// to read: an unowned mount or swap file with no `Options=` gets it, a
-/// mask with no file does not. A masked `tmp.mount` gets no `To carry it`
-/// line, since § 10.3 refuses that mask. Control: the same mask over a
-/// package-owned file is a `mask` command and has no advisory.
+/// form is withheld, so no file line. A masked unit does not mount, so its
+/// advisory has no layout line and no `nofail` line, though the vendor
+/// file's `Where=` is under `/srv` and it has no `Options=`. A masked
+/// `tmp.mount` gets no `To carry it` line, since § 10.3 refuses that mask.
+/// Controls: the same mask over a package-owned file is a `mask` command
+/// and has no advisory; the same unowned unit enabled gets the layout line
+/// and, for a mount or swap, the `nofail` line.
 #[test]
 fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
-    for unit in [
-        "srv-data.mount",
-        "srv-data.automount",
-        "dev-vdb1.swap",
-        "tmp.mount",
+    for (unit, vendor_file) in [
+        ("srv-data.mount", mount_file("/srv/data", None)),
+        (
+            "srv-data.automount",
+            "[Automount]\nWhere=/srv/data\n".to_owned(),
+        ),
+        ("dev-vdb1.swap", "[Swap]\nWhat=/dev/vdb1\n".to_owned()),
+        ("tmp.mount", "[Mount]\nWhat=tmpfs\nWhere=/tmp\n".to_owned()),
     ] {
         let has_options = !unit.ends_with(".automount");
+        let under_srv = unit.starts_with("srv-data.");
+
+        let enabled = scan(UnitHost::new().unit(unit, "enabled").vendor_unit(
+            unit,
+            &vendor_file,
+            None,
+        ));
+        let mut expected = vec![advisory_fact(unit, "enabled")];
+        if under_srv {
+            expected.push(var_symlink_line("/srv"));
+        }
+        if has_options {
+            expected.push(NOFAIL_LINE.to_owned());
+        }
+        expected.push(carry_line("enable", unit));
+        let containerfile = containerfile_in(&render_export(&enabled));
+        assert_eq!(
+            advisory_for(&containerfile, unit),
+            expected,
+            "{unit}, enabled, unowned:\n{containerfile}"
+        );
+
         for form in MASK_FORMS {
             for owner in ["owned", "unowned", "no vendor file"] {
                 let label = format!("{unit}, {form}, {owner}");
                 let host = UnitHost::new().unit(unit, "masked");
                 let host = match owner {
-                    "owned" => host.vendor_unit(unit, "[Unit]\n", Some("pkg")),
-                    "unowned" => host.vendor_unit(unit, "[Unit]\n", None),
+                    "owned" => host.vendor_unit(unit, &vendor_file, Some("pkg")),
+                    "unowned" => host.vendor_unit(unit, &vendor_file, None),
                     _ => host,
                 };
                 let snap = scan(masked_by(host, unit, form));
@@ -2613,9 +2678,6 @@ fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
                     continue;
                 }
                 let mut expected = vec![advisory_fact(unit, "masked")];
-                if owner == "unowned" && has_options {
-                    expected.push(NOFAIL_LINE.to_owned());
-                }
                 if unit != "tmp.mount" {
                     expected.push(carry_line("mask", unit));
                 }
