@@ -1952,6 +1952,11 @@ fn t11_each_mask_form_is_one_masked_state_change_and_nothing_else() {
 /// The storage kinds and a name for each.
 const STORAGE_UNITS: [&str; 3] = ["srv-data.mount", "srv-data.automount", "dev-sdb.swap"];
 
+/// A non-empty storage file under `/etc/systemd/system`: a config entry,
+/// the positive control for a storage mask's "no config entry".
+const STORAGE_CONTROL: &str = "srv-other.mount";
+const STORAGE_CONTROL_PATH: &str = "/etc/systemd/system/srv-other.mount";
+
 /// T11, storage half. For each storage kind and both mask forms: a mask on
 /// a package-owned vendor file is a carried `Masked` state change; on an
 /// unowned vendor file, or on no file, it is a mount finding with state
@@ -1980,11 +1985,18 @@ fn t11_storage_masks_route_by_owner() {
                     }
                     Vendor::NoFile => {}
                 }
-                let exec = with_etc_units(exec, vec![unit, CONTROL]);
+                let exec = with_etc_units(exec, vec![unit, CONTROL, STORAGE_CONTROL])
+                    .with_file(STORAGE_CONTROL_PATH, "[Mount]\nWhere=/srv/other\n");
                 let (section, warnings) = scan(&exec);
                 let config = config_paths(&exec);
                 assert!(warnings.is_empty(), "{label}: {warnings:?}");
                 assert_control_is_a_full_shadow(&section, &config, &label);
+                // Control for "no config entry": a non-empty storage file on
+                // the same host is one.
+                assert!(
+                    config.iter().any(|p| p == STORAGE_CONTROL_PATH),
+                    "{label}: {config:?}"
+                );
 
                 let change = section
                     .state_changes
@@ -2239,20 +2251,142 @@ fn full_shadow_that_is_not_text_keeps_its_state_change_and_does_not_degrade() {
             owning_package: Some("a".into()),
         }
     );
-    let config = config_entries(&exec);
+    let config = config_entries_not_degraded(&exec);
     let entry = config
         .iter()
         .find(|f| f.path == "/etc/systemd/system/latin1.service")
         .unwrap_or_else(|| panic!("a config entry: {config:?}"));
+    assert!(is_content_not_captured(entry), "{:?}", entry.disposition);
+}
+
+/// The config entries the real config inspector records over `exec`, on a
+/// host where no package owns anything under `/etc`. The inspector must
+/// return `Ok`: a degraded config scan fails the test.
+fn config_entries_not_degraded(exec: &MockExecutor) -> Vec<ConfigFileEntry> {
+    let source = pkg_source();
+    let rpm_state = RpmState::default();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output = ConfigInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap_or_else(|e| panic!("the config inspector does not degrade: {e:?}"));
+    let SectionData::Config(config) = output.section else {
+        panic!("expected the config section");
+    };
+    config.files
+}
+
+/// A host listing one disabled vendor unit, as its preset says: the scan
+/// runs to the drop-in collection, and nothing is a state change.
+fn quiet_mock() -> MockExecutor {
+    with_vendor_units(
+        kinds_mock(&[("sshd.service", "disabled")], "disable *\n"),
+        &["sshd.service"],
+    )
+}
+
+fn is_content_not_captured(entry: &ConfigFileEntry) -> bool {
+    matches!(
+        entry.disposition,
+        FindingKind::Advisory {
+            advisory_type: AdvisoryType::ContentNotCaptured,
+            ..
+        }
+    )
+}
+
+/// A drop-in `.conf` that is not text, or is over the executor's size cap
+/// (`InvalidData`), in the drop-in directory of a service, a socket and a
+/// `.device`, is no drop-in row and does not degrade either inspector: the
+/// config entry, a `ContentNotCaptured` advisory, is its one row. The
+/// readable twin in each directory is a drop-in row. A regular file whose
+/// name ends in `.d` directly under `/etc/systemd/system` is not a drop-in
+/// directory: listing it fails with `NotADirectory`, which does not degrade
+/// the units scan, and the file stays a config entry.
+#[test]
+fn drop_in_that_is_not_text_is_its_config_entry_and_does_not_degrade() {
+    let units = ["httpd.service", "cockpit.socket", "dev-sda.device"];
+    let file_named_d = format!("{ETC_UNITS}/notes.d");
+    let exec = quiet_mock();
+    let mut entries: Vec<String> = units.iter().map(|u| format!("{u}.d")).collect();
+    entries.push("notes.d".into());
+    let mut exec = with_etc_units(exec, entries.iter().map(String::as_str).collect())
+        .with_file(&file_named_d, "not a directory\n")
+        .with_dir_error(&file_named_d, std::io::ErrorKind::NotADirectory);
+    for unit in units {
+        let dir = format!("{ETC_UNITS}/{unit}.d");
+        exec = exec
+            .with_dir(&dir, vec!["latin1.conf", "twin.conf"])
+            .with_file_error(
+                &format!("{dir}/latin1.conf"),
+                std::io::ErrorKind::InvalidData,
+            )
+            .with_file(&format!("{dir}/twin.conf"), "[Unit]\nDescription=x\n");
+    }
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // Control: each readable twin is a drop-in row.
+    let twins: Vec<String> = units
+        .iter()
+        .map(|u| format!("{ETC_UNITS}/{u}.d/twin.conf"))
+        .collect();
+    assert_eq!(drop_in_paths(&section), twins);
+
+    let config = config_entries_not_degraded(&exec);
+    for unit in units {
+        let path = format!("{ETC_UNITS}/{unit}.d/latin1.conf");
+        let entry = config
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("{path}: a config entry: {config:?}"));
+        assert!(is_content_not_captured(entry), "{path}: {entry:?}");
+    }
     assert!(
-        matches!(
-            entry.disposition,
-            FindingKind::Advisory {
-                advisory_type: AdvisoryType::ContentNotCaptured,
-                ..
-            }
-        ),
-        "{:?}",
-        entry.disposition
+        config.iter().any(|f| f.path == file_named_d),
+        "the file named *.d is a config entry: {config:?}"
     );
+}
+
+/// The full shadow scan reads the `/etc` entry first: an alias link
+/// directly under `/etc/systemd/system` is never a shadow, so a vendor read
+/// error for its name does not degrade the scan. Control: the same vendor
+/// error under a regular `/etc` file, which may be a shadow, degrades it.
+#[test]
+fn vendor_read_error_under_an_etc_link_does_not_degrade() {
+    let name = "alias.service";
+    let etc = format!("{ETC_UNITS}/{name}");
+    let vendor = format!("/usr/lib/systemd/system/{name}");
+    let host = |exec: MockExecutor| {
+        with_etc_units(exec, vec![name])
+            .with_link_error(&vendor, std::io::ErrorKind::PermissionDenied)
+    };
+
+    let linked = host(
+        quiet_mock()
+            .with_file("/usr/lib/systemd/system/real.service", UNIT_FILE)
+            .with_link(&etc, "/usr/lib/systemd/system/real.service"),
+    );
+    let (section, warnings) = scan(&linked);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(section.drop_ins.is_empty(), "{:?}", section.drop_ins);
+
+    let regular = host(quiet_mock().with_file(&etc, UNIT_FILE));
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &regular,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    match UnitsInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, .. }) => {
+            assert!(reason.contains(&vendor), "{reason}");
+        }
+        other => panic!("a vendor read error under a regular file degrades: {other:?}"),
+    }
 }

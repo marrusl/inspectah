@@ -829,6 +829,9 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
 
         let conf_files = match exec.read_dir(&dir_path) {
             Ok(c) => c,
+            // A regular file whose name ends in `.d` is no drop-in
+            // directory; the config walk records it.
+            Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => continue,
             Err(e) => {
                 read_failures.push(format!("{}: {e}", dir_path.to_string_lossy()));
                 continue;
@@ -842,6 +845,10 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
             let file_path = dir_path.join(conf);
             let content = match exec.read_file(&file_path) {
                 Ok(c) => c,
+                // Not text, or over the executor's size cap: no row, as for
+                // a full shadow (see [`full_shadow`]). Its config entry
+                // records that the content was not captured.
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue,
                 Err(e) => {
                     read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
                     continue;
@@ -937,17 +944,19 @@ fn full_shadow(exec: &dyn Executor, entry: &str) -> Result<Option<SystemdDropIn>
         ResolveError::Read { path, error } => format!("{path}: {error}"),
         ResolveError::Linked { path, target } => format!("{path}: link to {target}"),
     };
-    let vendor = format!("{VENDOR_UNIT_DIR}/{entry}");
-    if matches!(
-        resolve::entry(exec, &vendor).map_err(read_failure)?,
-        Entry::Missing
-    ) {
-        return Ok(None);
-    }
+    // The `/etc` form first: a link there (an alias or a mask) is never a
+    // shadow and costs no vendor read.
     let path = format!("{ETC_UNIT_DIR}/{entry}");
     if !matches!(
         resolve::entry(exec, &path).map_err(read_failure)?,
         Entry::File { empty: false }
+    ) {
+        return Ok(None);
+    }
+    let vendor = format!("{VENDOR_UNIT_DIR}/{entry}");
+    if matches!(
+        resolve::entry(exec, &vendor).map_err(read_failure)?,
+        Entry::Missing
     ) {
         return Ok(None);
     }
