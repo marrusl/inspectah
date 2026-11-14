@@ -1681,7 +1681,7 @@ fn storage_unit_routes_by_owner_to_state_change_or_mount_finding() {
         ]
     );
     for finding in &section.mount_findings {
-        // Task 2.5 reads these from the unit file.
+        // Read from the unit file, which has no `[Mount]` section here.
         assert_eq!(finding.mount_point, None);
         assert!(!finding.nofail);
     }
@@ -2388,5 +2388,261 @@ fn vendor_read_error_under_an_etc_link_does_not_degrade() {
             assert!(reason.contains(&vendor), "{reason}");
         }
         other => panic!("a vendor read error under a regular file degrades: {other:?}"),
+    }
+}
+
+// ── Mount findings (§ 6.5 of the units spec) ───────────────────────
+
+/// A mount finding as a comparable row: name, fragment, recorded state,
+/// mount point and `nofail`.
+type MountRow = (
+    String,
+    AdminStorageFragment,
+    Option<(UnitState, Option<PresetDefault>)>,
+    Option<String>,
+    bool,
+);
+
+fn mount_rows(section: &UnitSection) -> Vec<MountRow> {
+    let mut rows: Vec<MountRow> = section
+        .mount_findings
+        .iter()
+        .map(|f| {
+            (
+                f.unit.name().as_unit_name().as_str().to_owned(),
+                f.unit.fragment().clone(),
+                f.state_change,
+                f.mount_point.clone(),
+                f.nofail,
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
+/// A mount source holding a credential, which no field may copy.
+const MOUNT_SOURCE: &str = "What=https://files.example/volume?token=collector-source-1\n";
+
+fn mount_unit(section: &str, lines: &str) -> String {
+    format!("[Unit]\nDescription=admin mount\n\n[{section}]\n{MOUNT_SOURCE}{lines}")
+}
+
+/// § 6.5: every source of a mount finding, each with `mount_point` and
+/// `nofail` read from the file systemd loads.
+///
+/// - Regular, non-empty storage files under `/etc/systemd/system`, whatever
+///   their state: static (not listed), disabled, a full copy over a vendor
+///   file, an enabled copy over a vendor file whose preset enables it, an
+///   automount, a relative `Where=`, and a file that is not text.
+/// - An unowned vendor unit only when enabled or masked: enabled at its
+///   preset is a finding; the same unit disabled is not.
+/// - A mask with no unit file: `MaskOnly`, no mount point.
+///
+/// A package-owned vendor mount enabled at its preset is neither a finding
+/// nor a state change. `What=` is in no finding.
+#[test]
+fn mount_findings_come_from_every_source_section_6_5_names() {
+    let preset = "enable opt-on.mount\nenable srv-shadow.mount\nenable tmp.mount\ndisable *\n";
+    let exec = kinds_mock(
+        &[
+            ("srv-off.mount", "disabled"),
+            ("data.swap", "disabled"),
+            ("srv-shadow.mount", "enabled"),
+            ("opt-on.mount", "enabled"),
+            ("opt-off.mount", "disabled"),
+            ("opt-masked.mount", "masked"),
+            ("gone.mount", "masked"),
+            ("tmp.mount", "enabled"),
+        ],
+        preset,
+    );
+    let etc_files = [
+        (
+            "srv-static.mount",
+            mount_unit("Mount", "Where=/srv/static\nOptions=defaults,nofail\n"),
+        ),
+        ("srv-off.mount", mount_unit("Mount", "Where=/srv/off\n")),
+        (
+            "data.swap",
+            mount_unit("Swap", "Options=defaults,nofail\r\n"),
+        ),
+        (
+            "srv-shadow.mount",
+            mount_unit("Mount", "Where=/srv/shadow \r\n"),
+        ),
+        (
+            "mnt-auto.automount",
+            mount_unit("Automount", "Where=/mnt/auto\n"),
+        ),
+        (
+            "relative.mount",
+            mount_unit("Mount", "Where=srv\nOptions=nofail\n"),
+        ),
+    ];
+    let mut entries: Vec<&str> = etc_files.iter().map(|(n, _)| *n).collect();
+    entries.extend(["latin1.mount", "opt-masked.mount", "gone.mount"]);
+    let mut exec = with_etc_units(exec, entries);
+    for (name, content) in &etc_files {
+        exec = exec.with_file(&format!("{ETC_UNITS}/{name}"), content);
+    }
+    exec = exec.with_file_error(
+        &format!("{ETC_UNITS}/latin1.mount"),
+        std::io::ErrorKind::InvalidData,
+    );
+    exec = with_mask(exec, "opt-masked.mount", MaskForm::DevNullLink);
+    exec = with_mask(exec, "gone.mount", MaskForm::DevNullLink);
+    for (name, content) in [
+        ("data.swap", mount_unit("Swap", "")),
+        (
+            "srv-shadow.mount",
+            mount_unit("Mount", "Where=/srv/vendor\n"),
+        ),
+        ("opt-on.mount", mount_unit("Mount", "Where=/opt/on\n")),
+        ("opt-off.mount", mount_unit("Mount", "Where=/opt/off\n")),
+        (
+            "opt-masked.mount",
+            mount_unit("Mount", "Where=/opt/masked\nOptions=nofail\n"),
+        ),
+        ("tmp.mount", mount_unit("Mount", "Where=/tmp\n")),
+    ] {
+        exec = exec.with_file(&format!("/usr/lib/systemd/system/{name}"), &content);
+    }
+    for (name, owner) in [
+        ("data.swap", Some("swap-pkg")),
+        ("srv-shadow.mount", Some("srv-pkg")),
+        ("opt-on.mount", None),
+        ("opt-off.mount", None),
+        ("opt-masked.mount", None),
+        ("tmp.mount", Some("systemd")),
+    ] {
+        exec = owner_answer(exec, name, owner);
+    }
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let enabled_at_preset = Some((UnitState::Enabled, Some(PresetDefault::Enable)));
+    let masked = Some((UnitState::Masked, Some(PresetDefault::Disable)));
+    let path = |p: &str| Some(p.to_owned());
+    let mut expected: Vec<MountRow> = vec![
+        (
+            "data.swap".into(),
+            AdminStorageFragment::Shadowed {
+                owning_package: Some("swap-pkg".into()),
+            },
+            None,
+            None,
+            true,
+        ),
+        (
+            "gone.mount".into(),
+            AdminStorageFragment::MaskOnly,
+            masked,
+            None,
+            false,
+        ),
+        (
+            "latin1.mount".into(),
+            AdminStorageFragment::Local,
+            None,
+            None,
+            false,
+        ),
+        (
+            "mnt-auto.automount".into(),
+            AdminStorageFragment::Local,
+            None,
+            path("/mnt/auto"),
+            false,
+        ),
+        (
+            "opt-masked.mount".into(),
+            AdminStorageFragment::UnownedVendor,
+            masked,
+            path("/opt/masked"),
+            true,
+        ),
+        (
+            "opt-on.mount".into(),
+            AdminStorageFragment::UnownedVendor,
+            enabled_at_preset,
+            path("/opt/on"),
+            false,
+        ),
+        (
+            "relative.mount".into(),
+            AdminStorageFragment::Local,
+            None,
+            None,
+            true,
+        ),
+        (
+            "srv-off.mount".into(),
+            AdminStorageFragment::Local,
+            None,
+            path("/srv/off"),
+            false,
+        ),
+        (
+            "srv-shadow.mount".into(),
+            AdminStorageFragment::Shadowed {
+                owning_package: Some("srv-pkg".into()),
+            },
+            enabled_at_preset,
+            path("/srv/shadow"),
+            false,
+        ),
+        (
+            "srv-static.mount".into(),
+            AdminStorageFragment::Local,
+            None,
+            path("/srv/static"),
+            true,
+        ),
+    ];
+    expected.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(mount_rows(&section), expected);
+
+    // The unowned vendor unit that is disabled is no finding; its enabled
+    // twin above is. The owned vendor mount at its preset is neither a
+    // finding nor a state change.
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+
+    // No field copies the mount source. Presence first: the files hold it.
+    assert!(etc_files.iter().all(|(_, c)| c.contains(MOUNT_SOURCE)));
+    let written = serde_json::to_string(&section).expect("the section serializes");
+    assert!(written.contains("srv-static.mount"));
+    assert!(!written.contains("collector-source-1"), "{written}");
+}
+
+/// A local mount unit file that cannot be read for a reason other than its
+/// content (here, permission) degrades the scan, naming the file: whether
+/// it is a finding, and what it mounts, is unknown. A file that is not text
+/// is a finding with no mount point and does not degrade (above).
+#[test]
+fn unreadable_mount_unit_file_degrades_naming_it() {
+    let exec = with_etc_units(quiet_mock(), vec!["srv-locked.mount"]).with_file_error(
+        &format!("{ETC_UNITS}/srv-locked.mount"),
+        std::io::ErrorKind::PermissionDenied,
+    );
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    match UnitsInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, .. }) => {
+            assert!(
+                reason.contains("/etc/systemd/system/srv-locked.mount"),
+                "{reason}"
+            );
+        }
+        other => panic!("an unreadable mount unit file degrades the scan: {other:?}"),
     }
 }

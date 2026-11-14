@@ -975,7 +975,11 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan systemd drop-in contents in services section
+    // Scan systemd drop-in contents in services section. The units
+    // section's other rows hold no file content: a mount finding has no
+    // copy of `What=`, which can hold a credential (the unit file's config
+    // entry carries it, scrubbed by the config pass), and its
+    // `mount_point` is a path, classified as an identifier.
     if let Some(ref mut services) = snapshot.units {
         for drop_in in &mut services.drop_ins {
             let findings = scan_content(&drop_in.content, &drop_in.path);

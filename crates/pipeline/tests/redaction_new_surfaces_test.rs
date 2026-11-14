@@ -414,3 +414,62 @@ fn test_clean_surfaces_no_false_positives() {
         other => panic!("expected FullyRedacted for clean snapshot, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Mount unit findings: the mount source is scrubbed where it is stored
+// ---------------------------------------------------------------------------
+
+/// A local mount unit as the scan records it: the unit file is a config
+/// entry, and the mount finding holds the mount point and `nofail` but no
+/// copy of `What=`. Redaction scrubs the token in the config entry, so the
+/// serialized snapshot no longer holds it, and leaves the finding as it
+/// was: the mount point is a path, classified as an identifier.
+#[test]
+fn test_mount_unit_source_scrubbed_in_its_config_entry_only() {
+    use inspectah_core::types::units::{MountUnitFinding, UnitFragment, UnitName, UnitSubject};
+
+    const TOKEN: &str = "mount-source-91c2";
+    let path = "/etc/systemd/system/srv-data.mount";
+    let name = UnitName::try_from("srv-data.mount".to_owned()).unwrap();
+    let finding = MountUnitFinding {
+        unit: UnitSubject::new(name.clone(), UnitFragment::Local { file: name })
+            .unwrap()
+            .try_into()
+            .unwrap(),
+        state_change: None,
+        mount_point: Some("/srv/data".into()),
+        nofail: true,
+        aggregate: None,
+    };
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: path.into(),
+            content: format!(
+                "[Mount]\nWhat=https://files.example/volume?token={TOKEN}\nWhere=/srv/data\n"
+            ),
+            disposition: SnapshotFindingKind::included(),
+            ..Default::default()
+        }],
+    });
+    snapshot.units = Some(UnitSection {
+        mount_findings: vec![finding.clone()],
+        ..Default::default()
+    });
+    // Presence first: the token is in the snapshot before the pass.
+    assert!(serde_json::to_string(&snapshot).unwrap().contains(TOKEN));
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let written = serde_json::to_string(&snapshot).unwrap();
+    assert!(!written.contains(TOKEN), "{written}");
+    assert!(
+        snapshot.redactions.iter().any(|f| f.path == path),
+        "the finding names the unit file: {:?}",
+        snapshot.redactions
+    );
+    assert_eq!(
+        snapshot.units.as_ref().unwrap().mount_findings,
+        vec![finding]
+    );
+}

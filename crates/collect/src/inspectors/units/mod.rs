@@ -9,9 +9,9 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    Classified, MountUnitFinding, OrdinaryKind, PresetDefault, SystemdDropIn, UNIT_TYPE_SUFFIXES,
-    UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange,
-    UnitSubject,
+    AdminStorageFragment, AdvisoryUnit, Classified, MountUnitFinding, OrdinaryKind, PresetDefault,
+    StorageKind, SystemdDropIn, UNIT_TYPE_SUFFIXES, UnitFragment, UnitInventoryEntry, UnitKind,
+    UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::HashSet;
@@ -265,11 +265,18 @@ fn is_state_change(candidate: &Candidate, fragment: &UnitFragment) -> bool {
     )
 }
 
-/// Resolve each candidate's unit file, keep the state changes, look up the
-/// owners, then classify: a carried unit is a state change, an
-/// administrator's storage unit a mount finding. A candidate that cannot be
-/// resolved or classified is reported through `warnings`; a unit file that
-/// could not be read goes to `read_failures`.
+/// Whether a candidate is an enabled storage unit. An administrator's one
+/// is a mount finding whatever its preset (§ 6.5 of the units spec), so it
+/// is kept until its owner is known, even when its state is no change.
+fn is_enabled_storage(candidate: &Candidate) -> bool {
+    matches!(candidate.name.kind(), UnitKind::Storage(_)) && candidate.state == UnitState::Enabled
+}
+
+/// Resolve each candidate's unit file, keep the state changes and the
+/// enabled storage units, look up the owners, then classify: a carried unit
+/// is a state change, an administrator's storage unit a mount finding. A
+/// candidate that cannot be resolved or classified is reported through
+/// `warnings`; a unit file that could not be read goes to `read_failures`.
 fn build_state_changes(
     exec: &dyn Executor,
     candidates: Vec<Candidate>,
@@ -283,9 +290,10 @@ fn build_state_changes(
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         match resolve::resolve(exec, &candidate.name) {
             Ok(Resolved::File { fragment }) | Ok(Resolved::Masked { hidden: fragment }) => {
-                if is_state_change(&candidate, &fragment) {
+                let state_change = is_state_change(&candidate, &fragment);
+                if state_change || is_enabled_storage(&candidate) {
                     fragments.push(fragment);
-                    found.push(candidate);
+                    found.push((candidate, state_change));
                 }
             }
             Ok(Resolved::AliasOf(target)) => warnings.push(warn(&format!(
@@ -311,7 +319,7 @@ fn build_state_changes(
 
     let mut state_changes = Vec::new();
     let mut mount_findings = Vec::new();
-    for (candidate, fragment) in found.into_iter().zip(fragments) {
+    for ((candidate, state_change), fragment) in found.into_iter().zip(fragments) {
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         let subject = match UnitSubject::new(candidate.name.clone(), fragment) {
@@ -322,10 +330,15 @@ fn build_state_changes(
             }
         };
         let unit = match subject.classify() {
-            Classified::Carried(unit) => unit,
+            Classified::Carried(unit) if state_change => unit,
+            // An enabled storage unit at its preset, carried: the image
+            // already has its state.
+            Classified::Carried(_) => continue,
             // An administrator's storage unit is a mount finding, never a
             // state change (§ 6.5). The finding records the state when the
-            // unit is enabled or masked; a disabled one is not a finding.
+            // unit is enabled or masked. A disabled one here is not a
+            // finding; a disabled one with a file under `/etc` is recorded
+            // by [`etc_storage_findings`].
             Classified::Advisory(unit) => {
                 if candidate.state != UnitState::Disabled {
                     mount_findings.push(MountUnitFinding {
@@ -345,6 +358,76 @@ fn build_state_changes(
         }
     }
     (state_changes, mount_findings)
+}
+
+/// The mount findings for the storage files under `/etc/systemd/system`
+/// that the candidates did not make a finding of (§ 6.5 of the units
+/// spec): every regular, non-empty `.mount`, `.automount` or `.swap` file,
+/// local or a full copy over a vendor file. Such a unit is not enabled (an
+/// enabled one was a candidate) and not masked (its file is no mask), so
+/// its finding records no state. `recorded` holds the names that already
+/// have a finding.
+///
+/// A listing error is left to [`collect_drop_ins`], which reads the same
+/// directory and reports it. A unit file that could not be read goes to
+/// `read_failures`.
+fn etc_storage_findings(
+    exec: &dyn Executor,
+    recorded: &HashSet<UnitName>,
+    warnings: &mut Vec<Warning>,
+    read_failures: &mut Vec<String>,
+) -> Vec<MountUnitFinding> {
+    let Ok(entries) = exec.read_dir(Path::new(ETC_UNIT_DIR)) else {
+        return Vec::new();
+    };
+    let mut fragments = Vec::new();
+    for entry in entries {
+        let Ok(name) = UnitName::try_from(entry) else {
+            continue;
+        };
+        if !matches!(name.kind(), UnitKind::Storage(_)) || recorded.contains(&name) {
+            continue;
+        }
+        match resolve::resolve(exec, &name) {
+            Ok(Resolved::File {
+                fragment: fragment @ (UnitFragment::Local { .. } | UnitFragment::Shadowed { .. }),
+            }) => fragments.push((name, fragment)),
+            // A mask, an alias or a link elsewhere: not a unit file here.
+            Ok(_) | Err(ResolveError::Linked { .. }) => {}
+            Err(ResolveError::Read { path, error }) => {
+                read_failures.push(format!("{path}: {error}"));
+            }
+        }
+    }
+
+    let (names, mut fragments): (Vec<UnitName>, Vec<UnitFragment>) = fragments.into_iter().unzip();
+    populate_owning_packages(exec, &mut fragments);
+
+    let mut findings = Vec::new();
+    for (name, fragment) in names.into_iter().zip(fragments) {
+        // The name is the file's and the owner is never empty, so neither
+        // check below refuses in practice; a refusal is still reported.
+        let warn = |detail: &str| Warning {
+            inspector: "units".into(),
+            message: format!("unit file {ETC_UNIT_DIR}/{} - {detail}", name.as_str()),
+            severity: Some(WarningSeverity::Warning),
+            extra: std::collections::HashMap::from([("unit".into(), serde_json::json!(name))]),
+        };
+        let unit = UnitSubject::new(name.clone(), fragment)
+            .map_err(|e| e.to_string())
+            .and_then(|subject| AdvisoryUnit::try_from(subject).map_err(|e| e.to_string()));
+        match unit {
+            Ok(unit) => findings.push(MountUnitFinding {
+                unit,
+                state_change: None,
+                mount_point: None,
+                nofail: false,
+                aggregate: None,
+            }),
+            Err(detail) => warnings.push(warn(&detail)),
+        }
+    }
+    findings
 }
 
 /// Inspects systemd unit state for every unit kind: enabled, disabled or
@@ -500,12 +583,28 @@ impl Inspector for UnitsInspector {
         // 4b. Resolve each candidate's unit file and owning package, then
         //     build the state changes.
         let mut unit_file_read_failures = Vec::new();
-        let (state_changes, mount_findings) = build_state_changes(
+        let (state_changes, mut mount_findings) = build_state_changes(
             exec,
             candidates,
             &mut warnings,
             &mut unit_file_read_failures,
         );
+
+        // 4c. The administrator's other storage files, then what each
+        //     finding mounts, read from its unit file (§ 6.5).
+        let recorded: HashSet<UnitName> = mount_findings
+            .iter()
+            .map(|f| f.unit.name().as_unit_name().clone())
+            .collect();
+        mount_findings.extend(etc_storage_findings(
+            exec,
+            &recorded,
+            &mut warnings,
+            &mut unit_file_read_failures,
+        ));
+        for finding in &mut mount_findings {
+            read_mount_settings(exec, finding, &mut unit_file_read_failures);
+        }
 
         // Emit metric for progress rendering
         progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
@@ -976,9 +1075,243 @@ fn full_shadow(exec: &dyn Executor, entry: &str) -> Result<Option<SystemdDropIn>
     }))
 }
 
+/// What a mount finding records from its unit file (§ 6.5 of the units
+/// spec): the mount point and whether the unit is `nofail`.
+#[derive(Debug, PartialEq, Eq)]
+struct MountSettings {
+    /// `Where=`, when it is an absolute path. A swap unit has none.
+    mount_point: Option<String>,
+    /// Whether `Options=` holds `nofail`. An automount has no `Options=`.
+    nofail: bool,
+}
+
+/// The section a storage unit's own settings are in.
+fn storage_section(kind: StorageKind) -> &'static str {
+    match kind {
+        StorageKind::Mount => "Mount",
+        StorageKind::Automount => "Automount",
+        StorageKind::Swap => "Swap",
+    }
+}
+
+/// Read `Where=` and `Options=` from a storage unit file as systemd reads
+/// them: only in the section of the unit's own kind, the last assignment
+/// winning (an empty one resets), comment lines skipped, and the key and
+/// value trimmed, which drops a CRLF line end and trailing whitespace.
+/// `Where=` belongs to mounts and automounts, `Options=` to mounts and
+/// swaps. `What=` is never read: it can hold a credential, and the finding
+/// has no field for it. A line continued with a trailing `\` is read as
+/// it stands.
+fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
+    let own_section = storage_section(kind);
+    let mut section = None;
+    let mut where_value = None;
+    let mut options = None;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = Some(name);
+            continue;
+        }
+        if section != Some(own_section) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match (key.trim(), kind) {
+            ("Where", StorageKind::Mount | StorageKind::Automount) => {
+                where_value = Some(value.trim());
+            }
+            ("Options", StorageKind::Mount | StorageKind::Swap) => options = Some(value.trim()),
+            _ => {}
+        }
+    }
+    MountSettings {
+        mount_point: where_value
+            .filter(|path| path.starts_with('/'))
+            .map(str::to_owned),
+        nofail: options.is_some_and(|o| o.split(',').any(|option| option.trim() == "nofail")),
+    }
+}
+
+/// Fill in a finding's `mount_point` and `nofail` from the unit file
+/// systemd loads for it: the `/etc` file for a local or shadowed unit, the
+/// vendor file for an unowned vendor unit (masked or not). A mask with no
+/// unit file has neither. A file that is not text, or is over the
+/// executor's size cap, leaves both unset; its config entry, if it has
+/// one, records that the content was not captured. Any other read error
+/// goes to `read_failures`.
+fn read_mount_settings(
+    exec: &dyn Executor,
+    finding: &mut MountUnitFinding,
+    read_failures: &mut Vec<String>,
+) {
+    let dir = match finding.unit.fragment() {
+        AdminStorageFragment::Local | AdminStorageFragment::Shadowed { .. } => ETC_UNIT_DIR,
+        AdminStorageFragment::UnownedVendor => VENDOR_UNIT_DIR,
+        AdminStorageFragment::MaskOnly => return,
+    };
+    let name = finding.unit.name();
+    let path = format!("{dir}/{}", name.as_unit_name().as_str());
+    let content = match exec.read_file(Path::new(&path)) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return,
+        Err(e) => {
+            read_failures.push(format!("{path}: {e}"));
+            return;
+        }
+    };
+    let settings = mount_settings(name.kind(), &content);
+    finding.mount_point = settings.mount_point;
+    finding.nofail = settings.nofail;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Where=` and `Options=` are read from the section of the unit's own
+    /// kind, last assignment winning, as systemd reads them; `What=` is
+    /// never read. CRLF line ends and trailing whitespace are not part of a
+    /// value (plan review focus 3).
+    #[test]
+    fn mount_settings_read_where_and_options_from_the_kinds_section() {
+        use StorageKind::{Automount, Mount, Swap};
+        let settings = |mount_point: Option<&str>, nofail: bool| MountSettings {
+            mount_point: mount_point.map(str::to_owned),
+            nofail,
+        };
+        let cases: &[(&str, StorageKind, &str, MountSettings)] = &[
+            (
+                "absolute",
+                Mount,
+                "[Mount]\nWhere=/srv\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "relative",
+                Mount,
+                "[Mount]\nWhere=srv\n",
+                settings(None, false),
+            ),
+            (
+                "empty Where",
+                Mount,
+                "[Mount]\nWhere=\n",
+                settings(None, false),
+            ),
+            (
+                "CRLF and trailing whitespace",
+                Mount,
+                "[Mount]\r\nWhere=/srv \r\nOptions=defaults,nofail\r\n",
+                settings(Some("/srv"), true),
+            ),
+            (
+                "spaces round =",
+                Mount,
+                "[Mount]\nWhere = /srv\nOptions = nofail\n",
+                settings(Some("/srv"), true),
+            ),
+            (
+                "nofail among others",
+                Mount,
+                "[Mount]\nOptions=rw, nofail ,noatime\n",
+                settings(None, true),
+            ),
+            (
+                "nofail as a prefix",
+                Mount,
+                "[Mount]\nOptions=nofailover,x-nofail\n",
+                settings(None, false),
+            ),
+            (
+                "header with trailing space",
+                Mount,
+                "[Mount]  \nWhere=/srv\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "keys in [Unit]",
+                Mount,
+                "[Unit]\nWhere=/srv\nOptions=nofail\n[Mount]\nWhat=/dev/sdb1\n",
+                settings(None, false),
+            ),
+            (
+                "keys in [Install]",
+                Mount,
+                "[Mount]\nWhat=x\n[Install]\nWhere=/srv\nOptions=nofail\n",
+                settings(None, false),
+            ),
+            (
+                "another kind's section",
+                Mount,
+                "[Swap]\nOptions=nofail\n[Automount]\nWhere=/srv\n",
+                settings(None, false),
+            ),
+            (
+                "later Where overrides",
+                Mount,
+                "[Mount]\nWhere=/srv\nWhere=/data\n",
+                settings(Some("/data"), false),
+            ),
+            (
+                "empty Options resets",
+                Mount,
+                "[Mount]\nOptions=nofail\nOptions=\n",
+                settings(None, false),
+            ),
+            (
+                "later Options overrides",
+                Mount,
+                "[Mount]\nOptions=defaults\nOptions=nofail\n",
+                settings(None, true),
+            ),
+            (
+                "commented keys",
+                Mount,
+                "[Mount]\n#Where=/srv\n;Options=nofail\n",
+                settings(None, false),
+            ),
+            (
+                "automount Where",
+                Automount,
+                "[Automount]\nWhere=/mnt/a\n",
+                settings(Some("/mnt/a"), false),
+            ),
+            (
+                "automount has no Options",
+                Automount,
+                "[Automount]\nWhere=/mnt/a\nOptions=nofail\n",
+                settings(Some("/mnt/a"), false),
+            ),
+            (
+                "swap Options",
+                Swap,
+                "[Swap]\nWhat=/dev/sdb2\nOptions=defaults,nofail\r\n",
+                settings(None, true),
+            ),
+            (
+                "swap has no Where",
+                Swap,
+                "[Swap]\nWhere=/swap\n",
+                settings(None, false),
+            ),
+            (
+                "no section",
+                Mount,
+                "Where=/srv\nOptions=nofail\n",
+                settings(None, false),
+            ),
+            ("not text a unit holds", Mount, "", settings(None, false)),
+        ];
+        for (label, kind, content, expected) in cases {
+            assert_eq!(&mount_settings(*kind, content), expected, "{label}");
+        }
+    }
 
     #[test]
     fn test_glob_match_exact() {

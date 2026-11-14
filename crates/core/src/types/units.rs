@@ -238,12 +238,17 @@ impl OrdinaryUnitName {
 
 /// A [`UnitName`] proved to be a mount, automount or swap unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StorageUnitName(UnitName);
+pub struct StorageUnitName(UnitName, StorageKind);
 
 impl StorageUnitName {
     /// The proved name.
     pub fn as_unit_name(&self) -> &UnitName {
         &self.0
+    }
+
+    /// The storage kind the name's suffix names.
+    pub fn kind(&self) -> StorageKind {
+        self.1
     }
 }
 
@@ -433,13 +438,13 @@ impl UnitSubject {
     /// with a known owning package.
     pub fn classify(self) -> Classified {
         let Self { name, fragment } = self;
-        let UnitKind::Storage(_) = name.kind() else {
+        let UnitKind::Storage(kind) = name.kind() else {
             return Classified::Carried(CarriedUnit::Ordinary(OrdinaryUnit {
                 name: OrdinaryUnitName(name),
                 fragment,
             }));
         };
-        let name = StorageUnitName(name);
+        let name = StorageUnitName(name, kind);
         let fragment = match fragment {
             UnitFragment::Vendor {
                 owning_package: Some(owning_package),
@@ -1007,6 +1012,27 @@ pub struct UnitSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The half of the redaction field guard
+    /// (`every_field_of_a_content_bearing_type_is_classified` in
+    /// `crates/pipeline/src/render/mod.rs`) that needs this module's
+    /// privacy: [`UnitStateChange`] keeps its unit and state private, so
+    /// only code here can name every field. The pattern has no `..`, so a
+    /// field added to the type stops the build here until it is classified.
+    #[test]
+    fn every_field_of_a_unit_state_change_is_classified() {
+        fn _classify_unit_state_change(change: UnitStateChange) {
+            let UnitStateChange {
+                unit: _,             // exempt: a proved name, fragment and package name
+                current_state: _,    // exempt: enabled, disabled or masked
+                default_state: _,    // exempt: enable or disable
+                disposition: _,      // decision
+                locked: _,           // decision
+                aggregate: _,        // fleet counts
+                attention_reason: _, // generated prose, never file content
+            } = change;
+        }
+    }
 
     /// Expected outcome of parsing one name in the table test.
     enum Expect {

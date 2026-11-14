@@ -308,7 +308,7 @@ mod tests {
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
-        use inspectah_core::types::units::SystemdDropIn;
+        use inspectah_core::types::units::{MountUnitFinding, SystemdDropIn, UnitInventoryEntry};
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -352,6 +352,38 @@ mod tests {
             shadow_type: _,
             shadow_rationale: _,
         } = SystemdDropIn::default();
+
+        // `units.state_changes[]`: `UnitStateChange` keeps its unit and
+        // state private, so this pattern cannot name them here. Its guard
+        // is in the type's own module, `crates/core/src/types/units.rs`
+        // (`every_field_of_a_unit_state_change_is_classified`), with the
+        // same rule: no `..`, every field classified.
+
+        // `units.inventory[]`. No `Default`, so the pattern sits in a
+        // function that is never called, as the sysctl ones below.
+        fn _classify_unit_inventory_entry(entry: UnitInventoryEntry) {
+            let UnitInventoryEntry {
+                unit: _,   // exempt: a proved unit name
+                state: _,  // exempt: enabled, disabled or masked
+                preset: _, // exempt: enable or disable
+            } = entry;
+        }
+
+        // `units.mount_findings[]`. There is no field for the mount source
+        // (`What=`): it can hold a credential, and a copy here is one the
+        // config pass never visits. Refine links the row to the unit
+        // file's config entry, which the config pass scrubs.
+        fn _classify_mount_unit_finding(finding: MountUnitFinding) {
+            let MountUnitFinding {
+                unit: _,         // exempt: a proved unit name, and the owning package's name
+                state_change: _, // exempt: a state and a preset
+                // EXEMPT, pinned by SENTINEL-MOUNT-POINT in the sweep below:
+                // an identifier, an absolute path from `Where=`.
+                mount_point: _,
+                nofail: _,    // exempt: a boolean from `Options=`
+                aggregate: _, // fleet counts
+            } = finding;
+        }
 
         // `scheduled_tasks.generated_timer_units[]`.
         let GeneratedTimerUnit {
@@ -529,7 +561,9 @@ mod tests {
         use inspectah_core::types::sysctl::{
             SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlSection,
         };
-        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
+        use inspectah_core::types::units::{
+            MountUnitFinding, SystemdDropIn, UnitFragment, UnitName, UnitSection, UnitSubject,
+        };
 
         // Each sentinel is planted behind a keyword the pattern set
         // recognises, so a visited field redacts it and an unvisited one
@@ -557,6 +591,7 @@ mod tests {
             "SENTINEL-SYSCTL-LINK",
             "SENTINEL-SYSCTL-OUTSIDE",
             "SENTINEL-SYSCTL-RUNTIME",
+            "SENTINEL-MOUNT-WHAT",
         ];
 
         // Declared exempt, and planted anyway so the exemption is a
@@ -564,20 +599,36 @@ mod tests {
         // one's reason is recorded beside its field in
         // `every_field_of_a_content_bearing_type_is_classified`.
         const EXEMPT: &[&str] = &[
-            "SENTINEL-FIREWALL",   // firewalld zone XML holds no credential
-            "SENTINEL-NRSCONTENT", // no collector writes NonRpmItem.content
+            "SENTINEL-FIREWALL",    // firewalld zone XML holds no credential
+            "SENTINEL-NRSCONTENT",  // no collector writes NonRpmItem.content
+            "SENTINEL-MOUNT-POINT", // MountUnitFinding.mount_point is a path
         ];
 
         let mut snap = test_snapshot();
 
+        // A local mount unit's file is a config entry, so its `What=` is
+        // scrubbed by the config pass; the finding below has no copy.
+        let mount_unit = "/etc/systemd/system/srv-data.mount";
         snap.config = Some(ConfigSection {
-            files: vec![ConfigFileEntry {
-                path: "/etc/myapp/app.conf".into(),
-                kind: ConfigFileKind::Unowned,
-                content: "password=SENTINEL-CONFIG\n".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            }],
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/myapp/app.conf".into(),
+                    kind: ConfigFileKind::Unowned,
+                    content: "password=SENTINEL-CONFIG\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: mount_unit.into(),
+                    kind: ConfigFileKind::Unowned,
+                    content:
+                        "[Mount]\nWhat=https://files.example/volume?token=SENTINEL-MOUNT-WHAT\n\
+                              Where=/srv/data\n"
+                            .into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
         });
 
         if let Some(ref mut rpm) = snap.rpm {
@@ -593,6 +644,11 @@ mod tests {
             }];
         }
 
+        let srv_data = UnitName::try_from("srv-data.mount".to_owned()).unwrap();
+        let advisory = UnitSubject::new(srv_data.clone(), UnitFragment::Local { file: srv_data })
+            .unwrap()
+            .try_into()
+            .unwrap();
         snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "app.service".into(),
@@ -600,6 +656,15 @@ mod tests {
                 content: "[Service]\nEnvironment=DB_PASSWORD=SENTINEL-DROPIN\n".into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
+            }],
+            mount_findings: vec![MountUnitFinding {
+                unit: advisory,
+                state_change: None,
+                // Behind a keyword, as every sentinel is: a visited field
+                // would lose it.
+                mount_point: Some("/srv/token=SENTINEL-MOUNT-POINT".into()),
+                nofail: false,
+                aggregate: None,
             }],
             ..Default::default()
         });
