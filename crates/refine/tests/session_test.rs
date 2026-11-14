@@ -2146,7 +2146,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     let session_rows: Vec<&str> = decisions
         .unit_states
         .iter()
-        .map(|s| s.entry.unit().name().as_str())
+        .map(|s| s.unit.as_str())
         .collect();
     assert_eq!(
         session_rows,
@@ -2357,7 +2357,7 @@ fn the_decision_view_serializes_unit_keys_and_no_service_keys() {
         .as_array()
         .expect("the view must carry `unit_states` as an array");
     assert_eq!(states.len(), 1, "one state row, got {states:?}");
-    assert_eq!(states[0]["entry"]["unit"]["name"], CHANGED_UNIT);
+    assert_eq!(states[0]["unit"], CHANGED_UNIT);
     let dropins = view["unit_dropins"]
         .as_array()
         .expect("the view must carry `unit_dropins` as an array");
@@ -2576,4 +2576,557 @@ fn test_carried_unit(
     };
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
+}
+
+// ---------------------------------------------------------------------------
+// § 11.1: unit rows carry the plan's reasons, offered files the stager's.
+// Hand-built snapshots stand for imported ones: their rows hold no
+// `attention_reason` unless a test sets one.
+// ---------------------------------------------------------------------------
+
+mod unit_rows {
+    use inspectah_core::snapshot::InspectionSnapshot;
+    use inspectah_core::types::FindingKind;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+    use inspectah_core::types::units::{
+        AdvisoryUnit, CarriedUnit, MountUnitFinding, SystemdDropIn, UnitFragment, UnitName,
+        UnitSection, UnitState, UnitStateChange, UnitSubject,
+    };
+    use inspectah_refine::projection::{
+        DeclinedRenders, DeclinedView, FragmentView, UnitStateView, WithheldView,
+    };
+    use inspectah_refine::session::RefineSession;
+    use inspectah_refine::types::{ItemId, RefinementOp};
+
+    fn name(unit: &str) -> UnitName {
+        unit.to_owned().try_into().expect("a unit name")
+    }
+
+    /// A state change for `unit` recorded from `fragment`, included, with
+    /// no `attention_reason`.
+    fn change(unit: &str, fragment: UnitFragment, state: UnitState) -> UnitStateChange {
+        let subject = UnitSubject::new(name(unit), fragment).expect("a subject");
+        let carried = CarriedUnit::try_from(subject).expect("a carried unit");
+        UnitStateChange::new(carried, state, None).expect("a state change")
+    }
+
+    fn vendor(file: &str, owner: Option<&str>) -> UnitFragment {
+        UnitFragment::Vendor {
+            file: name(file),
+            owning_package: owner.map(str::to_owned),
+        }
+    }
+
+    fn config(path: &str, content: &str) -> ConfigFileEntry {
+        ConfigFileEntry {
+            path: path.into(),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }
+    }
+
+    fn snapshot(
+        changes: Vec<UnitStateChange>,
+        files: Vec<ConfigFileEntry>,
+        drop_ins: Vec<SystemdDropIn>,
+    ) -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.config = Some(ConfigSection { files });
+        snap.units = Some(UnitSection {
+            state_changes: changes,
+            drop_ins,
+            ..Default::default()
+        });
+        snap
+    }
+
+    fn row<'a>(session: &'a RefineSession, unit: &str) -> &'a UnitStateView {
+        session
+            .decisions()
+            .unit_states
+            .iter()
+            .find(|r| r.unit.as_str() == unit)
+            .unwrap_or_else(|| panic!("no unit row for {unit}"))
+    }
+
+    fn fixme(text: &str) -> Option<DeclinedView> {
+        Some(DeclinedView {
+            renders: DeclinedRenders::Fixme,
+            reason: "TargetNeedsUnit".into(),
+            text: text.into(),
+        })
+    }
+
+    /// § 10.3's text for a protected unit, and for a masked `tmp.mount`.
+    fn needed(unit: &str, participle: &str) -> String {
+        format!(
+            "{unit} is {participle} on the source host. Not carried: the image needs this unit."
+        )
+    }
+    const TMP_MOUNT_TEXT: &str = "tmp.mount is masked on the source host, where /tmp is then a \
+         directory on the root filesystem. Not carried: the bootc base image mounts /tmp from \
+         this unit, and without it /tmp is read-only.";
+
+    /// T12, last sentence: each refusal is a structured `declined` on its
+    /// row, for rows whose `attention_reason` is null, with the
+    /// Containerfile's text. The preview carries the same line. Control:
+    /// an `enable` of a protected unit is carried and its row has none.
+    #[test]
+    fn t12_each_refusal_is_a_structured_decline_on_an_imported_row() {
+        let session = RefineSession::new(snapshot(
+            vec![
+                change(
+                    "bootc-fetch-apply-updates.timer",
+                    vendor("bootc-fetch-apply-updates.timer", None),
+                    UnitState::Disabled,
+                ),
+                change(
+                    "ostree-remount.service",
+                    vendor("ostree-remount.service", None),
+                    UnitState::Masked,
+                ),
+                change(
+                    "tmp.mount",
+                    vendor("tmp.mount", Some("systemd")),
+                    UnitState::Masked,
+                ),
+                change(
+                    "systemd-remount-fs.service",
+                    vendor("systemd-remount-fs.service", None),
+                    UnitState::Enabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        let preview = &session.view().containerfile_preview;
+        for (unit, text) in [
+            (
+                "bootc-fetch-apply-updates.timer",
+                needed("bootc-fetch-apply-updates.timer", "disabled"),
+            ),
+            (
+                "ostree-remount.service",
+                needed("ostree-remount.service", "masked"),
+            ),
+            ("tmp.mount", TMP_MOUNT_TEXT.to_owned()),
+        ] {
+            let r = row(&session, unit);
+            assert_eq!(r.attention_reason, None, "{unit}");
+            assert_eq!(r.declined, fixme(&text), "{unit}");
+            assert!(
+                preview.contains(&format!("# FIXME: {text}")),
+                "{unit}:\n{preview}"
+            );
+        }
+        let control = row(&session, "systemd-remount-fs.service");
+        assert_eq!(control.declined, None);
+        assert!(control.include);
+    }
+
+    /// T12's imported zero-length files: a protected unit's mask as a
+    /// config entry (its path with an interior `.`) and as a drop-in whose
+    /// `unit` names another unit (its path with a doubled separator) is
+    /// withheld, and the row that offered it says so; a path with `..` is
+    /// refused, and its row says so. Control: a config entry with content
+    /// at another unit's path is written, and is not listed.
+    #[test]
+    fn t12_a_withheld_or_refused_offer_is_shown_on_its_row() {
+        const ZERO_LENGTH: &str = "a zero-length file at a unit path is a mask; the export \
+             carries a mask only as a systemctl mask command";
+        let session = RefineSession::new(snapshot(
+            vec![],
+            vec![
+                config("/etc/systemd/system/./ostree-remount.service", ""),
+                config("/etc/systemd/system/../escape.service", "[Unit]\n"),
+                config("/etc/systemd/system/written.service", "[Unit]\n"),
+            ],
+            vec![
+                SystemdDropIn {
+                    unit: "other.service".into(),
+                    path: "/etc/systemd//system/ostree-finalize-staged.service".into(),
+                    content: String::new(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+                SystemdDropIn {
+                    unit: "sshd.service".into(),
+                    path: "/etc/systemd/system/sshd.service.d/../x.conf".into(),
+                    content: "[Service]\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                },
+            ],
+        ));
+        let decisions = session.decisions();
+        let withheld = |why: &str, text: &str| WithheldView::Withheld {
+            why: why.into(),
+            text: text.into(),
+        };
+        let traversal = WithheldView::Refused {
+            rule: "Traversal".into(),
+            text: "path traversal detected".into(),
+        };
+        let configs: Vec<(&str, &WithheldView)> = decisions
+            .config_withheld
+            .iter()
+            .map(|c| (c.path.as_str(), &c.withheld))
+            .collect();
+        assert_eq!(
+            configs,
+            [
+                (
+                    "/etc/systemd/system/./ostree-remount.service",
+                    &withheld("ZeroLengthUnitFile", ZERO_LENGTH)
+                ),
+                ("/etc/systemd/system/../escape.service", &traversal),
+            ]
+        );
+        let drop_ins: Vec<(&str, Option<&str>, Option<&WithheldView>)> = decisions
+            .unit_dropins
+            .iter()
+            .map(|d| {
+                (
+                    d.entry.path.as_str(),
+                    d.kind.as_deref(),
+                    d.withheld.as_ref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            drop_ins,
+            [
+                (
+                    "/etc/systemd//system/ostree-finalize-staged.service",
+                    Some("service"),
+                    Some(&withheld("ZeroLengthUnitFile", ZERO_LENGTH))
+                ),
+                (
+                    "/etc/systemd/system/sshd.service.d/../x.conf",
+                    Some("service"),
+                    Some(&traversal)
+                ),
+            ]
+        );
+        assert!(
+            session
+                .view()
+                .containerfile_preview
+                .contains("ostree-remount.service"),
+            "the preview names the withheld file"
+        );
+    }
+
+    /// A row can carry the collector's § 10.3 sentence while the plan
+    /// declines it for another rule: the view reports the plan's reason
+    /// and leaves `attention_reason` as the row holds it.
+    #[test]
+    fn declined_is_the_plans_reason_whatever_attention_reason_says() {
+        const SENTENCE: &str = "kdump.service is masked on the source host. Not carried: the \
+             image needs this unit.";
+        let mut masked = change(
+            "kdump.service",
+            vendor("kdump.service", None),
+            UnitState::Masked,
+        );
+        masked.attention_reason = Some(SENTENCE.into());
+        let session = RefineSession::new(snapshot(
+            vec![masked],
+            vec![config("/etc/systemd/system/kdump.service", "[Service]\n")],
+            vec![],
+        ));
+        let r = row(&session, "kdump.service");
+        assert_eq!(r.attention_reason.as_deref(), Some(SENTENCE));
+        assert_eq!(
+            r.declined,
+            Some(DeclinedView {
+                renders: DeclinedRenders::Omitted,
+                reason: "MaskPathOccupied".into(),
+                text: "kdump.service (the export also carries a unit file at \
+                       /etc/systemd/system/kdump.service; exclude one of the two)"
+                    .into(),
+            })
+        );
+    }
+
+    /// § 10.4: a runtime updater is an ordinary row, excluded with its
+    /// reason, and has no `declined`: the plan did not decline it. Control
+    /// on the same snapshot: a protected unit's disable is declined.
+    #[test]
+    fn a_runtime_updater_row_is_excluded_and_not_declined() {
+        let mut updater = change(
+            "dnf-automatic.timer",
+            vendor("dnf-automatic.timer", None),
+            UnitState::Enabled,
+        );
+        inspectah_core::baseline::apply_runtime_updater_default(&mut updater);
+        let session = RefineSession::new(snapshot(
+            vec![
+                updater,
+                change(
+                    "bootc-fetch-apply-updates.timer",
+                    vendor("bootc-fetch-apply-updates.timer", None),
+                    UnitState::Disabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        let r = row(&session, "dnf-automatic.timer");
+        assert!(!r.include);
+        assert_eq!(
+            r.attention_reason.as_deref(),
+            Some(inspectah_core::baseline::RUNTIME_UPDATER_REASON)
+        );
+        assert_eq!(r.declined, None);
+        assert!(
+            row(&session, "bootc-fetch-apply-updates.timer")
+                .declined
+                .is_some()
+        );
+    }
+
+    /// T15's pair of config entries, a file and a file under it, are both
+    /// withheld as a conflict, and each config row says so. Excluding one
+    /// through `RefineSession` stages the other, and neither is listed.
+    #[test]
+    fn a_withheld_conflict_is_shown_on_each_config_row() {
+        const UNIT: &str = "/etc/systemd/system/worker.service";
+        const CHILD: &str = "/etc/systemd/system/worker.service/extra.conf";
+        let mut session = RefineSession::new(snapshot(
+            vec![],
+            vec![config(CHILD, "[Service]\n"), config(UNIT, "[Unit]\n")],
+            vec![],
+        ));
+        let listed: Vec<(String, WithheldView)> = session
+            .decisions()
+            .config_withheld
+            .iter()
+            .map(|c| (c.path.clone(), c.withheld.clone()))
+            .collect();
+        let conflict = |other: &str| WithheldView::Withheld {
+            why: "Conflict".into(),
+            text: format!(
+                "{other} is also staged, and one of the two paths is a directory of the other; \
+                 exclude one of the two"
+            ),
+        };
+        assert_eq!(
+            listed,
+            [
+                (CHILD.to_owned(), conflict(UNIT)),
+                (UNIT.to_owned(), conflict(CHILD))
+            ]
+        );
+
+        session
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config { path: CHILD.into() },
+                include: false,
+            })
+            .expect("the config row toggles");
+        assert!(session.decisions().config_withheld.is_empty());
+        assert!(
+            session
+                .view()
+                .containerfile_preview
+                .contains("COPY config/etc/ /etc/"),
+            "{}",
+            session.view().containerfile_preview
+        );
+    }
+
+    /// The derived fields: `kind`, `instance_of` from the name (instances
+    /// are not collected yet, so built by hand), and `fragment` with
+    /// `unit_file_path` for each fragment.
+    #[test]
+    fn a_unit_row_derives_kind_instance_and_fragment() {
+        let session = RefineSession::new(snapshot(
+            vec![
+                change(
+                    "getty@tty2.service",
+                    vendor("getty@.service", Some("systemd")),
+                    UnitState::Enabled,
+                ),
+                change(
+                    "sshd.socket",
+                    vendor("sshd.socket", Some("openssh-server")),
+                    UnitState::Enabled,
+                ),
+                change(
+                    "local.service",
+                    UnitFragment::Local {
+                        file: name("local.service"),
+                    },
+                    UnitState::Enabled,
+                ),
+                change(
+                    "shadow.service",
+                    UnitFragment::Shadowed {
+                        file: name("shadow.service"),
+                        owning_package: Some("pkg".into()),
+                    },
+                    UnitState::Enabled,
+                ),
+                change("ghost.service", UnitFragment::Absent, UnitState::Masked),
+                change(
+                    "var-lib-pkg.mount",
+                    vendor("var-lib-pkg.mount", Some("pkgmount")),
+                    UnitState::Enabled,
+                ),
+            ],
+            vec![],
+            vec![],
+        ));
+        // Unit, kind, instance_of, fragment, unit_file_path, owning_package.
+        type Derived<'a> = (
+            &'a str,
+            &'a str,
+            Option<&'a str>,
+            FragmentView,
+            Option<&'a str>,
+            Option<&'a str>,
+        );
+        let derived: Vec<Derived<'_>> = session
+            .decisions()
+            .unit_states
+            .iter()
+            .map(|r| {
+                (
+                    r.unit.as_str(),
+                    r.kind.as_str(),
+                    r.instance_of.as_ref().map(UnitName::as_str),
+                    r.fragment,
+                    r.unit_file_path.as_deref(),
+                    r.owning_package.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            derived,
+            [
+                (
+                    "getty@tty2.service",
+                    "service",
+                    Some("getty@.service"),
+                    FragmentView::Vendor,
+                    None,
+                    Some("systemd")
+                ),
+                (
+                    "sshd.socket",
+                    "socket",
+                    None,
+                    FragmentView::Vendor,
+                    None,
+                    Some("openssh-server")
+                ),
+                (
+                    "local.service",
+                    "service",
+                    None,
+                    FragmentView::Local,
+                    Some("/etc/systemd/system/local.service"),
+                    None
+                ),
+                (
+                    "shadow.service",
+                    "service",
+                    None,
+                    FragmentView::Shadowed,
+                    Some("/etc/systemd/system/shadow.service"),
+                    Some("pkg")
+                ),
+                (
+                    "ghost.service",
+                    "service",
+                    None,
+                    FragmentView::Absent,
+                    None,
+                    None
+                ),
+                (
+                    "var-lib-pkg.mount",
+                    "mount",
+                    None,
+                    FragmentView::Vendor,
+                    None,
+                    Some("pkgmount")
+                ),
+            ]
+        );
+    }
+
+    /// A mount finding row: no `include` key at all, its fields, the config
+    /// row that holds its file, and § 10.6's lines, which the preview
+    /// carries too. A finding with no recorded state has `state: null`.
+    #[test]
+    fn a_mount_finding_row_has_its_fields_and_no_include() {
+        let finding = |unit: &str, state: Option<UnitState>, mount_point: &str| {
+            let subject = UnitSubject::new(name(unit), UnitFragment::Local { file: name(unit) })
+                .expect("a subject");
+            MountUnitFinding {
+                unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
+                state_change: state.map(|s| (s, None)),
+                mount_point: Some(mount_point.into()),
+                nofail: true,
+                aggregate: None,
+            }
+        };
+        let mut snap = snapshot(
+            vec![],
+            vec![config(
+                "/etc/systemd/system/srv.mount",
+                "[Mount]\nWhere=/srv\n",
+            )],
+            vec![],
+        );
+        let units = snap.units.as_mut().expect("a units section");
+        units.mount_findings = vec![
+            finding("srv.mount", Some(UnitState::Enabled), "/srv"),
+            finding("data.mount", None, "/data"),
+        ];
+        let session = RefineSession::new(snap);
+        let rows = &session.decisions().mount_findings;
+        let json = serde_json::to_value(rows).expect("the rows serialize");
+        assert_eq!(
+            json[0],
+            serde_json::json!({
+                "unit": "srv.mount",
+                "kind": "mount",
+                "state": "enabled",
+                "mount_point": "/srv",
+                "fragment": "local",
+                "unit_file_path": "/etc/systemd/system/srv.mount",
+                "advisories": [
+                    "# Advisory: srv.mount is enabled on the source host. inspectah does not \
+                     enable, disable or mask a mount, automount or swap unit the administrator \
+                     wrote.",
+                    "#   Its unit file is copied into the image. No enable line is written, but \
+                     the unit still starts if another unit requires it or names its mount point \
+                     in RequiresMountsFor=, and it replaces a unit of the same name that the \
+                     image ships.",
+                    "#   /srv is a symlink into /var in the RHEL bootc base image. The unit must \
+                     be renamed for the resolved path (for /srv: var-srv.mount with \
+                     Where=/var/srv).",
+                    "#   To carry it, add after the configuration COPY: RUN systemctl enable -- \
+                     'srv.mount'"
+                ]
+            })
+        );
+        assert_eq!(json[1]["state"], serde_json::Value::Null);
+        assert_eq!(
+            json[1]["unit_file_path"],
+            serde_json::Value::Null,
+            "no config row"
+        );
+        for row in json.as_array().expect("an array") {
+            assert!(row.get("include").is_none(), "{row}");
+        }
+        let preview = &session.view().containerfile_preview;
+        for line in &rows[0].advisories {
+            assert!(preview.contains(line.as_str()), "{line}\n{preview}");
+        }
+    }
 }

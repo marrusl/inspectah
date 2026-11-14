@@ -132,14 +132,14 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .unit_states
         .iter()
         .map(|s| ServiceDecisionDto {
-            unit: s.entry.unit().name().as_str().to_owned(),
+            unit: s.unit.as_str().to_owned(),
             triage: s.triage.clone(),
-            include: s.entry.disposition.is_included(),
-            locked: s.entry.locked,
-            attention_reason: s.entry.attention_reason.clone(),
-            owning_package: s.entry.unit().owning_package().map(str::to_owned),
-            default_state: s.entry.default_state.map(|d| d.to_string()),
-            current_state: s.entry.current_state().to_string(),
+            include: s.include,
+            locked: s.locked,
+            attention_reason: s.attention_reason.clone(),
+            owning_package: s.owning_package.clone(),
+            default_state: s.default_state.map(|d| d.to_string()),
+            current_state: s.current_state.to_string(),
         })
         .collect();
 

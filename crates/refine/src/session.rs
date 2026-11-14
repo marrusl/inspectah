@@ -5913,10 +5913,7 @@ mod tests {
         // decisions() should return without panic and contain the service
         let dec = session.decisions();
         assert_eq!(dec.unit_states.len(), 1);
-        assert_eq!(
-            dec.unit_states[0].entry.unit().name().as_str(),
-            "httpd.service"
-        );
+        assert_eq!(dec.unit_states[0].unit.as_str(), "httpd.service");
 
         // reference() should return without panic
         let _ref_proj = session.reference();
@@ -6003,8 +6000,7 @@ mod tests {
             dec_before
                 .unit_states
                 .iter()
-                .any(|s| s.entry.unit().name().as_str() == "httpd.service"
-                    && !s.entry.disposition.is_included()),
+                .any(|s| s.unit.as_str() == "httpd.service" && !s.include),
             "httpd.service should start excluded"
         );
 
@@ -6024,8 +6020,7 @@ mod tests {
             dec_after
                 .unit_states
                 .iter()
-                .any(|s| s.entry.unit().name().as_str() == "httpd.service"
-                    && s.entry.disposition.is_included()),
+                .any(|s| s.unit.as_str() == "httpd.service" && s.include),
             "httpd.service should now be included"
         );
 

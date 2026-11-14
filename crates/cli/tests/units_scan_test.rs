@@ -3176,3 +3176,167 @@ fn an_aggregate_shows_a_shared_mount_advisory_once() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 11.1: the refine view shows what the export does with each row.
+// ---------------------------------------------------------------------
+
+/// The `declined` of `unit`'s row in `session`'s view.
+fn declined_in(
+    session: &RefineSession,
+    unit: &str,
+) -> Option<inspectah_refine::projection::DeclinedView> {
+    session
+        .decisions()
+        .unit_states
+        .iter()
+        .find(|r| r.unit.as_str() == unit)
+        .unwrap_or_else(|| panic!("no unit row for {unit}"))
+        .declined
+        .clone()
+}
+
+/// `InstallEvidenceChanged` for `unit`, naming `path`, as the view holds it.
+fn evidence_declined(unit: &str, path: &str) -> inspectah_refine::projection::DeclinedView {
+    inspectah_refine::projection::DeclinedView {
+        renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+        reason: "InstallEvidenceChanged".into(),
+        text: format!(
+            "{unit} (the [Install] section in the image would not be the one recorded on the \
+             source host ({path}))"
+        ),
+    }
+}
+
+/// T10, view half: through the scan and a refine session, the mount
+/// finding's row exists with its fields, and the planted token is in
+/// neither the view nor the decision projection, serialized whole.
+#[test]
+fn t10_the_mount_source_is_in_no_view_response() {
+    let refine = session(&scan(t10_host()));
+    let rows = &refine.decisions().mount_findings;
+    let row = rows
+        .iter()
+        .find(|r| r.unit.as_str() == MOUNT_UNIT)
+        .unwrap_or_else(|| panic!("no row for {MOUNT_UNIT}: {rows:?}"));
+    assert_eq!(row.mount_point.as_deref(), Some("/srv/data"));
+    assert_eq!(row.unit_file_path.as_deref(), Some(MOUNT_UNIT_PATH));
+    assert!(!row.advisories.is_empty());
+    let view = serde_json::to_string(refine.view()).expect("the view serializes");
+    let decisions = serde_json::to_string(refine.decisions()).expect("the projection serializes");
+    assert!(decisions.contains(MOUNT_UNIT), "presence first");
+    assert!(!view.contains(MOUNT_TOKEN));
+    assert!(!decisions.contains(MOUNT_TOKEN));
+}
+
+/// T15, last clause, the `Shadowed` case: excluding the shadow through
+/// `RefineSession` alone puts `InstallEvidenceChanged`, naming the shadow,
+/// on the unit row, while the Containerfile omits the command; including
+/// it again clears both.
+#[test]
+fn t15_a_shadowed_row_shows_the_excluded_shadow() {
+    let snap = scan(shadow_host("enabled", "disable"));
+    let mut refine = session(&snap);
+    assert_eq!(declined_in(&refine, "shadow.service"), None, "at scan");
+    let shadow = ItemId::DropIn {
+        path: SHADOW_UNIT.into(),
+    };
+    for (include, expected) in [
+        (
+            false,
+            Some(evidence_declined("shadow.service", SHADOW_UNIT)),
+        ),
+        (true, None),
+    ] {
+        refine
+            .apply(set_include(shadow.clone(), include))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            declined_in(&refine, "shadow.service"),
+            expected,
+            "shadow included {include}"
+        );
+        let containerfile = containerfile_in(&export_session(&refine));
+        assert_eq!(
+            acts(&containerfile, "enable", "shadow.service"),
+            include,
+            "shadow included {include}:\n{containerfile}"
+        );
+    }
+}
+
+/// T15, last clause, the `Vendor` case: another row's unit file staged at
+/// the vendor unit's name (an imported config entry) puts
+/// `InstallEvidenceChanged`, naming that file, on the unit row; excluding
+/// the config row through `RefineSession` alone clears it and the enable
+/// returns.
+#[test]
+fn t15_a_vendor_row_shows_another_rows_unit_file() {
+    const UNIT: &str = "orphan.service";
+    let snap = with_config_entry(
+        &scan(t5_host()),
+        ORPHAN_UNIT,
+        "[Service]\nExecStart=/usr/bin/other\n",
+    );
+    let mut refine = session(&snap);
+    assert_eq!(
+        declined_in(&refine, UNIT),
+        Some(evidence_declined(UNIT, ORPHAN_UNIT))
+    );
+    assert!(in_no_systemctl_instruction(
+        &containerfile_in(&export_session(&refine)),
+        UNIT
+    ));
+    refine
+        .apply(set_include(config_item(ORPHAN_UNIT), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(declined_in(&refine, UNIT), None);
+    let containerfile = containerfile_in(&export_session(&refine));
+    assert!(acts(&containerfile, "enable", UNIT), "{containerfile}");
+}
+
+/// On an aggregate, the view shows what the merged export renders: T18
+/// (c)'s pair of hosts, the mask row declined with `MaskPathOccupied`
+/// while the other host's unit file is included, and not once it is
+/// excluded.
+#[test]
+fn an_aggregate_row_shows_the_merged_exports_reason() {
+    const UNIT: &str = "kdump.service";
+    let path = etc_path(UNIT);
+    let merged = merged(
+        named(
+            owned_unit_host(UNIT, "kexec-tools", "masked", VENDOR_SERVICE),
+            "host-a",
+        ),
+        named(
+            UnitHost::new()
+                .unit(UNIT, "enabled")
+                .preset("disable *")
+                .etc_unit(UNIT, "[Service]\nExecStart=/usr/local/bin/kdump\n"),
+            "host-b",
+        ),
+    );
+    let mut refine = session(&merged);
+    refine
+        .apply(set_include(config_item(&path), true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        declined_in(&refine, UNIT),
+        Some(inspectah_refine::projection::DeclinedView {
+            renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+            reason: "MaskPathOccupied".into(),
+            text: format!(
+                "{UNIT} (the export also carries a unit file at {path}; exclude one of the two)"
+            ),
+        })
+    );
+    refine
+        .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(declined_in(&refine, UNIT), None);
+    assert!(acts(
+        &containerfile_in(&export_session(&refine)),
+        "mask",
+        UNIT
+    ));
+}

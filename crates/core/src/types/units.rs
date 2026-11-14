@@ -85,6 +85,23 @@ impl UnitKind {
         };
         Some(kind)
     }
+
+    /// The type suffix that names this kind, lowercase, without the `.`:
+    /// the inverse of the suffix reading, and how refine names a row's
+    /// kind (§ 11.1).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Ordinary(OrdinaryKind::Service) => "service",
+            Self::Ordinary(OrdinaryKind::Socket) => "socket",
+            Self::Ordinary(OrdinaryKind::Path) => "path",
+            Self::Ordinary(OrdinaryKind::Timer) => "timer",
+            Self::Ordinary(OrdinaryKind::Target) => "target",
+            Self::Ordinary(OrdinaryKind::Slice) => "slice",
+            Self::Storage(StorageKind::Mount) => "mount",
+            Self::Storage(StorageKind::Automount) => "automount",
+            Self::Storage(StorageKind::Swap) => "swap",
+        }
+    }
 }
 
 /// Why a string is not a [`UnitName`]. Each variant names the rule it failed.
@@ -1776,6 +1793,26 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// `suffix` is the inverse of the suffix reading, for every suffix the
+    /// model knows.
+    #[test]
+    fn a_kind_names_the_suffix_it_was_read_from() {
+        for suffix in [
+            "service",
+            "socket",
+            "path",
+            "timer",
+            "target",
+            "slice",
+            "mount",
+            "automount",
+            "swap",
+        ] {
+            let kind = UnitKind::from_suffix(suffix).expect("a known suffix");
+            assert_eq!(kind.suffix(), suffix);
         }
     }
 }

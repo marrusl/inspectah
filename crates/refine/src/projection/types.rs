@@ -2,15 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline_summary::BaselineSummary;
 use crate::types::{
-    ItemId, RefinedDropIn, RefinedFlatpak, RefinedQuadlet, RefinedServiceState,
-    RefinedTunedSelection, RepoProvenance, RepoTier,
+    ItemId, RefinedFlatpak, RefinedQuadlet, RefinedTunedSelection, RepoProvenance, RepoTier,
+    TriageTag,
 };
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::storage::VarDirBacking;
-use inspectah_core::types::units::{PresetDefault, UnitState};
+use inspectah_core::types::units::{PresetDefault, SystemdDropIn, UnitName, UnitState};
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_pipeline::render::unit_plan::{AdvisoryReason, OmissionReason};
@@ -20,8 +20,18 @@ use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionProjection {
-    pub unit_states: Vec<RefinedServiceState>,
-    pub unit_dropins: Vec<RefinedDropIn>,
+    /// One row per unit state change (§ 11.1).
+    pub unit_states: Vec<UnitStateView>,
+    /// One row per drop-in or full shadow, whether or not its unit has a
+    /// state change row.
+    pub unit_dropins: Vec<DropInView>,
+    /// One row per administrator's mount, automount or swap unit. These
+    /// rows have no toggle.
+    pub mount_findings: Vec<MountFindingView>,
+    /// The included config rows whose file the export does not write, by
+    /// the row's own `path`: only an included row offers a file, so the
+    /// row is the included config entry at that path.
+    pub config_withheld: Vec<ConfigWithheldView>,
     pub quadlets: Vec<RefinedQuadlet>,
     pub flatpaks: Vec<RefinedFlatpak>,
     pub tuned: Vec<RefinedTunedSelection>,
@@ -35,6 +45,128 @@ pub struct DecisionProjection {
     pub not_carried: Vec<NotCarriedRow>,
     /// The notice the export sends for the rows that own an enabled unit.
     pub not_carried_notice: Option<ExportWarning>,
+}
+
+// ── Unit rows (§ 11.1) ───────────────────────────────────────────
+
+/// Where the unit file behind a row is on the source host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FragmentView {
+    /// Under the vendor directory only (for a mount finding: with no
+    /// package known to own it).
+    Vendor,
+    /// Under `/etc/systemd/system` only.
+    Local,
+    /// A vendor file with a copy in `/etc/systemd/system` that replaces it.
+    Shadowed,
+    /// No unit file: a mask on a name that has none.
+    Absent,
+}
+
+/// How the Containerfile writes a command the plan declined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeclinedRenders {
+    /// An `# Omitted:` line.
+    Omitted,
+    /// A `# FIXME:` line (§ 10.3).
+    Fixme,
+    /// An advisory block. § 10.2 rule 7 renders a declined command this
+    /// way; no reason the plan gives today does.
+    Advisory,
+}
+
+/// Why the export writes no command for a row, as the plan decided it
+/// against the session's current snapshot (§ 11.1). Independent of the
+/// row's `attention_reason`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedView {
+    pub renders: DeclinedRenders,
+    /// The `OmissionReason` variant's name (`OmissionReason::name`).
+    pub reason: String,
+    /// The Containerfile line's text after its marker, unescaped
+    /// (`declined_line`).
+    pub text: String,
+}
+
+/// Why the export does not write a file a row offered (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum WithheldView {
+    /// The stager withholds the file: the `WithheldWhy` variant's name and
+    /// its text.
+    Withheld { why: String, text: String },
+    /// The offer's path is not a destination the stager accepts: the
+    /// `PathError` variant's name and its text.
+    Refused { rule: String, text: String },
+}
+
+/// One unit state change as refine shows it (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitStateView {
+    pub unit: UnitName,
+    /// The type suffix, lowercase (`service`, `mount`, ...).
+    pub kind: String,
+    /// The template, when the unit is an instance (`getty@.service` for
+    /// `getty@tty2.service`).
+    pub instance_of: Option<UnitName>,
+    pub current_state: UnitState,
+    pub default_state: Option<PresetDefault>,
+    pub fragment: FragmentView,
+    /// The `/etc` unit file the row was recorded from, for a local or
+    /// shadowed fragment.
+    pub unit_file_path: Option<String>,
+    pub owning_package: Option<String>,
+    pub include: bool,
+    pub locked: bool,
+    pub triage: TriageTag,
+    pub attention_reason: Option<String>,
+    /// Present when the plan writes no command for the row.
+    pub declined: Option<DeclinedView>,
+}
+
+/// One drop-in or full shadow row (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DropInView {
+    pub entry: SystemdDropIn,
+    pub triage: TriageTag,
+    /// The parent unit's kind, lowercase; `None` when the parent's name is
+    /// not a unit name.
+    pub kind: Option<String>,
+    /// Present when the export does not write the file this row offers.
+    pub withheld: Option<WithheldView>,
+}
+
+/// An included config row whose file the export does not write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigWithheldView {
+    /// The config row's `path`, as the row records it.
+    pub path: String,
+    pub withheld: WithheldView,
+}
+
+/// One administrator's mount, automount or swap unit (§ 11.1). No
+/// `include`: the row has no toggle. No mount source: `unit_file_path`
+/// names the config row that holds the scrubbed file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MountFindingView {
+    pub unit: UnitName,
+    /// `mount`, `automount` or `swap`.
+    pub kind: String,
+    /// The recorded state, enabled or masked; `None` when it is neither
+    /// (the collector records no other state for these units).
+    pub state: Option<UnitState>,
+    pub mount_point: Option<String>,
+    /// `local`, `shadowed`, `vendor` for an unowned vendor unit, `absent`
+    /// for a mask with no unit file.
+    pub fragment: FragmentView,
+    /// The path of the config row that holds the unit file and its toggle,
+    /// when the snapshot has one.
+    pub unit_file_path: Option<String>,
+    /// § 10.6's lines for the finding, as the Containerfile writes them
+    /// before escaping.
+    pub advisories: Vec<String>,
 }
 
 /// One package the export leaves out as not carried: an auto package

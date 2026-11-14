@@ -118,9 +118,19 @@ pub enum WithheldWhy {
 }
 
 impl WithheldWhy {
+    /// The variant's name, as refine's view names why a file is withheld
+    /// (§ 11.1). The one place it is spelled.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ZeroLengthUnitFile => "ZeroLengthUnitFile",
+            Self::Conflict { .. } => "Conflict",
+        }
+    }
+
     /// What the Containerfile's FIXME says after the path of the file
-    /// withheld at `at`. The one place this text is written.
-    pub(crate) fn describe(&self, at: &Destination) -> String {
+    /// withheld at `at`, and refine's text for the row that offered it.
+    /// The one place this text is written.
+    pub fn describe(&self, at: &Destination) -> String {
         match self {
             Self::ZeroLengthUnitFile => "a zero-length file at a unit path is a mask; \
                  the export carries a mask only as a systemctl mask command"
@@ -250,6 +260,21 @@ pub enum PathError {
     SymlinkEscape,
     #[error("path names no file")]
     NoFileName,
+}
+
+impl PathError {
+    /// The variant's name, as refine's view names the rule a refused
+    /// offer broke. The one place it is spelled.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NulByte => "NulByte",
+            Self::LineBreakOrControl => "LineBreakOrControl",
+            Self::AbsolutePath => "AbsolutePath",
+            Self::Traversal => "Traversal",
+            Self::SymlinkEscape => "SymlinkEscape",
+            Self::NoFileName => "NoFileName",
+        }
+    }
 }
 
 /// Destinations a config entry must not be staged at, because another

@@ -266,6 +266,22 @@ impl OmissionReason {
         }
     }
 
+    /// The variant's name, as refine's view names the reason (§ 11.1).
+    /// The one place it is spelled: the match is exhaustive, so a new
+    /// variant cannot go unnamed.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::PackageExcluded { .. } => "PackageExcluded",
+            Self::NotInTargetImage { .. } => "NotInTargetImage",
+            Self::NotCarried { .. } => "NotCarried",
+            Self::UnitFileNotStaged => "UnitFileNotStaged",
+            Self::InstallEvidenceChanged { .. } => "InstallEvidenceChanged",
+            Self::StorageFileStaged { .. } => "StorageFileStaged",
+            Self::TargetNeedsUnit => "TargetNeedsUnit",
+            Self::MaskPathOccupied { .. } => "MaskPathOccupied",
+        }
+    }
+
     /// The owning package a presence reason names, `None` for a reason
     /// about the export's files.
     pub fn owning_package(&self) -> Option<&str> {
@@ -765,8 +781,10 @@ fn rule_4_mask_path(
 // Rule 5, the row's own file
 // ---------------------------------------------------------------------------
 
-/// Where the image loads a unit file named `file` from `/etc`.
-fn etc_unit_path(file: &UnitName) -> String {
+/// Where the image loads a unit file named `file` from `/etc`: the path a
+/// config entry or drop-in row for it records, and refine's
+/// `unit_file_path`.
+pub fn etc_unit_path(file: &UnitName) -> String {
     format!("{ETC_UNIT_DIR}/{}", file.as_str())
 }
 
