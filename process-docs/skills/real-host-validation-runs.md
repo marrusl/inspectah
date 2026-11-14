@@ -1194,6 +1194,97 @@ daemon list, and in the base images after `dnf install cups libvirt-daemon`.
   a second copy of a planting script on the same guest; revert before
   trusting what it measured.
 
+### Measured, 2026-11-14: cockpit.socket end to end
+
+Run R1 of the units spec, at `6220362e` on the units branch (`inspectah
+version` on each guest printed `commit 6220362e`). RHEL 9.8 and RHEL
+10.2, both aarch64, each reverted to its clean snapshot, given a
+standard drift run, scanned as root, and the scan tarball built
+unmodified with `podman build --layers=true` under the proxy workaround.
+**The built image reads the host's state on both releases.**
+
+**Neither the clean snapshot nor the base image has cockpit.** On the
+clean guests `rpm -q cockpit-ws` reports it not installed and
+`systemctl list-unit-files cockpit.socket` lists 0 unit files, so there
+is no preset column to read before drift. Install it first with
+`sudo dnf install -y cockpit`, which is the package the standard profile
+installs anyway (driftify then prints `already installed`). In the base
+images, `podman run --rm <base> systemctl is-enabled cockpit.socket`
+answers `Failed to get unit file state ... No such file or directory`
+(exit 1) on `rhel-bootc:9.8` and `not-found` (exit 4) on
+`rhel-bootc:10.2`. So the comparison that can fail is against the layer
+after `COPY config/etc/ /etc/`, the last one before the unit state
+section: the build's package install has applied the preset there.
+
+| | RHEL 9.8 | RHEL 10.2 |
+|---|---|---|
+| preset rule | none for cockpit; `99-default-disable.preset`: `disable *` | `90-default.preset:475`: `enable cockpit.socket` |
+| after `dnf install cockpit`: `list-unit-files` state, preset | `disabled disabled` | `enabled enabled` |
+| driftify's line | `cockpit.socket: preset disabled, setting enabled` | `cockpit.socket: preset enabled, setting disabled` |
+| host after drift: `list-unit-files` | `enabled disabled` | `disabled enabled` |
+| unmodified base image: `is-enabled` | no such file (not installed) | `not-found` |
+| layer before the unit state section: `is-enabled` | `disabled` | `enabled` |
+| built image: `list-unit-files` | `enabled disabled` | `disabled enabled` |
+| built image: `is-enabled` | `enabled` | `disabled` |
+
+In each case the image moved off the preset in the direction the host
+did, so the run discriminates on both releases and no hand plant was
+needed. The snapshot row is `current_state: enabled, default_state:
+disable` on RHEL 9 and `disabled`, `enable` on RHEL 10, both `fragment:
+vendor`, `owning_package: cockpit-ws`, included.
+
+**The Containerfile lines.** On both, `# === Systemd Unit State ===`
+follows `COPY config/etc/ /etc/`, opens with the `tmp.mount` FIXME, and
+puts the socket after the services in its verb's list. RHEL 9:
+
+```
+RUN systemctl enable -- \
+    ...
+    'nginx.service' \
+    'cockpit.socket' \
+    'multipathd.socket'
+```
+
+The build printed `Created symlink
+/etc/systemd/system/sockets.target.wants/cockpit.socket →
+/usr/lib/systemd/system/cockpit.socket.` for that step. RHEL 10:
+
+```
+RUN systemctl disable -- \
+    'cockpit.socket'
+```
+
+The build printed `Removed
+'/etc/systemd/system/sockets.target.wants/cockpit.socket'.`, the link the
+package install had made earlier in the same build.
+
+**What else the scans showed.**
+
+- Warnings: the snapshot holds one on RHEL 9 and two on RHEL 10. Both
+  hosts have `unit systemd-remount-fs.service has state
+  'enabled-runtime'`, and RHEL 10 adds the skipped ELF scan (`readelf`
+  absent). Nothing on stderr is a warning. None names a `.scope` or
+  `.device` unit, `NotADirectory`, or a `*.d` path. The only `.scope` and
+  `.device` strings in the snapshot are man page paths and one unit
+  file's `Conflicts=` line.
+- Owner lookups: every `vendor` fragment in `units.state_changes` has an
+  `owning_package` (9 of 9 on RHEL 9, 6 of 6 on RHEL 10), so no lookup
+  failed. The scan prints no count of failed lookups: read from the
+  collector, not measured, an unknown owner shows only as a null there.
+- Unit state lines, by verb: RHEL 9 `enable` 9 and `mask` 2; RHEL 10
+  `enable` 5, `disable` 1 and `mask` 2. `state_changes` holds 12 and 9
+  rows; the third masked row in each is `tmp.mount`, which the FIXME
+  covers.
+- Both builds passed with the COPY-source check clean, in 346 s and
+  288 s, with the known lint warnings (two and three).
+
+**A hand-made link is not carried yet.** `driftify-static.service` is
+`enabled` on both hosts through a hand-made `multi-user.target.wants/`
+link to a unit with no `[Install]`. It is in the `enable` list, the
+build printed no link for it, and the image reads `static` with no
+link. Inferred, not measured: this is the expected phase 2 output, since
+the plan gives hand-made links to phase 4.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
