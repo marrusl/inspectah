@@ -87,11 +87,24 @@ function DropInRow({
   onToggle,
 }: DropInRowProps) {
   const diBucket = extractTriageBucket(di.triage);
-  const diBorder = LEVEL_BORDER[diBucket] ?? "none";
   const diBadge = badgeTextForTriage(di.triage);
   const diLevel = triageBucketToAttention(di.triage);
   const diLocked = di.locked === true || parentLocked;
   const disabled = parentExcluded || isPending || diLocked;
+  const isShadow = di.shadow_type === "full_shadow";
+
+  // Border-left priority: triage border wins if present, else shadow warning border
+  let diBorder = LEVEL_BORDER[diBucket] ?? "none";
+  let backgroundColor: string | undefined;
+  if (isShadow) {
+    if (diBorder !== "none") {
+      // Triage border wins left edge, shadow gets background
+      backgroundColor = "var(--pf-t--global--color--status--warning--default)";
+    } else {
+      // No triage border, shadow gets left border
+      diBorder = "4px solid var(--pf-t--global--color--status--warning--default)";
+    }
+  }
 
   return (
     <div
@@ -106,6 +119,9 @@ function DropInRow({
       className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
       style={{
         borderLeft: diBorder,
+        backgroundColor: backgroundColor
+          ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
+          : undefined,
         paddingLeft: "calc(var(--pf-t--global--spacer--md) + 16px)",
         opacity: parentExcluded ? 0.55 : 1,
         transition: "opacity 200ms ease, background-color 150ms ease",
@@ -135,6 +151,9 @@ function DropInRow({
                 : `Toggle ${di.path}`
             }
             aria-disabled={parentExcluded}
+            aria-describedby={
+              isShadow ? `shadow-rationale-dropin-${di.path}` : undefined
+            }
             style={{ minWidth: 20, minHeight: 20 }}
           />
         </div>
@@ -150,6 +169,22 @@ function DropInRow({
             </Label>
           </div>
         )}
+        {!parentExcluded && !diLocked && diBadge && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
+          </div>
+        )}
+        {isShadow && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid={`shadow-badge-dropin-${di.path}`}
+          >
+            <Label color="orange" isCompact>
+              Shadow override
+            </Label>
+          </div>
+        )}
         {diLocked && (
           <div
             role="gridcell"
@@ -162,12 +197,24 @@ function DropInRow({
             </Label>
           </div>
         )}
-        {!parentExcluded && !diLocked && diBadge && (
-          <div role="gridcell" className="inspectah-decision-row__badge">
-            <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
-          </div>
-        )}
       </div>
+      {/* Full-shadow rationale below the drop-in toggle row */}
+      {isShadow && di.shadow_rationale && (
+        <div
+          id={`shadow-rationale-dropin-${di.path}`}
+          className="inspectah-decision-row__helper-text"
+          data-testid={`shadow-rationale-dropin-${di.path}`}
+          style={{
+            paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
+            paddingBottom: "var(--pf-t--global--spacer--xs)",
+            fontSize: "var(--pf-t--global--font--size--xs)",
+            color: "var(--pf-t--global--text--color--subtle)",
+            fontStyle: "italic",
+          }}
+        >
+          {di.shadow_rationale}
+        </div>
+      )}
     </div>
   );
 }
