@@ -5002,3 +5002,53 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
     assert_eq!(rendered, planned, "{cf}");
     assert_kernel_section_writes_the_profile_only(&cf, "full scan");
 }
+
+/// The scheduled section's comment says which local timers the export
+/// carries: one line for the timers whose file is staged, one for those
+/// whose file is not, with the plan's `UnitFileNotStaged` text. Control:
+/// with both config rows included, both timers are on the carried line
+/// and there is no not-carried line.
+#[test]
+fn the_local_timers_comment_says_which_are_carried() {
+    const CARRIED: &str = "# Local timers carried with the configuration tree";
+    const NOT_CARRIED: &str = "# Local timers not carried";
+    let body = "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n";
+    let snap = scan(
+        UnitHost::new()
+            .unit("report.timer", "disabled")
+            .unit("audit.timer", "disabled")
+            .preset("disable *")
+            .etc_unit("report.timer", body)
+            .etc_unit("audit.timer", body),
+    );
+    let line = |cf: &str, prefix: &str| {
+        cf.lines()
+            .find(|l| l.starts_with(prefix))
+            .map(str::to_owned)
+    };
+
+    let scanned = containerfile_in(&render_export(&snap));
+    let carried = line(&scanned, CARRIED).expect("a carried line");
+    assert!(
+        carried.ends_with("(2): audit.timer, report.timer")
+            || carried.ends_with("(2): report.timer, audit.timer"),
+        "{carried}"
+    );
+    assert_eq!(line(&scanned, NOT_CARRIED), None, "{scanned}");
+
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(&etc_path("audit.timer")), false)],
+    ));
+    assert_eq!(
+        line(&excluded, CARRIED).as_deref(),
+        Some("# Local timers carried with the configuration tree (1): report.timer"),
+        "{excluded}"
+    );
+    assert_eq!(
+        line(&excluded, NOT_CARRIED).as_deref(),
+        Some("# Local timers not carried (1): audit.timer (its unit file is not in the export)"),
+        "{excluded}"
+    );
+    assert!(!excluded.contains("Existing local timers"), "{excluded}");
+}

@@ -29,7 +29,7 @@ use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::comment::escape_comment_text;
 use super::configtree::{
-    Destination, KARGS_PATH, StagedFileKind, UnstagedWhy, is_staged, staged_count,
+    Destination, ETC_UNIT_DIR, KARGS_PATH, StagedFileKind, UnstagedWhy, is_staged, staged_count,
     staged_unit_file, staged_writes, unstaged_files, validate_path,
 };
 use super::language_packages;
@@ -40,7 +40,7 @@ use super::safety::{
     is_valid_tuned_profile, operand_refusal, sanitize_shell_value, shell_operand_refusal,
 };
 use super::unit_plan::{
-    GeneratedSource, declined_line, generated_unit_name, is_package_installable,
+    GeneratedSource, OmissionReason, declined_line, generated_unit_name, is_package_installable,
     manual_follow_up_line, plan_units, systemctl_lines, unit_state_lines,
 };
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
@@ -1382,7 +1382,8 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     let mut body = Vec::new();
-    let plan = plan_units(snap, &staged_writes(snap));
+    let staged = staged_writes(snap);
+    let plan = plan_units(snap, &staged);
 
     // The generated units the plan enables are copied here, before their
     // enable (§ 10.7).
@@ -1390,16 +1391,34 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
-    // Timer names are snapshot strings: every one that reaches a comment
-    // is escaped, or a newline in it would end the comment.
-    if !local_timers.is_empty() {
-        let names: Vec<String> = local_timers
+    // A local timer's file is carried by its config or drop-in row (§ 8):
+    // the comment says which timers that row put in the export and which
+    // it did not. Timer names are snapshot strings: every one that reaches
+    // a comment is escaped, or a newline in it would end the comment.
+    let (carried, not_carried): (Vec<_>, Vec<_>) = local_timers.iter().partition(|t| {
+        staged_unit_file(&t.name, "timer")
+            .is_some_and(|file| is_staged(&staged, &format!("{ETC_UNIT_DIR}/{file}")))
+    });
+    let shown = |t: &&&inspectah_core::types::scheduled::SystemdTimer| {
+        language_packages::sanitize_for_comment(&format!("{}.timer", t.name))
+    };
+    if !carried.is_empty() {
+        let names: Vec<String> = carried.iter().map(shown).collect();
+        body.push(format!(
+            "# Local timers carried with the configuration tree ({}): {}",
+            carried.len(),
+            names.join(", ")
+        ));
+    }
+    if !not_carried.is_empty() {
+        let reason = OmissionReason::UnitFileNotStaged.describe();
+        let names: Vec<String> = not_carried
             .iter()
-            .map(|t| language_packages::sanitize_for_comment(&format!("{}.timer", t.name)))
+            .map(|t| format!("{} ({reason})", shown(t)))
             .collect();
         body.push(format!(
-            "# Existing local timers ({}): {}",
-            local_timers.len(),
+            "# Local timers not carried ({}): {}",
+            not_carried.len(),
             names.join(", ")
         ));
     }
