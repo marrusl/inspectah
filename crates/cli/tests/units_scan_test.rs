@@ -606,7 +606,7 @@ fn a_drop_in_cannot_contradict_an_explicit_parent_exclusion() {
 // ---------------------------------------------------------------------
 
 /// The unit state section's header.
-const UNIT_SECTION: &str = "# === Service Enablement ===";
+const UNIT_SECTION: &str = "# === Systemd Unit State ===";
 
 /// The `Containerfile` of an export tree.
 fn containerfile_in(tree: &tempfile::TempDir) -> String {
@@ -2000,4 +2000,118 @@ fn t11_a_comment_only_shadow_is_staged_and_not_masked() {
         in_no_systemctl_instruction(&containerfile, UNIT),
         "{containerfile}"
     );
+}
+
+// ---------------------------------------------------------------------
+// § 10.7 order, § 10.1 header and README sentences, through the scan.
+// ---------------------------------------------------------------------
+
+/// The Containerfile's section headers, in order.
+fn section_headers(containerfile: &str) -> Vec<&str> {
+    containerfile
+        .lines()
+        .filter(|l| l.starts_with("# === ") && l.ends_with(" ==="))
+        .collect()
+}
+
+/// T13, order: a local service with no paired timer. The config `COPY` that
+/// stages its file and its enable both exist, and the enable follows. The
+/// unit state section, under § 10.1's header, is the section directly
+/// after Configuration Files.
+#[test]
+fn t13_a_local_unit_is_enabled_after_the_copy_of_its_file() {
+    let snap = scan(t5_host());
+    let tree = render_export(&snap);
+    assert!(
+        tree.path().join("config").join(&LOCAL_UNIT[1..]).is_file(),
+        "the local unit's file is staged in the config tree"
+    );
+    let containerfile = containerfile_in(&tree);
+    let copy = containerfile
+        .find("\nCOPY config/etc/ /etc/\n")
+        .unwrap_or_else(|| panic!("no config COPY:\n{containerfile}"));
+    let enable = containerfile
+        .find("\n    'local.service'")
+        .unwrap_or_else(|| panic!("no enable:\n{containerfile}"));
+    assert!(
+        acts(&containerfile, "enable", "local.service"),
+        "{containerfile}"
+    );
+    assert!(
+        copy < enable,
+        "the enable precedes the COPY:\n{containerfile}"
+    );
+
+    let headers = section_headers(&containerfile);
+    let config = headers
+        .iter()
+        .position(|h| *h == "# === Configuration Files ===")
+        .unwrap_or_else(|| panic!("no Configuration Files section: {headers:?}"));
+    assert_eq!(headers.get(config + 1), Some(&UNIT_SECTION), "{headers:?}");
+}
+
+/// § 10.7: a full shadow's enable follows the drop-ins `COPY` that stages
+/// the shadow, so it links to the `/etc` file.
+#[test]
+fn a_full_shadow_is_enabled_after_the_copy_of_its_shadow() {
+    let tree = render_export(&scan(shadow_host("enabled", "disable")));
+    assert!(staged_at(&tree, SHADOW_UNIT), "the shadow is staged");
+    let containerfile = containerfile_in(&tree);
+    let copy = containerfile
+        .find("\nCOPY drop-ins/etc/systemd/system/ /etc/systemd/system/\n")
+        .unwrap_or_else(|| panic!("no drop-ins COPY:\n{containerfile}"));
+    assert!(
+        acts(&containerfile, "enable", "shadow.service"),
+        "{containerfile}"
+    );
+    let enable = containerfile
+        .find("\n    'shadow.service'")
+        .expect("the enable's operand line");
+    assert!(
+        copy < enable,
+        "the enable precedes the COPY:\n{containerfile}"
+    );
+}
+
+/// § 10.1's two sentences about what a carried unit state means on the
+/// target.
+const README_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
+     section survive first boot: on both bootc base images, installed with `bootc install \
+     to-existing-root`, first boot does not re-apply presets. A later `systemctl \
+     preset-all` puts every unit back to preset.";
+const README_DISABLE: &str = "A `disable` removes the administrator's links and nothing more: \
+     a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
+     `disabled` afterwards and is still wanted.";
+
+/// § 10.1: the README states both sentences when the export has a unit
+/// state section. Control: a host whose only unit is a vendor unit at its
+/// preset has no unit state section, and its README has neither sentence.
+#[test]
+fn the_readme_explains_carried_unit_states_when_there_are_any() {
+    let readme = |tree: &tempfile::TempDir| {
+        std::fs::read_to_string(tree.path().join("README.md")).expect("README.md")
+    };
+    let tree = render_export(&scan(t5_host()));
+    let containerfile = containerfile_in(&tree);
+    assert!(containerfile.contains(UNIT_SECTION), "{containerfile}");
+    let text = readme(&tree);
+    for sentence in [README_FIRST_BOOT, README_DISABLE] {
+        assert!(text.contains(sentence), "missing {sentence:?}:\n{text}");
+    }
+
+    let at_preset = render_export(&scan(
+        UnitHost::new()
+            .unit("sshd.service", "enabled")
+            .preset("enable sshd.service")
+            .vendor_unit("sshd.service", VENDOR_SERVICE, Some("openssh-server")),
+    ));
+    let containerfile = containerfile_in(&at_preset);
+    assert!(!containerfile.contains(UNIT_SECTION), "{containerfile}");
+    let text = readme(&at_preset);
+    for sentence in [README_FIRST_BOOT, README_DISABLE] {
+        assert!(
+            !text.contains(sentence),
+            "{sentence:?} without a section:\n{text}"
+        );
+    }
 }

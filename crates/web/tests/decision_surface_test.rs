@@ -626,7 +626,7 @@ fn cases() -> Vec<Case> {
                 );
                 assert!(
                     e.containerfile()
-                        .contains("RUN systemctl enable tuned.service"),
+                        .contains("RUN systemctl enable -- 'tuned.service'"),
                     "the whole tuned block renders, not only the echo line"
                 );
             },

@@ -471,7 +471,7 @@ fn t12_a_zero_length_unit_file_is_withheld_from_every_offer() {
     );
     assert!(containerfile.contains(DROP_INS_COPY), "{containerfile}");
     assert!(
-        containerfile.contains("# 1 service drop-in(s)"),
+        containerfile.contains("# 1 unit drop-in(s)"),
         "the count is what the export writes:\n{containerfile}"
     );
 
@@ -577,7 +577,7 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
 const FLATPAK_UNIT: &str = "/etc/systemd/system/flatpak-provision.service";
 const FLATPAK_COPY: &str =
     "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
-const FLATPAK_ENABLE: &str = "RUN systemctl enable flatpak-provision.service";
+const FLATPAK_ENABLE: &str = "RUN systemctl enable -- 'flatpak-provision.service'";
 
 fn with_flatpak(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp};

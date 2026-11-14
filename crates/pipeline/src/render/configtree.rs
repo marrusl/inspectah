@@ -32,7 +32,7 @@ const QUADLET_PREFIX: &str = "/etc/containers/systemd/";
 pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// The provisioning service inspectah generates for flatpak applications.
-const FLATPAK_SERVICE: &str = "flatpak-provision.service";
+pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
 
 /// Where a staged file lands in the image: a normalized absolute path.
 ///
@@ -354,7 +354,7 @@ impl StagedFileKind {
             Self::RepoFile => "repo file",
             Self::GpgKey => "GPG key",
             Self::FirewallZone => "firewall zone",
-            Self::DropIn => "service drop-in",
+            Self::DropIn => "unit drop-in",
             Self::LocalTimerUnit => "local timer unit",
             Self::GeneratedUnit => "generated unit",
             Self::FlatpakService => "flatpak provisioning service",

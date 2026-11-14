@@ -305,8 +305,8 @@ fn failed_section_excluded_from_containerfile() {
         "failed services must not produce systemctl disable in Containerfile"
     );
     assert!(
-        !output.contains("Service Enablement"),
-        "failed services must not produce Service Enablement heading"
+        !output.contains("Systemd Unit State"),
+        "failed services must not produce the Systemd Unit State heading"
     );
 
     // The top-level incompleteness warning IS expected

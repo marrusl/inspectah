@@ -27,8 +27,8 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::configtree::{
-    StagedFileKind, UnstagedWhy, is_staged, staged_count, staged_unit_file, staged_writes,
-    stages_config_unit_dir, unstaged_files, validate_path,
+    FLATPAK_SERVICE, StagedFileKind, UnstagedWhy, is_staged, staged_count, staged_unit_file,
+    staged_writes, stages_config_unit_dir, unstaged_files, validate_path,
 };
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
@@ -36,7 +36,7 @@ use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
     is_valid_tuned_profile, operand_refusal, operator_kargs, sanitize_shell_value,
-    shell_operand_refusal,
+    shell_operand_refusal, single_quote,
 };
 use super::unit_plan::{
     is_package_installable, manual_follow_up_line, plan_units, unit_state_lines,
@@ -175,11 +175,11 @@ fn render_containerfile_inner(
         lines.push(String::new());
     }
 
-    // 2. Services
+    // 2. Unit drop-ins and full shadows. The unit state section follows
+    //    the Configuration Files section (§ 10.7).
     if is_degraded(&snap.completeness, InspectorId::Units) {
         lines.push("# FIXME: services data may be incomplete (inspector returned degraded)".into());
     }
-    lines.extend(services_section_lines(snap));
     lines.extend(drop_ins_section_lines(snap));
 
     // 3. Firewall zones
@@ -201,6 +201,11 @@ fn render_containerfile_inner(
         lines.push("# FIXME: config data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(config_section_lines(snap, materialized_roots));
+
+    // 5b. Unit state: after every COPY that can stage a file for a
+    //     collected unit (drop-ins and shadows, the config tree), so each
+    //     command acts on the file the image loads (§ 10.7).
+    lines.extend(unit_state_section_lines(snap));
 
     // 6. Non-RPM software
     if is_degraded(&snap.completeness, InspectorId::NonRpmSoftware) {
@@ -1220,11 +1225,13 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-// --- Services section (delegated to the unit plan) ---
+// --- Unit state section (delegated to the unit plan) ---
 
-fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+/// The unit state section (§ 10.1): empty when the plan has no line to
+/// write, so a caller can ask whether the export has one.
+pub(crate) fn unit_state_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let plan = plan_units(snap, &staged_writes(snap));
-    section("Service Enablement", unit_state_lines(&plan))
+    section("Systemd Unit State", unit_state_lines(&plan))
 }
 
 // --- Service Drop-ins section ---
@@ -1240,7 +1247,7 @@ fn drop_ins_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut body = Vec::new();
     body.push(format!(
-        "# {} service drop-in(s) — override snippets for systemd units",
+        "# {} unit drop-in(s): override snippets for systemd units",
         included_count
     ));
     body.push("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/".into());
@@ -1403,14 +1410,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
     }
     if !timer_names.is_empty() {
-        body.push(format!("RUN systemctl enable {}", timer_names.join(" ")));
+        body.push(systemctl_enable_line(&timer_names));
     }
     if !reboot_service_names.is_empty() {
         body.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
-        body.push(format!(
-            "RUN systemctl enable {}",
-            reboot_service_names.join(" ")
-        ));
+        body.push(systemctl_enable_line(&reboot_service_names));
     }
 
     if !st.at_jobs.is_empty() {
@@ -1428,6 +1432,19 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     section("Scheduled Tasks", body)
 }
+
+/// `RUN systemctl enable -- 'unit' ...` for units a section copies and
+/// enables itself, outside the unit plan: every operand single-quoted after
+/// `--`, as § 10.1 writes the plan's lines. Each name is a value its caller
+/// already proved a shell operand, or a constant.
+fn systemctl_enable_line<S: AsRef<str>>(units: &[S]) -> String {
+    let operands: Vec<String> = units.iter().map(|u| single_quote(u.as_ref())).collect();
+    format!("RUN systemctl enable -- {}", operands.join(" "))
+}
+
+/// The unit the kernel and boot section enables with an active tuned
+/// profile.
+const TUNED_SERVICE: &str = "tuned.service";
 
 /// The unit file `name.suffix` if it may be enabled: the config tree
 /// staged it ([`staged_unit_file`]) and it is safe as a shell word.
@@ -1654,7 +1671,7 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
                 .into(),
         );
-        body.push("RUN systemctl enable flatpak-provision.service".into());
+        body.push(systemctl_enable_line(&[FLATPAK_SERVICE]));
     }
     let total_workloads = included_quadlets + included_flatpaks;
     lines.extend(section(
@@ -1887,7 +1904,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 kb.tuned_active
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
-            body.push("RUN systemctl enable tuned.service".into());
+            body.push(systemctl_enable_line(&[TUNED_SERVICE]));
         }
     }
 
@@ -4046,7 +4063,7 @@ RUN dnf install -y \
 
         // Verify section order: packages before services before selinux before epilogue
         let packages_pos = output.find("dnf install -y").unwrap();
-        let services_pos = output.find("Service Enablement").unwrap();
+        let services_pos = output.find("Systemd Unit State").unwrap();
         let selinux_pos = output.find("Security & Access Control").unwrap();
         let epilogue_pos = output.find("bootc container lint").unwrap();
 
@@ -4869,7 +4886,7 @@ RUN dnf install -y \
             "included tuned must produce tuned output"
         );
         assert!(
-            output.contains("RUN systemctl enable tuned.service"),
+            output.contains("RUN systemctl enable -- 'tuned.service'"),
             "included tuned must enable tuned.service"
         );
     }
@@ -5115,7 +5132,7 @@ RUN dnf install -y \
             "must set active_profile"
         );
         assert!(
-            output.contains("RUN systemctl enable tuned.service"),
+            output.contains("RUN systemctl enable -- 'tuned.service'"),
             "must enable tuned.service"
         );
     }
@@ -6744,7 +6761,7 @@ RUN dnf install -y \
             "a carriage return reached the output: {output}"
         );
         assert!(
-            active.contains(&"RUN systemctl enable good.timer backup.timer"),
+            active.contains(&"RUN systemctl enable -- 'good.timer' 'backup.timer'"),
             "the ordinary timers are not enabled: {active:#?}"
         );
         for refused in [

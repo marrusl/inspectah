@@ -8,6 +8,18 @@ use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
 use super::selinux;
 
+/// § 10.1: a carried unit state holds through first boot (measured on both
+/// bootc bases, installed with `bootc install to-existing-root`, run R3).
+const UNIT_STATE_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
+     section survive first boot: on both bootc base images, installed with `bootc install \
+     to-existing-root`, first boot does not re-apply presets. A later `systemctl preset-all` \
+     puts every unit back to preset.";
+
+/// § 10.1: what a carried `disable` does and does not do (measured).
+const UNIT_STATE_DISABLE: &str = "A `disable` removes the administrator's links and nothing \
+     more: a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
+     `disabled` afterwards and is still wanted.";
+
 /// Render the README markdown from a snapshot.
 pub fn render_readme(snap: &InspectionSnapshot) -> String {
     let mut lines = Vec::new();
@@ -311,6 +323,18 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
              not combine the way you expect, and the mismatch may not fail visibly."
                 .into(),
         );
+        lines.push(String::new());
+    }
+
+    // Unit state: § 10.1's two measured facts about what a carried
+    // `systemctl` line means on the target, stated whenever the
+    // Containerfile has the section.
+    if !super::containerfile::unit_state_section_lines(snap).is_empty() {
+        lines.push("## Unit state".into());
+        lines.push(String::new());
+        lines.push(UNIT_STATE_FIRST_BOOT.into());
+        lines.push(String::new());
+        lines.push(UNIT_STATE_DISABLE.into());
         lines.push(String::new());
     }
 

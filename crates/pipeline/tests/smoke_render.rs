@@ -145,8 +145,8 @@ fn services_in_containerfile() {
         "Containerfile must contain systemctl disable for cups.service"
     );
     assert!(
-        output.contains("Service Enablement"),
-        "Containerfile must contain the Service Enablement section heading"
+        output.contains("Systemd Unit State"),
+        "Containerfile must contain the Systemd Unit State section heading"
     );
 }
 

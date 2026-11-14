@@ -425,7 +425,7 @@ const STAGED_ROWS: &[Row] = &[
                 "/etc/systemd/system/app.service.d/{v}.conf"
             )))
         },
-        reached: Reached::Fixme("# FIXME: service drop-in"),
+        reached: Reached::Fixme("# FIXME: unit drop-in"),
     },
 ];
 
@@ -1439,4 +1439,93 @@ fn test_carried_unit(
     };
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
+}
+
+/// § 15, phase 2: every `systemctl` site writes `--` and then single-quoted
+/// operands, the timer, `@reboot`, flatpak and tuned sites included, which
+/// do not go through the unit plan yet. Each benign value renders exactly
+/// that line, and no `systemctl` instruction anywhere in the output names
+/// an operand without the quotes. The hostile values of the timer rows are
+/// refused by `OPERAND_ROWS` as before.
+#[test]
+fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
+    let timer = |cron: &str| {
+        scheduled(ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: "backup".into(),
+                cron_expr: cron.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+    };
+    let local_timer = scheduled(ScheduledTaskSection {
+        systemd_timers: vec![SystemdTimer {
+            name: "report".into(),
+            source: "local".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mut flatpak = InspectionSnapshot::new();
+    flatpak.containers = Some(ContainerSection {
+        flatpak_apps: vec![flatpak_app()],
+        ..Default::default()
+    });
+    let mut tuned = InspectionSnapshot::new();
+    tuned.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
+        tuned_active: "my-profile".into(),
+        tuned_disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    let cases = [
+        (
+            "local timer",
+            local_timer,
+            "RUN systemctl enable -- 'report.timer'",
+        ),
+        (
+            "cron timer",
+            timer("0 3 * * *"),
+            "RUN systemctl enable -- 'backup.timer'",
+        ),
+        (
+            "@reboot service",
+            timer("@reboot"),
+            "RUN systemctl enable -- 'backup.service'",
+        ),
+        (
+            "flatpak",
+            render_containerfile(&flatpak, None, None),
+            "RUN systemctl enable -- 'flatpak-provision.service'",
+        ),
+        (
+            "tuned",
+            render_containerfile(&tuned, None, None),
+            "RUN systemctl enable -- 'tuned.service'",
+        ),
+    ];
+    for (label, output, line) in cases {
+        assert!(
+            output.lines().any(|l| l == line),
+            "{label}: missing {line:?}\n{output}"
+        );
+        for l in output
+            .lines()
+            .filter(|l| !l.starts_with('#') && l.contains("systemctl "))
+        {
+            let (_, operands) = l
+                .split_once(" -- ")
+                .unwrap_or_else(|| panic!("{label}: no `--` in {l:?}"));
+            assert!(
+                operands
+                    .split_whitespace()
+                    .filter(|w| *w != "\\")
+                    .all(|w| w.starts_with('\'') && w.ends_with('\'')),
+                "{label}: an unquoted operand in {l:?}"
+            );
+        }
+    }
 }
