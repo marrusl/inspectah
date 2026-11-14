@@ -82,13 +82,11 @@ impl Destination {
         &self.0[1..]
     }
 
-    /// Each proper ancestor directory, nearest first, `/` excluded.
-    fn ancestors(&self) -> impl Iterator<Item = &str> {
-        let path = self.0.as_str();
-        path.match_indices('/')
-            .rev()
-            .map(move |(at, _)| &path[..at])
-            .filter(|ancestor| !ancestor.is_empty())
+    /// The directory this path is in, `None` for a top-level name. A
+    /// prefix of a normal path ending before a separator is normal too.
+    fn parent(&self) -> Option<Destination> {
+        let (dir, _) = self.0.rsplit_once('/')?;
+        (!dir.is_empty()).then(|| Destination(dir.to_owned()))
     }
 
     /// Whether a zero-length file here is a mask: a file directly in
@@ -109,19 +107,35 @@ impl std::fmt::Display for Destination {
     }
 }
 
-/// Why the export withholds a file it was offered. The text is what the
-/// Containerfile's FIXME says after the file's path.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Why the export withholds a file it was offered.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WithheldWhy {
     /// A zero-length file at a unit path is a mask (§ 10.2 rule 1).
-    #[error(
-        "a zero-length file at a unit path is a mask; the export carries a mask only as a systemctl mask command"
-    )]
     ZeroLengthUnitFile,
     /// Another staged file has this destination, or needs it as a
     /// directory.
-    #[error("{other} is also staged and needs this path; exclude one of the two")]
     Conflict { other: Destination },
+}
+
+impl WithheldWhy {
+    /// What the Containerfile's FIXME says after the path of the file
+    /// withheld at `at`. The one place this text is written.
+    pub(crate) fn describe(&self, at: &Destination) -> String {
+        match self {
+            Self::ZeroLengthUnitFile => "a zero-length file at a unit path is a mask; \
+                 the export carries a mask only as a systemctl mask command"
+                .to_owned(),
+            Self::Conflict { other } if other == at => {
+                "another section also offers a different file at this path; \
+                 exclude one of the two"
+                    .to_owned()
+            }
+            Self::Conflict { other } => format!(
+                "{other} is also staged, and one of the two paths is a directory \
+                 of the other; exclude one of the two"
+            ),
+        }
+    }
 }
 
 /// One file the export writes: what offered it, and its content, borrowed
@@ -134,10 +148,17 @@ pub struct StagedWrite<'a> {
 }
 
 /// Every file the export writes, and every file it was offered and does
-/// not write. The stager writes `writes` and nothing else.
+/// not write. The stager writes `writes`, then `beside`, and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StagedWrites<'a> {
     pub writes: BTreeMap<Destination, StagedWrite<'a>>,
+    /// Interim: generated units (`GeneratedUnit`, `FlatpakService`)
+    /// written at a destination that another offer also has, in offer
+    /// order after `writes`, exactly as the stager wrote them before
+    /// `staged_writes` existed. Removed by the generated-name collision
+    /// rule of § 10.2, which arrives with generated units as plan
+    /// requests.
+    pub beside: Vec<(Destination, StagedWrite<'a>)>,
     /// Offered files with a valid destination that are not written.
     pub withheld: Vec<(Destination, StagedFileKind, WithheldWhy)>,
     /// Offered files whose path is not a [`Destination`], as offered.
@@ -333,6 +354,11 @@ impl StagedFileKind {
         }
     }
 
+    /// Whether inspectah generates the file rather than collecting it.
+    fn is_generated(self) -> bool {
+        matches!(self, Self::GeneratedUnit | Self::FlatpakService)
+    }
+
     /// Where a file of this kind at `dest` is staged under `output_dir`.
     fn staged_path(self, output_dir: &Path, dest: &Destination) -> PathBuf {
         match self {
@@ -493,19 +519,26 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 /// 2. A config entry at a destination another section carries
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
-/// 3. A local timer's file yields to any other offer at its destination.
-/// 4. Offers at one destination with the same content are one write: the
-///    config walk and the repo, GPG key or firewall inventory record one
-///    host file twice. Different contents at one destination, and a
-///    destination another write needs as a directory, are a `Conflict`:
-///    every file of the pair is withheld, so neither silently replaces or
-///    blocks the other.
-/// 5. A zero-length file directly in `/etc/systemd/system` named as a
+/// 3. Interim: a local timer's file yields to any other offer at its
+///    destination.
+/// 4. Collected offers at one destination with the same content are one
+///    write: the config walk and the repo, GPG key or firewall inventory
+///    record one host file twice. Collected offers with different
+///    contents at one destination, and a destination another offer needs
+///    as a directory, are a `Conflict`: every file there is withheld, so
+///    neither silently replaces or blocks the other.
+/// 5. Interim: a generated offer (`GeneratedUnit`, `FlatpakService`) is
+///    never a same-destination conflict. With a collected offer there, the
+///    collected file is the write and the generated one goes in `beside`;
+///    with several generated offers and no collected one, the first is
+///    the write and the rest go in `beside`. Written in that order, as
+///    before.
+/// 6. A zero-length file directly in `/etc/systemd/system` named as a
 ///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
 ///    section offered it (§ 10.2 rule 1).
 ///
-/// Everything else is written. [`write_config_tree`] writes `writes` and
-/// nothing else, and [`unstaged_files`] names `withheld` and `refused` in
+/// Everything else is written. [`write_config_tree`] writes `writes`, then
+/// `beside`, and nothing else, and [`unstaged_files`] names `withheld` and `refused` in
 /// the Containerfile, so the export and the Containerfile read one
 /// decision.
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
@@ -532,33 +565,55 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     }
 
     for offered in by_dest.values_mut() {
+        // Interim: a local timer's file yields to the config entry or
+        // drop-in row that records the same host file. Removed together
+        // with the scheduled section's local-timer writer (§ 8).
         if offered
             .iter()
             .any(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit)
         {
             offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
         }
-        let first = offered[0].1.clone();
-        if offered.iter().all(|(_, content)| *content == first) {
-            offered.truncate(1);
+        // Collected offers with one content are one write.
+        let first_collected = offered
+            .iter()
+            .find(|(kind, _)| !kind.is_generated())
+            .map(|(_, content)| content.clone());
+        if let Some(first) = first_collected
+            && offered
+                .iter()
+                .filter(|(kind, _)| !kind.is_generated())
+                .all(|(_, content)| *content == first)
+        {
+            let mut kept = false;
+            offered.retain(|(kind, _)| kind.is_generated() || !std::mem::replace(&mut kept, true));
         }
     }
 
+    // Interim: generated offers are never a same-destination conflict,
+    // with a collected offer or with each other; only collected offers
+    // with different content are. The generated-name collision rule of
+    // § 10.2, which arrives with generated units as plan requests,
+    // replaces this.
     let mut conflicts: BTreeMap<Destination, Destination> = BTreeMap::new();
     for (dest, offered) in &by_dest {
-        if offered.len() > 1 {
+        if offered
+            .iter()
+            .filter(|(kind, _)| !kind.is_generated())
+            .count()
+            > 1
+        {
             conflicts
                 .entry(dest.clone())
                 .or_insert_with(|| dest.clone());
         }
-        for ancestor in dest.ancestors() {
-            let ancestor = Destination(ancestor.to_owned());
-            if by_dest.contains_key(&ancestor) {
-                conflicts
-                    .entry(dest.clone())
-                    .or_insert_with(|| ancestor.clone());
-                conflicts.entry(ancestor).or_insert_with(|| dest.clone());
+        let mut ancestor = dest.parent();
+        while let Some(dir) = ancestor {
+            if by_dest.contains_key(&dir) {
+                conflicts.entry(dest.clone()).or_insert_with(|| dir.clone());
+                conflicts.entry(dir.clone()).or_insert_with(|| dest.clone());
             }
+            ancestor = dir.parent();
         }
     }
 
@@ -575,10 +630,23 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
             }));
             continue;
         }
-        // One offer is left: more than one is a conflict, above.
-        let Some((source, content)) = offered.into_iter().next() else {
-            continue;
+        // At most one collected offer is left: more is a conflict, above.
+        // It is the destination's write; with none, the first generated
+        // offer is. Any other generated offer is written beside it.
+        let (mut generated, collected): (Vec<_>, Vec<_>) = offered
+            .into_iter()
+            .partition(|(kind, _)| kind.is_generated());
+        let primary = match collected.into_iter().next() {
+            Some(offer) => offer,
+            None if !generated.is_empty() => generated.remove(0),
+            None => continue,
         };
+        out.beside.extend(
+            generated
+                .into_iter()
+                .map(|(source, content)| (dest.clone(), StagedWrite { source, content })),
+        );
+        let (source, content) = primary;
         if content.is_empty() && dest.is_unit_file_path() {
             out.withheld
                 .push((dest, source, WithheldWhy::ZeroLengthUnitFile));
@@ -594,15 +662,15 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
 pub(crate) enum UnstagedWhy {
     /// The path is not a [`Destination`].
     Refused(PathError),
-    /// [`staged_writes`] withholds it.
-    Withheld(WithheldWhy),
+    /// [`staged_writes`] withholds the file at this destination.
+    Withheld(Destination, WithheldWhy),
 }
 
 impl std::fmt::Display for UnstagedWhy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Refused(e) => e.fmt(f),
-            Self::Withheld(why) => why.fmt(f),
+            Self::Withheld(at, why) => f.write_str(&why.describe(at)),
         }
     }
 }
@@ -630,8 +698,8 @@ pub(crate) fn unstaged_files(snap: &InspectionSnapshot) -> Vec<Unstaged> {
         .into_iter()
         .map(|(dest, kind, why)| Unstaged {
             kind,
-            path: dest.0,
-            why: UnstagedWhy::Withheld(why),
+            path: dest.as_str().to_owned(),
+            why: UnstagedWhy::Withheld(dest, why),
         });
     refused.chain(withheld).collect()
 }
@@ -644,7 +712,8 @@ pub(crate) fn staged_count(staged: &StagedWrites<'_>, kind: StagedFileKind) -> u
 /// Whether the export writes any file under `config/etc/systemd/system/`,
 /// the directory the scheduled section copies, by [`staged_writes`].
 pub(crate) fn stages_config_unit_dir(staged: &StagedWrites<'_>) -> bool {
-    staged.writes.iter().any(|(dest, write)| {
+    let beside = staged.beside.iter().map(|(dest, write)| (dest, write));
+    staged.writes.iter().chain(beside).any(|(dest, write)| {
         !matches!(
             write.source,
             StagedFileKind::DropIn | StagedFileKind::FlatpakService
@@ -795,7 +864,12 @@ pub fn write_config_tree(
     // drop-ins under `drop-ins/`. A file it withholds or refuses is not
     // written, and the Containerfile names it from `unstaged_files`. A
     // write that fails fails the export.
-    for (dest, write) in &staged_writes(snap).writes {
+    let staged = staged_writes(snap);
+    for (dest, write) in staged
+        .writes
+        .iter()
+        .chain(staged.beside.iter().map(|(d, w)| (d, w)))
+    {
         write_staged(&write.source.staged_path(output_dir, dest), &write.content)?;
     }
 

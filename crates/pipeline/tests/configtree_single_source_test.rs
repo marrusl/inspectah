@@ -570,3 +570,189 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
     assert!(dir.path().join("config").join(&TIMER[1..]).is_file());
     assert!(containerfile.contains(SCHEDULED_COPY), "{containerfile}");
 }
+
+// --- Interim: a generated unit beside a collected file of its name ------
+
+/// The flatpak provisioning service's image path.
+const FLATPAK_UNIT: &str = "/etc/systemd/system/flatpak-provision.service";
+const FLATPAK_COPY: &str =
+    "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
+const FLATPAK_ENABLE: &str = "RUN systemctl enable flatpak-provision.service";
+
+fn with_flatpak(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.example.App".into(),
+            remote: "flathub".into(),
+            remote_url: "https://dl.flathub.org/repo/".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// The generated provisioning service, as the export writes it alone.
+fn generated_flatpak_service() -> String {
+    let (dir, _) = export(&with_flatpak(staged_snapshot(vec![], vec![])));
+    std::fs::read_to_string(dir.path().join("flatpak/flatpak-provision.service"))
+        .expect("the generated service is staged")
+}
+
+/// A rescan of a host built from an inspectah image carries a collected
+/// `flatpak-provision.service` beside the generated one. Until the
+/// generated-name collision rule arrives, both are written to their own
+/// trees as before, nothing is withheld, and the containers section's COPY
+/// and enable name a file the export wrote. With identical content too.
+#[test]
+fn a_collected_flatpak_service_stays_beside_the_generated_one() {
+    let generated = generated_flatpak_service();
+    for (label, collected) in [
+        (
+            "different content",
+            "[Unit]\nDescription=older provisioning\n".to_string(),
+        ),
+        ("identical content", generated.clone()),
+    ] {
+        let snap = with_flatpak(staged_snapshot(
+            vec![config_entry(FLATPAK_UNIT, &collected)],
+            vec![],
+        ));
+        let staged = staged_writes(&snap);
+        assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        let (dir, containerfile) = export(&snap);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config").join(&FLATPAK_UNIT[1..])).unwrap(),
+            collected,
+            "{label}: the collected file is written under config/"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("flatpak/flatpak-provision.service")).unwrap(),
+            generated,
+            "{label}: the generated file is written under flatpak/"
+        );
+        assert!(
+            containerfile.contains(FLATPAK_COPY),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            containerfile.contains(FLATPAK_ENABLE),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            fixme_naming(&containerfile, FLATPAK_UNIT).is_none(),
+            "{label}:\n{containerfile}"
+        );
+    }
+}
+
+fn with_generated(mut snap: InspectionSnapshot, units: &[(&str, &str)]) -> InspectionSnapshot {
+    use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: units
+            .iter()
+            .map(|(timer, service)| GeneratedTimerUnit {
+                name: "cron-backup".into(),
+                timer_content: (*timer).into(),
+                service_content: (*service).into(),
+                cron_expr: "0 1 * * *".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    snap
+}
+
+const CRON_TIMER: &str = "/etc/systemd/system/cron-backup.timer";
+
+/// A generated cron timer whose name matches a collected unit file with
+/// different content: as before, the generated file is written last over
+/// the same staging file, nothing is withheld, and the enable names a
+/// file the export wrote.
+#[test]
+fn a_generated_timer_stays_beside_a_collected_file_of_its_name() {
+    let snap = with_generated(
+        staged_snapshot(
+            vec![config_entry(CRON_TIMER, "[Timer]\nOnCalendar=weekly\n")],
+            vec![],
+        ),
+        &[(
+            "[Timer]\nOnCalendar=*-*-* 01:00:00\n",
+            "[Service]\nExecStart=/bin/true\n",
+        )],
+    );
+    let staged = staged_writes(&snap);
+    assert!(staged.withheld.is_empty(), "{:?}", staged.withheld);
+    let (dir, containerfile) = export(&snap);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("config").join(&CRON_TIMER[1..])).unwrap(),
+        "[Timer]\nOnCalendar=*-*-* 01:00:00\n"
+    );
+    assert!(
+        dir.path()
+            .join("config/etc/systemd/system/cron-backup.service")
+            .is_file()
+    );
+    assert!(
+        containerfile
+            .lines()
+            .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer")),
+        "{containerfile}"
+    );
+    assert!(
+        fixme_naming(&containerfile, CRON_TIMER).is_none(),
+        "{containerfile}"
+    );
+}
+
+/// Two generated units of one name (one cron file with two lines): the
+/// interim rule writes both in order, as before, so the later one is what
+/// lands, and nothing is withheld.
+#[test]
+fn two_generated_units_of_one_name_are_written_in_order() {
+    let snap = with_generated(
+        staged_snapshot(vec![], vec![]),
+        &[
+            ("[Timer]\nfirst\n", "[Service]\nfirst\n"),
+            ("[Timer]\nsecond\n", "[Service]\nsecond\n"),
+        ],
+    );
+    let staged = staged_writes(&snap);
+    assert!(staged.withheld.is_empty(), "{:?}", staged.withheld);
+    let (dir, _) = export(&snap);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("config").join(&CRON_TIMER[1..])).unwrap(),
+        "[Timer]\nsecond\n"
+    );
+}
+
+/// Control: two collected entries with different content at the flatpak
+/// service's path are both withheld, and the FIXME says another section
+/// offers a different file there.
+#[test]
+fn two_collected_files_at_a_generated_units_path_are_withheld() {
+    let snap = staged_snapshot(
+        vec![
+            config_entry(FLATPAK_UNIT, "[Unit]\nDescription=a\n"),
+            config_entry(
+                "/etc/systemd//system/flatpak-provision.service",
+                "[Unit]\nDescription=b\n",
+            ),
+        ],
+        vec![],
+    );
+    let staged = staged_writes(&snap);
+    assert!(staged.writes.is_empty(), "{:?}", staged.writes.keys());
+    assert_eq!(staged.withheld.len(), 2, "{:?}", staged.withheld);
+    let (_, containerfile) = export(&snap);
+    let fixme = fixme_naming(&containerfile, FLATPAK_UNIT).expect("named in a FIXME");
+    assert!(
+        fixme.contains("another section also offers a different file at this path"),
+        "{fixme}"
+    );
+}
