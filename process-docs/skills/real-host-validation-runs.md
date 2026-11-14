@@ -1166,7 +1166,9 @@ daemon list, and in the base images after `dnf install cups libvirt-daemon`.
   the host keys are new. The installed system has no Parallels tools,
   so `prlctl list -f` shows no address, and `prlctl restart` is
   cancelled. On RHEL 9.8 the installed system never got an address,
-  with or without an NM keyfile, and the cause was not found. Bake a
+  with or without an NM keyfile, and the cause was not found (probably
+  the probe's `tmp.mount` mask: see
+  [§ Measured, 2026-11-14: unit state at first boot](#measured-2026-11-14-unit-state-at-first-boot)). Bake a
   oneshot unit into the probe image that writes its measurements to
   `/var` and a summary to `/dev/tty1`, then read the summary with
   `prlctl capture <vm> --file x.png`. Revert the guest afterwards.
@@ -1284,6 +1286,143 @@ link to a unit with no `[Install]`. It is in the `enable` list, the
 build printed no link for it, and the image reads `static` with no
 link. Inferred, not measured: this is the expected phase 2 output, since
 the plan gives hand-made links to phase 4.
+
+### Measured, 2026-11-14: unit state at first boot
+
+Run R3 of the units spec, on RHEL 9.8 (systemd 252) and RHEL 10.2
+(systemd 257), both aarch64. Each case started from a guest reverted to
+its clean snapshot, built a probe image on the guest as root, installed
+it with `bootc install to-existing-root` as described in the 2026-11-13
+section (with `--root-ssh-authorized-keys`), and rebooted with
+`sudo systemctl reboot`. The probe is a `Type=simple` unit,
+`After=multi-user.target`, that waits 25 s, writes `systemctl is-enabled`,
+`is-active`, `FragmentPath`, `findmnt`, `systemctl --failed` and filtered
+`journalctl -b` lines to `/var`, pages them on `/dev/tty1`, and powers the
+guest off seven minutes later. Results were read over root ssh where the
+installed system allowed it and from `prlctl capture` otherwise. Before
+each reboot, the deployed `/etc/machine-id` was read on the old root at
+`/ostree/deploy/default/deploy/*.0/etc/machine-id`.
+
+**An image whose `/etc/machine-id` reads `uninitialized` gets a preset
+pass at first boot.** Built from each base with
+`systemctl disable chronyd.service` (preset `enable`), `systemctl enable
+dnf-makecache.timer` (preset `disable`), `systemctl mask
+irqbalance.service`, then `printf 'uninitialized\n' > /etc/machine-id`.
+`to-existing-root` deployed that file unchanged (14 bytes). Both releases
+logged `Detected first boot.`, `Populated /etc with preset unit
+settings.` and `Reached target First Boot Complete`.
+
+| after first boot | RHEL 9.8 | RHEL 10.2 |
+|---|---|---|
+| `chronyd.service`, disabled in the image | `enabled`, `active` | `enabled`, `active` |
+| `dnf-makecache.timer`, enabled in the image | `enabled` | `disabled`, link gone |
+| the probe, enabled in the image, no preset rule (`disable *`) | ran | `disabled`, never started |
+| `irqbalance.service`, masked | `masked` | `masked` |
+
+So RHEL 9 undoes a rendered `disable` that departs from preset and keeps
+a rendered `enable`, and RHEL 10 undoes both. `mask` survives on both.
+Inferred, not measured: the difference is each systemd's first-boot
+preset mode.
+
+**A zero-length `/etc/machine-id` gets no preset pass.** Every other
+image here kept the base's zero-length file (deployed size 0), and every
+boot logged `First Boot Complete was skipped because of an unmet
+condition check (ConditionFirstBoot=yes)` and no preset line.
+`bootc install to-disk --via-loopback --generic-image --filesystem xfs`
+from `rhel10/rhel-bootc:10.2` to a 12 GB file wrote a 0-byte
+`/etc/machine-id` into its deployment too (loop-mounted read-only). That
+disk was not booted: the guests have one disk, so `to-disk` as a booted
+route was not run. Anaconda was not run either: it needs the guest booted
+from installer media with a kickstart and a registry the installer can
+pull the probe from, and neither was set up.
+
+**Rendered `enable`, `disable` and `mask` on RHEL 9 hold at first boot.**
+Branch build at `6220362e`, standard drift run after `dnf install -y
+cockpit`, plus `sudo systemctl disable irqbalance.service` by hand
+because the standard profile renders no `disable` on RHEL 9 (it disables
+`kdump` at minimal and masks it at standard). The scan rendered
+`enable` (nine units, `cockpit.socket` among them), `disable --
+'irqbalance.service'` and `mask -- 'bluetooth.service' 'kdump.service'`.
+The scan tarball built unmodified (310 s, 348 s and 330 s on three runs)
+and was installed. Read from the console on two runs and over root ssh on
+the third, with the same result each time:
+
+| unit | `is-enabled` | `is-active` |
+|---|---|---|
+| `cockpit.socket`, `httpd.service`, `nginx.service` | `enabled` | `active` |
+| `irqbalance.service` | `disabled` | `inactive` |
+| `kdump.service`, `bluetooth.service` | `masked` | `inactive` |
+
+`systemctl --failed` was empty and `is-system-running` read `running`.
+The full `journalctl -b` of the third run has `Listening on Cockpit Web
+Service Socket.`, `Started The Apache HTTP Server.` and `Started The
+nginx HTTP and reverse proxy server.`, no line naming `irqbalance`,
+`kdump` or `bluetooth`, and no preset line. `mask` leaves the base image's own `multi-user.target.wants/kdump.service`
+and `bluetooth.target.wants/bluetooth.service` links in place; the units
+stay inactive.
+
+**`tmp.mount` on a booted host.**
+
+- Unmasked, on both releases: `/tmp` is a writable tmpfs mounted by
+  `tmp.mount` through the base's `local-fs.target.wants/tmp.mount` link,
+  while `is-enabled` reads `disabled`. `bootc status` works.
+- Masked, on RHEL 9.8: `/tmp` is not a mount, `stat -f` reads
+  `overlayfs`, and `touch /tmp/x` fails. `bootc status` fails with
+  `Ensuring selinux install_t type: ... Read-only file system`, and
+  `systemctl --failed` lists `bootc-publish-rhsm-facts.service`,
+  `dbus-broker.service` and `dbus.socket`. The host got no network
+  address. RHEL 10.2 was measured masked on 2026-11-13.
+
+**A `disable` of a unit the base pulls in through a vendor `.wants` link
+does nothing.** The units each base pulls in that way and that have an
+`[Install]` section: `tmp.mount`, `rpm-ostree-fix-shadow-mode.service`,
+and `ostree-readonly-sysroot-migration.service` on RHEL 9.8 or
+`systemd-sysext.socket`, `systemd-pcrextend.socket` and
+`systemd-pcrlock.socket` on RHEL 10.2. Each reads `disabled` in the base
+already. `systemctl disable` of three of them in a `RUN` step exited 0,
+printed nothing and removed nothing. After boot every one was started
+(`active`, or on RHEL 9 `ostree-readonly-sysroot-migration.service`
+queued and then skipped by its own `ConditionPathIsReadWrite=`).
+
+**Both bases already default to `graphical.target`.** `systemctl
+get-default` printed `graphical.target` in `rhel-bootc:9.8` and `:10.2`
+before anything set it. With no display manager installed
+(`display-manager.service` not found, though `graphical.target` wants
+it), both booted to `graphical.target` with no failed unit and no jobs
+left.
+
+**Mounts under `/opt` and `/usr`, and a copied `tmp.mount`.** Same result
+on both releases. Each mount unit was a tmpfs with
+`WantedBy=multi-user.target`, copied to `/etc/systemd/system` and enabled.
+
+- `/opt/<dir>`, directory in the image: mounted, with `Directory ... to
+  mount over is not empty, mounting anyway.` The image's file under it is
+  hidden until `umount`.
+- `/opt/<dir>`, no directory in the image: `mount point does not exist`,
+  the unit `failed`, and the host `degraded`. Boot still completed.
+  `/opt` is read-only on the booted host.
+- `/usr/share/<dir>`, directory in the image: mounted over the read-only
+  image, hiding its file.
+- `/etc/systemd/system/tmp.mount`, a copy of the vendor unit with
+  `size=77m`, no enable line: `FragmentPath` is the `/etc` file, `/tmp`
+  is mounted at 77 MiB, and `is-enabled` reads `disabled`. The vendor
+  link starts the copy by name.
+
+**Traps from this run.**
+
+- **A drifted image refuses root ssh.** The standard profile writes
+  `/etc/ssh/sshd_config.d/00-driftify.conf` with `PermitRootLogin no`.
+  sshd keeps the first value it reads, so a probe drop-in must sort before
+  `00-driftify.conf`: `00-r3-probe.conf` did not work and
+  `00-a-r3-probe.conf` did. On RHEL 9.8 a booted
+  image without a `tmp.mount` mask had an address every time.
+- **RHEL 9's systemd logs units by description.** `Started The Apache
+  HTTP Server`, not `httpd.service`, so grepping `journalctl -b` for unit
+  names finds almost nothing on RHEL 9. Use `journalctl -b -u <unit>`.
+- **A preset pass also undoes the probe.** On RHEL 10 the first-boot
+  preset pass disabled the probe unit, so nothing reached the console. A
+  probe for this case has to be read over ssh, or carried by a preset
+  file that enables it.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
