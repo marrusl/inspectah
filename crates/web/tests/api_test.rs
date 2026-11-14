@@ -832,7 +832,8 @@ const FLATPAK_PROVISION: &str = "flatpak-provision.service";
 /// flatpak application. With `collected`, the host also has a collected
 /// unit of each generated unit's name, `cron-backup.timer` and
 /// `flatpak-provision.service`, both enabled against a `disable` preset,
-/// so both generated requests are declined for the name collision.
+/// so both generated requests are declined for the name collision, and a
+/// collected `cron-backup` timer row in the scheduled section.
 fn generated_collision_state(collected: bool) -> Arc<AppState> {
     use inspectah_core::types::scheduled::GeneratedTimerUnit;
     let mut snap = InspectionSnapshot::new();
@@ -855,7 +856,20 @@ fn generated_collision_state(collected: bool) -> Arc<AppState> {
             mount_findings: Vec::new(),
         });
     }
+    // With `collected`, the host's own timer of the generated name is a
+    // collected timer row in the scheduled section too.
+    let systemd_timers = if collected {
+        vec![SystemdTimer {
+            name: GENERATED_TIMER.into(),
+            on_calendar: "daily".into(),
+            exec_start: "/usr/bin/vendor-backup".into(),
+            ..Default::default()
+        }]
+    } else {
+        vec![]
+    };
     snap.scheduled_tasks = Some(ScheduledTaskSection {
+        systemd_timers,
         generated_timer_units: vec![GeneratedTimerUnit {
             name: GENERATED_TIMER.into(),
             cron_expr: "0 2 * * *".into(),
@@ -939,6 +953,47 @@ async fn a_declined_generated_unit_is_carried_for_its_row() {
         control["declined_generated"],
         serde_json::json!([]),
         "{control}"
+    );
+}
+
+/// A generated timer row and the collected timer of its name are two
+/// scheduled rows with two ids: the generated row's id carries its kind,
+/// so no key, DOM id or search entry is shared. Control: cron and
+/// collected timer rows keep the id they had.
+#[tokio::test]
+async fn a_generated_scheduled_row_has_its_own_id() {
+    let scheduled_ids = |sections: &serde_json::Value| -> Vec<String> {
+        sections
+            .as_array()
+            .expect("sections is an array")
+            .iter()
+            .find(|s| s["id"] == "scheduled_tasks")
+            .expect("a scheduled_tasks section")["items"]
+            .as_array()
+            .expect("scheduled items")
+            .iter()
+            .map(|i| i["id"].as_str().expect("an id").to_owned())
+            .collect()
+    };
+    let (status, sections) = get_json(
+        &app(generated_collision_state(true)),
+        "/api/snapshot/sections",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        scheduled_ids(&sections),
+        [
+            GENERATED_TIMER.to_owned(),
+            format!("generated:{GENERATED_TIMER}")
+        ]
+    );
+
+    let (_, sections) = get_json(&app(scheduled_timer_state()), "/api/snapshot/sections").await;
+    assert_eq!(
+        scheduled_ids(&sections),
+        [TIMER_CRON_PATH, "backup", "cleanup"],
+        "cron and collected timer rows keep their ids"
     );
 }
 

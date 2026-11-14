@@ -1661,6 +1661,24 @@ fn unbacked_var_row(vd: &RefVarDirectory, rationale: String, state: Option<Strin
 
 // -- Generic sections (scheduled_tasks, non_rpm_software, selinux) ---------
 
+/// The tag the reference projection puts on a generated timer row.
+const GENERATED_TIMER_TAG: &str = "generated-timer";
+/// Prefix of a generated timer row's id. A generated timer is declined
+/// exactly when a collected unit has its name, so its row and the
+/// collected timer's row would otherwise share one id in the scheduled
+/// section. The frontend joins a declined generated unit on this id.
+const GENERATED_ROW_ID_PREFIX: &str = "generated:";
+
+/// A row's id in the web response: a generated timer row's id names its
+/// kind, every other row keeps the projection's id.
+fn generic_row_id(item: &GenericRefItem) -> String {
+    if item.tags.iter().any(|t| t == GENERATED_TIMER_TAG) {
+        format!("{GENERATED_ROW_ID_PREFIX}{}", item.id)
+    } else {
+        item.id.clone()
+    }
+}
+
 pub fn web_generic_section(
     id: &str,
     display_name: &str,
@@ -1669,7 +1687,7 @@ pub fn web_generic_section(
     let context_items: Vec<ContextItem> = items
         .iter()
         .map(|item| ContextItem {
-            id: item.id.clone(),
+            id: generic_row_id(item),
             title: item.key.clone(),
             subtitle: item.summary.clone(),
             detail: item.content.clone(),
