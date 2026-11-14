@@ -751,7 +751,10 @@ export interface PackageProvenance {
   group_name: string;
 }
 
-/** View endpoint response: RefinedView + repo_groups. */
+/**
+ * View endpoint response: RefinedView's wire fields, listed by the server
+ * with a `withheld` on each config row, and the decision lists beside them.
+ */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   version_changes: VersionChangeEntry[];

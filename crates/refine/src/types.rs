@@ -594,8 +594,8 @@ pub struct RefinedView {
     pub containerfile_preview: String,
     pub stats: RefineStats,
     /// Per-`RepoId` effective-member counts (§ 3.2). Not part of the wire
-    /// contract: `ViewResponse` flattens `RefinedView` directly into
-    /// `/api/view`, and this is an internal computation the session reads
+    /// contract: the web `ViewResponse` lists `RefinedView`'s other fields
+    /// itself and drops this one, an internal computation the session reads
     /// through `repo_effective`, not a field the client sees -- the client
     /// sees `RepoGroupInfo`'s three counts instead.
     #[serde(skip)]

@@ -192,6 +192,40 @@ describe("ServiceSection: every unit kind", () => {
     ).toEqual([sentence, DECLINED_TEXT]);
   });
 
+  it("shows the reason once when attention_reason and declined.text are the same", () => {
+    // A scanned protected unit: the collector's sentence and the plan's
+    // decline text come from one server function. The test above, with
+    // two different texts, is the control.
+    const sentence =
+      "ostree-remount.service is masked on the source host. Not carried: the image needs this unit.";
+    render(
+      <ServiceSection
+        {...baseProps}
+        services={[
+          makeUnit({
+            unit: "ostree-remount.service",
+            current_state: "masked",
+            attention_reason: sentence,
+            declined: { renders: "fixme", reason: "TargetNeedsUnit", text: sentence },
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByTestId("attention-service-ostree-remount.service"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("declined-service-ostree-remount.service").textContent,
+    ).toBe(sentence);
+    const box = screen.getByRole("checkbox", {
+      name: "Toggle ostree-remount.service",
+    });
+    expect(box.getAttribute("aria-describedby")).toBe(
+      "declined-service-ostree-remount.service",
+    );
+    expect(describedBy(box)).toEqual([sentence]);
+  });
+
   it("keeps a runtime updater row (excluded, with a reason, no declined) toggleable", async () => {
     const reason = "dnf-automatic.timer updates packages at runtime.";
     mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
@@ -330,13 +364,16 @@ describe("ServiceSection: mount findings", () => {
 describe("ServiceSection: server text is text", () => {
   it("shows markup characters in reasons and advisories literally", () => {
     const hostile = "pkg <b>bold</b> & co";
+    // A different string, so the attention note is not folded into the
+    // declined one.
+    const hostileAttention = "unit <b>x</b> & y";
     render(
       <ServiceSection
         {...baseProps}
         services={[
           makeUnit({
             unit: "kdump.service",
-            attention_reason: hostile,
+            attention_reason: hostileAttention,
             declined: { renders: "omitted", reason: "PackageExcluded", text: hostile },
           }),
         ]}
@@ -351,9 +388,11 @@ describe("ServiceSection: server text is text", () => {
     );
     const section = screen.getByTestId("service-section");
     expect(section.querySelector("b")).toBeNull();
+    expect(screen.getByTestId("attention-service-kdump.service").textContent).toBe(
+      hostileAttention,
+    );
     for (const id of [
       "declined-service-kdump.service",
-      "attention-service-kdump.service",
       "withheld-dropin-/etc/systemd/system/httpd.service.d/override.conf",
     ]) {
       expect(screen.getByTestId(id).textContent).toBe(hostile);

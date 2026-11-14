@@ -446,7 +446,12 @@ export function ServiceSection({
         // A locked row shows its reason in the badge; an unlocked one, such
         // as a runtime updater excluded by default, under the row.
         const attentionId = `attention-service-${svc.unit}`;
-        const attention = svcLocked ? null : (svc.attention_reason ?? null);
+        // A scanned protected unit's attention_reason and its declined text
+        // are the same served sentence: show it once, as the decline.
+        const attention =
+          svcLocked || svc.attention_reason === svc.declined?.text
+            ? null
+            : (svc.attention_reason ?? null);
         const declinedId = `declined-service-${svc.unit}`;
 
         return (
