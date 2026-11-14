@@ -1441,9 +1441,10 @@ target, and the exported README states each in a sentence:
   (Mark Russell, 2026-11-14)** Both bootc bases ship a zero-length
   `/etc/machine-id`, and `bootc install to-existing-root` and `to-disk`
   deploy it unchanged. With it, first boot applies no presets, and every
-  rendered `enable`, `disable` and `mask` holds (measured through a scan,
-  build, install and two boots on RHEL 9.8; `add-wants` and `set-default`
-  on RHEL 10.2). An image whose `/etc/machine-id` reads `uninitialized`,
+  rendered `enable`, `disable` and `mask` holds (measured on RHEL 9.8
+  through a scan, build and install, three runs, each read after its
+  first boot; and on RHEL 10.2 on 2026-11-13, through two boots, with
+  `add-wants` and `set-default` as well). An image whose `/etc/machine-id` reads `uninitialized`,
   or that has no such file, gets a preset pass at first boot. That pass
   undoes a rendered `disable` on RHEL 9, and a rendered `enable` and
   `disable` on RHEL 10, where a unit with no preset rule also falls under
