@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { getDefaultNormalizer, render, screen } from "@testing-library/react";
 import { DecisionItem } from "../DecisionItem";
 import type { RefinedConfig, TriageTag, WithheldView } from "../../api/types";
 
@@ -49,6 +49,19 @@ function renderRow(cfg: RefinedConfig) {
 const CONFLICT =
   "/etc/app/conf/x is also staged, and one of the two paths is a directory of the other; exclude one of the two";
 
+/** Matches a test id holding a tab or a newline as written. */
+const EXACT = { normalizer: getDefaultNormalizer({ trim: false, collapseWhitespace: false }) };
+
+/** Each id an element's `aria-describedby` names, resolved to its text. */
+function describedBy(el: HTMLElement): string[] {
+  const ids = (el.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+  return ids.map((id) => {
+    const target = document.getElementById(id);
+    expect(target, `aria-describedby names a missing id ${JSON.stringify(id)}`).not.toBeNull();
+    return target!.textContent ?? "";
+  });
+}
+
 describe("DecisionItem: a withheld config row", () => {
   it("renders the withheld reason on the row, tied to it", () => {
     renderRow(config("/etc/app/conf", { outcome: "withheld", why: "Conflict", text: CONFLICT }));
@@ -80,6 +93,28 @@ describe("DecisionItem: a withheld config row", () => {
     expect(
       screen.queryByTestId("withheld-configs:/etc/app/written.conf"),
     ).not.toBeInTheDocument();
+  });
+
+  // `aria-describedby` is a list of ids separated by whitespace, so an id
+  // built from a path holding a space or a tab names ids that do not exist.
+  it.each([
+    ["a space", "/etc/app/my conf"],
+    ["a tab", "/etc/app/a\tb"],
+    ["a newline", "/etc/app/a\nb"],
+  ])("ties the reason to a row whose path holds %s", (_label, path) => {
+    renderRow(config(path, { outcome: "refused", rule: "Traversal", text: CONFLICT }));
+    const row = screen.getByTestId(`decision-item-configs:${path}`, EXACT);
+    expect(describedBy(row)).toEqual([CONFLICT]);
+  });
+
+  it("ties a locked row's reason and its withheld reason to a path with a space", () => {
+    const path = "/etc/app/my conf";
+    const cfg = config(path, { outcome: "withheld", why: "Conflict", text: CONFLICT });
+    cfg.entry.locked = true;
+    cfg.entry.attention_reason = "held by the base image";
+    renderRow(cfg);
+    const row = screen.getByTestId(`decision-item-configs:${path}`);
+    expect(describedBy(row)).toEqual(["held by the base image", CONFLICT]);
   });
 
   it("shows markup characters in the reason literally", () => {

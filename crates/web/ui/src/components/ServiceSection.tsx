@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useId, useMemo } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
   ServiceDecisionDto,
@@ -137,7 +137,13 @@ function DropInRow({
   const isShadow = di.shadow_type === "full_shadow";
   // The checkbox points at the rationale only when the rationale renders.
   const hasRationale = isShadow && !!di.shadow_rationale;
-  const withheldId = `withheld-dropin-${di.path}`;
+  // The ids `aria-describedby` names. A path can hold a space, and that
+  // attribute is a list split on whitespace, so the ids are generated and
+  // never built from the path; the test ids keep the path.
+  const noteId = useId();
+  const lockedReasonId = `${noteId}-locked-reason`;
+  const rationaleId = `${noteId}-shadow-rationale`;
+  const withheldId = `${noteId}-withheld`;
 
   // Border-left priority: triage border wins if present, else shadow warning border
   let diBorder = LEVEL_BORDER[diBucket] ?? "none";
@@ -156,9 +162,7 @@ function DropInRow({
     <div
       role="row"
       aria-label={di.path}
-      aria-describedby={
-        diLocked ? `locked-reason-dropin-${di.path}` : undefined
-      }
+      aria-describedby={diLocked ? lockedReasonId : undefined}
       tabIndex={diLocked ? 0 : -1}
       data-testid={`dropin-item-${di.path}`}
       data-locked={diLocked ? "true" : undefined}
@@ -198,7 +202,7 @@ function DropInRow({
             }
             aria-disabled={parentExcluded}
             aria-describedby={describedBy(
-              hasRationale && `shadow-rationale-dropin-${di.path}`,
+              hasRationale && rationaleId,
               di.withheld && withheldId,
             )}
             style={{ minWidth: 20, minHeight: 20 }}
@@ -236,7 +240,7 @@ function DropInRow({
           <div
             role="gridcell"
             className="inspectah-decision-row__badge"
-            id={`locked-reason-dropin-${di.path}`}
+            id={lockedReasonId}
             data-testid={`locked-badge-dropin-${di.path}`}
           >
             <Label color="grey" isCompact>
@@ -248,7 +252,7 @@ function DropInRow({
       {/* Full-shadow rationale below the drop-in toggle row */}
       {hasRationale && (
         <div
-          id={`shadow-rationale-dropin-${di.path}`}
+          id={rationaleId}
           className="inspectah-decision-row__helper-text"
           data-testid={`shadow-rationale-dropin-${di.path}`}
           style={{
@@ -265,7 +269,7 @@ function DropInRow({
       {di.withheld && (
         <RowNote
           id={withheldId}
-          testId={withheldId}
+          testId={`withheld-dropin-${di.path}`}
           className="inspectah-unit-note--withheld"
           text={di.withheld.text}
         />

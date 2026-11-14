@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { getDefaultNormalizer, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 // Rendered with a real pending guard, as its owner supplies one in the app.
 import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/withPendingGuard";
@@ -282,6 +282,65 @@ describe("ServiceSection: every unit kind", () => {
     expect(
       screen.queryByTestId("withheld-dropin-/etc/systemd/system/httpd.service.d/b.conf"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// `aria-describedby` is a list of ids separated by whitespace, so an id
+// built from a path holding a space or a tab names ids that do not exist.
+describe("ServiceSection: a drop-in's notes at a path with whitespace", () => {
+  /** Matches a test id holding a tab or a newline as written. */
+  const EXACT = { normalizer: getDefaultNormalizer({ trim: false, collapseWhitespace: false }) };
+  const text = "a zero-length file at a unit path is a mask; the export carries a mask only as a systemctl mask command";
+
+  it.each([
+    ["a space", "/etc/systemd/system/httpd.service.d/my override.conf"],
+    ["a tab", "/etc/systemd/system/httpd.service.d/a\tb.conf"],
+    ["a newline", "/etc/systemd/system/httpd.service.d/a\nb.conf"],
+  ])("ties the withheld text to the toggle when the path holds %s", (_label, path) => {
+    render(
+      <ServiceSection
+        {...baseProps}
+        services={[makeUnit()]}
+        dropins={[makeDropin({ path, withheld: { outcome: "refused", rule: "Traversal", text } })]}
+      />,
+    );
+    const row = screen.getByTestId(`dropin-item-${path}`, EXACT);
+    expect(describedBy(within(row).getByRole("checkbox"))).toEqual([text]);
+  });
+
+  it("ties the shadow rationale and the withheld text to the toggle", () => {
+    const path = "/etc/systemd/system/my app.service";
+    render(
+      <ServiceSection
+        {...baseProps}
+        dropins={[
+          makeDropin({
+            path,
+            shadow_type: "full_shadow",
+            shadow_rationale: "replaces the vendor unit",
+            withheld: { outcome: "withheld", why: "Conflict", text },
+          }),
+        ]}
+      />,
+    );
+    const row = screen.getByTestId(`dropin-item-${path}`);
+    expect(describedBy(within(row).getByRole("checkbox"))).toEqual([
+      "replaces the vendor unit",
+      text,
+    ]);
+  });
+
+  it("ties a locked drop-in row to its reason", () => {
+    const path = "/etc/systemd/system/httpd.service.d/my override.conf";
+    render(
+      <ServiceSection
+        {...baseProps}
+        dropins={[makeDropin({ path, locked: true, attention_reason: "held by the base image" })]}
+      />,
+    );
+    expect(describedBy(screen.getByTestId(`dropin-item-${path}`))).toEqual([
+      "held by the base image",
+    ]);
   });
 });
 

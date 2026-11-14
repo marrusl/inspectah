@@ -534,13 +534,10 @@ describe("ServiceSection full shadow on the drop-in row", () => {
     const rationale = within(row).getByTestId(
       `shadow-rationale-dropin-${SHADOW_PATH}`,
     );
-    expect(rationale).toHaveAttribute(
-      "id",
-      `shadow-rationale-dropin-${SHADOW_PATH}`,
-    );
+    expect(rationale.id).not.toBe("");
     expect(within(row).getByRole("checkbox")).toHaveAttribute(
       "aria-describedby",
-      `shadow-rationale-dropin-${SHADOW_PATH}`,
+      rationale.id,
     );
   });
 

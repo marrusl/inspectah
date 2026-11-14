@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useId } from "react";
 import { Button, Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type {
@@ -159,7 +159,14 @@ export function DecisionItem({
   // Why the export does not write this config row's file, as the server
   // wrote it (spec § 11.1).
   const withheld = item.type === "config" ? item.data.withheld : undefined;
-  const withheldId = `withheld-${id}`;
+  // The ids `aria-describedby` names. A path can hold a space, and that
+  // attribute is a list split on whitespace, so the ids are generated and
+  // never built from the path; the test ids keep the path.
+  const noteId = useId();
+  const advisoryRationaleId = `${noteId}-advisory-rationale`;
+  const shadowOwnerExplanationId = `${noteId}-shadow-owner-explanation`;
+  const lockedReasonId = `${noteId}-locked-reason`;
+  const withheldId = `${noteId}-withheld`;
   const hasBeenToggled = useRef(false);
 
   // Derive effective attention level: triageTag takes priority over legacy level prop
@@ -290,11 +297,11 @@ export function DecisionItem({
       aria-describedby={
         [
           itemDisposition.kind === "advisory"
-            ? `advisory-rationale-${id}`
+            ? advisoryRationaleId
             : shadowOwner
-              ? `shadow-owner-explanation-${id}`
+              ? shadowOwnerExplanationId
               : locked
-                ? `locked-reason-${id}`
+                ? lockedReasonId
                 : null,
           withheld ? withheldId : null,
         ]
@@ -433,7 +440,7 @@ export function DecisionItem({
           <div
             role="gridcell"
             className="inspectah-decision-row__badge"
-            id={`locked-reason-${id}`}
+            id={lockedReasonId}
             data-testid={`locked-badge-${id}`}
           >
             <Label color="grey" isCompact>
@@ -467,7 +474,7 @@ export function DecisionItem({
       {/* Advisory rationale below the row — the whole content of the finding */}
       {itemDisposition.kind === "advisory" && (
         <div
-          id={`advisory-rationale-${id}`}
+          id={advisoryRationaleId}
           className="inspectah-decision-row__helper-text"
           data-testid={`advisory-rationale-${id}`}
           style={{
@@ -484,7 +491,7 @@ export function DecisionItem({
       {/* Where the decision went — the row itself offers no control */}
       {shadowOwner && (
         <div
-          id={`shadow-owner-explanation-${id}`}
+          id={shadowOwnerExplanationId}
           className="inspectah-decision-row__helper-text"
           data-testid={`shadow-owner-explanation-${id}`}
           style={{
@@ -501,7 +508,7 @@ export function DecisionItem({
       {withheld && (
         <div
           id={withheldId}
-          data-testid={withheldId}
+          data-testid={`withheld-${id}`}
           className="inspectah-decision-row__helper-text inspectah-unit-note inspectah-unit-note--withheld"
         >
           {withheld.text}
