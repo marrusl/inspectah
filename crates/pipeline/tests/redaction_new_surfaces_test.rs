@@ -438,7 +438,7 @@ fn test_mount_unit_source_scrubbed_in_its_config_entry_only() {
             .unwrap(),
         state_change: None,
         mount_point: Some("/srv/data".into()),
-        nofail: true,
+        nofail: Some(true),
         aggregate: None,
     };
     let mut snapshot = InspectionSnapshot::new();

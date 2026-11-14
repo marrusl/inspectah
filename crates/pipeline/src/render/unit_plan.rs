@@ -10,8 +10,8 @@ use inspectah_core::baseline::{
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, MountUnitFinding, StorageKind, SystemdDropIn, UnitAction,
-    UnitFragment, UnitName, UnitState, UnitStateChange,
+    CarriedUnit, MountUnitFinding, StorageKind, SystemdDropIn, UnitAction, UnitFragment, UnitName,
+    UnitState, UnitStateChange,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -614,14 +614,13 @@ fn normal_mount_point(mount_point: &str) -> String {
 ///   shows that form. A masked unit does not mount, so the layout of its
 ///   mount point does not bear on it.
 /// - The `tmp.mount` line, when that unit's file is staged.
-/// - The `nofail` line, for a mount or swap whose `nofail` is false, when
-///   the unit is not masked, its file was read, and `drop_ins` holds no row
-///   for the unit. A mask with no unit file has no `Options=` to read. A
-///   mount unit with no `mount_point` was not read (or has no absolute
-///   `Where=` in its `[Mount]` section; the finding cannot tell the two
-///   apart), so it gets no line. A swap has no `mount_point` either way, so
-///   an unreadable swap file still gets the line: telling it apart would
-///   need a field the finding does not have. The collector reads
+/// - The `nofail` line, for a mount or swap whose `nofail` is
+///   `Some(false)` (its unit file was read and `Options=` has no
+///   `nofail`), when the unit is not masked and `drop_ins` holds no row
+///   for the unit. `None` (a mask with no unit file, a file that is not
+///   text or could not be read) gets no line. A mount unit with no
+///   `mount_point` gets none either: its file was not read, or has no
+///   absolute `Where=` in its `[Mount]` section. The collector reads
 ///   `Options=` from the unit file alone, by logical line: a drop-in may
 ///   set `nofail`, so a unit with any drop-in row whose `unit` is its
 ///   name gets no line.
@@ -712,16 +711,19 @@ pub fn mount_advisory_lines(
     if is_tmp_mount && file_staged {
         lines.push(MOUNT_TMP_FILE_STAGED.to_owned());
     }
-    let nofail_read = match name.kind() {
+    // The line is a statement about the unit file's `Options=`, so it needs
+    // them read (`Some(false)`). A mount unit with no mount point gets no
+    // line either, and an automount has no `Options=`.
+    let kind_allows_line = match name.kind() {
         StorageKind::Mount => finding.mount_point.is_some(),
-        StorageKind::Swap => *finding.unit.fragment() != AdminStorageFragment::MaskOnly,
+        StorageKind::Swap => true,
         StorageKind::Automount => false,
     };
     // The collector reads `Options=` from the unit file alone. With a
     // drop-in row for the unit, a drop-in may set `nofail`, so the finding's
     // settings are not known to be the effective ones.
     let has_drop_ins = drop_ins.iter().any(|d| d.unit == unit.as_str());
-    if nofail_read && !masked && !finding.nofail && !has_drop_ins {
+    if kind_allows_line && finding.nofail == Some(false) && !masked && !has_drop_ins {
         lines.push(MOUNT_NO_NOFAIL.to_owned());
     }
     // A recipe that its own advisory rules out is not given: a unit told

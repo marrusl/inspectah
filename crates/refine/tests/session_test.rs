@@ -3070,7 +3070,7 @@ mod unit_rows {
                 unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
                 state_change: state.map(|s| (s, None)),
                 mount_point: Some(mount_point.into()),
-                nofail: true,
+                nofail: Some(true),
                 aggregate: None,
             }
         };

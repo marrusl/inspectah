@@ -2557,7 +2557,8 @@ fn carry_line(verb: &str, unit: &str) -> String {
     format!("#   To carry it, add after the configuration COPY: RUN systemctl {verb} -- '{unit}'")
 }
 
-/// A finding for `unit` as the collector records one.
+/// A finding for `unit` as the collector records one whose unit file it
+/// read, so `nofail` is known.
 fn mount_finding(
     unit: &str,
     fragment: UnitFragment,
@@ -2571,7 +2572,7 @@ fn mount_finding(
         unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
         state_change: state.map(|s| (s, None)),
         mount_point: mount_point.map(str::to_owned),
-        nofail,
+        nofail: Some(nofail),
         aggregate: None,
     }
 }
@@ -2767,6 +2768,26 @@ fn mount_advisory_lines_follow_the_table() {
                 advisory_fact("dev-vdb1.swap", "enabled"),
                 NOFAIL_LINE.into(),
                 carry_line("enable", "dev-vdb1.swap"),
+            ],
+        ),
+        (
+            // A swap whose unit file was not read (not text, over the size
+            // cap, or a read error): nothing is known of its options, so no
+            // `nofail` line. The controls are `dev-vdb1.swap` above, read
+            // without `nofail`, and `dev-vdb2.swap` below, read with it.
+            MountUnitFinding {
+                nofail: None,
+                ..mount_finding(
+                    "dev-vdb4.swap",
+                    local("dev-vdb4.swap"),
+                    Some(Enabled),
+                    None,
+                    false,
+                )
+            },
+            vec![
+                advisory_fact("dev-vdb4.swap", "enabled"),
+                carry_line("enable", "dev-vdb4.swap"),
             ],
         ),
         (

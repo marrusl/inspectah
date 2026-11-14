@@ -1012,8 +1012,14 @@ pub struct MountUnitFinding {
     pub state_change: Option<(UnitState, Option<PresetDefault>)>,
     /// `Where=` for a mount or automount, when it is an absolute path.
     pub mount_point: Option<String>,
-    /// Whether `Options=` holds `nofail`.
-    pub nofail: bool,
+    /// Whether `Options=` holds `nofail`, when the collector read the unit
+    /// file systemd loads for the unit and parsed its `Options=` (a mount
+    /// or swap unit). `None` when it did not: a mask with no unit file, a
+    /// file that is not text or is over the size cap, a read error, or an
+    /// automount, which has no `Options=`. A missing or null value reads as
+    /// `None`.
+    #[serde(default)]
+    pub nofail: Option<bool>,
     pub aggregate: Option<AggregatePrevalence>,
 }
 
@@ -1894,5 +1900,30 @@ mod tests {
             let kind = UnitKind::from_suffix(suffix).expect("a known suffix");
             assert_eq!(kind.suffix(), suffix);
         }
+    }
+
+    /// A finding's `nofail` reads as written when the snapshot holds a
+    /// boolean, and as `None` (the options were not read) when it is null
+    /// or the key is missing.
+    #[test]
+    fn a_mount_findings_nofail_reads_false_null_and_missing() {
+        let finding = |nofail: Option<serde_json::Value>| {
+            let mut json = serde_json::json!({
+                "unit": {"name": "data.swap", "fragment": "local", "file": "data.swap"},
+                "state_change": ["enabled", null],
+                "mount_point": null,
+                "aggregate": null
+            });
+            if let Some(value) = nofail {
+                json["nofail"] = value;
+            }
+            serde_json::from_value::<MountUnitFinding>(json)
+                .expect("the finding deserializes")
+                .nofail
+        };
+        assert_eq!(finding(Some(serde_json::json!(false))), Some(false));
+        assert_eq!(finding(Some(serde_json::json!(true))), Some(true));
+        assert_eq!(finding(Some(serde_json::Value::Null)), None);
+        assert_eq!(finding(None), None);
     }
 }

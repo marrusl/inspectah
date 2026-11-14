@@ -78,7 +78,7 @@ fn assert_finding_fields(finding: &MountUnitFinding, route: &str) {
         "{route}"
     );
     assert_eq!(finding.mount_point.as_deref(), Some("/srv/data"), "{route}");
-    assert!(finding.nofail, "{route}");
+    assert_eq!(finding.nofail, Some(true), "{route}");
 }
 
 /// Every file under `dir` whose text holds `needle`.
@@ -2869,6 +2869,57 @@ fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
     }
 }
 
+/// A swap unit whose file in `/etc/systemd/system` is not text (or is over
+/// the size cap) was not read, so its advisory has the fact line and no
+/// `nofail` line: nothing is known of its options. The control on the same
+/// host and routes is a readable swap file without `nofail`, which gets the
+/// line. The scan export and a refine export.
+#[test]
+fn an_unread_swap_unit_file_gets_no_nofail_line() {
+    const UNREAD: &str = "dev-vdb5.swap";
+    const READ: &str = "dev-vdb1.swap";
+    let snap = scan(
+        advisory_host()
+            .unit(UNREAD, "enabled")
+            .unit(READ, "enabled")
+            .file_error(
+                &format!("/etc/systemd/system/{UNREAD}"),
+                std::io::ErrorKind::InvalidData,
+            )
+            .etc_unit(
+                READ,
+                "[Swap]\nWhat=/dev/vdb1\n[Install]\nWantedBy=swap.target\n",
+            ),
+    );
+    let findings = &snap.units.as_ref().expect("a units section").mount_findings;
+    let nofail_of = |unit: &str| {
+        findings
+            .iter()
+            .find(|f| f.unit.name().as_unit_name().as_str() == unit)
+            .unwrap_or_else(|| panic!("no finding for {unit}: {findings:?}"))
+            .nofail
+    };
+    assert_eq!(nofail_of(UNREAD), None, "the file was not read");
+    assert_eq!(nofail_of(READ), Some(false), "the control was read");
+    for (route, containerfile) in both_routes(&snap) {
+        let control = advisory_for(&containerfile, READ);
+        assert!(
+            control.contains(&NOFAIL_LINE.to_owned()),
+            "{route}, control:\n{containerfile}"
+        );
+        let advisory = advisory_for(&containerfile, UNREAD);
+        assert_eq!(
+            advisory.first(),
+            Some(&advisory_fact(UNREAD, "enabled")),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            !advisory.contains(&NOFAIL_LINE.to_owned()),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// T8: a `tmp.mount` with a full copy in `/etc` over the vendor file gets
 /// the advisory with the `tmp.mount` line, and its file is a config entry
 /// whose toggle, through `RefineSession` alone, removes and restores the
@@ -3792,7 +3843,11 @@ fn a_merged_mount_finding_describes_one_hosts_file_whatever_variant_is_staged() 
         .expect("a units section")
         .mount_findings;
     assert_eq!(findings.len(), 1, "{findings:?}");
-    assert!(findings[0].nofail, "host-a's finding: {findings:?}");
+    assert_eq!(
+        findings[0].nofail,
+        Some(true),
+        "host-a's finding: {findings:?}"
+    );
     let variants: Vec<String> = fleet
         .config
         .as_ref()

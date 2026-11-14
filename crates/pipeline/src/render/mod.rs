@@ -385,7 +385,7 @@ mod tests {
                 // EXEMPT, pinned by SENTINEL-MOUNT-POINT in the sweep below:
                 // an identifier, an absolute path from `Where=`.
                 mount_point: _,
-                nofail: _,    // exempt: a boolean from `Options=`
+                nofail: _,    // exempt: an optional boolean from `Options=`
                 aggregate: _, // fleet counts
             } = finding;
         }
@@ -668,7 +668,7 @@ mod tests {
                 // Behind a keyword, as every sentinel is: a visited field
                 // would lose it.
                 mount_point: Some("/srv/token=SENTINEL-MOUNT-POINT".into()),
-                nofail: false,
+                nofail: Some(false),
                 aggregate: None,
             }],
             ..Default::default()

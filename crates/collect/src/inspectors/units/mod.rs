@@ -362,7 +362,7 @@ fn build_state_changes(
                         unit,
                         state_change: Some((candidate.state, candidate.default_state)),
                         mount_point: None,
-                        nofail: false,
+                        nofail: None,
                         aggregate: None,
                     });
                 }
@@ -449,7 +449,7 @@ fn etc_storage_findings(
                 unit,
                 state_change: None,
                 mount_point: None,
-                nofail: false,
+                nofail: None,
                 aggregate: None,
             }),
             Err(detail) => warnings.push(warn(&detail)),
@@ -1303,11 +1303,13 @@ fn names_option(option: &str, name: &str) -> bool {
 
 /// Fill in a finding's `mount_point` and `nofail` from the unit file
 /// systemd loads for it: the `/etc` file for a local or shadowed unit, the
-/// vendor file for an unowned vendor unit (masked or not). A mask with no
-/// unit file has neither. A file that is not text, or is over the
-/// executor's size cap, leaves both unset; its config entry, if it has
-/// one, records that the content was not captured. Any other read error
-/// goes to `read_failures`.
+/// vendor file for an unowned vendor unit (masked or not). `nofail` is
+/// `Some` only for a mount or swap unit whose file was read; an automount
+/// has no `Options=`. A mask with no unit file has neither. A file that is
+/// not text, or is over the executor's size cap, leaves both `None`; its
+/// config entry, if it has one, records that the content was not
+/// captured. Any other read error leaves both `None` and goes to
+/// `read_failures`.
 fn read_mount_settings(
     exec: &dyn Executor,
     finding: &mut MountUnitFinding,
@@ -1330,7 +1332,10 @@ fn read_mount_settings(
     };
     let settings = mount_settings(name.kind(), &content);
     finding.mount_point = settings.mount_point;
-    finding.nofail = settings.nofail;
+    finding.nofail = match name.kind() {
+        StorageKind::Mount | StorageKind::Swap => Some(settings.nofail),
+        StorageKind::Automount => None,
+    };
 }
 
 #[cfg(test)]
@@ -1625,6 +1630,68 @@ mod tests {
         ];
         for (label, kind, content, expected) in cases {
             assert_eq!(&mount_settings(*kind, content), expected, "{label}");
+        }
+    }
+
+    /// A swap finding's `nofail` is set only when its unit file was read:
+    /// `None` for a file that is not text or is over the size cap
+    /// (`InvalidData`) and for a read error, which also goes to
+    /// `read_failures`; `Some` from a readable file (the controls). The
+    /// read error is reached here, not through a scan, because the scan
+    /// resolves the same file first and stops on the same error.
+    #[test]
+    fn read_mount_settings_records_nofail_only_when_the_file_was_read() {
+        use crate::executor::mock::MockExecutor;
+        use std::io::ErrorKind;
+        const PATH: &str = "/etc/systemd/system/data.swap";
+        let finding = || {
+            let name = UnitName::try_from("data.swap".to_owned()).expect("a unit name");
+            let subject = UnitSubject::new(name.clone(), UnitFragment::Local { file: name })
+                .expect("a subject");
+            MountUnitFinding {
+                unit: AdvisoryUnit::try_from(subject).expect("an advisory unit"),
+                state_change: None,
+                mount_point: None,
+                nofail: None,
+                aggregate: None,
+            }
+        };
+        let cases = [
+            (
+                "nofail",
+                MockExecutor::new().with_file(PATH, "[Swap]\nOptions=nofail\n"),
+                Some(true),
+                false,
+            ),
+            (
+                "no nofail",
+                MockExecutor::new().with_file(PATH, "[Swap]\nWhat=/dev/vdb\n"),
+                Some(false),
+                false,
+            ),
+            (
+                "not text",
+                MockExecutor::new().with_file_error(PATH, ErrorKind::InvalidData),
+                None,
+                false,
+            ),
+            (
+                "read error",
+                MockExecutor::new().with_file_error(PATH, ErrorKind::PermissionDenied),
+                None,
+                true,
+            ),
+        ];
+        for (label, exec, expected, fails) in cases {
+            let mut finding = finding();
+            let mut read_failures = Vec::new();
+            read_mount_settings(&exec, &mut finding, &mut read_failures);
+            assert_eq!(finding.nofail, expected, "{label}");
+            assert_eq!(
+                !read_failures.is_empty(),
+                fails,
+                "{label}: {read_failures:?}"
+            );
         }
     }
 

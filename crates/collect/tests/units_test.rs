@@ -1681,9 +1681,11 @@ fn storage_unit_routes_by_owner_to_state_change_or_mount_finding() {
         ]
     );
     for finding in &section.mount_findings {
-        // Read from the unit file, which has no `[Mount]` section here.
+        // Read from the unit file, which has no `[Mount]` section here. A
+        // mask with no unit file has no options to read.
         assert_eq!(finding.mount_point, None);
-        assert!(!finding.nofail);
+        let read = *finding.unit.fragment() != AdminStorageFragment::MaskOnly;
+        assert_eq!(finding.nofail, read.then_some(false));
     }
     assert!(warnings.is_empty(), "routed, not only warned: {warnings:?}");
 }
@@ -2400,7 +2402,7 @@ type MountRow = (
     AdminStorageFragment,
     Option<(UnitState, Option<PresetDefault>)>,
     Option<String>,
-    bool,
+    Option<bool>,
 );
 
 fn mount_rows(section: &UnitSection) -> Vec<MountRow> {
@@ -2429,7 +2431,9 @@ fn mount_unit(section: &str, lines: &str) -> String {
 }
 
 /// § 6.5: every source of a mount finding, each with `mount_point` and
-/// `nofail` read from the file systemd loads.
+/// `nofail` read from the file systemd loads. `nofail` is `None` where no
+/// `Options=` was read: the file that is not text, the mask with no unit
+/// file, and the automount, which has no `Options=`.
 ///
 /// - Regular, non-empty storage files under `/etc/systemd/system`, whatever
 ///   their state: static (not listed), disabled, disabled against an
@@ -2537,56 +2541,56 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             },
             None,
             None,
-            true,
+            Some(true),
         ),
         (
             "gone.mount".into(),
             AdminStorageFragment::MaskOnly,
             masked,
             None,
-            false,
+            None,
         ),
         (
             "latin1.mount".into(),
             AdminStorageFragment::Local,
             None,
             None,
-            false,
+            None,
         ),
         (
             "mnt-auto.automount".into(),
             AdminStorageFragment::Local,
             None,
             path("/mnt/auto"),
-            false,
+            None,
         ),
         (
             "opt-masked.mount".into(),
             AdminStorageFragment::UnownedVendor,
             masked,
             path("/opt/masked"),
-            true,
+            Some(true),
         ),
         (
             "opt-on.mount".into(),
             AdminStorageFragment::UnownedVendor,
             enabled_at_preset,
             path("/opt/on"),
-            false,
+            Some(false),
         ),
         (
             "relative.mount".into(),
             AdminStorageFragment::Local,
             None,
             None,
-            true,
+            Some(true),
         ),
         (
             "srv-off.mount".into(),
             AdminStorageFragment::Local,
             None,
             path("/srv/off"),
-            false,
+            Some(false),
         ),
         // Disabled against an `enable` preset: the candidate pass skips an
         // advisory unit, so the directory pass records it, and a disabled
@@ -2596,7 +2600,7 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             AdminStorageFragment::Local,
             None,
             path("/srv/pre"),
-            false,
+            Some(false),
         ),
         (
             "srv-shadow.mount".into(),
@@ -2605,14 +2609,14 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             },
             enabled_at_preset,
             path("/srv/shadow"),
-            false,
+            Some(false),
         ),
         (
             "srv-static.mount".into(),
             AdminStorageFragment::Local,
             None,
             path("/srv/static"),
-            true,
+            Some(true),
         ),
     ];
     expected.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2632,6 +2636,46 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
     let written = serde_json::to_string(&section).expect("the section serializes");
     assert!(written.contains("srv-static.mount"));
     assert!(!written.contains("collector-source-1"), "{written}");
+}
+
+/// A swap unit's `nofail` is recorded only when its unit file was read:
+/// `Some(true)` with `nofail` in `Options=`, `Some(false)` without it (the
+/// controls), and `None` for a file that is not text or is over the size
+/// cap (`InvalidData`), which is still a finding and does not degrade the
+/// scan.
+#[test]
+fn a_swap_finding_records_nofail_only_when_its_file_was_read() {
+    let files = [
+        ("with.swap", mount_unit("Swap", "Options=defaults,nofail\n")),
+        ("without.swap", mount_unit("Swap", "Options=defaults\n")),
+    ];
+    let mut exec = with_etc_units(
+        quiet_mock(),
+        vec!["with.swap", "without.swap", "latin1.swap"],
+    );
+    for (name, content) in &files {
+        exec = exec.with_file(&format!("{ETC_UNITS}/{name}"), content);
+    }
+    let exec = exec.with_file_error(
+        &format!("{ETC_UNITS}/latin1.swap"),
+        std::io::ErrorKind::InvalidData,
+    );
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut nofail: Vec<(&str, Option<bool>)> = section
+        .mount_findings
+        .iter()
+        .map(|f| (f.unit.name().as_unit_name().as_str(), f.nofail))
+        .collect();
+    nofail.sort();
+    assert_eq!(
+        nofail,
+        [
+            ("latin1.swap", None),
+            ("with.swap", Some(true)),
+            ("without.swap", Some(false)),
+        ]
+    );
 }
 
 /// A local mount unit file that cannot be read for a reason other than its

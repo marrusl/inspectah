@@ -3360,7 +3360,7 @@ fn admin_mount_finding(
             .expect("an administrator's storage unit"),
         state_change: state.map(|s| (s, None)),
         mount_point: Some(mount_point.into()),
-        nofail,
+        nofail: Some(nofail),
         aggregate: None,
     }
 }
@@ -3402,7 +3402,7 @@ fn mount_findings_merge_to_one_row_per_unit_name() {
     )
     .unwrap();
     // Unit name, mount point, nofail, count and hosts of each merged row.
-    type Row<'a> = (&'a str, Option<&'a str>, bool, i32, Vec<String>);
+    type Row<'a> = (&'a str, Option<&'a str>, Option<bool>, i32, Vec<String>);
     let rows: Vec<Row<'_>> = result
         .mount_findings
         .iter()
@@ -3421,14 +3421,20 @@ fn mount_findings_merge_to_one_row_per_unit_name() {
     assert_eq!(
         rows,
         [
-            ("data.mount", Some("/data"), true, 1, hosts(&["h1"])),
+            ("data.mount", Some("/data"), Some(true), 1, hosts(&["h1"])),
             // A tie between h1 and h2: h1's finding, both hosts counted.
-            ("opt.mount", Some("/opt"), true, 2, hosts(&["h1", "h2"])),
+            (
+                "opt.mount",
+                Some("/opt"),
+                Some(true),
+                2,
+                hosts(&["h1", "h2"])
+            ),
             // h2 and h3 agree: their finding, every host counted.
             (
                 "srv.mount",
                 Some("/srv"),
-                true,
+                Some(true),
                 3,
                 hosts(&["h1", "h2", "h3"])
             ),
