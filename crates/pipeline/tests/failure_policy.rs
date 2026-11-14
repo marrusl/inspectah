@@ -84,8 +84,6 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             owning_package: None,
             aggregate: None,
             attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
         }],
         inventory: vec![
             UnitInventoryEntry {

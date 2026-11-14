@@ -20,7 +20,7 @@ use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
 
 use crate::aggregate::variant_ops::{self, VariantProjectionState};
 use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
-use crate::classify::{classify_configs, classify_packages, synthesize_orphan_shadows};
+use crate::classify::{classify_configs, classify_packages};
 use crate::group_state::{self, GroupEvalContext, derive_group_state};
 use crate::normalize::{
     normalize_config_defaults, normalize_inspectah_repo_files, normalize_language_env_defaults,
@@ -513,12 +513,6 @@ impl RefineSession {
         normalize_config_defaults(&mut snapshot, &configs);
         normalize_inspectah_repo_files(&mut snapshot);
         normalize_language_env_defaults(&mut snapshot);
-
-        // Synthesize orphan full-shadow service entries so they are real
-        // toggle targets throughout the session lifecycle.
-        if let Some(services) = snapshot.units.as_mut() {
-            synthesize_orphan_shadows(services);
-        }
 
         // Detect aggregate mode from snapshot metadata.
         let refine_mode = if let Some(ref aggregate_meta) = snapshot.aggregate_meta {
@@ -5207,8 +5201,6 @@ mod tests {
                         owning_package: Some("httpd".into()),
                         aggregate: None,
                         attention_reason: None,
-                        shadow_type: None,
-                        shadow_rationale: None,
                     },
                     UnitStateChange {
                         unit: "sshd.service".to_owned().try_into().unwrap(),
@@ -5219,8 +5211,6 @@ mod tests {
                         owning_package: Some("openssh-server".into()),
                         aggregate: None,
                         attention_reason: None,
-                        shadow_type: None,
-                        shadow_rationale: None,
                     },
                 ],
                 inventory: vec![
@@ -5883,8 +5873,6 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![UnitInventoryEntry {
                     unit: "httpd.service"
@@ -5963,8 +5951,6 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![UnitInventoryEntry {
                     unit: "httpd.service"
@@ -7438,8 +7424,6 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -7523,8 +7507,6 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -7582,8 +7564,6 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             ..Default::default()
         });

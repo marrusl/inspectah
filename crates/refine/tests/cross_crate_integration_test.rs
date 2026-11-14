@@ -208,8 +208,6 @@ fn service_surface_agreement() {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             },
             UnitStateChange {
                 unit: "httpd.service".to_owned().try_into().unwrap(),
@@ -220,8 +218,6 @@ fn service_surface_agreement() {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             },
         ],
         inventory: vec![

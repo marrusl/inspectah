@@ -731,8 +731,6 @@ fn service(unit: &str, state: UnitState) -> String {
             owning_package: None,
             aggregate: None,
             attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
         }],
         ..Default::default()
     });

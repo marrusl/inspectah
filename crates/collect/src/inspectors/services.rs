@@ -368,8 +368,6 @@ impl Inspector for ServicesInspector {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 });
                 continue;
             }
@@ -399,8 +397,6 @@ impl Inspector for ServicesInspector {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 });
             }
             // State matches preset, or no matching preset rule → no

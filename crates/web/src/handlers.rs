@@ -1758,10 +1758,10 @@ mod tests {
         assert!(!should_include_in_containerfile(&FindingKind::inventory()));
     }
 
-    /// Verify the view response includes shadow fields for services with
-    /// full-shadow drop-ins.
+    /// Verify the view response reports a full shadow on its drop-in row,
+    /// and that the unit's state change row carries no copy of it.
     #[test]
-    fn view_response_includes_shadow_fields_for_services() {
+    fn view_response_carries_shadow_fields_on_the_drop_in() {
         use inspectah_core::types::ShadowType;
         use inspectah_core::types::units::{
             PresetDefault, SystemdDropIn, UnitSection as SvcSection, UnitState, UnitStateChange,
@@ -1778,8 +1778,6 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: Some(ShadowType::FullShadow),
-                shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
             }],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),
@@ -1797,26 +1795,7 @@ mod tests {
         let session = RefineSession::new(snap);
         let response = crate::adapter::build_web_view(&session);
 
-        // Service DTO should have shadow fields from the service entry
-        let sshd = response
-            .service_states
-            .iter()
-            .find(|s| s.unit == "sshd.service")
-            .expect("sshd.service should be in service_states");
-        assert_eq!(
-            sshd.shadow_type.as_deref(),
-            Some("full_shadow"),
-            "shadow_type should be populated from service entry"
-        );
-        assert!(
-            sshd.shadow_rationale
-                .as_ref()
-                .map(|r| r.contains("Full unit override"))
-                .unwrap_or(false),
-            "shadow_rationale should be populated from service entry"
-        );
-
-        // Drop-in DTO should also carry shadow fields
+        // The drop-in DTO carries the shadow fields.
         let dropin = response
             .service_dropins
             .iter()
@@ -1824,6 +1803,17 @@ mod tests {
             .expect("sshd.service drop-in should be in service_dropins");
         assert_eq!(dropin.shadow_type.as_deref(), Some("full_shadow"));
         assert!(dropin.shadow_rationale.is_some());
+
+        // The state change row is present and holds no shadow copy.
+        let json = serde_json::to_value(&response).expect("serialize");
+        let sshd = json["service_states"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["unit"] == "sshd.service")
+            .expect("sshd.service should be in service_states");
+        assert!(sshd.get("shadow_type").is_none(), "{sshd}");
+        assert!(sshd.get("shadow_rationale").is_none(), "{sshd}");
     }
 
     // -- Batch toggle handler slug migration tests ---------------------------

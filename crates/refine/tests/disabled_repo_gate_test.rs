@@ -228,8 +228,6 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         owning_package: Some(owner.into()),
         aggregate: None,
         attention_reason: None,
-        shadow_type: None,
-        shadow_rationale: None,
     };
     snap.units = Some(UnitSection {
         // The dependency owns a unit too. dnf installs it with the leaf,

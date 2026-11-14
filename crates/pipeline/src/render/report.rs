@@ -2369,8 +2369,6 @@ mod tests {
                 owning_package: Some("firewalld".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             inventory: vec![UnitInventoryEntry {
                 unit: "firewalld.service"
@@ -2410,8 +2408,6 @@ mod tests {
                 owning_package: Some("openssh-server".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             inventory: vec![UnitInventoryEntry {
                 unit: "sshd.service"
@@ -2479,8 +2475,6 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 inspectah_core::types::units::UnitStateChange {
                     unit: "cups.service".to_owned().try_into().unwrap(),
@@ -2491,8 +2485,6 @@ mod tests {
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             inventory: vec![UnitInventoryEntry {
@@ -3520,8 +3512,6 @@ mod tests {
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             ..Default::default()
         });

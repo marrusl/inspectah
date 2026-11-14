@@ -631,8 +631,6 @@ mod tests {
             owning_package: Some(owner.into()),
             aggregate: None,
             attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
         }
     }
 

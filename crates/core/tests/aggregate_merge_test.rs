@@ -1218,8 +1218,6 @@ fn test_merge_service_sections_dedup_units() {
         owning_package: None,
         aggregate: None,
         attention_reason: None,
-        shadow_type: None,
-        shadow_rationale: None,
     };
     let s1 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],

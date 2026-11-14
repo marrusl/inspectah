@@ -71,8 +71,6 @@ fn snapshot() -> InspectionSnapshot {
             owning_package: Some("cockpit-ws".into()),
             aggregate: None,
             attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
         }],
         inventory: vec![],
         drop_ins: vec![],

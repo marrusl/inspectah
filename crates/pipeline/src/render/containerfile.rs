@@ -2708,8 +2708,6 @@ mod tests {
                     owning_package: Some("openh264".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![],
                 drop_ins: vec![],
@@ -3310,8 +3308,6 @@ mod tests {
                 owning_package: Some("custom-tool".into()),
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             inventory: vec![],
             drop_ins: vec![],
@@ -4017,8 +4013,6 @@ RUN dnf install -y \
                 owning_package: None,
                 aggregate: None,
                 attention_reason: None,
-                shadow_type: None,
-                shadow_rationale: None,
             }],
             ..Default::default()
         });
@@ -4096,8 +4090,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "sshd.service".to_owned().try_into().unwrap(),
@@ -4108,8 +4100,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "cups.service".to_owned().try_into().unwrap(),
@@ -4120,8 +4110,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             // The inventory holds every unit — not used by renderer
@@ -4585,8 +4573,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "sshd.service".to_owned().try_into().unwrap(),
@@ -4597,8 +4583,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "chronyd.service".to_owned().try_into().unwrap(),
@@ -4609,8 +4593,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "firewalld.service".to_owned().try_into().unwrap(),
@@ -4621,8 +4603,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -4654,8 +4634,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "sshd.service".to_owned().try_into().unwrap(),
@@ -4666,8 +4644,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -4694,8 +4670,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "httpd.service".to_owned().try_into().unwrap(),
@@ -4706,8 +4680,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -4739,8 +4711,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "avahi-daemon.service".to_owned().try_into().unwrap(),
@@ -4751,8 +4721,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "bluetooth.service".to_owned().try_into().unwrap(),
@@ -4763,8 +4731,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "ModemManager.service".to_owned().try_into().unwrap(),
@@ -4775,8 +4741,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -5046,8 +5010,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "excluded.service".to_owned().try_into().unwrap(),
@@ -5058,8 +5020,6 @@ RUN dnf install -y \
                     owning_package: None,
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()
@@ -5098,8 +5058,6 @@ RUN dnf install -y \
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "cups.service".to_owned().try_into().unwrap(),
@@ -5110,8 +5068,6 @@ RUN dnf install -y \
                     owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
                 UnitStateChange {
                     unit: "avahi-daemon.service".to_owned().try_into().unwrap(),
@@ -5122,8 +5078,6 @@ RUN dnf install -y \
                     owning_package: Some("avahi".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 },
             ],
             ..Default::default()

@@ -31,8 +31,6 @@ fn state_change(
         owning_package: owning_package.map(str::to_string),
         aggregate: None,
         attention_reason: None,
-        shadow_type: None,
-        shadow_rationale: None,
     }
 }
 

@@ -162,8 +162,8 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
                 .get(sc.unit.as_str())
                 .cloned()
                 .unwrap_or_default(),
-            shadow_type: sc.shadow_type.clone(),
-            shadow_rationale: sc.shadow_rationale.clone(),
+            shadow_type: None,
+            shadow_rationale: None,
         });
     }
 
@@ -1088,8 +1088,6 @@ mod tests {
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![UnitInventoryEntry {
                     unit: "firewalld.service"
@@ -1282,8 +1280,6 @@ mod tests {
                     owning_package: Some("httpd".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![UnitInventoryEntry {
                     unit: "httpd.service"
@@ -1330,8 +1326,6 @@ mod tests {
                     owning_package: Some("firewalld".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: vec![
                     UnitInventoryEntry {
@@ -1423,8 +1417,6 @@ mod tests {
                     owning_package: Some("cups".into()),
                     aggregate: None,
                     attention_reason: None,
-                    shadow_type: None,
-                    shadow_rationale: None,
                 }],
                 inventory: Vec::new(),
                 drop_ins: Vec::new(),

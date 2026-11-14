@@ -2043,3 +2043,117 @@ fn toggling_a_shadowed_config_file_is_refused_in_both_directions() {
         );
     }
 }
+
+// ── A full shadow is its own row, not a state change ─────────────────
+//
+// An enabled, preset-matched service whose unit file the administrator
+// replaced has no state divergence. The shadow reaches the export through
+// its drop-in row alone; nothing invents a state change for the unit.
+
+const SHADOWED_UNIT: &str = "sshd.service";
+const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
+
+fn full_shadow_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::ShadowType;
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+    };
+
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.units = Some(UnitSection {
+        state_changes: vec![],
+        inventory: vec![UnitInventoryEntry {
+            unit: UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
+            state: UnitState::Enabled,
+            preset: Some(PresetDefault::Enable),
+        }],
+        drop_ins: vec![SystemdDropIn {
+            unit: SHADOWED_UNIT.into(),
+            path: FULL_SHADOW_PATH.into(),
+            content:
+                "[Unit]\nDescription=sshd, replaced\n\n[Service]\nExecStart=/usr/sbin/sshd -D\n"
+                    .into(),
+            disposition: FindingKind::included(),
+            shadow_type: Some(ShadowType::FullShadow),
+            shadow_rationale: Some("replaces the vendor unit".into()),
+            ..Default::default()
+        }],
+    });
+    snap
+}
+
+/// Whether the export's staged tree holds the full shadow's file.
+fn full_shadow_is_staged(session: &RefineSession) -> bool {
+    let out = tempfile::tempdir().unwrap();
+    inspectah_pipeline::render::configtree::write_config_tree(
+        &session.snapshot_projected(),
+        out.path(),
+    )
+    .unwrap();
+    out.path()
+        .join("drop-ins")
+        .join(FULL_SHADOW_PATH.trim_start_matches('/'))
+        .is_file()
+}
+
+#[test]
+fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
+    use inspectah_core::types::ShadowType;
+
+    let mut session = RefineSession::new(full_shadow_snapshot());
+
+    // Presence first: the shadow is a drop-in row carrying its shadow type,
+    // and the shadow count is read from the drop-in rows.
+    let decisions = session.decisions();
+    let shadows: Vec<_> = decisions
+        .service_dropins
+        .iter()
+        .filter(|d| d.entry.shadow_type == Some(ShadowType::FullShadow))
+        .collect();
+    assert_eq!(shadows.len(), 1, "the full shadow must be one drop-in row");
+    assert_eq!(shadows[0].entry.unit, SHADOWED_UNIT);
+    assert_eq!(shadows[0].entry.path, FULL_SHADOW_PATH);
+    assert_eq!(
+        serde_json::to_value(&shadows[0].entry.shadow_type).unwrap(),
+        "full_shadow"
+    );
+
+    // Then absence: no state change row exists for the unit.
+    assert!(
+        !decisions
+            .service_states
+            .iter()
+            .any(|s| s.entry.unit.as_str() == SHADOWED_UNIT),
+        "an enabled, preset-matched unit has no state change row, got {:?}",
+        decisions.service_states
+    );
+    assert!(
+        session
+            .snapshot_projected()
+            .units
+            .unwrap()
+            .state_changes
+            .is_empty(),
+        "the projected snapshot must hold no invented state change"
+    );
+
+    // The drop-in toggles alone: staged, then gone, then back.
+    assert!(full_shadow_is_staged(&session), "the shadow starts staged");
+    let toggle = |include| RefinementOp::SetInclude {
+        item_id: ItemId::DropIn {
+            path: FULL_SHADOW_PATH.into(),
+        },
+        include,
+    };
+    session.apply(toggle(false)).unwrap();
+    assert!(
+        !full_shadow_is_staged(&session),
+        "SetInclude(false) on the drop-in removes the staged file"
+    );
+    session.apply(toggle(true)).unwrap();
+    assert!(
+        full_shadow_is_staged(&session),
+        "SetInclude(true) on the drop-in restores the staged file"
+    );
+}

@@ -1794,8 +1794,6 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
             owning_package: Some("openh264".into()),
             aggregate: None,
             attention_reason: None,
-            shadow_type: None,
-            shadow_rationale: None,
         }],
         inventory: vec![],
         drop_ins: vec![],
