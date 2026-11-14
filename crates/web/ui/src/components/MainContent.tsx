@@ -913,7 +913,11 @@ export function MainContent({
             {section.ifcfg_note}
           </Alert>
         )}
-        <ContextList key={lookupId} section={section} />
+        <ContextList
+          key={lookupId}
+          section={section}
+          onNavigateToUnit={(unit) => onNavigateToItem?.("units", unit)}
+        />
       </>
     );
   }

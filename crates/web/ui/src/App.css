@@ -811,6 +811,12 @@ body,
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
+/* A scheduled timer row's unit: a link to its unit row, or the name alone. */
+.inspectah-context-row__unit {
+  flex: none;
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
 .inspectah-context-row__detail {
   white-space: pre-wrap;
   font-family: var(--pf-t--global--font--family--mono);

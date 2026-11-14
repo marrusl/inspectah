@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use inspectah_core::types::AdvisoryType;
 use inspectah_core::types::sysctl::SysctlDir;
+use inspectah_core::types::units::UnitName;
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
@@ -121,6 +122,22 @@ pub struct ContextItem {
     /// and the user cannot decide (§ 3.8).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory: Option<ContextAdvisory>,
+    /// On a scheduled timer row only: the unit the timer is, serialized
+    /// as the row's `unit` and `unit_row` fields (§ 11.1). Absent on every
+    /// other row.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub unit_link: Option<ContextUnitLink>,
+}
+
+/// The unit a scheduled timer row describes, so the row can link to the
+/// unit row that holds the timer's state. The timer row itself has no
+/// include flag.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextUnitLink {
+    /// `<name>.timer`.
+    pub unit: UnitName,
+    /// Whether `unit_states` holds a row for `unit`.
+    pub unit_row: bool,
 }
 
 /// The decision a reference row carries, keyed by the same [`ItemId`]

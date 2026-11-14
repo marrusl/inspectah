@@ -547,13 +547,15 @@ function SingleHostApp({
 
     requestAnimationFrame(() => {
       // Try multiple testid patterns to find the target element:
-      // decision items, context items, language env rows, unmanaged items
+      // decision items, context items, language env rows, drop-in and unit
+      // rows, unmanaged items
       const el = (document.querySelector(
         `[data-testid="decision-item-${itemId}"]`,
       ) ??
         document.querySelector(`[data-testid="context-item-${itemId}"]`) ??
         document.querySelector(`[data-testid="lang-env-row-${itemId}"]`) ??
         document.querySelector(`[data-testid="dropin-item-${itemId}"]`) ??
+        document.querySelector(`[data-testid="service-item-${itemId}"]`) ??
         document.querySelector(
           `[data-testid="unmanaged-item-${itemId}"]`,
         )) as HTMLElement | null;

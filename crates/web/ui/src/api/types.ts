@@ -368,6 +368,13 @@ export interface ContextItem {
   subtitle: string | null;
   detail: string | null;
   searchable_text: string;
+  /**
+   * On a scheduled timer row only: the unit the timer is (`<name>.timer`).
+   * The row has no include flag; the timer's state is its unit row's.
+   */
+  unit?: string;
+  /** With `unit`: whether `unit_states` holds a row for that unit. */
+  unit_row?: boolean;
 }
 
 export interface ContextSubsection {
@@ -920,11 +927,6 @@ export interface ItemIdCronJob {
   key: { path: string };
 }
 
-export interface ItemIdSystemdTimer {
-  kind: "SystemdTimer";
-  key: { name: string };
-}
-
 export interface ItemIdAtJob {
   kind: "AtJob";
   key: { file: string };
@@ -1139,7 +1141,6 @@ export type ItemId =
   | ItemIdKernelModule
   | ItemIdTunedSelection
   | ItemIdCronJob
-  | ItemIdSystemdTimer
   | ItemIdAtJob
   | ItemIdGeneratedTimer
   | ItemIdSelinuxPort

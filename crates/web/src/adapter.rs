@@ -1688,6 +1688,13 @@ pub fn web_generic_section(
                 }
                 search
             },
+            unit_link: item
+                .unit_link
+                .as_ref()
+                .map(|link| crate::web_types::ContextUnitLink {
+                    unit: link.unit.clone(),
+                    unit_row: link.unit_row,
+                }),
             ..Default::default()
         })
         .collect();

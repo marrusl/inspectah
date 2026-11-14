@@ -99,8 +99,6 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.profile;
     case "CronJob":
       return itemId.key.path;
-    case "SystemdTimer":
-      return itemId.key.name;
     case "AtJob":
       return itemId.key.file;
     case "GeneratedTimer":

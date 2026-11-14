@@ -56,6 +56,7 @@ fn plain_context_item_is_byte_identical() {
         searchable_text: "net.ipv4.ip_forward 1 0 /etc/sysctl.d/k8s.conf".to_string(),
         decision: None,
         advisory: None,
+        unit_link: None,
     };
     insta::assert_snapshot!(
         serde_json::to_string(&item).expect("ContextItem serializes"),

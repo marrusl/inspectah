@@ -650,6 +650,179 @@ async fn the_context_sections_name_the_unit_section_units() {
     assert!(!ids.contains(&"services"), "{ids:?}");
 }
 
+/// Path of the cron job in [`scheduled_timer_state`].
+const TIMER_CRON_PATH: &str = "/etc/cron.d/backup";
+
+/// A host with two collected timers and a cron job. `backup.timer` has a
+/// state change, so a row in `unit_states`; `cleanup.timer` has none.
+fn scheduled_timer_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit("backup.timer".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
+        drop_ins: vec![],
+        inventory: vec![],
+        mount_findings: Vec::new(),
+    });
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: TIMER_CRON_PATH.into(),
+            source: "0 2 * * * root /usr/local/bin/backup.sh".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![
+            SystemdTimer {
+                name: "backup".into(),
+                on_calendar: "daily".into(),
+                exec_start: "/usr/local/bin/backup.sh".into(),
+                ..Default::default()
+            },
+            SystemdTimer {
+                name: "cleanup".into(),
+                on_calendar: "weekly".into(),
+                exec_start: "/usr/local/bin/cleanup.sh".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// T20 through the production handlers: a scheduled timer row names its
+/// unit and whether that unit has a row, and offers no include flag; the
+/// timer's unit row keeps its own.
+#[tokio::test]
+async fn a_scheduled_timer_row_names_its_unit_and_offers_no_include() {
+    let app = app(scheduled_timer_state());
+    let (status, sections) = get_json(&app, "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = sections
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .find(|s| s["id"] == "scheduled_tasks")
+        .expect("a scheduled_tasks section")["items"]
+        .as_array()
+        .expect("scheduled items")
+        .clone();
+    let row = |id: &str| {
+        items
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap_or_else(|| panic!("no scheduled row {id}: {items:?}"))
+            .clone()
+    };
+
+    let backup = row("backup");
+    assert_eq!(backup["unit"], "backup.timer", "{backup}");
+    assert_eq!(backup["unit_row"], true, "{backup}");
+    let cleanup = row("cleanup");
+    assert_eq!(cleanup["unit"], "cleanup.timer", "{cleanup}");
+    assert_eq!(cleanup["unit_row"], false, "{cleanup}");
+    for timer in [&backup, &cleanup] {
+        assert!(timer.get("include").is_none(), "{timer}");
+        assert!(timer.get("decision").is_none(), "{timer}");
+    }
+    // A cron row is not a unit and names none.
+    let cron = row(TIMER_CRON_PATH);
+    assert!(cron.get("unit").is_none(), "{cron}");
+    assert!(cron.get("unit_row").is_none(), "{cron}");
+
+    // The positive control: the timer's unit row carries the flag.
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let unit_row = view["unit_states"]
+        .as_array()
+        .expect("unit_states")
+        .iter()
+        .find(|s| s["unit"] == "backup.timer")
+        .unwrap_or_else(|| panic!("no unit row for backup.timer: {view}"));
+    assert_eq!(unit_row["include"], true, "{unit_row}");
+    assert!(
+        !view.to_string().contains("SystemdTimer"),
+        "the view names no timer operation"
+    );
+}
+
+/// The services and scheduling group toggle reaches the cron job and the
+/// timer's unit row, and emits no timer operation.
+#[tokio::test]
+async fn the_scheduling_group_toggle_emits_no_timer_operation() {
+    let state = scheduled_timer_state();
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = timeline_items(&state);
+    assert!(
+        items.contains(&inspectah_refine::types::ItemId::CronJob {
+            path: TIMER_CRON_PATH.into()
+        }),
+        "{items:?}"
+    );
+    assert!(
+        items.contains(&inspectah_refine::types::ItemId::Unit {
+            unit: "backup.timer".to_owned().try_into().unwrap()
+        }),
+        "{items:?}"
+    );
+    let kinds: Vec<serde_json::Value> = items
+        .iter()
+        .map(|item| serde_json::to_value(item).expect("an item id serializes")["kind"].clone())
+        .collect();
+    assert!(
+        !kinds.contains(&serde_json::json!("SystemdTimer")),
+        "{kinds:?}"
+    );
+}
+
+/// A request naming the removed timer operation is refused with the
+/// variant named; the same request on the cron job is applied.
+#[tokio::test]
+async fn api_op_refuses_the_removed_timer_operation() {
+    let op = |item_id: serde_json::Value| {
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {"item_id": item_id, "include": false}
+        })
+    };
+    let app = app(scheduled_timer_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        op(serde_json::json!({"kind": "CronJob", "key": {"path": TIMER_CRON_PATH}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+
+    let (status, json) = post_json(
+        &app,
+        "/api/op",
+        op(serde_json::json!({"kind": "SystemdTimer", "key": {"name": "backup"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(
+        json["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("unknown variant `SystemdTimer`")),
+        "{json}"
+    );
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 

@@ -5,9 +5,11 @@ import { ContextItem } from "./ContextItem";
 
 export interface ContextListProps {
   section: ReferenceSection;
+  /** Opens the unit row a scheduled timer row names. */
+  onNavigateToUnit?: (unit: string) => void;
 }
 
-export function ContextList({ section }: ContextListProps) {
+export function ContextList({ section, onNavigateToUnit }: ContextListProps) {
   const subsections = (section.subsections ?? []).filter(
     (sub) => sub.items.length > 0,
   );
@@ -32,7 +34,11 @@ export function ContextList({ section }: ContextListProps) {
       {section.items.length > 0 && (
         <div role="list" aria-label={`${section.display_name} context items`}>
           {section.items.map((item) => (
-            <ContextItem key={item.id} item={item} />
+            <ContextItem
+              key={item.id}
+              item={item}
+              onNavigateToUnit={onNavigateToUnit}
+            />
           ))}
         </div>
       )}
@@ -51,7 +57,11 @@ export function ContextList({ section }: ContextListProps) {
           </h4>
           <div role="list" aria-label={`${sub.display_name} context items`}>
             {sub.items.map((item) => (
-              <ContextItem key={item.id} item={item} />
+              <ContextItem
+                key={item.id}
+                item={item}
+                onNavigateToUnit={onNavigateToUnit}
+              />
             ))}
           </div>
         </section>
