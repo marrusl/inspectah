@@ -1108,27 +1108,97 @@ fn storage_section(kind: StorageKind) -> &'static str {
     }
 }
 
+/// The characters systemd's unit file parser strips from the ends of a
+/// line, a key and a value.
+const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
+
+/// The characters that start a comment line in a unit file.
+const UNIT_FILE_COMMENT_STARTS: &[char] = &['#', ';'];
+
+/// The characters that end a line in a unit file, as systemd reads it.
+const UNIT_FILE_LINE_ENDS: &[char] = &['\n', '\r', '\0'];
+
+/// The lines of a unit file as systemd's `read_line` splits them: `\n`,
+/// `\r` and `\0` each end a line, and a run of them is one line end while
+/// no character repeats in it and no `\0` came before, so `\r\n` and
+/// `\n\r` are one line end and `\n\n` is two.
+fn physical_lines(content: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut rest = content;
+    while !rest.is_empty() {
+        let end = rest.find(UNIT_FILE_LINE_ENDS).unwrap_or(rest.len());
+        lines.push(&rest[..end]);
+        rest = &rest[end..];
+        let mut seen = Vec::new();
+        while let Some(c) = rest
+            .chars()
+            .next()
+            .filter(|c| UNIT_FILE_LINE_ENDS.contains(c) && !seen.contains(c))
+        {
+            rest = &rest[c.len_utf8()..];
+            seen.push(c);
+            if c == '\0' {
+                break;
+            }
+        }
+    }
+    lines
+}
+
+/// The logical lines of a unit file, joined as systemd's config parser
+/// joins them (systemd.syntax(7)): a line that ends in a backslash which
+/// is not itself escaped continues onto the next, the backslash read as a
+/// space. A comment line is skipped wherever it is, inside a continuation
+/// too, so it neither ends nor continues one. A continuation still open at
+/// the end of the file is a line of its own.
+fn logical_lines(content: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut pending: Option<String> = None;
+    for line in physical_lines(content) {
+        if line
+            .trim_start_matches(UNIT_FILE_WHITESPACE)
+            .starts_with(UNIT_FILE_COMMENT_STARTS)
+        {
+            continue;
+        }
+        let mut joined = pending.take().unwrap_or_default();
+        joined.push_str(line);
+        let trailing_backslashes = line.len() - line.trim_end_matches('\\').len();
+        if trailing_backslashes % 2 == 1 {
+            joined.pop();
+            joined.push(' ');
+            pending = Some(joined);
+        } else {
+            lines.push(joined);
+        }
+    }
+    lines.extend(pending);
+    lines
+}
+
 /// Read `Where=` and `Options=` from a storage unit file as systemd reads
-/// them: only in the section of the unit's own kind, the last assignment
-/// winning (an empty one resets), comment lines skipped, and the key and
-/// value trimmed, which drops a CRLF line end and trailing whitespace.
-/// `Where=` belongs to mounts and automounts, `Options=` to mounts and
-/// swaps. `What=` is never read: it can hold a credential, and the finding
-/// has no field for it. `nofail` is decided as systemd decides it, by
-/// whichever of `nofail` and `fail` comes last in `Options=`.
+/// them: by logical line ([`logical_lines`]), so the continuation of one
+/// setting is never read as a key or a section header of its own; only in
+/// the section of the unit's own kind; the last assignment winning (an
+/// empty one resets); comment lines skipped; and the key and value
+/// stripped of the whitespace systemd strips. `Where=` belongs to mounts
+/// and automounts, `Options=` to mounts and swaps. `What=` is never read:
+/// it can hold a credential, and the finding has no field for it. `nofail`
+/// is decided as systemd decides it, by whichever of `nofail` and `fail`
+/// comes last in `Options=`.
 ///
 /// Only the unit file itself is read. Drop-ins
 /// (`<name>.mount.d/*.conf`) that set `Where=` or `Options=` are not read,
-/// and a line continued with a trailing `\` is not joined to the next, so
-/// either can leave `mount_point` and `nofail` short of what systemd uses.
+/// so they can leave `mount_point` and `nofail` short of what systemd uses.
 fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
     let own_section = storage_section(kind);
     let mut section = None;
     let mut where_value = None;
     let mut options = None;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+    let lines = logical_lines(content);
+    for line in &lines {
+        let line = line.trim_matches(UNIT_FILE_WHITESPACE);
+        if line.is_empty() {
             continue;
         }
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
@@ -1141,11 +1211,10 @@ fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        match (key.trim(), kind) {
-            ("Where", StorageKind::Mount | StorageKind::Automount) => {
-                where_value = Some(value.trim());
-            }
-            ("Options", StorageKind::Mount | StorageKind::Swap) => options = Some(value.trim()),
+        let value = value.trim_matches(UNIT_FILE_WHITESPACE);
+        match (key.trim_matches(UNIT_FILE_WHITESPACE), kind) {
+            ("Where", StorageKind::Mount | StorageKind::Automount) => where_value = Some(value),
+            ("Options", StorageKind::Mount | StorageKind::Swap) => options = Some(value),
             _ => {}
         }
     }
@@ -1343,6 +1412,76 @@ mod tests {
                 settings(None, false),
             ),
             ("not text a unit holds", Mount, "", settings(None, false)),
+            // Logical lines: a line ending in `\` continues onto the next,
+            // so the next line is part of the value, never a key or a
+            // section header of its own.
+            (
+                "a key in a continuation is part of the value",
+                Mount,
+                "[Mount]\nWhere=/srv/data\nWhat=https://files.example/volume?\\\n\
+                 Where=/opt/token=mount-secret-91c2\nOptions=nofail\n",
+                settings(Some("/srv/data"), true),
+            ),
+            (
+                "a continued Where",
+                Mount,
+                "[Mount]\nWhere=/srv/\\\ndata\n",
+                settings(Some("/srv/ data"), false),
+            ),
+            (
+                "a continued Options",
+                Mount,
+                "[Mount]\nOptions=defaults\\\n,nofail\n",
+                settings(None, true),
+            ),
+            (
+                "a continuation that looks like [Unit] stays in [Mount]",
+                Mount,
+                "[Mount]\nWhat=/dev/sdb1\\\n[Unit]\nWhere=/srv\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "a continuation that looks like [Mount] stays in [Unit]",
+                Mount,
+                "[Unit]\nDescription=data\\\n[Mount]\nWhere=/srv\n",
+                settings(None, false),
+            ),
+            (
+                "a comment inside a continuation is skipped",
+                Mount,
+                "[Mount]\nWhat=/dev/sdb1\\\n# Where=/opt\nWhere=/srv\nOptions=nofail\n",
+                settings(None, true),
+            ),
+            (
+                "an empty line ends a continuation",
+                Mount,
+                "[Mount]\nWhat=/dev/sdb1\\\n\nWhere=/srv\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "an escaped backslash does not continue",
+                Mount,
+                "[Mount]\nWhat=/dev/sdb1\\\\\nWhere=/srv\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "a continuation open at the end of the file",
+                Mount,
+                "[Mount]\nWhere=/srv\nWhat=/dev/sdb1\\",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "CRLF with a continuation",
+                Mount,
+                "[Mount]\r\nWhere=/srv\r\nWhat=x?\\\r\nWhere=/opt/token=y\r\n",
+                settings(Some("/srv"), false),
+            ),
+            (
+                "a lone CR ends a line",
+                Mount,
+                "[Mount]\nWhere=/srv\rWhat=https://files.example/v?token=z\n",
+                settings(Some("/srv"), false),
+            ),
         ];
         for (label, kind, content, expected) in cases {
             assert_eq!(&mount_settings(*kind, content), expected, "{label}");

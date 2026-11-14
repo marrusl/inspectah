@@ -20,7 +20,10 @@ use inspectah_core::types::units::{
 use inspectah_pipeline::render;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
-use unit_hosts::{UnitHost, export_session, reload, render_export, scan, scan_unredacted, session};
+use unit_hosts::{
+    CONTINUED_MOUNT_TOKEN, UnitHost, continued_mount_host, export_session, reload, render_export,
+    scan, scan_unredacted, session,
+};
 
 // ---------------------------------------------------------------------
 // T10: the mount source is copied into no field (§ 6.5, § 6.7).
@@ -151,6 +154,67 @@ fn t10_the_mount_source_is_in_no_snapshot_after_a_refine_export() {
     assert!(!json.contains(MOUNT_TOKEN));
     assert_eq!(
         files_holding(export.path(), MOUNT_TOKEN),
+        Vec::<String>::new()
+    );
+}
+
+/// T10, a continued `What=`: the line after it reads like a second
+/// `Where=` holding a token, and is the rest of the mount source as systemd
+/// reads it. Presence first: before redaction the token is in the unit
+/// file's config entry. The finding records the unit's real mount point,
+/// so after the scan's redaction the token is in no field of the
+/// serialized snapshot, the reloaded one, or any file of the export.
+#[test]
+fn t10_a_continued_mount_source_is_in_no_snapshot_after_scan() {
+    let unredacted = scan_unredacted(continued_mount_host());
+    assert_finding_fields(mount_finding(&unredacted), "unredacted");
+    let config = unredacted.config.as_ref().expect("the config section");
+    let entry = config
+        .files
+        .iter()
+        .find(|f| f.path == MOUNT_UNIT_PATH)
+        .expect("the unit file is a config entry");
+    assert!(
+        entry.content.contains(CONTINUED_MOUNT_TOKEN),
+        "{}",
+        entry.content
+    );
+
+    let scanned = scan(continued_mount_host());
+    assert_finding_fields(mount_finding(&scanned), "scan");
+    let written = serde_json::to_string(&scanned).expect("the snapshot serializes");
+    assert!(!written.contains(CONTINUED_MOUNT_TOKEN), "{written}");
+
+    let reloaded = reload(&scanned);
+    assert_finding_fields(mount_finding(&reloaded), "reload");
+    let written = serde_json::to_string(&reloaded).expect("the snapshot serializes");
+    assert!(!written.contains(CONTINUED_MOUNT_TOKEN));
+
+    let export = render_export(&scanned);
+    assert!(
+        export.path().join("inspection-snapshot.json").is_file(),
+        "the export holds the snapshot"
+    );
+    assert_eq!(
+        files_holding(export.path(), CONTINUED_MOUNT_TOKEN),
+        Vec::<String>::new()
+    );
+}
+
+/// T10, a continued `What=`, refine route: the exported snapshot keeps the
+/// finding with its real mount point, and no file of the refine export
+/// holds the token.
+#[test]
+fn t10_a_continued_mount_source_is_in_no_snapshot_after_a_refine_export() {
+    let refine = session(&scan(continued_mount_host()));
+    let export = export_session(&refine);
+    let json = std::fs::read_to_string(export.path().join("inspection-snapshot.json"))
+        .expect("the export holds the snapshot");
+    let exported = InspectionSnapshot::load(&json).expect("the exported snapshot loads");
+    assert_finding_fields(mount_finding(&exported), "refine export");
+    assert!(!json.contains(CONTINUED_MOUNT_TOKEN));
+    assert_eq!(
+        files_holding(export.path(), CONTINUED_MOUNT_TOKEN),
         Vec::<String>::new()
     );
 }

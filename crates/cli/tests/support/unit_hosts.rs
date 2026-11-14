@@ -353,6 +353,35 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// A token planted in [`continued_mount_host`]'s unit file, in a line
+/// that reads like a second `Where=` but continues the `What=` value.
+pub const CONTINUED_MOUNT_TOKEN: &str = "mount-secret-91c2";
+/// The one unit [`continued_mount_host`] has.
+pub const CONTINUED_MOUNT_UNIT: &str = "srv-data.mount";
+/// The mount point systemd reads from [`continued_mount_host`]'s unit.
+pub const CONTINUED_MOUNT_POINT: &str = "/srv/data";
+
+/// A host with one local mount unit, enabled, whose `What=` ends in a
+/// backslash, so the next line, `Where=/opt/token=<token>`, is the rest of
+/// the `What=` value as systemd reads it. The token belongs to the mount
+/// source; the unit's mount point is [`CONTINUED_MOUNT_POINT`].
+pub fn continued_mount_host() -> UnitHost {
+    UnitHost::new()
+        .unit(CONTINUED_MOUNT_UNIT, "enabled")
+        .preset("disable *")
+        .etc_unit(
+            CONTINUED_MOUNT_UNIT,
+            &format!(
+                "[Unit]\nDescription=Data volume\n\n[Mount]\n\
+                 Where={CONTINUED_MOUNT_POINT}\n\
+                 What=https://files.example/volume?\\\n\
+                 Where=/opt/token={CONTINUED_MOUNT_TOKEN}\n\
+                 Options=nofail\n\n\
+                 [Install]\nWantedBy=multi-user.target\n"
+            ),
+        )
+}
+
 fn ok(stdout: &str) -> ExecResult {
     ExecResult {
         stdout: stdout.into(),
