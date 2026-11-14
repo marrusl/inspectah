@@ -107,14 +107,15 @@ fn contract_snapshot() -> InspectionSnapshot {
     });
 
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::excluded(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
+        state_changes: vec![{
+            let mut change = UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::excluded();
+            change
         }],
         ..Default::default()
     });

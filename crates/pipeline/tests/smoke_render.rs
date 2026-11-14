@@ -27,24 +27,18 @@ fn snapshot_with_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
         state_changes: vec![
-            UnitStateChange {
-                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
-            UnitStateChange {
-                unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
-                current_state: UnitState::Disabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
         ],
         inventory: vec![
             UnitInventoryEntry {

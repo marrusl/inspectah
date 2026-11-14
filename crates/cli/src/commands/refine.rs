@@ -353,25 +353,23 @@ mod tests {
 
     /// A tarball whose snapshot has one unit state row, `httpd.service`.
     fn write_units_tarball(path: &Path) {
-        use inspectah_core::types::FindingKind;
         use inspectah_core::types::units::{
             PresetDefault, UnitName, UnitSection, UnitState, UnitStateChange,
         };
 
         let mut snap = redacted_snapshot();
         snap.units = Some(UnitSection {
-            state_changes: vec![UnitStateChange {
-                unit: test_carried_unit(
-                    UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
-                    None,
-                ),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                        None,
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         write_snapshot_tarball(path, &snap);
@@ -458,7 +456,7 @@ mod tests {
         let row = units
             .state_changes
             .iter()
-            .find(|s| s.unit.name().as_str() == STATE_ROW_UNIT)
+            .find(|s| s.unit().name().as_str() == STATE_ROW_UNIT)
             .expect("the state row is present");
         assert!(
             !row.disposition.is_included(),

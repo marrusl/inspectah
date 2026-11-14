@@ -183,18 +183,17 @@ mod tests {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "httpd.service".to_owned().try_into().unwrap(),
-                        Some("httpd".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![UnitInventoryEntry {
                     unit: "httpd.service"
                         .to_owned()
@@ -217,7 +216,7 @@ mod tests {
 
         assert_eq!(proj.unit_states.len(), 1);
         assert_eq!(
-            proj.unit_states[0].entry.unit.name().as_str(),
+            proj.unit_states[0].entry.unit().name().as_str(),
             "httpd.service"
         );
     }
@@ -303,18 +302,17 @@ mod tests {
                 ..Default::default()
             }),
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "sshd.service".to_owned().try_into().unwrap(),
-                        Some("openssh-server".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Enable),
+                    )
+                    .unwrap(),
+                ],
                 ..Default::default()
             }),
             config: Some(ConfigSection { files: vec![] }),

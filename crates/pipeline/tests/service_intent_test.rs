@@ -22,18 +22,15 @@ fn state_change(
     default_state: Option<PresetDefault>,
     owning_package: Option<&str>,
 ) -> UnitStateChange {
-    UnitStateChange {
-        unit: test_carried_unit(
+    UnitStateChange::new(
+        test_carried_unit(
             unit.to_owned().try_into().unwrap(),
             owning_package.map(str::to_string),
         ),
         current_state,
         default_state,
-        disposition: FindingKind::included(),
-        locked: false,
-        aggregate: None,
-        attention_reason: None,
-    }
+    )
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------

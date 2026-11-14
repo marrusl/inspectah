@@ -251,7 +251,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
 
     // Lock incompatible services
     for sc in &mut services.state_changes {
-        if incompatible_units.contains(&sc.unit.name().as_str()) {
+        if incompatible_units.contains(&sc.unit().name().as_str()) {
             sc.disposition = FindingKind::excluded();
             sc.locked = true;
             sc.attention_reason = Some("service-image-mode-incompatible".to_string());
@@ -456,14 +456,15 @@ mod tests {
 
     fn sc(unit: &str, include: bool) -> UnitStateChange {
         use inspectah_core::types::units::{PresetDefault, UnitState};
-        UnitStateChange {
-            unit: test_carried_unit(unit.to_string().try_into().unwrap(), None),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::from_bool(include),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
+        {
+            let mut change = UnitStateChange::new(
+                test_carried_unit(unit.to_string().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::from_bool(include);
+            change
         }
     }
 

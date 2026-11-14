@@ -2068,15 +2068,14 @@ fn full_shadow_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(name(CHANGED_UNIT), Some("httpd".into())),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(name(CHANGED_UNIT), Some("httpd".into())),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
         inventory: vec![
             UnitInventoryEntry {
                 unit: name(CHANGED_UNIT),
@@ -2147,7 +2146,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     let session_rows: Vec<&str> = decisions
         .unit_states
         .iter()
-        .map(|s| s.entry.unit.name().as_str())
+        .map(|s| s.entry.unit().name().as_str())
         .collect();
     assert_eq!(
         session_rows,
@@ -2158,7 +2157,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     let projected_rows: Vec<&str> = projected
         .state_changes
         .iter()
-        .map(|s| s.unit.name().as_str())
+        .map(|s| s.unit().name().as_str())
         .collect();
     assert_eq!(
         projected_rows,
@@ -2252,18 +2251,17 @@ fn a_full_shadow_with_a_real_state_change_keeps_its_systemctl_line() {
 
     let mut snap = full_shadow_snapshot();
     let units = snap.units.as_mut().unwrap();
-    units.state_changes.push(UnitStateChange {
-        unit: test_carried_unit(
-            UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
-            Some("openssh-server".into()),
-        ),
-        current_state: UnitState::Enabled,
-        default_state: Some(PresetDefault::Disable),
-        disposition: FindingKind::included(),
-        locked: false,
-        aggregate: None,
-        attention_reason: None,
-    });
+    units.state_changes.push(
+        UnitStateChange::new(
+            test_carried_unit(
+                UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
+                Some("openssh-server".into()),
+            ),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap(),
+    );
     units
         .inventory
         .iter_mut()
@@ -2384,14 +2382,13 @@ fn cascade_snapshot() -> InspectionSnapshot {
         PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
     };
 
-    let change = |unit: &str| UnitStateChange {
-        unit: test_carried_unit(UnitName::try_from(unit.to_string()).unwrap(), None),
-        current_state: UnitState::Enabled,
-        default_state: Some(PresetDefault::Disable),
-        disposition: FindingKind::included(),
-        locked: false,
-        aggregate: None,
-        attention_reason: None,
+    let change = |unit: &str| {
+        UnitStateChange::new(
+            test_carried_unit(UnitName::try_from(unit.to_string()).unwrap(), None),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap()
     };
     let drop_in = |unit: &str, path: &str| SystemdDropIn {
         unit: unit.into(),
@@ -2444,7 +2441,7 @@ fn unit_inclusion(session: &RefineSession) -> (Inclusion, Inclusion) {
         .iter()
         .map(|s| {
             (
-                s.unit.name().as_str().to_string(),
+                s.unit().name().as_str().to_string(),
                 s.disposition.is_included(),
             )
         })

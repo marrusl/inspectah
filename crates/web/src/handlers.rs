@@ -888,7 +888,7 @@ pub async fn batch_toggle_group(
                     }
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {
                         item_id: inspectah_refine::types::ItemId::Unit {
-                            unit: sc.unit.name().clone(),
+                            unit: sc.unit().name().clone(),
                         },
                         include: payload.include,
                     });
@@ -1783,18 +1783,17 @@ mod tests {
 
         let mut snap = empty_snapshot();
         snap.units = Some(SvcSection {
-            state_changes: vec![UnitStateChange {
-                unit: test_carried_unit(
-                    "sshd.service".to_owned().try_into().unwrap(),
-                    Some("openssh-server".into()),
-                ),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+            ],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),
                 path: "/etc/systemd/system/sshd.service".into(),

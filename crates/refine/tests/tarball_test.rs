@@ -297,7 +297,10 @@ fn schema_27_snapshot_is_refused() {
         .units
         .as_ref()
         .expect("the `units` section is present");
-    assert_eq!(units.state_changes[0].unit.name().as_str(), "httpd.service");
+    assert_eq!(
+        units.state_changes[0].unit().name().as_str(),
+        "httpd.service"
+    );
 
     let dir = tempdir().unwrap();
     let tarball = write_flat_tarball(dir.path(), schema_27);

@@ -117,9 +117,9 @@ fn happy_path_state_changes() {
     let bluetooth = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == "bluetooth.service")
+        .find(|s| s.unit().name().as_str() == "bluetooth.service")
         .expect("bluetooth should have state change");
-    assert_eq!(bluetooth.current_state, UnitState::Enabled);
+    assert_eq!(bluetooth.current_state(), UnitState::Enabled);
     assert_eq!(bluetooth.default_state, Some(PresetDefault::Disable));
     assert_eq!(bluetooth.implied_action(), UnitAction::Enable);
 
@@ -127,9 +127,9 @@ fn happy_path_state_changes() {
     let gdm = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == "gdm.service")
+        .find(|s| s.unit().name().as_str() == "gdm.service")
         .expect("gdm should have state change");
-    assert_eq!(gdm.current_state, UnitState::Disabled);
+    assert_eq!(gdm.current_state(), UnitState::Disabled);
     assert_eq!(gdm.default_state, Some(PresetDefault::Enable));
     assert_eq!(gdm.implied_action(), UnitAction::Disable);
 
@@ -138,7 +138,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.name().as_str() != "httpd.service"),
+            .all(|s| s.unit().name().as_str() != "httpd.service"),
         "httpd has no preset rule, should not appear in state_changes"
     );
 
@@ -147,7 +147,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.name().as_str() != "libvirtd.service"),
+            .all(|s| s.unit().name().as_str() != "libvirtd.service"),
         "libvirtd has no preset rule, should not appear in state_changes"
     );
 
@@ -156,7 +156,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.name().as_str() != "auditd.service"),
+            .all(|s| s.unit().name().as_str() != "auditd.service"),
         "auditd state matches preset, should not appear in state_changes"
     );
 
@@ -166,7 +166,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit.name().as_str() != "cups.service"),
+            .all(|s| s.unit().name().as_str() != "cups.service"),
         "cups should not appear in state_changes"
     );
 
@@ -349,7 +349,7 @@ fn inventory_records_masked_units() {
         section
             .state_changes
             .iter()
-            .any(|s| s.unit.name().as_str() == "cups.service"),
+            .any(|s| s.unit().name().as_str() == "cups.service"),
         "a masked unit is a state change as well as an inventory entry"
     );
 }
@@ -407,10 +407,10 @@ fn preset_first_match_wins() {
     let sshd = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == "sshd.service")
+        .find(|s| s.unit().name().as_str() == "sshd.service")
         .expect("sshd should diverge from first-match preset");
     assert_eq!(sshd.default_state, Some(PresetDefault::Disable));
-    assert_eq!(sshd.current_state, UnitState::Enabled);
+    assert_eq!(sshd.current_state(), UnitState::Enabled);
 }
 
 // ── Test 4: Preset glob matching ───────────────────────────────────
@@ -457,10 +457,10 @@ fn preset_glob_matching() {
     let app = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == "custom-app.service")
+        .find(|s| s.unit().name().as_str() == "custom-app.service")
         .expect("custom-app should diverge from glob preset");
     assert_eq!(app.default_state, Some(PresetDefault::Enable));
-    assert_eq!(app.current_state, UnitState::Disabled);
+    assert_eq!(app.current_state(), UnitState::Disabled);
 }
 
 // ── Test 5: Drop-in files collected ────────────────────────────────
@@ -1007,11 +1007,11 @@ fn test_owning_package_batch_query_populates_state_changes() {
     };
 
     assert_eq!(
-        section.state_changes[0].unit.owning_package(),
+        section.state_changes[0].unit().owning_package(),
         Some("httpd")
     );
     assert_eq!(
-        section.state_changes[1].unit.owning_package(),
+        section.state_changes[1].unit().owning_package(),
         Some("firewalld")
     );
 }
@@ -1081,11 +1081,11 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
     };
 
     assert_eq!(
-        section.state_changes[0].unit.owning_package(),
+        section.state_changes[0].unit().owning_package(),
         Some("httpd")
     );
     assert_eq!(
-        section.state_changes[1].unit.owning_package(),
+        section.state_changes[1].unit().owning_package(),
         Some("firewalld")
     );
 }
@@ -1140,9 +1140,9 @@ fn fragment_of<'a>(section: &'a UnitSection, unit: &str) -> &'a UnitFragment {
     let change = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == unit)
+        .find(|s| s.unit().name().as_str() == unit)
         .unwrap_or_else(|| panic!("{unit} should be a state change"));
-    match &change.unit {
+    match change.unit() {
         CarriedUnit::Ordinary(ordinary) => ordinary.fragment(),
         other => panic!("{unit} is not an ordinary unit: {other:?}"),
     }

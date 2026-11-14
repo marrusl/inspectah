@@ -985,7 +985,7 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
         lines.push("| Unit | Current | Default | Action |".into());
         lines.push("|------|---------|---------|--------|".into());
         for sc in &services.state_changes {
-            let state_str = match sc.current_state {
+            let state_str = match sc.current_state() {
                 inspectah_core::types::units::UnitState::Enabled => "enabled",
                 inspectah_core::types::units::UnitState::Disabled => "disabled",
                 inspectah_core::types::units::UnitState::Masked => "masked",
@@ -1002,7 +1002,7 @@ fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) 
             };
             lines.push(format!(
                 "| {} | {} | {} | {} |",
-                sc.unit.name().as_str(),
+                sc.unit().name().as_str(),
                 state_str,
                 default_str,
                 action_str

@@ -763,11 +763,32 @@ impl std::fmt::Display for UnitAction {
 ///
 /// Loaded through [`UnitStateChange::new`], which refuses a state a unit of
 /// that name and fragment cannot have.
+///
+/// The unit and its state are read-only, so no caller can pair a template
+/// or a unit with no file with a state other than `masked` after the check.
+/// A caller that needs another unit or state builds a new value through
+/// `new`:
+///
+/// ```compile_fail,E0616
+/// use inspectah_core::types::units::{UnitState, UnitStateChange};
+///
+/// fn unmask(change: &mut UnitStateChange) {
+///     change.current_state = UnitState::Enabled;
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// use inspectah_core::types::units::{CarriedUnit, UnitStateChange};
+///
+/// fn swap(change: &mut UnitStateChange, unit: CarriedUnit) {
+///     change.unit = unit;
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "UnitStateChangeWire")]
 pub struct UnitStateChange {
-    pub unit: CarriedUnit,
-    pub current_state: UnitState,
+    unit: CarriedUnit,
+    current_state: UnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
     #[serde(default)]
@@ -863,6 +884,16 @@ impl UnitStateChange {
             aggregate: None,
             attention_reason: None,
         })
+    }
+
+    /// The unit, with the fragment it loads from and its owning package.
+    pub fn unit(&self) -> &CarriedUnit {
+        &self.unit
+    }
+
+    /// The unit's state on the source host.
+    pub fn current_state(&self) -> UnitState {
+        self.current_state
     }
 }
 
@@ -1154,27 +1185,18 @@ mod tests {
     fn test_service_state_change_roundtrip_uses_typed_enums() {
         let section = UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        unit_name("firewalld.service"),
-                        Some("firewalld".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
-                    current_state: UnitState::Masked,
-                    default_state: None,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit(unit_name("cups.service"), Some("cups".into())),
+                    UnitState::Masked,
+                    None,
+                )
+                .unwrap(),
             ],
             inventory: vec![UnitInventoryEntry {
                 unit: unit_name("firewalld.service"),
@@ -1193,33 +1215,24 @@ mod tests {
 
     #[test]
     fn test_implied_action_derives_from_current_state() {
-        let enabled = UnitStateChange {
-            unit: test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        };
-        let disabled = UnitStateChange {
-            unit: test_carried_unit(unit_name("sshd.service"), Some("openssh-server".into())),
-            current_state: UnitState::Disabled,
-            default_state: Some(PresetDefault::Enable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        };
-        let masked = UnitStateChange {
-            unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
-            current_state: UnitState::Masked,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        };
+        let enabled = UnitStateChange::new(
+            test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap();
+        let disabled = UnitStateChange::new(
+            test_carried_unit(unit_name("sshd.service"), Some("openssh-server".into())),
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+        )
+        .unwrap();
+        let masked = UnitStateChange::new(
+            test_carried_unit(unit_name("cups.service"), Some("cups".into())),
+            UnitState::Masked,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(enabled.implied_action(), UnitAction::Enable);
         assert_eq!(disabled.implied_action(), UnitAction::Disable);
@@ -1228,28 +1241,22 @@ mod tests {
 
     #[test]
     fn test_option_preset_default_serde_roundtrip() {
-        let with_preset = UnitStateChange {
-            unit: test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        };
+        let with_preset = UnitStateChange::new(
+            test_carried_unit(unit_name("firewalld.service"), Some("firewalld".into())),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap();
         let json = serde_json::to_string(&with_preset).unwrap();
         let parsed: UnitStateChange = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.default_state, Some(PresetDefault::Disable));
 
-        let without_preset = UnitStateChange {
-            unit: test_carried_unit(unit_name("cups.service"), Some("cups".into())),
-            current_state: UnitState::Masked,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        };
+        let without_preset = UnitStateChange::new(
+            test_carried_unit(unit_name("cups.service"), Some("cups".into())),
+            UnitState::Masked,
+            None,
+        )
+        .unwrap();
         let json = serde_json::to_string(&without_preset).unwrap();
         let parsed: UnitStateChange = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.default_state, None);
@@ -1560,9 +1567,13 @@ mod tests {
     fn storage_subject_file_must_be_the_unit_itself() {
         for kind in ["mount", "automount", "swap"] {
             let name = format!("foo@bar.{kind}");
-            // Positive control: the unit's own file loads.
-            let own = serde_json::json!({"name": name, "fragment": "local", "file": name});
-            serde_json::from_value::<AdvisoryUnit>(own)
+            // Positive control, on the refusal's route: the same vendor unit
+            // with an owner and its own file loads as a carried unit.
+            let own = serde_json::json!({
+                "name": name, "fragment": "vendor", "file": name,
+                "owning_package": "systemd"
+            });
+            serde_json::from_value::<CarriedUnit>(own)
                 .unwrap_or_else(|err| panic!("{name} with its own file: {err}"));
 
             let template = format!("foo@.{kind}");

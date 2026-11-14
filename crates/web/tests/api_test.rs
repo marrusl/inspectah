@@ -537,18 +537,17 @@ const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
 fn units_view_state() -> Arc<AppState> {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(
-                "kdump.service".to_owned().try_into().unwrap(),
-                Some("kexec-tools".into()),
-            ),
-            current_state: UnitState::Disabled,
-            default_state: Some(PresetDefault::Enable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    "kdump.service".to_owned().try_into().unwrap(),
+                    Some("kexec-tools".into()),
+                ),
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
+        ],
         drop_ins: vec![
             SystemdDropIn {
                 unit: "kdump.service".into(),
@@ -1100,14 +1099,15 @@ fn rich_snapshot() -> InspectionSnapshot {
     });
 
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-            current_state: inspectah_core::types::units::UnitState::Enabled,
-            default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-            disposition: FindingKind::excluded(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
+        state_changes: vec![{
+            let mut change = UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap();
+            change.disposition = FindingKind::excluded();
+            change
         }],
         drop_ins: vec![
             SystemdDropIn {
@@ -2217,30 +2217,24 @@ fn service_subsection_state() -> Arc<AppState> {
     });
     snap.units = Some(UnitSection {
         state_changes: vec![
-            UnitStateChange {
-                unit: test_carried_unit(
+            UnitStateChange::new(
+                test_carried_unit(
                     "custom-app.service".to_owned().try_into().unwrap(),
                     Some("custom-app".into()),
                 ),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
-            UnitStateChange {
-                unit: test_carried_unit(
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit(
                     "sssd-kcm.service".to_owned().try_into().unwrap(),
                     Some("sssd".into()),
                 ),
-                current_state: UnitState::Disabled,
-                default_state: Some(PresetDefault::Enable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
+                UnitState::Disabled,
+                Some(PresetDefault::Enable),
+            )
+            .unwrap(),
         ],
         inventory: vec![],
         drop_ins: vec![],

@@ -270,13 +270,13 @@ fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&
         .collect();
 
     for change in &services.state_changes {
-        if let Some(owner) = change.unit.owning_package()
-            && enabled.contains(change.unit.name().as_str())
+        if let Some(owner) = change.unit().owning_package()
+            && enabled.contains(change.unit().name().as_str())
         {
             owners
                 .entry(owner)
                 .or_default()
-                .insert(change.unit.name().as_str());
+                .insert(change.unit().name().as_str());
         }
     }
 
@@ -636,15 +636,12 @@ mod tests {
     }
 
     fn enabled_change(unit: &str, owner: &str) -> UnitStateChange {
-        UnitStateChange {
-            unit: test_carried_unit(unit.to_owned().try_into().unwrap(), Some(owner.into())),
-            current_state: UnitState::Enabled,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }
+        UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), Some(owner.into())),
+            UnitState::Enabled,
+            None,
+        )
+        .unwrap()
     }
 
     /// The classified host with its services: `firewalld.service` is

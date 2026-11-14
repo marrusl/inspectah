@@ -519,7 +519,7 @@ impl Inspector for ServicesInspector {
                 drop_ins.iter().map(|d| d.unit.as_str()).collect();
             let mut shadow_entries = Vec::new();
             for sc in &state_changes {
-                let unit = sc.unit.name().as_str();
+                let unit = sc.unit().name().as_str();
                 if dropin_units.contains(unit) {
                     continue;
                 }
@@ -1388,14 +1388,14 @@ mod tests {
             assert!(
                 svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str() == "httpd.service"),
+                    .any(|sc| sc.unit().name().as_str() == "httpd.service"),
                 "httpd.service must be in state_changes"
             );
             // D-Bus aliases must NOT appear — no operator evidence
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str().starts_with("dbus-")),
+                    .any(|sc| sc.unit().name().as_str().starts_with("dbus-")),
                 "D-Bus aliases must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1446,14 +1446,14 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str() == "sshd.service"),
+                    .any(|sc| sc.unit().name().as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // cups is masked — operator intent, must be captured
             let cups = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit.name().as_str() == "cups.service");
+                .find(|sc| sc.unit().name().as_str() == "cups.service");
             assert!(
                 cups.is_some(),
                 "masked cups.service must be in state_changes"
@@ -1464,7 +1464,7 @@ mod tests {
                 inspectah_core::types::units::UnitAction::Mask,
                 "masked service action must be Mask"
             );
-            assert_eq!(cups.current_state, UnitState::Masked);
+            assert_eq!(cups.current_state(), UnitState::Masked);
             assert!(
                 cups.disposition.is_included(),
                 "masked service must be included"
@@ -1514,7 +1514,7 @@ mod tests {
             let fw = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit.name().as_str() == "firewalld.service");
+                .find(|sc| sc.unit().name().as_str() == "firewalld.service");
             assert!(
                 fw.is_some(),
                 "operator-disabled firewalld must be in state_changes"
@@ -1571,7 +1571,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str().starts_with("sssd")),
+                    .any(|sc| sc.unit().name().as_str().starts_with("sssd")),
                 "untouched SSSD services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1624,7 +1624,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str().contains("sysupdate")),
+                    .any(|sc| sc.unit().name().as_str().contains("sysupdate")),
                 "sysupdate services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
@@ -1684,7 +1684,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str() == "some-obscure.service"),
+                    .any(|sc| sc.unit().name().as_str() == "some-obscure.service"),
                 "service matching preset via wildcard must not be in state_changes"
             );
         } else {
@@ -2050,7 +2050,7 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.name().as_str() == "sshd.service"),
+                    .any(|sc| sc.unit().name().as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // sshd must be a preset-matched inventory entry
@@ -2183,10 +2183,10 @@ mod tests {
         );
         assert_eq!(changes.len(), 1);
         assert!(
-            matches!(&changes[0].unit, inspectah_core::types::units::CarriedUnit::PackagedStorage(u)
+            matches!(changes[0].unit(), inspectah_core::types::units::CarriedUnit::PackagedStorage(u)
                 if u.owning_package() == "systemd"),
             "{:?}",
-            changes[0].unit
+            changes[0].unit()
         );
 
         for answer in [rpm("file is not owned by any package\n", 1), rpm("\n", 0)] {

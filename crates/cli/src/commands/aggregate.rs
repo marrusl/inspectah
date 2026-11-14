@@ -642,7 +642,10 @@ mod tests {
         let loaded = load_snapshot_from_tarball(&tarball)
             .expect("the same section under `units` loads at the current version");
         let units = loaded.units.expect("the `units` section is present");
-        assert_eq!(units.state_changes[0].unit.name().as_str(), "httpd.service");
+        assert_eq!(
+            units.state_changes[0].unit().name().as_str(),
+            "httpd.service"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &schema_27);

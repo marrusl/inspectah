@@ -219,14 +219,13 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
         rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
     }
-    let unit = |name: &str, owner: &str| UnitStateChange {
-        unit: test_carried_unit(name.to_owned().try_into().unwrap(), Some(owner.into())),
-        current_state: UnitState::Enabled,
-        default_state: Some(PresetDefault::Disable),
-        disposition: FindingKind::included(),
-        locked: false,
-        aggregate: None,
-        attention_reason: None,
+    let unit = |name: &str, owner: &str| {
+        UnitStateChange::new(
+            test_carried_unit(name.to_owned().try_into().unwrap(), Some(owner.into())),
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )
+        .unwrap()
     };
     snap.units = Some(UnitSection {
         // The dependency owns a unit too. dnf installs it with the leaf,

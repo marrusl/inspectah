@@ -136,7 +136,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
     let has_unattributed_services = snap.units.as_ref().is_some_and(|svc| {
         svc.state_changes
             .iter()
-            .any(|s| s.unit.owning_package().is_none())
+            .any(|s| s.unit().owning_package().is_none())
     });
     let has_orphaned_modified_configs = has_config
         && snap.config.as_ref().is_some_and(|config| {
@@ -251,9 +251,9 @@ fn build_user_enabled_service_set(snap: &InspectionSnapshot) -> std::collections
     let mut set = std::collections::HashSet::new();
     if let Some(services) = &snap.units {
         for svc in &services.state_changes {
-            if svc.current_state == UnitState::Enabled
+            if svc.current_state() == UnitState::Enabled
                 && svc.default_state != Some(PresetDefault::Enable)
-                && let Some(pkg) = svc.unit.owning_package()
+                && let Some(pkg) = svc.unit().owning_package()
             {
                 set.insert(pkg);
             }
@@ -567,7 +567,7 @@ pub fn classify_services(
 }
 
 fn classify_service(change: &UnitStateChange) -> TriageTag {
-    if change.unit.owning_package().is_none() {
+    if change.unit().owning_package().is_none() {
         return TriageTag {
             triage: Triage::SingleHost(TriageBucket::Investigate),
             primary_reason: TriageReason::ServiceUnknownOrigin,
@@ -1775,18 +1775,17 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("firewalld")],
             Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        Some("firewalld".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
@@ -2104,15 +2103,15 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("kernel-tools"), anaconda_pkg("cronie")],
             Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(), // degraded — missing attribution
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        // degraded: missing attribution
+                        test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
@@ -2159,18 +2158,17 @@ mod anaconda_classification {
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("kernel-tools")],
             Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "sshd.service".to_owned().try_into().unwrap(),
-                        Some("openssh-server".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Enable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
@@ -2227,18 +2225,17 @@ mod service_classification {
     fn service_matching_preset_default_is_site_until_baseline() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "sshd.service".to_owned().try_into().unwrap(),
-                        Some("openssh-server".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "sshd.service".to_owned().try_into().unwrap(),
+                            Some("openssh-server".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Enable),
+                    )
+                    .unwrap(),
+                ],
                 ..Default::default()
             }),
             ..Default::default()
@@ -2258,18 +2255,17 @@ mod service_classification {
     fn service_differing_from_preset_is_site() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        Some("firewalld".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 ..Default::default()
             }),
             ..Default::default()
@@ -2287,15 +2283,14 @@ mod service_classification {
     fn service_without_owning_package_is_investigate() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: None,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit("mystery.service".to_owned().try_into().unwrap(), None),
+                        UnitState::Enabled,
+                        None,
+                    )
+                    .unwrap(),
+                ],
                 ..Default::default()
             }),
             ..Default::default()

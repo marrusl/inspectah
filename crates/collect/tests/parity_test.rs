@@ -194,7 +194,7 @@ fn test_services_inspector_correctness() {
     );
     for sc in &section.state_changes {
         assert!(
-            !sc.unit.name().as_str().is_empty(),
+            !sc.unit().name().as_str().is_empty(),
             "state_change unit must not be empty"
         );
         // current_state is a typed enum — the fact that it deserialized proves

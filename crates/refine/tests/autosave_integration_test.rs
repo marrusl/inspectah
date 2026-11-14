@@ -394,18 +394,17 @@ fn units_snapshot() -> InspectionSnapshot {
 
     let mut snap = test_snapshot_redacted();
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(
-                UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
-                None,
-            ),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    UnitName::try_from(STATE_ROW_UNIT.to_string()).unwrap(),
+                    None,
+                ),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
         inventory: vec![],
         drop_ins: vec![SystemdDropIn {
             unit: SHADOW_ONLY_UNIT.into(),
@@ -505,7 +504,7 @@ fn a_saved_session_naming_the_service_kind_is_refused_on_resume() {
     let row = units
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == STATE_ROW_UNIT)
+        .find(|s| s.unit().name().as_str() == STATE_ROW_UNIT)
         .expect("the state row is present");
     assert!(
         !row.disposition.is_included(),

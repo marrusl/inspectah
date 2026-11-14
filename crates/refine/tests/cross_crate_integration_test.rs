@@ -199,27 +199,18 @@ fn service_surface_agreement() {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
         state_changes: vec![
-            UnitStateChange {
-                unit: test_carried_unit(
-                    "dnf-makecache.service".to_owned().try_into().unwrap(),
-                    None,
-                ),
-                current_state: inspectah_core::types::units::UnitState::Enabled,
-                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
-            UnitStateChange {
-                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                current_state: inspectah_core::types::units::UnitState::Enabled,
-                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            },
+            UnitStateChange::new(
+                test_carried_unit("dnf-makecache.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap(),
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                inspectah_core::types::units::UnitState::Enabled,
+                Some(inspectah_core::types::units::PresetDefault::Disable),
+            )
+            .unwrap(),
         ],
         inventory: vec![
             UnitInventoryEntry {
@@ -252,7 +243,7 @@ fn service_surface_agreement() {
     let dnf_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit.name().as_str() == "dnf-makecache.service")
+        .find(|sc| sc.unit().name().as_str() == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
     assert!(
         !dnf_sc.disposition.is_included(),
@@ -263,7 +254,7 @@ fn service_surface_agreement() {
     let httpd_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit.name().as_str() == "httpd.service")
+        .find(|sc| sc.unit().name().as_str() == "httpd.service")
         .expect("httpd.service must be in state_changes");
     assert!(
         httpd_sc.disposition.is_included(),

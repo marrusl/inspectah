@@ -469,14 +469,13 @@ fn incompatible_units_are_locked_out_and_others_left_alone() {
     snap.units = Some(UnitSection {
         state_changes: units
             .iter()
-            .map(|u| UnitStateChange {
-                unit: test_carried_unit(name(u), None),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
+            .map(|u| {
+                UnitStateChange::new(
+                    test_carried_unit(name(u), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap()
             })
             .collect(),
         inventory: units
@@ -506,7 +505,7 @@ fn incompatible_units_are_locked_out_and_others_left_alone() {
         let sc = section
             .state_changes
             .iter()
-            .find(|s| s.unit.name().as_str() == unit)
+            .find(|s| s.unit().name().as_str() == unit)
             .unwrap_or_else(|| panic!("{unit} must keep its state row"));
         assert!(
             sc.locked && !sc.disposition.is_included(),
@@ -535,7 +534,7 @@ fn incompatible_units_are_locked_out_and_others_left_alone() {
     let control = section
         .state_changes
         .iter()
-        .find(|s| s.unit.name().as_str() == CONTROL)
+        .find(|s| s.unit().name().as_str() == CONTROL)
         .expect("the control unit keeps its state row");
     assert!(!control.locked && control.disposition.is_included());
     assert_eq!(control.attention_reason, None);

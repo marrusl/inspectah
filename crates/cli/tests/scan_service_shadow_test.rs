@@ -428,7 +428,7 @@ fn only_a_preset_diverging_unit_gets_a_state_change_row() {
     let changed: Vec<&str> = services
         .state_changes
         .iter()
-        .map(|s| s.unit.name().as_str())
+        .map(|s| s.unit().name().as_str())
         .collect();
     assert_eq!(
         changed,

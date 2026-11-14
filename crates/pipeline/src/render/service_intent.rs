@@ -363,7 +363,7 @@ fn classify_service_presence(
     not_carried: &std::collections::HashSet<String>,
     baseline_unavailable: bool,
 ) -> PresenceDecision {
-    let pkg_name = match sc.unit.owning_package() {
+    let pkg_name = match sc.unit().owning_package() {
         Some(name) => name,
         // Tier 1: unknown owner — always emit conservatively
         None => {
@@ -458,7 +458,7 @@ fn excluded_owner(
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
 ) -> Option<PresenceDecision> {
-    let pkg_name = sc.unit.owning_package()?;
+    let pkg_name = sc.unit().owning_package()?;
     let mut entries = rpm
         .packages_added
         .iter()
@@ -562,7 +562,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = sc.unit.name().as_str();
+        let u = sc.unit().name().as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;
@@ -686,7 +686,7 @@ fn render_without_rpm(
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = sc.unit.name().as_str();
+        let u = sc.unit().name().as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;

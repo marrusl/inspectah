@@ -722,15 +722,14 @@ fn selinux(boolean: (&str, &str), port: (&str, &str, &str)) -> String {
 fn service(unit: &str, state: UnitState) -> String {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(unit.to_owned().try_into().unwrap(), None),
-            current_state: state,
-            default_state: None,
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+                state,
+                None,
+            )
+            .unwrap(),
+        ],
         ..Default::default()
     });
     render_containerfile(&snap, None, None)

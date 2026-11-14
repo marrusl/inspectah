@@ -166,8 +166,8 @@ pub fn build_filter_data(snap: &InspectionSnapshot) -> ReportFilterData {
             svc.state_changes
                 .iter()
                 .map(|s| FilterableService {
-                    unit: s.unit.name().as_str().to_owned(),
-                    state: enum_to_string(&s.current_state),
+                    unit: s.unit().name().as_str().to_owned(),
+                    state: enum_to_string(&s.current_state()),
                 })
                 .collect()
         })

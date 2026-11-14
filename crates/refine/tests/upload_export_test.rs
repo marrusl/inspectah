@@ -1785,15 +1785,14 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
         rpm.leaf_dep_tree = serde_json::json!({ "vlc.x86_64": ["openh264.x86_64"] });
     }
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(UNIT.to_owned().try_into().unwrap(), Some("openh264".into())),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(UNIT.to_owned().try_into().unwrap(), Some("openh264".into())),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),

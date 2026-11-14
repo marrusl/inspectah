@@ -101,7 +101,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let divergent_set: HashSet<&str> = svc
         .state_changes
         .iter()
-        .map(|sc| sc.unit.name().as_str())
+        .map(|sc| sc.unit().name().as_str())
         .collect();
     let enabled = || {
         svc.inventory
@@ -150,16 +150,16 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     // 1. Divergent items (from state_changes)
     let mut divergent = Vec::new();
     for sc in &svc.state_changes {
-        if omitted_units.contains(sc.unit.name().as_str()) {
+        if omitted_units.contains(sc.unit().name().as_str()) {
             continue;
         }
         divergent.push(RefServiceItem {
-            unit: sc.unit.name().as_str().to_owned(),
-            current_state: sc.current_state,
+            unit: sc.unit().name().as_str().to_owned(),
+            current_state: sc.current_state(),
             default_state: sc.default_state,
-            owning_package: sc.unit.owning_package().map(str::to_owned),
+            owning_package: sc.unit().owning_package().map(str::to_owned),
             dropin_contents: dropin_by_unit
-                .get(sc.unit.name().as_str())
+                .get(sc.unit().name().as_str())
                 .cloned()
                 .unwrap_or_default(),
         });
@@ -1085,18 +1085,17 @@ mod tests {
     fn test_divergent_service_categorized() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        Some("firewalld".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![UnitInventoryEntry {
                     unit: "firewalld.service"
                         .to_owned()
@@ -1284,18 +1283,17 @@ mod tests {
     fn test_dropin_folded_into_divergent_item() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "httpd.service".to_owned().try_into().unwrap(),
-                        Some("httpd".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "httpd.service".to_owned().try_into().unwrap(),
+                            Some("httpd".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![UnitInventoryEntry {
                     unit: "httpd.service"
                         .to_owned()
@@ -1333,18 +1331,17 @@ mod tests {
     fn test_three_way_split() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        Some("firewalld".into()),
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "firewalld.service".to_owned().try_into().unwrap(),
+                            Some("firewalld".into()),
+                        ),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![
                     UnitInventoryEntry {
                         unit: "firewalld.service"
@@ -1428,18 +1425,17 @@ mod tests {
     fn test_masked_service_in_divergent() {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
-                state_changes: vec![UnitStateChange {
-                    unit: test_carried_unit(
-                        "cups.service".to_owned().try_into().unwrap(),
-                        Some("cups".into()),
-                    ),
-                    current_state: UnitState::Masked,
-                    default_state: None,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    UnitStateChange::new(
+                        test_carried_unit(
+                            "cups.service".to_owned().try_into().unwrap(),
+                            Some("cups".into()),
+                        ),
+                        UnitState::Masked,
+                        None,
+                    )
+                    .unwrap(),
+                ],
                 inventory: Vec::new(),
                 drop_ins: Vec::new(),
                 mount_findings: Vec::new(),

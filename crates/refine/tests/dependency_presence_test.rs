@@ -62,18 +62,17 @@ fn snapshot() -> InspectionSnapshot {
         extracted_at: "2026-11-08T00:00:00Z".into(),
     });
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit(
-                UNIT.to_owned().try_into().unwrap(),
-                Some("cockpit-ws".into()),
-            ),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit(
+                    UNIT.to_owned().try_into().unwrap(),
+                    Some("cockpit-ws".into()),
+                ),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),

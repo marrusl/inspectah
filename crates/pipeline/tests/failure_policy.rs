@@ -75,15 +75,14 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
     use inspectah_core::types::units::{PresetDefault, UnitState};
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
-        state_changes: vec![UnitStateChange {
-            unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            disposition: FindingKind::included(),
-            locked: false,
-            aggregate: None,
-            attention_reason: None,
-        }],
+        state_changes: vec![
+            UnitStateChange::new(
+                test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap(),
+        ],
         inventory: vec![
             UnitInventoryEntry {
                 unit: "httpd.service"

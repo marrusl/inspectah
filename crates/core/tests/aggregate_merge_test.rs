@@ -1212,14 +1212,15 @@ fn test_merge_service_sections_all_none() {
 
 #[test]
 fn test_merge_service_sections_dedup_units() {
-    let make_sc = |unit: &str| UnitStateChange {
-        unit: test_carried_unit(unit.to_owned().try_into().unwrap(), None),
-        current_state: UnitState::Enabled,
-        default_state: None,
-        disposition: FindingKind::excluded(),
-        locked: false,
-        aggregate: None,
-        attention_reason: None,
+    let make_sc = |unit: &str| {
+        let mut change = UnitStateChange::new(
+            test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+            UnitState::Enabled,
+            None,
+        )
+        .unwrap();
+        change.disposition = FindingKind::excluded();
+        change
     };
     let s1 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],

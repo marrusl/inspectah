@@ -149,7 +149,10 @@ fn schema_27_snapshot_is_refused() {
         .expect("the same section under `units` loads at the current version");
     let units = current.units.expect("the `units` section is present");
     assert_eq!(units.state_changes.len(), 1);
-    assert_eq!(units.state_changes[0].unit.name().as_str(), "httpd.service");
+    assert_eq!(
+        units.state_changes[0].unit().name().as_str(),
+        "httpd.service"
+    );
 
     match InspectionSnapshot::load(SCHEMA_27_SNAPSHOT) {
         Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 27),
@@ -249,9 +252,9 @@ fn state_change_storage_unit_is_classified_on_load() {
         let snap = InspectionSnapshot::load(&owned)
             .unwrap_or_else(|err| panic!("{name} vendor with an owner loads: {err}"));
         let units = snap.units.expect("units present");
-        assert_eq!(units.state_changes[0].unit.name().as_str(), name);
+        assert_eq!(units.state_changes[0].unit().name().as_str(), name);
         assert_eq!(
-            units.state_changes[0].unit.owning_package(),
+            units.state_changes[0].unit().owning_package(),
             Some("systemd")
         );
 

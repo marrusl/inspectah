@@ -544,12 +544,12 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         _ => (String::new(), String::new()),
                     };
                     let shadow_rat = shadow_rationales
-                        .get(s.unit.name().as_str())
+                        .get(s.unit().name().as_str())
                         .cloned()
                         .unwrap_or_default();
                     Value::from_serialize(serde_json::json!({
-                        "unit": s.unit.name(),
-                        "current_state": s.current_state.to_string(),
+                        "unit": s.unit().name(),
+                        "current_state": s.current_state().to_string(),
                         "default_state": default_str,
                         "include": s.disposition.is_included(),
                         "is_advisory": is_advisory,
@@ -572,7 +572,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         let state_change_units: std::collections::HashSet<&str> = svc
             .state_changes
             .iter()
-            .map(|s| s.unit.name().as_str())
+            .map(|s| s.unit().name().as_str())
             .collect();
         for d in &svc.drop_ins {
             if !matches!(d.shadow_type, Some(ShadowType::FullShadow)) {
@@ -627,12 +627,12 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             let enabled = svc
                 .state_changes
                 .iter()
-                .filter(|s| s.current_state == UnitState::Enabled)
+                .filter(|s| s.current_state() == UnitState::Enabled)
                 .count();
             let masked = svc
                 .state_changes
                 .iter()
-                .filter(|s| s.current_state == UnitState::Masked)
+                .filter(|s| s.current_state() == UnitState::Masked)
                 .count();
             let mut parts = Vec::new();
             if enabled > 0 {
@@ -2377,18 +2377,17 @@ mod tests {
     fn test_report_contains_services_section() {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
-            state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                unit: test_carried_unit(
-                    "firewalld.service".to_owned().try_into().unwrap(),
-                    Some("firewalld".into()),
-                ),
-                current_state: inspectah_core::types::units::UnitState::Enabled,
-                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit(
+                        "firewalld.service".to_owned().try_into().unwrap(),
+                        Some("firewalld".into()),
+                    ),
+                    inspectah_core::types::units::UnitState::Enabled,
+                    Some(inspectah_core::types::units::PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
             inventory: vec![UnitInventoryEntry {
                 unit: "firewalld.service"
                     .to_owned()
@@ -2419,17 +2418,18 @@ mod tests {
     fn test_report_services_table_columns() {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
-            state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                unit: test_carried_unit(
-                    "sshd.service".to_owned().try_into().unwrap(),
-                    Some("openssh-server".into()),
-                ),
-                current_state: inspectah_core::types::units::UnitState::Disabled,
-                default_state: Some(inspectah_core::types::units::PresetDefault::Enable),
-                disposition: FindingKind::excluded(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
+            state_changes: vec![{
+                let mut change = inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit(
+                        "sshd.service".to_owned().try_into().unwrap(),
+                        Some("openssh-server".into()),
+                    ),
+                    inspectah_core::types::units::UnitState::Disabled,
+                    Some(inspectah_core::types::units::PresetDefault::Enable),
+                )
+                .unwrap();
+                change.disposition = FindingKind::excluded();
+                change
             }],
             inventory: vec![UnitInventoryEntry {
                 unit: "sshd.service"
@@ -2490,27 +2490,18 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                inspectah_core::types::units::UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: inspectah_core::types::units::UnitState::Enabled,
-                    default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                inspectah_core::types::units::UnitStateChange {
-                    unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
-                    current_state: inspectah_core::types::units::UnitState::Masked,
-                    default_state: None,
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit("firewalld.service".to_owned().try_into().unwrap(), None),
+                    inspectah_core::types::units::UnitState::Enabled,
+                    Some(inspectah_core::types::units::PresetDefault::Disable),
+                )
+                .unwrap(),
+                inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    inspectah_core::types::units::UnitState::Masked,
+                    None,
+                )
+                .unwrap(),
             ],
             inventory: vec![UnitInventoryEntry {
                 unit: "firewalld.service"
@@ -3529,15 +3520,14 @@ mod tests {
         });
 
         snap.units = Some(UnitSection {
-            state_changes: vec![UnitStateChange {
-                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                current_state: UnitState::Enabled,
-                default_state: None,
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    None,
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
 
@@ -3672,14 +3662,13 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: (0..ROWS)
-                .map(|i| inspectah_core::types::units::UnitStateChange {
-                    unit: test_carried_unit(format!("unit{i}.service").try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
+                .map(|i| {
+                    inspectah_core::types::units::UnitStateChange::new(
+                        test_carried_unit(format!("unit{i}.service").try_into().unwrap(), None),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap()
                 })
                 .collect(),
             ..Default::default()

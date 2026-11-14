@@ -2713,18 +2713,17 @@ mod tests {
             make_disabled_repo_package(&mut snap, "openh264", DISABLED_REPO_ID);
             super::super::repo_enabling::demote_unserved_repo_enabling(&mut snap);
             snap.units = Some(inspectah_core::types::units::UnitSection {
-                state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                    unit: test_carried_unit(
-                        "openh264.service".to_owned().try_into().unwrap(),
-                        Some("openh264".into()),
-                    ),
-                    current_state: inspectah_core::types::units::UnitState::Enabled,
-                    default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                }],
+                state_changes: vec![
+                    inspectah_core::types::units::UnitStateChange::new(
+                        test_carried_unit(
+                            "openh264.service".to_owned().try_into().unwrap(),
+                            Some("openh264".into()),
+                        ),
+                        inspectah_core::types::units::UnitState::Enabled,
+                        Some(inspectah_core::types::units::PresetDefault::Disable),
+                    )
+                    .unwrap(),
+                ],
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
@@ -3316,18 +3315,17 @@ mod tests {
             pkg.repoless_annotation = "No repo source \u{2014} cached RPM bundled".into();
         }
         snap.units = Some(inspectah_core::types::units::UnitSection {
-            state_changes: vec![inspectah_core::types::units::UnitStateChange {
-                unit: test_carried_unit(
-                    "custom-tool.service".to_owned().try_into().unwrap(),
-                    Some("custom-tool".into()),
-                ),
-                current_state: inspectah_core::types::units::UnitState::Enabled,
-                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                inspectah_core::types::units::UnitStateChange::new(
+                    test_carried_unit(
+                        "custom-tool.service".to_owned().try_into().unwrap(),
+                        Some("custom-tool".into()),
+                    ),
+                    inspectah_core::types::units::UnitState::Enabled,
+                    Some(inspectah_core::types::units::PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
             inventory: vec![],
             drop_ins: vec![],
             mount_findings: Vec::new(),
@@ -4024,15 +4022,14 @@ RUN dnf install -y \
         // Build a snapshot with data in multiple sections to verify ordering
         let mut snap = snapshot_with_packages(&["httpd"]);
         snap.units = Some(inspectah_core::types::units::UnitSection {
-            state_changes: vec![UnitStateChange {
-                unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                current_state: UnitState::Enabled,
-                default_state: Some(PresetDefault::Disable),
-                disposition: FindingKind::included(),
-                locked: false,
-                aggregate: None,
-                attention_reason: None,
-            }],
+            state_changes: vec![
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+            ],
             ..Default::default()
         });
         snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
@@ -4100,33 +4097,24 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
             ],
             // The inventory holds every unit: not used by renderer
             inventory: vec![
@@ -4580,45 +4568,30 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("chronyd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        "firewalld.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("chronyd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("firewalld.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
@@ -4640,24 +4613,18 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("sshd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
@@ -4674,24 +4641,18 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Masked,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Masked,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
@@ -4713,51 +4674,30 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        "avahi-daemon.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        "bluetooth.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        "ModemManager.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                UnitStateChange::new(
+                    test_carried_unit("cups.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("avahi-daemon.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("bluetooth.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit("ModemManager.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
@@ -5017,26 +4957,21 @@ RUN dnf install -y \
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
-                        "excluded.service".to_owned().try_into().unwrap(),
-                        None,
-                    ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::excluded(), // excluded by triage
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
+                UnitStateChange::new(
+                    test_carried_unit("httpd.service".to_owned().try_into().unwrap(), None),
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                {
+                    let mut change = UnitStateChange::new(
+                        test_carried_unit("excluded.service".to_owned().try_into().unwrap(), None),
+                        UnitState::Enabled,
+                        Some(PresetDefault::Disable),
+                    )
+                    .unwrap();
+                    change.disposition = FindingKind::excluded(); // excluded by triage
+                    change
                 },
             ],
             ..Default::default()
@@ -5066,42 +5001,33 @@ RUN dnf install -y \
         });
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                UnitStateChange {
-                    unit: test_carried_unit(
+                UnitStateChange::new(
+                    test_carried_unit(
                         "httpd.service".to_owned().try_into().unwrap(),
                         Some("httpd".into()),
                     ),
-                    current_state: UnitState::Enabled,
-                    default_state: Some(PresetDefault::Disable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
+                    UnitState::Enabled,
+                    Some(PresetDefault::Disable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit(
                         "cups.service".to_owned().try_into().unwrap(),
                         Some("cups".into()),
                     ),
-                    current_state: UnitState::Masked,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
-                UnitStateChange {
-                    unit: test_carried_unit(
+                    UnitState::Masked,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
+                UnitStateChange::new(
+                    test_carried_unit(
                         "avahi-daemon.service".to_owned().try_into().unwrap(),
                         Some("avahi".into()),
                     ),
-                    current_state: UnitState::Disabled,
-                    default_state: Some(PresetDefault::Enable),
-                    disposition: FindingKind::included(),
-                    locked: false,
-                    aggregate: None,
-                    attention_reason: None,
-                },
+                    UnitState::Disabled,
+                    Some(PresetDefault::Enable),
+                )
+                .unwrap(),
             ],
             ..Default::default()
         });
