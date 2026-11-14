@@ -168,17 +168,38 @@ impl From<UnitName> for String {
 }
 
 /// The parts of an instance name, borrowed from the [`UnitName`].
+///
+/// The parts are read-only: [`InstanceName::template`] builds a proved name
+/// from them without a re-parse, so a caller must not be able to swap in a
+/// prefix the parser never checked.
+///
+/// ```compile_fail,E0616
+/// use inspectah_core::types::units::UnitName;
+///
+/// let name = UnitName::try_from("getty@tty1.service".to_string()).unwrap();
+/// let mut parts = name.instance().unwrap();
+/// parts.prefix = "bad name";
+/// let _ = parts.template();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstanceName<'a> {
-    /// The text before the first `@` (`getty` in `getty@tty1.service`).
-    pub prefix: &'a str,
-    /// The non-empty text between the first `@` and the suffix (`tty1`).
-    pub instance: &'a str,
+    prefix: &'a str,
+    instance: &'a str,
     /// The type suffix, kept to build the template name.
     suffix: &'a str,
 }
 
-impl InstanceName<'_> {
+impl<'a> InstanceName<'a> {
+    /// The text before the first `@` (`getty` in `getty@tty1.service`).
+    pub fn prefix(&self) -> &'a str {
+        self.prefix
+    }
+
+    /// The non-empty text between the first `@` and the suffix (`tty1`).
+    pub fn instance(&self) -> &'a str {
+        self.instance
+    }
+
     /// `prefix@.suffix`, the template an instance falls back to.
     pub fn template(&self) -> UnitName {
         // Proved without a re-parse: the prefix and suffix come from a proved
@@ -474,8 +495,8 @@ mod tests {
         let parts = instance
             .instance()
             .expect("getty@tty1.service is an instance");
-        assert_eq!(parts.prefix, "getty");
-        assert_eq!(parts.instance, "tty1");
+        assert_eq!(parts.prefix(), "getty");
+        assert_eq!(parts.instance(), "tty1");
         let template = parts.template();
         assert_eq!(template.as_str(), "getty@.service");
         assert_eq!(template.kind(), UnitKind::Ordinary(OrdinaryKind::Service));
@@ -493,8 +514,8 @@ mod tests {
         // the text after the last dot.
         let escaped = UnitName::try_from(r"wg-quick@wg0.conf\x2dx.service".to_string()).unwrap();
         let parts = escaped.instance().unwrap();
-        assert_eq!(parts.prefix, "wg-quick");
-        assert_eq!(parts.instance, r"wg0.conf\x2dx");
+        assert_eq!(parts.prefix(), "wg-quick");
+        assert_eq!(parts.instance(), r"wg0.conf\x2dx");
         assert_eq!(parts.template().as_str(), "wg-quick@.service");
     }
 
