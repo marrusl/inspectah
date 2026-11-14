@@ -73,7 +73,7 @@ expression: value
   },
   {
     "display_name": "Services",
-    "id": "services",
+    "id": "units",
     "items": [
       {
         "detail": null,

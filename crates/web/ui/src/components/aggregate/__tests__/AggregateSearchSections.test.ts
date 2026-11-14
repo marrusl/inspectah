@@ -210,10 +210,10 @@ describe("buildAggregateSearchSections", () => {
 
   it("does not modify search text for non-metadata sections", () => {
     const sections = [
-      makeSection("services", "Services", [
+      makeSection("units", "Services", [
         {
           item_id: {
-            kind: "Service",
+            kind: "Unit",
             key: { unit: "httpd.service" },
           },
         },

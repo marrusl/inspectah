@@ -223,41 +223,6 @@ expression: value
       "tier": "distro"
     }
   ],
-  "service_dropins": [],
-  "service_states": [
-    {
-      "include": true,
-      "owning_package": "httpd",
-      "triage": {
-        "annotations": [],
-        "primary_reason": "service_non_default",
-        "triage": {
-          "baseline": "site",
-          "mode": "single_host"
-        }
-      },
-      "unit": "httpd.service"
-    },
-    {
-      "include": false,
-      "owning_package": null,
-      "triage": {
-        "annotations": [
-          {
-            "detail": "Non-default service state",
-            "level": "needs_review",
-            "reason": "service_non_default"
-          }
-        ],
-        "primary_reason": "service_non_default",
-        "triage": {
-          "baseline": "investigate",
-          "mode": "single_host"
-        }
-      },
-      "unit": "custom-agent.service"
-    }
-  ],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": true,
@@ -369,6 +334,41 @@ expression: value
     "vendor_replacements": []
   },
   "tuned": [],
+  "unit_dropins": [],
+  "unit_states": [
+    {
+      "include": true,
+      "owning_package": "httpd",
+      "triage": {
+        "annotations": [],
+        "primary_reason": "service_non_default",
+        "triage": {
+          "baseline": "site",
+          "mode": "single_host"
+        }
+      },
+      "unit": "httpd.service"
+    },
+    {
+      "include": false,
+      "owning_package": null,
+      "triage": {
+        "annotations": [
+          {
+            "detail": "Non-default service state",
+            "level": "needs_review",
+            "reason": "service_non_default"
+          }
+        ],
+        "primary_reason": "service_non_default",
+        "triage": {
+          "baseline": "investigate",
+          "mode": "single_host"
+        }
+      },
+      "unit": "custom-agent.service"
+    }
+  ],
   "users_groups_decisions": [
     {
       "classification": "interactive",

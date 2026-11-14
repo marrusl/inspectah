@@ -742,7 +742,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
     // Verify the services section has a drop-in item with variants
     let services = sections
         .iter()
-        .find(|s| s["id"] == "services")
+        .find(|s| s["id"] == "units")
         .expect("services section should exist");
     let dropin_item = find_item_in_section(services, "DropIn");
     assert!(

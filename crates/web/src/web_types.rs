@@ -526,8 +526,8 @@ pub struct ViewResponse {
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
-    pub service_states: Vec<ServiceDecisionDto>,
-    pub service_dropins: Vec<DropInDecisionDto>,
+    pub unit_states: Vec<ServiceDecisionDto>,
+    pub unit_dropins: Vec<DropInDecisionDto>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
     /// The read-only sysctl panel. Always present.

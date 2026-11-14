@@ -47,7 +47,7 @@ const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
   config: "Configuration Files",
   configs: "Config Files",
-  services: "Services",
+  units: "Services",
   containers: "Containers",
   compose: "Compose",
   network: "Network",
@@ -244,7 +244,7 @@ export function MainContent({
   const shadowOwners = useMemo(
     () =>
       viewData
-        ? buildShadowOwners(viewData.config_files, viewData.service_dropins)
+        ? buildShadowOwners(viewData.config_files, viewData.unit_dropins)
         : new Map(),
     [viewData],
   );
@@ -707,15 +707,16 @@ export function MainContent({
   }
 
   // Services decision section — promoted from context to decision.
-  if (activeSection === "services") {
-    const services = viewData?.service_states ?? [];
-    const shadowCount = services.filter(
-      (s) => s.shadow_type === "full_shadow",
+  if (activeSection === "units") {
+    const services = viewData?.unit_states ?? [];
+    const dropins = viewData?.unit_dropins ?? [];
+    const shadowCount = dropins.filter(
+      (d) => d.shadow_type === "full_shadow",
     ).length;
     const headerText =
       shadowCount > 0
-        ? `${SECTION_LABELS.services} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
-        : SECTION_LABELS.services;
+        ? `${SECTION_LABELS.units} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
+        : SECTION_LABELS.units;
 
     return (
       <>
@@ -724,7 +725,7 @@ export function MainContent({
         </Content>
         <ServiceSection
           services={services}
-          dropins={viewData?.service_dropins ?? []}
+          dropins={dropins}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}

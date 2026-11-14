@@ -805,7 +805,7 @@ fn an_uncollected_section_is_data_unavailable() {
     assert_eq!(
         reasons,
         vec![
-            ("services".to_string(), Some("data_unavailable".to_string())),
+            ("units".to_string(), Some("data_unavailable".to_string())),
             (
                 "containers".to_string(),
                 Some("data_unavailable".to_string())

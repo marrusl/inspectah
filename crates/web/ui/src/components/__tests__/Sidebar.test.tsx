@@ -62,7 +62,7 @@ const MOCK_GROUPS: SectionGroupMeta[] = [
     slug: "services-scheduling",
     label: "Services & Scheduling",
     sections: [
-      { id: "services", label: "Services", is_triage: true },
+      { id: "units", label: "Services", is_triage: true },
       { id: "scheduled_tasks", label: "Scheduled Tasks", is_triage: false },
       { id: "containers", label: "Containers", is_triage: true },
     ],
@@ -117,7 +117,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
   generation: 1,
   repo_groups: [],
   version_changes: [],
-  service_states: [
+  unit_states: [
     {
       unit: "sshd.service",
       triage: {
@@ -129,7 +129,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
       current_state: "enabled",
     },
   ],
-  service_dropins: [],
+  unit_dropins: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -431,7 +431,7 @@ describe("Sidebar", () => {
     );
 
     await userEvent.click(screen.getByText("Services"));
-    expect(onSelect).toHaveBeenCalledWith("services");
+    expect(onSelect).toHaveBeenCalledWith("units");
   });
 
   it("passes API section id (config, not configs) on click", async () => {
@@ -905,7 +905,7 @@ describe("Sidebar", () => {
 
       const emptyViewData: ViewResponse = {
         ...MOCK_VIEW_DATA,
-        service_states: [],
+        unit_states: [],
         quadlets: [],
         flatpaks: [],
       };
@@ -1049,7 +1049,7 @@ describe("Sidebar", () => {
 
       // Per-section kebabs on triage sections within multi-section groups
       expect(screen.getByTestId("kebab-config")).toBeInTheDocument();
-      expect(screen.getByTestId("kebab-services")).toBeInTheDocument();
+      expect(screen.getByTestId("kebab-units")).toBeInTheDocument();
 
       // Non-triage sections should NOT have kebab
       expect(screen.queryByTestId("kebab-kernel_boot")).not.toBeInTheDocument();
@@ -1368,7 +1368,7 @@ describe("Sidebar", () => {
     it("fires Ctrl+Shift+X from per-section NavItem within a multi-section group", () => {
       render(
         <Sidebar
-          activeSection="services"
+          activeSection="units"
           onSelect={vi.fn()}
           stats={MOCK_STATS}
           sections={MOCK_SECTIONS}
@@ -1386,7 +1386,7 @@ describe("Sidebar", () => {
 
       fireEvent.keyDown(servicesLink!, { key: "x", ctrlKey: true, shiftKey: true });
 
-      expect(onBatchToggle).toHaveBeenCalledWith("services", false);
+      expect(onBatchToggle).toHaveBeenCalledWith("units", false);
     });
 
     it("does NOT fire Ctrl+Shift+A from group heading button (no actionable wrapper)", () => {

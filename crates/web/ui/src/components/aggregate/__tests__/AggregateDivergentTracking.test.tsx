@@ -98,7 +98,7 @@ function makeAggregateViewWithDivergent(
         },
       },
       {
-        id: "services",
+        id: "units",
         display_name: "Services",
         is_decision_section: true,
         items: extraServiceItems,
@@ -184,7 +184,7 @@ describe("AggregateApp divergent review tracking", () => {
   it("does not add non-divergent items to confirmed set", async () => {
     // Put a non-divergent service item in a flat section (no zones)
     const serviceItem: AggregateItem = {
-      item_id: { kind: "Service", key: { unit: "httpd.service" } },
+      item_id: { kind: "Unit", key: { unit: "httpd.service" } },
       include: true,
       triage: { bucket: "universal", prevalence: { count: 3, total: 3 } },
       prevalence: { count: 3, total: 3 },

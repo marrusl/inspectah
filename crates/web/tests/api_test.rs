@@ -527,6 +527,124 @@ async fn apply_valid_op() {
     assert_eq!(pkg_stats["included"], 1);
 }
 
+/// Path of the full-shadow unit file in [`units_view_state`].
+const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
+
+/// A unit whose state differs from its preset, with a drop-in, and an
+/// enabled unit at its preset whose only finding is a full shadow. The
+/// collector writes no state change for the second one, and the config
+/// entry at the shadow's path is owned by the drop-in.
+fn units_view_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: "kdump.service".to_owned().try_into().unwrap(),
+            current_state: UnitState::Disabled,
+            default_state: Some(PresetDefault::Enable),
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: Some("kexec-tools".into()),
+            aggregate: None,
+            attention_reason: None,
+        }],
+        drop_ins: vec![
+            SystemdDropIn {
+                unit: "kdump.service".into(),
+                path: "/etc/systemd/system/kdump.service.d/override.conf".into(),
+                content: "[Service]\nTimeoutSec=600\n".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                shadow_type: Some(inspectah_core::types::ShadowType::DropIn),
+                ..Default::default()
+            },
+            SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: FULL_SHADOW_PATH.into(),
+                content: "[Service]\nExecStart=/usr/sbin/sshd -D\n".into(),
+                disposition: FindingKind::included(),
+                locked: false,
+                shadow_type: Some(inspectah_core::types::ShadowType::FullShadow),
+                shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
+                ..Default::default()
+            },
+        ],
+        inventory: vec![],
+    });
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: FULL_SHADOW_PATH.into(),
+            kind: ConfigFileKind::Unowned,
+            disposition: FindingKind::inventory(),
+            locked: false,
+            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Units),
+            ..Default::default()
+        }],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// T3 and T4 through the production handlers: the view names the unit
+/// rows `unit_states` and `unit_dropins`, a full shadow on a unit at its
+/// preset is a drop-in row and not a state row, and the old keys are gone.
+#[tokio::test]
+async fn the_view_carries_unit_fields_and_no_service_fields() {
+    let app = app(units_view_state());
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let states = json["unit_states"]
+        .as_array()
+        .expect("the view carries unit_states");
+    let state_units: Vec<&str> = states.iter().filter_map(|s| s["unit"].as_str()).collect();
+    assert_eq!(state_units, ["kdump.service"], "{json}");
+    assert!(
+        states[0].get("shadow_type").is_none(),
+        "a state row carries no shadow: {}",
+        states[0]
+    );
+
+    let dropins = json["unit_dropins"]
+        .as_array()
+        .expect("the view carries unit_dropins");
+    assert_eq!(dropins.len(), 2, "{json}");
+    let full_shadows: Vec<&str> = dropins
+        .iter()
+        .filter(|d| d["shadow_type"] == "full_shadow")
+        .filter_map(|d| d["path"].as_str())
+        .collect();
+    assert_eq!(full_shadows, [FULL_SHADOW_PATH]);
+
+    let shadowed = json["config_files"]
+        .as_array()
+        .expect("config_files")
+        .iter()
+        .find(|c| c["entry"]["path"] == FULL_SHADOW_PATH)
+        .expect("the shadowed config entry is in the view");
+    assert_eq!(shadowed["entry"]["shadowed_by"], "units");
+
+    // The new keys are present with content above; the old ones are gone.
+    assert!(json.get("service_states").is_none(), "{json}");
+    assert!(json.get("service_dropins").is_none(), "{json}");
+}
+
+/// The context section list names the unit section `units`.
+#[tokio::test]
+async fn the_context_sections_name_the_unit_section_units() {
+    let app = app(rich_state());
+    let (status, json) = get_json(&app, "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = json
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .filter_map(|s| s["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"units"), "{ids:?}");
+    assert!(!ids.contains(&"services"), "{ids:?}");
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 
@@ -1209,7 +1327,7 @@ async fn sections_returns_eight_sections() {
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
-    assert!(ids.contains(&"services"));
+    assert!(ids.contains(&"units"));
     assert!(ids.contains(&"containers"));
     assert!(ids.contains(&"network"));
     assert!(ids.contains(&"storage"));
@@ -1706,7 +1824,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
     let snap = rich_snapshot();
     let session = RefineSession::new(snap);
     let sections = build_web_sections(&session.reference());
-    let svc = sections.iter().find(|s| s.id == "services").unwrap();
+    let svc = sections.iter().find(|s| s.id == "units").unwrap();
 
     // httpd.service state_change (with folded drop-in detail)
     let httpd = svc.items.iter().find(|i| i.id == "httpd.service").unwrap();
@@ -2017,7 +2135,7 @@ fn build_web_sections_section_count_and_ids() {
     assert_eq!(sections.len(), 8, "exactly 8 context sections");
 
     let expected_ids = [
-        "services",
+        "units",
         "containers",
         "network",
         "storage",
@@ -2042,7 +2160,7 @@ fn build_web_sections_item_counts() {
     let sections = build_web_sections(&session.reference());
 
     // Verify non-zero item counts for sections with data
-    let svc = sections.iter().find(|s| s.id == "services").unwrap();
+    let svc = sections.iter().find(|s| s.id == "units").unwrap();
     assert!(
         !svc.items.is_empty(),
         "services should have items from rich_snapshot"
@@ -2141,7 +2259,7 @@ async fn sections_include_service_subsections() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().unwrap();
-    let svc = sections.iter().find(|s| s["id"] == "services").unwrap();
+    let svc = sections.iter().find(|s| s["id"] == "units").unwrap();
 
     let subsections = svc["subsections"]
         .as_array()

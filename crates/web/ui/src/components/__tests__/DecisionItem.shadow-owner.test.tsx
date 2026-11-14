@@ -17,7 +17,7 @@ const OWNER: ShadowOwner = {
   label: "Controlled in Service Drop-ins",
   state: { text: "Owner included", included: true },
   explanation: "The Service Drop-ins row for this same path carries the file.",
-  target: { sectionId: "services", itemId: PATH },
+  target: { sectionId: "units", itemId: PATH },
 };
 
 function shadowedConfig(): RefinedConfig {
@@ -34,7 +34,7 @@ function shadowedConfig(): RefinedConfig {
       tie: false,
       tie_winner: false,
       aggregate: null,
-      shadowed_by: "services",
+      shadowed_by: "units",
     },
     triage: TRIAGE,
   };
@@ -86,7 +86,7 @@ describe("DecisionItem shadowed config row", () => {
   it("routes to the owning row when the operator clicks through", async () => {
     const onNavigateToOwner = renderShadowed();
     await userEvent.click(screen.getByTestId("shadow-owner-link"));
-    expect(onNavigateToOwner).toHaveBeenCalledWith("services", PATH);
+    expect(onNavigateToOwner).toHaveBeenCalledWith("units", PATH);
   });
 
   it("offers no route and no state when the owning row is absent", () => {

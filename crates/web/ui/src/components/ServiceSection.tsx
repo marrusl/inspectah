@@ -208,7 +208,7 @@ export function ServiceSection({
       sendInclude(serviceKey(unit), {
         op: "SetInclude",
         target: {
-          item_id: { kind: "Service", key: { unit } },
+          item_id: { kind: "Unit", key: { unit } },
           include: !currentInclude,
         },
       });
@@ -253,20 +253,7 @@ export function ServiceSection({
         const level = triageBucketToAttention(svc.triage);
         const isPending = pendingKeys.has(serviceKey(svc.unit));
         const svcLocked = svc.locked === true;
-        const isShadow = svc.shadow_type === "full_shadow";
-
-        // Border-left priority: triage border wins if present, else shadow warning border
-        let borderLeft = LEVEL_BORDER[bucket] ?? "none";
-        let backgroundColor: string | undefined;
-        if (isShadow) {
-          if (borderLeft !== "none") {
-            // Triage border wins left edge, shadow gets background
-            backgroundColor = "var(--pf-t--global--color--status--warning--default)";
-          } else {
-            // No triage border, shadow gets left border
-            borderLeft = "4px solid var(--pf-t--global--color--status--warning--default)";
-          }
-        }
+        const borderLeft = LEVEL_BORDER[bucket] ?? "none";
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -279,12 +266,7 @@ export function ServiceSection({
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
               className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
-              style={{
-                borderLeft,
-                backgroundColor: backgroundColor
-                  ? `color-mix(in srgb, ${backgroundColor} 10%, transparent)`
-                  : undefined,
-              }}
+              style={{ borderLeft }}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return;
                 if (svcLocked) return;
@@ -309,13 +291,7 @@ export function ServiceSection({
                         : `Toggle ${svc.unit}`
                     }
                     aria-describedby={
-                      svcLocked && isShadow
-                        ? `shadow-rationale-${svc.unit} locked-reason-service-${svc.unit}`
-                        : svcLocked
-                          ? `locked-reason-service-${svc.unit}`
-                          : isShadow
-                            ? `shadow-rationale-${svc.unit}`
-                            : undefined
+                      svcLocked ? `locked-reason-service-${svc.unit}` : undefined
                     }
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
@@ -354,17 +330,6 @@ export function ServiceSection({
                     <Label color={attentionLabelColor(level)}>{badge}</Label>
                   </div>
                 )}
-                {isShadow && (
-                  <div
-                    role="gridcell"
-                    className="inspectah-decision-row__badge"
-                    data-testid={`shadow-badge-service-${svc.unit}`}
-                  >
-                    <Label color="orange" isCompact>
-                      Shadow override
-                    </Label>
-                  </div>
-                )}
                 {svcLocked && (
                   <div
                     role="gridcell"
@@ -378,23 +343,6 @@ export function ServiceSection({
                   </div>
                 )}
               </div>
-              {/* Full-shadow rationale below the service toggle row */}
-              {isShadow && svc.shadow_rationale && (
-                <div
-                  id={`shadow-rationale-${svc.unit}`}
-                  className="inspectah-decision-row__helper-text"
-                  data-testid={`shadow-rationale-${svc.unit}`}
-                  style={{
-                    paddingLeft: "calc(var(--pf-t--global--spacer--md) + 28px)",
-                    paddingBottom: "var(--pf-t--global--spacer--xs)",
-                    fontSize: "var(--pf-t--global--font--size--xs)",
-                    color: "var(--pf-t--global--text--color--subtle)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  {svc.shadow_rationale}
-                </div>
-              )}
             </div>
 
             {/* Drop-in children */}

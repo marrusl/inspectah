@@ -85,9 +85,9 @@ function decisionCount(
   if (id === "users_groups") {
     return userDecisionCount != null ? String(userDecisionCount) : "...";
   }
-  if (id === "services") {
+  if (id === "units") {
     if (!viewData) return "...";
-    return String(viewData.service_states?.length ?? 0);
+    return String(viewData.unit_states?.length ?? 0);
   }
   // Tuned rows only: the sysctl panel holds no decisions.
   if (id === "system_tuning") {

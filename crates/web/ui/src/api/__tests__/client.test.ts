@@ -127,8 +127,8 @@ const mockView: ViewResponse = {
     },
   ],
   version_changes: [],
-  service_states: [],
-  service_dropins: [],
+  unit_states: [],
+  unit_dropins: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -142,7 +142,7 @@ const mockView: ViewResponse = {
 
 const mockSections: ReferenceSection[] = [
   {
-    id: "services",
+    id: "units",
     display_name: "Systemd Services",
     items: [
       {
@@ -313,7 +313,7 @@ describe("GET endpoints", () => {
   describe("fetchViewed", () => {
     it("sends GET to /api/viewed and returns id list", async () => {
       const viewedData = {
-        ids: ["packages:httpd.x86_64", "services:sshd.service"],
+        ids: ["packages:httpd.x86_64", "units:sshd.service"],
       };
       mockFetchSuccess(viewedData);
       const result = await fetchViewed();
@@ -440,7 +440,7 @@ describe("POST mutation endpoints", () => {
     it("does not throw on 204 No Content", async () => {
       mockFetchNoContent();
       await expect(
-        markViewed("services:sshd.service"),
+        markViewed("units:sshd.service"),
       ).resolves.toBeUndefined();
     });
   });

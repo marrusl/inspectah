@@ -770,7 +770,7 @@ fn build_aggregate_sections(
         }
 
         if !items.is_empty() {
-            sections.push(build_section("services", "Services", true, &items, ctx));
+            sections.push(build_section("units", "Services", true, &items, ctx));
         }
     }
 

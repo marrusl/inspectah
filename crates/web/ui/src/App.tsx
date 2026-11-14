@@ -689,7 +689,7 @@ function SingleHostApp({
         searchConfigItems={configItems}
         searchUserDecisions={view.data?.users_groups_decisions}
         searchContextSections={sections.data}
-        searchServiceDropins={view.data?.service_dropins}
+        searchServiceDropins={view.data?.unit_dropins}
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}

@@ -33,6 +33,17 @@ describe("ItemDetailPane", () => {
     expect(screen.getByText("2/3 hosts")).toBeInTheDocument();
   });
 
+  it("names a unit item by its unit and shows its kind", () => {
+    const item = makeItem({
+      item_id: { kind: "Unit", key: { unit: "httpd.service" } },
+    });
+
+    render(<ItemDetailPane item={item} />);
+
+    expect(screen.getByText("httpd.service")).toBeInTheDocument();
+    expect(screen.getByText("Unit")).toBeInTheDocument();
+  });
+
   it("renders base fields for a path item", () => {
     const item = makeItem({
       item_id: {

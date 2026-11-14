@@ -99,7 +99,7 @@ function makeAggregateView(
         },
       },
       {
-        id: "services",
+        id: "units",
         display_name: "Services",
         is_decision_section: false,
         items: [],
@@ -274,7 +274,7 @@ describe("AggregateSidebar", () => {
       },
     },
     {
-      id: "services",
+      id: "units",
       display_name: "Services",
       is_decision_section: false,
       items: [],
@@ -322,7 +322,7 @@ describe("AggregateSidebar", () => {
       />,
     );
     await userEvent.click(screen.getByText("Services"));
-    expect(onSelect).toHaveBeenCalledWith("services");
+    expect(onSelect).toHaveBeenCalledWith("units");
   });
 
   it("shows include/total counts for decision sections, total for reference", () => {

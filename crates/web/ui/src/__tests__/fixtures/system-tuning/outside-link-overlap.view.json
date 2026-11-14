@@ -76,8 +76,6 @@
       "tier": "none"
     }
   ],
-  "service_dropins": [],
-  "service_states": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -148,6 +146,8 @@
     "vendor_replacements": []
   },
   "tuned": [],
+  "unit_dropins": [],
+  "unit_states": [],
   "users_groups_decisions": [],
   "version_changes": []
 }

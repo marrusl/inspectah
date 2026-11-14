@@ -109,8 +109,8 @@ const VIEW = {
     baseline_available: false,
   },
   version_changes: [],
-  service_states: [],
-  service_dropins: [],
+  unit_states: [],
+  unit_dropins: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -296,8 +296,8 @@ const CASES: GuardCase[] = [
     request: "applyOp",
     renderWith: (onMutationError) =>
       renderSection(
-        "services",
-        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        "units",
+        { unit_states: [SERVICE], unit_dropins: [DROPIN] },
         onMutationError,
       ),
     control: () =>
@@ -309,8 +309,8 @@ const CASES: GuardCase[] = [
     request: "applyOp",
     renderWith: (onMutationError) =>
       renderSection(
-        "services",
-        { service_states: [SERVICE], service_dropins: [DROPIN] },
+        "units",
+        { unit_states: [SERVICE], unit_dropins: [DROPIN] },
         onMutationError,
       ),
     control: () =>
@@ -527,8 +527,8 @@ const LIFETIME_CASES: LifetimeCase[] = [
   },
   {
     name: "service toggle",
-    section: "services",
-    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    section: "units",
+    view: { unit_states: [SERVICE], unit_dropins: [DROPIN] },
     hold: () => heldClientRequest("applyOp"),
     control: () =>
       screen.getByRole("checkbox", { name: "Toggle httpd.service" }),
@@ -536,8 +536,8 @@ const LIFETIME_CASES: LifetimeCase[] = [
   },
   {
     name: "service drop-in toggle",
-    section: "services",
-    view: { service_states: [SERVICE], service_dropins: [DROPIN] },
+    section: "units",
+    view: { unit_states: [SERVICE], unit_dropins: [DROPIN] },
     hold: () => heldClientRequest("applyOp"),
     control: () =>
       screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),

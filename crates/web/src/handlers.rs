@@ -1797,21 +1797,21 @@ mod tests {
 
         // The drop-in DTO carries the shadow fields.
         let dropin = response
-            .service_dropins
+            .unit_dropins
             .iter()
             .find(|d| d.unit == "sshd.service")
-            .expect("sshd.service drop-in should be in service_dropins");
+            .expect("sshd.service drop-in should be in unit_dropins");
         assert_eq!(dropin.shadow_type.as_deref(), Some("full_shadow"));
         assert!(dropin.shadow_rationale.is_some());
 
         // The state change row is present and holds no shadow copy.
         let json = serde_json::to_value(&response).expect("serialize");
-        let sshd = json["service_states"]
+        let sshd = json["unit_states"]
             .as_array()
             .unwrap()
             .iter()
             .find(|s| s["unit"] == "sshd.service")
-            .expect("sshd.service should be in service_states");
+            .expect("sshd.service should be in unit_states");
         assert!(sshd.get("shadow_type").is_none(), "{sshd}");
         assert!(sshd.get("shadow_rationale").is_none(), "{sshd}");
     }

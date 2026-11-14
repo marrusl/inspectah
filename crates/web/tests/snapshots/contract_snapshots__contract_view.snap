@@ -162,23 +162,6 @@ expression: json
       "tier": "none"
     }
   ],
-  "service_dropins": [],
-  "service_states": [
-    {
-      "current_state": "enabled",
-      "default_state": "disable",
-      "include": false,
-      "locked": false,
-      "triage": {
-        "primary_reason": "service_unknown_origin",
-        "triage": {
-          "investigate": null,
-          "mode": "single_host"
-        }
-      },
-      "unit": "httpd.service"
-    }
-  ],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -208,6 +191,23 @@ expression: json
     "state": "unavailable"
   },
   "tuned": [],
+  "unit_dropins": [],
+  "unit_states": [
+    {
+      "current_state": "enabled",
+      "default_state": "disable",
+      "include": false,
+      "locked": false,
+      "triage": {
+        "primary_reason": "service_unknown_origin",
+        "triage": {
+          "investigate": null,
+          "mode": "single_host"
+        }
+      },
+      "unit": "httpd.service"
+    }
+  ],
   "users_groups_decisions": [],
   "version_changes": [
     {

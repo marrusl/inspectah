@@ -376,3 +376,87 @@ describe("MainContent — Focus management", () => {
     expect(document.activeElement).toBe(firstGroupHeader);
   });
 });
+
+describe("MainContent: unit section", () => {
+  const triage = {
+    triage: { mode: "single_host" as const, site: null },
+    primary_reason: "service_non_default_state",
+    annotations: [],
+  } as unknown as ViewResponse["unit_states"][number]["triage"];
+
+  const unitStates: ViewResponse["unit_states"] = [
+    {
+      unit: "kdump.service",
+      triage,
+      include: true,
+      current_state: "disabled",
+      default_state: "enable",
+    },
+  ];
+
+  // A full shadow on a unit at its preset has no state row: it is only
+  // a drop-in row. The plain drop-in is the control the count must skip.
+  const unitDropins: ViewResponse["unit_dropins"] = [
+    {
+      unit: "sshd.service",
+      path: "/etc/systemd/system/sshd.service",
+      triage,
+      include: true,
+      shadow_type: "full_shadow",
+      shadow_rationale: "Full unit override replaces vendor sshd.service",
+    },
+    {
+      unit: "kdump.service",
+      path: "/etc/systemd/system/kdump.service.d/override.conf",
+      triage,
+      include: true,
+      shadow_type: "drop_in",
+    },
+  ];
+
+  it("renders the rows of unit_states under section id units", () => {
+    render(
+      <MainContent
+        activeSection="units"
+        viewData={
+          makeViewData({
+            unit_states: unitStates,
+            unit_dropins: [],
+          }) as ViewResponse
+        }
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByTestId("service-item-kdump.service")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      /^Services$/,
+    );
+  });
+
+  it("counts shadow overrides from the full-shadow drop-ins", () => {
+    render(
+      <MainContent
+        activeSection="units"
+        viewData={
+          makeViewData({
+            unit_states: unitStates,
+            unit_dropins: unitDropins,
+          }) as ViewResponse
+        }
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Services (1 shadow override)",
+    );
+    // Both drop-ins are listed; only the full shadow is counted.
+    expect(
+      screen.getByTestId("dropin-item-/etc/systemd/system/sshd.service"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId(
+        "dropin-item-/etc/systemd/system/kdump.service.d/override.conf",
+      ),
+    ).toBeInTheDocument();
+  });
+});

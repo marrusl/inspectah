@@ -83,7 +83,7 @@ export type ConfigCategory =
  * Rust: ConfigShadow — #[serde(rename_all = "snake_case")]
  * Which other section's decision carries this file's content.
  */
-export type ConfigShadow = "services";
+export type ConfigShadow = "units";
 
 export interface ConfigFileEntry {
   path: string;
@@ -462,10 +462,6 @@ export interface ServiceDecisionDto {
   owning_package?: string | null;
   default_state?: string | null;
   current_state: string;
-  /** Present when a full-shadow drop-in overrides this service unit. */
-  shadow_type?: string | null;
-  /** Rationale text for the shadow override (displayed below the toggle). */
-  shadow_rationale?: string | null;
 }
 
 /** A classified service drop-in override, projected for the view response. */
@@ -701,8 +697,8 @@ export interface PackageProvenance {
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   version_changes: VersionChangeEntry[];
-  service_states: ServiceDecisionDto[];
-  service_dropins: DropInDecisionDto[];
+  unit_states: ServiceDecisionDto[];
+  unit_dropins: DropInDecisionDto[];
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
   /** The read-only sysctl panel. Always present. */
@@ -811,8 +807,8 @@ export interface ItemIdVersionLock {
   key: { name_arch: string };
 }
 
-export interface ItemIdService {
-  kind: "Service";
+export interface ItemIdUnit {
+  kind: "Unit";
   key: { unit: string };
 }
 
@@ -1070,7 +1066,7 @@ export type ItemId =
   | ItemIdRepo
   | ItemIdModuleStream
   | ItemIdVersionLock
-  | ItemIdService
+  | ItemIdUnit
   | ItemIdDropIn
   | ItemIdQuadlet
   | ItemIdCompose

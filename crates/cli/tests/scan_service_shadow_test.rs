@@ -304,16 +304,16 @@ fn the_view_response_names_the_owner_of_a_shadowed_config_row() {
     );
     assert_eq!(row["entry"]["disposition"]["kind"], "inventory");
 
-    // `service_dropins[].path` is the same string, which is what makes
+    // `unit_dropins[].path` is the same string, which is what makes
     // the owner row reachable from the shadowed row.
     assert!(
-        view["service_dropins"]
+        view["unit_dropins"]
             .as_array()
-            .expect("service_dropins")
+            .expect("unit_dropins")
             .iter()
             .any(|d| d["path"] == DROP_IN),
         "the owner row must be keyed by the same path, got {}",
-        view["service_dropins"]
+        view["unit_dropins"]
     );
 }
 

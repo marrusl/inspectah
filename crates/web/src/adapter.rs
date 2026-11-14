@@ -128,7 +128,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
 
     // Map service decisions from Refined types to DTOs. A unit's shadow
     // is reported on its drop-in row, not on the state change.
-    let service_states: Vec<ServiceDecisionDto> = decisions
+    let unit_states: Vec<ServiceDecisionDto> = decisions
         .unit_states
         .iter()
         .map(|s| ServiceDecisionDto {
@@ -143,7 +143,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .collect();
 
-    let service_dropins: Vec<DropInDecisionDto> = decisions
+    let unit_dropins: Vec<DropInDecisionDto> = decisions
         .unit_dropins
         .iter()
         .map(|d| DropInDecisionDto {
@@ -480,8 +480,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         repo_groups,
         baseline_summary: decisions.baseline_summary.clone(),
         version_changes,
-        service_states,
-        service_dropins,
+        unit_states,
+        unit_dropins,
         quadlets,
         flatpaks,
         sysctl: project_sysctl(&session.snapshot_projected()),
@@ -758,7 +758,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
     }
 
     ReferenceSection {
-        id: "services".to_string(),
+        id: "units".to_string(),
         display_name: "Services".to_string(),
         items,
         subsections,
@@ -1948,7 +1948,7 @@ mod tests {
         let response = build_web_view(&session);
         let json = serde_json::to_value(&response).expect("serialize");
         assert!(json.get("generation").is_some());
-        assert!(json.get("service_states").is_some());
+        assert!(json.get("unit_states").is_some());
         assert!(json.get("repo_groups").is_some());
         // package_groups present even with no groups
         let groups = json["package_groups"]
@@ -2003,7 +2003,7 @@ mod tests {
         assert_eq!(sections.len(), 8, "must return exactly 8 sections");
 
         let expected_ids = [
-            "services",
+            "units",
             "containers",
             "network",
             "storage",

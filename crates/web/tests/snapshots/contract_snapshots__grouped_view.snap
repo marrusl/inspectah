@@ -128,8 +128,6 @@ expression: json
       "tier": "none"
     }
   ],
-  "service_dropins": [],
-  "service_states": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -159,6 +157,8 @@ expression: json
     "state": "unavailable"
   },
   "tuned": [],
+  "unit_dropins": [],
+  "unit_states": [],
   "users_groups_decisions": [],
   "version_changes": []
 }

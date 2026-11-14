@@ -230,7 +230,7 @@ function mockAggregateViewResponse(
           divergent: { items: [], count: 0 },
         },
       }),
-      mockAggregateSection("services", {
+      mockAggregateSection("units", {
         display_name: "Services",
         is_decision_section: false,
         items: [],
@@ -624,7 +624,7 @@ describe("AggregateApp integration", () => {
         expect(screen.queryByText("httpd.x86_64")).not.toBeInTheDocument();
       });
 
-      // Press 3 → jumps to "services" (SECTION_IDS[2])
+      // Press 3 → jumps to "units" (SECTION_IDS[2])
       await user.keyboard("3");
 
       // Press 1 → back to "packages" (SECTION_IDS[0])
@@ -773,7 +773,7 @@ describe("AggregateApp integration", () => {
             is_decision_section: true,
             items: [],
           }),
-          mockAggregateSection("services", {
+          mockAggregateSection("units", {
             display_name: "Services",
             is_decision_section: false,
             items: [],

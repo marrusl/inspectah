@@ -66,8 +66,8 @@
     "baseline_available": false
   },
   "version_changes": [],
-  "service_states": [],
-  "service_dropins": [],
+  "unit_states": [],
+  "unit_dropins": [],
   "quadlets": [],
   "flatpaks": [],
   "sysctl": {

@@ -90,8 +90,6 @@
   "packages": [],
   "quadlets": [],
   "repo_groups": [],
-  "service_dropins": [],
-  "service_states": [],
   "session_is_sensitive": false,
   "stats": {
     "baseline_available": false,
@@ -120,6 +118,8 @@
     "state": "aggregate"
   },
   "tuned": [],
+  "unit_dropins": [],
+  "unit_states": [],
   "users_groups_decisions": [],
   "version_changes": []
 }
