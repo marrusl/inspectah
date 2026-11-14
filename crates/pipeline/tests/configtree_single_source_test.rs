@@ -1297,3 +1297,88 @@ fn a_path_longer_than_a_filesystem_allows_is_refused() {
     let longest_name = format!("/etc/{}", "n".repeat(255));
     assert!(Destination::new(&longest_name).is_ok());
 }
+
+// --- Counts describe what the export stages ------------------------------
+
+/// The GPG keys heading and the firewall zones comment count the files the
+/// stager writes: a key or zone it withholds (a config entry needs its path
+/// as a directory) is named in the configuration FIXME and not counted.
+/// Control: without the conflicting entry, both are counted. An included
+/// key with an empty path, which the stager refuses, is named in the GPG
+/// section with the rule; a key with an ordinary path gets no such line.
+#[test]
+fn key_and_zone_counts_follow_what_the_export_stages() {
+    use inspectah_core::types::network::{FirewallZone, NetworkSection};
+    use inspectah_core::types::rpm::{RepoFile, RpmSection};
+    const KEY_A: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-a";
+    const KEY_B: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-b";
+    const ZONE_A: &str = "/etc/firewalld/zones/a.xml";
+    const ZONE_B: &str = "/etc/firewalld/zones/b.xml";
+    let snapshot = |config: Vec<ConfigFileEntry>, keys: &[&str]| {
+        let mut snap = staged_snapshot(config, vec![]);
+        snap.rpm = Some(RpmSection {
+            gpg_keys: keys
+                .iter()
+                .map(|path| RepoFile {
+                    path: (*path).into(),
+                    content: "-----BEGIN PGP PUBLIC KEY BLOCK-----\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        snap.network = Some(NetworkSection {
+            firewall_zones: [ZONE_A, ZONE_B]
+                .iter()
+                .map(|path| FirewallZone {
+                    path: (*path).into(),
+                    name: "zone".into(),
+                    content: "<zone/>\n".into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        snap
+    };
+    let zones_line =
+        |n: usize| format!("# {n} custom firewall zone(s) — included in COPY config/etc/ below");
+
+    let conflicts = vec![
+        config_entry(&format!("{KEY_B}/x"), "x\n"),
+        config_entry(&format!("{ZONE_B}/x"), "x\n"),
+    ];
+    let (_, containerfile) = export(&snapshot(conflicts, &[KEY_A, KEY_B]));
+    assert!(
+        containerfile.contains("# === GPG Keys (1) ==="),
+        "{containerfile}"
+    );
+    assert!(containerfile.contains(&zones_line(1)), "{containerfile}");
+    for path in [KEY_B, ZONE_B] {
+        assert!(
+            fixme_naming(&containerfile, path).is_some(),
+            "{containerfile}"
+        );
+    }
+
+    let (_, containerfile) = export(&snapshot(vec![], &[KEY_A, KEY_B]));
+    assert!(
+        containerfile.contains("# === GPG Keys (2) ==="),
+        "{containerfile}"
+    );
+    assert!(containerfile.contains(&zones_line(2)), "{containerfile}");
+
+    let refused = "# FIXME: GPG key  not copied: path names no file";
+    let (_, containerfile) = export(&snapshot(vec![], &[KEY_A, ""]));
+    assert!(
+        containerfile.lines().any(|l| l == refused),
+        "the empty path is named:\n{containerfile}"
+    );
+    let (_, containerfile) = export(&snapshot(vec![], &[KEY_A]));
+    assert!(
+        !containerfile.contains("not copied: path names no file"),
+        "{containerfile}"
+    );
+}

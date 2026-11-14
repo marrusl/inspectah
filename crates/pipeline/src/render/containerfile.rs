@@ -28,8 +28,8 @@ use inspectah_core::types::units::UnitName;
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::configtree::{
-    ETC_UNIT_DIR, FLATPAK_SERVICE, KARGS_PATH, StagedFileKind, StagedWrites, UnstagedWhy,
-    is_staged, staged_count, staged_unit_file, staged_writes, stages_config_unit_dir,
+    Destination, ETC_UNIT_DIR, FLATPAK_SERVICE, KARGS_PATH, StagedFileKind, StagedWrites,
+    UnstagedWhy, is_staged, staged_count, staged_unit_file, staged_writes, stages_config_unit_dir,
     unstaged_files, validate_path,
 };
 use super::language_packages;
@@ -642,6 +642,16 @@ fn packages_section_lines(
                 ));
                 continue;
             }
+            // A key whose path the stager refuses (an empty path, one
+            // longer than a filesystem allows) is named here, since the
+            // config section leaves refused keys to this one.
+            if let Err(e) = Destination::new(&key.path) {
+                gpg_body.push(format!(
+                    "# FIXME: GPG key {} not copied: {e}",
+                    language_packages::sanitize_for_comment(&key.path)
+                ));
+                continue;
+            }
             // A key the stager withholds is named in the config section's
             // FIXME; neither a COPY nor an import may name it here.
             if !is_staged(&staged, &key.path) {
@@ -720,10 +730,13 @@ fn packages_section_lines(
                 language_packages::sanitize_for_comment(reason)
             ));
         }
-        lines.extend(section(
-            &format!("GPG Keys ({})", included_gpg.len()),
-            gpg_body,
-        ));
+        // Counted from what the stager writes: a key it withholds or
+        // refuses is named in a FIXME, not carried.
+        let staged_gpg = included_gpg
+            .iter()
+            .filter(|k| is_staged(&staged, &k.path))
+            .count();
+        lines.extend(section(&format!("GPG Keys ({staged_gpg})"), gpg_body));
     }
 
     let mut crb = CrbFlags::new(rpm);
@@ -1281,10 +1294,13 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
         // Only count actionable (non-inventory, non-advisory) items.
         // Network findings are inventory — they display data but never
         // produce Containerfile output.
+        // Counted from what the stager writes: a zone it withholds is
+        // named in the configuration FIXME, not in the COPY.
+        let staged = staged_writes(snap);
         let included_zones: usize = network
             .firewall_zones
             .iter()
-            .filter(|z| z.disposition.is_included())
+            .filter(|z| z.disposition.is_included() && is_staged(&staged, &z.path))
             .count();
         let included_direct_rules: usize = network
             .firewall_direct_rules
