@@ -723,8 +723,11 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 /// 4. A file two sections record: the config walk and the repo, GPG key
 ///    or firewall inventory record one host file twice. Where a config
 ///    entry is offered at the destination, the repo file, GPG key or
-///    firewall zone offer yields to it: the config entry's content, in a
-///    fleet aggregate the operator's selected variant, is the write.
+///    firewall zone offer yields to it: the included config entry's
+///    content is the write. On a fleet aggregate that is the variant whose
+///    entry is included, which is not always the selected one: refine's
+///    `SelectVariant` sets only `variant_selection`, and `SetInclude` on
+///    the path includes the first-ranked entry.
 ///    Collected offers at one destination with the same content are one
 ///    write. Collected offers with different
 ///    contents at one destination, and a destination another offer needs
@@ -789,8 +792,9 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         // The rule for a file two sections record: the repo, GPG key and
         // firewall inventories keep one representative payload per path in
         // a fleet aggregate, while the config entry keeps the content
-        // variants the operator selects from. The inventory copy yields to
-        // an included config entry, so the selected variant is the write and
+        // variants. The inventory copy yields to an included config entry,
+        // so that entry's content is the write (whichever variant is
+        // included, which refine's variant selection does not yet set) and
         // the repo file, key or zone stays in the export.
         if offered
             .iter()

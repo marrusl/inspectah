@@ -447,7 +447,9 @@ can see how widespread each version is.
 
 For items with multiple variants, you can:
 
-- **Select a variant**: Choose which host's version to use
+- **Select a variant**: Choose which host's version to use. For a
+  configuration file, selecting a different variant does not yet change
+  which variant is included, and the export writes the included one.
 - **Edit a variant**: Modify the content directly
 - **Discard a variant**: Remove a variant from consideration
 

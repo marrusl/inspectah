@@ -1,6 +1,6 @@
 ---
 name: unit-state-correctness
-description: Correctness requirements found while building unit state for every kind. A type that feeds an unchecked constructor of a proved type has no public fields, and a source-level test guards PlannedUnit because stable rustdoc does not check compile_fail error codes; zero length is decided without decoding a unit file, and a file that is not text never degrades the scan; every staged-file question goes to staged_writes through Destination, which covers every file under config/, drop-ins/ and flatpak/ except the tmpfiles fragment; settings are extracted from logical lines; a path is one destination per staging filesystem, not only per spelling; absence tests on systemctl lines use the strict helper.
+description: Correctness requirements found while building unit state for every kind. A type that feeds an unchecked constructor of a proved type has no public fields, and a source-level test guards PlannedUnit because stable rustdoc does not check compile_fail error codes; zero length is decided without decoding a unit file, and a file that is not text never degrades the scan; every staged-file question goes to staged_writes through Destination, which covers every file under config/, drop-ins/ and flatpak/ except the flatpak manifest and the tmpfiles fragment; settings are extracted from logical lines; a path is one destination per staging filesystem, not only per spelling; absence tests on systemctl lines use the strict helper.
 ---
 
 # Unit State Correctness
@@ -71,14 +71,19 @@ included `ConfigFile` offer shares a destination with a `RepoFile`,
 `GpgKey` or `FirewallZone` offer (`StagedFileKind::is_inventory_record`),
 the inventory offer yields. In a fleet aggregate the repo, key and zone
 inventories keep one representative payload per path while the config
-entry keeps the content variants the operator selects from, so without
-this rule two differing hosts withheld both and the repo file left the
-export. These three are the only kinds the config walk can record at
+entry keeps the content variants, so without this rule two differing
+hosts withheld both and the repo file left the export. The write is the
+included config entry's content. Refine's `SelectVariant` sets only a
+config entry's `variant_selection`, and `SetInclude` on the path
+includes the first-ranked entry, so selecting another variant does not
+yet change which one is written. These three are the only kinds the config walk can record at
 the same path, because it excludes none of their directories. Two
 differing config entries at one destination still conflict.
 
-**What the decision covers.** `write_config_tree` writes `writes`, then
-`beside`, and nothing else under `config/`, `drop-ins/` and `flatpak/`:
+**What the decision covers.** Under `config/`, `drop-ins/` and
+`flatpak/`, `write_config_tree` writes `writes`, then `beside`, and
+nothing else except the flatpak manifest, and the export's only other
+file there is the tmpfiles fragment (both below). The decision covers
 config entries, repo files, GPG keys, firewall zones, drop-in rows, the
 scheduled section's local timer files and generated units, the flatpak
 provisioning service, and the kernel arguments file (`KargsFile`, at

@@ -402,7 +402,9 @@ In the refine UI, users can:
 - **Exclude** a Site or Investigate item to remove it from the Containerfile
   (e.g., dropping a debugging package you do not want in the target image)
 - **Select a variant** in aggregate mode when multiple hosts have different
-  versions of the same config file
+  versions of the same config file. Selecting a different variant does not
+  yet change which variant is included, and the export writes the included
+  one.
 
 These user decisions override the automatic classification. The triage bucket
 itself does not change, only the include/exclude flag is toggled. This
