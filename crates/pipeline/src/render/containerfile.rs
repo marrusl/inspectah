@@ -26,7 +26,10 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
-use super::configtree::{StagedFileKind, staged_unit_file, unstaged_files, validate_path};
+use super::configtree::{
+    StagedFileKind, UnstagedWhy, is_staged, staged_unit_file, staged_writes, unstaged_files,
+    validate_path,
+};
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
@@ -562,19 +565,15 @@ fn packages_section_lines(
     }
 
     // Repo files
-    // Counted from what the stager writes: a repo file whose path it
-    // refuses is not under `config/`, and the config section below names
+    // Counted from what the stager writes: a repo file it refuses or
+    // withholds is not under `config/`, and the config section below names
     // it in a FIXME.
-    let refused_repo_paths: std::collections::HashSet<&str> = unstaged_files(snap)
-        .into_iter()
-        .filter(|(src, _)| src.kind == StagedFileKind::RepoFile)
-        .map(|(src, _)| src.path)
-        .collect();
+    let staged = staged_writes(snap);
     let included_repos: usize = rpm
         .repo_files
         .iter()
         .filter(|r| r.disposition.is_included() && !r.is_default_repo)
-        .filter(|r| !refused_repo_paths.contains(r.path.as_str()))
+        .filter(|r| is_staged(&staged, &r.path))
         .count();
     if included_repos > 0 {
         let body = vec!["COPY config/etc/yum.repos.d/ /etc/yum.repos.d/".into()];
@@ -627,6 +626,11 @@ fn packages_section_lines(
                     "# FIXME: GPG key {} not copied: {e}",
                     language_packages::sanitize_for_comment(&key.path)
                 ));
+                continue;
+            }
+            // A key the stager withholds is named in the config section's
+            // FIXME; neither a COPY nor an import may name it here.
+            if !is_staged(&staged, &key.path) {
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
@@ -1462,12 +1466,12 @@ fn config_section_lines(
         None => config_copy_roots_from_snapshot(snap),
     };
 
-    // Every file the config tree stager refuses by path, from the
-    // stager's own list and check. GPG keys are left to the GPG section,
-    // which also keeps a refused key off its `rpm --import` line.
+    // Every file the config tree stager refuses or withholds, from the
+    // stager's own decision. A GPG key refused by path is left to the GPG
+    // section, which names it and keeps it off its `rpm --import` line.
     let unstaged: Vec<_> = unstaged_files(snap)
         .into_iter()
-        .filter(|(src, _)| src.kind != StagedFileKind::GpgKey)
+        .filter(|u| !(u.kind == StagedFileKind::GpgKey && matches!(u.why, UnstagedWhy::Refused(_))))
         .collect();
 
     let has_config_content = !config_roots.is_empty()
@@ -1503,13 +1507,14 @@ fn config_section_lines(
             cfg_body.push(String::new());
         }
 
-        // A file the config tree stager refuses is never written, so
-        // say so here.
-        for (src, e) in &unstaged {
+        // A file the config tree stager refuses or withholds is never
+        // written, so say so here.
+        for u in &unstaged {
             cfg_body.push(format!(
-                "# FIXME: {} {} not copied: {e}",
-                src.kind.label(),
-                language_packages::sanitize_for_comment(src.path)
+                "# FIXME: {} {} not copied: {}",
+                u.kind.label(),
+                language_packages::sanitize_for_comment(&u.path),
+                u.why
             ));
         }
 
