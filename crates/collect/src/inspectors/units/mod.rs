@@ -1185,7 +1185,7 @@ fn logical_lines(content: &str) -> Vec<String> {
 /// and automounts, `Options=` to mounts and swaps. `What=` is never read:
 /// it can hold a credential, and the finding has no field for it. `nofail`
 /// is decided as systemd decides it, by whichever of `nofail` and `fail`
-/// comes last in `Options=`.
+/// comes last among the options [`mount_options`] splits `Options=` into.
 ///
 /// Only the unit file itself is read. Drop-ins
 /// (`<name>.mount.d/*.conf`) that set `Where=` or `Options=` are not read,
@@ -1223,12 +1223,48 @@ fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
             .filter(|path| path.starts_with('/'))
             .map(str::to_owned),
         nofail: options.is_some_and(|o| {
-            o.split(',')
-                .map(str::trim)
-                .rfind(|option| matches!(*option, "nofail" | "fail"))
-                == Some("nofail")
+            mount_options(o).into_iter().rev().find_map(|option| {
+                if names_option(option, "nofail") {
+                    Some(true)
+                } else if names_option(option, "fail") {
+                    Some(false)
+                } else {
+                    None
+                }
+            }) == Some(true)
         }),
     }
+}
+
+/// The options in an `Options=` value, split where systemd's option
+/// matcher (`fstab_filter_options` in `src/shared/fstab-util.c`) splits
+/// them: at each comma not escaped by a backslash, a backslash escaping
+/// whatever character follows it. Nothing is trimmed: whitespace inside the
+/// value is part of the option beside it.
+fn mount_options(value: &str) -> Vec<&str> {
+    let mut options = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, c) in value.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == ',' {
+            options.push(&value[start..i]);
+            start = i + 1;
+        }
+    }
+    options.push(&value[start..]);
+    options
+}
+
+/// Whether `option` is the mount option `name`, alone or with a value
+/// (`name=...`), as systemd's option matcher compares them.
+fn names_option(option: &str, name: &str) -> bool {
+    option
+        .strip_prefix(name)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('='))
 }
 
 /// Fill in a finding's `mount_point` and `nofail` from the unit file
@@ -1312,7 +1348,7 @@ mod tests {
             (
                 "nofail among others",
                 Mount,
-                "[Mount]\nOptions=rw, nofail ,noatime\n",
+                "[Mount]\nOptions=rw,nofail,noatime\n",
                 settings(None, true),
             ),
             (
@@ -1372,7 +1408,7 @@ mod tests {
             (
                 "nofail after fail",
                 Mount,
-                "[Mount]\nOptions=fail, nofail\n",
+                "[Mount]\nOptions=fail,nofail\n",
                 settings(None, true),
             ),
             (
@@ -1469,6 +1505,76 @@ mod tests {
                 Mount,
                 "[Mount]\nWhere=/srv\nWhat=/dev/sdb1\\",
                 settings(Some("/srv"), false),
+            ),
+            // Option boundaries, as systemd's option matcher reads them:
+            // only an unescaped comma separates; whitespace inside the
+            // value belongs to the option beside it; an option matches a
+            // name alone or followed by `=`.
+            (
+                "whitespace inside the value is part of an option",
+                Mount,
+                "[Mount]\nOptions=rw, nofail\n",
+                settings(None, false),
+            ),
+            (
+                "whitespace on both sides of an option",
+                Mount,
+                "[Mount]\nOptions=rw, nofail ,noatime\n",
+                settings(None, false),
+            ),
+            (
+                "whitespace round the whole value is not",
+                Mount,
+                "[Mount]\nOptions=  nofail  \n",
+                settings(None, true),
+            ),
+            (
+                "fail after nofail with a space",
+                Mount,
+                "[Mount]\nOptions=nofail, fail\n",
+                settings(None, true),
+            ),
+            (
+                "an escaped comma joins two options",
+                Mount,
+                "[Mount]\nOptions=x-opt\\,nofail\n",
+                settings(None, false),
+            ),
+            (
+                "an escaped comma after nofail",
+                Mount,
+                "[Mount]\nOptions=nofail\\,x-opt\n",
+                settings(None, false),
+            ),
+            (
+                "an escaped backslash before a comma",
+                Mount,
+                "[Mount]\nOptions=x-opt\\\\,nofail\n",
+                settings(None, true),
+            ),
+            (
+                "nofail with a value",
+                Mount,
+                "[Mount]\nOptions=nofail=1\n",
+                settings(None, true),
+            ),
+            (
+                "fail with a value after nofail",
+                Mount,
+                "[Mount]\nOptions=nofail,fail=0\n",
+                settings(None, false),
+            ),
+            (
+                "empty options",
+                Mount,
+                "[Mount]\nOptions=,nofail,\n",
+                settings(None, true),
+            ),
+            (
+                "a continuation after the comma leaves a space before nofail",
+                Mount,
+                "[Mount]\nOptions=defaults,\\\nnofail\n",
+                settings(None, false),
             ),
             (
                 "CRLF with a continuation",
