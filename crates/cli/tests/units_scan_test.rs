@@ -1977,6 +1977,95 @@ fn t11_a_storage_mask_is_carried_only_over_a_package_file() {
     }
 }
 
+/// T11, a link that ends at a zero-length file: directly to one in the unit
+/// directory, through a chain of links, and to one outside both unit
+/// directories. Each is a mask, as systemd reads it: one `Masked` state
+/// change on the link's own name, over that name's vendor file and owner,
+/// and nothing else, so no drop-in row and no config entry at its path.
+/// Presence first: a local socket beside them is a config entry, so the
+/// walk covers the directory. Control: the same links ending at a
+/// non-empty file are an alias and a linked unit, with today's warnings
+/// and no state change.
+#[test]
+fn t11_a_link_ending_at_an_empty_file_is_one_mask() {
+    const VENDOR_SOCKET: &str = "[Socket]\nListenStream=1\n";
+    const LOCAL: &str = "/etc/systemd/system/plain.socket";
+    let host = |end: &str| {
+        let mut host = UnitHost::new()
+            .unit("plain.socket", "enabled")
+            .etc_unit("plain.socket", VENDOR_SOCKET)
+            .etc_unit("b.socket", end)
+            .file("/opt/masks/off", end)
+            .link(&etc_path("a.socket"), "b.socket")
+            .link(&etc_path("c.socket"), "/etc/alternatives/c")
+            .link("/etc/alternatives/c", &etc_path("b.socket"))
+            .link(&etc_path("o.socket"), "/opt/masks/off");
+        for unit in ["a.socket", "c.socket", "o.socket"] {
+            host = host
+                .unit(unit, if end.is_empty() { "masked" } else { "enabled" })
+                .vendor_unit(unit, VENDOR_SOCKET, Some("sockpkg"));
+        }
+        host
+    };
+
+    let snap = scan(host(""));
+    let config = snap.config.as_ref().expect("the config section");
+    assert!(
+        config.files.iter().any(|f| f.path == LOCAL),
+        "the walk records a regular file in the unit directory"
+    );
+    let units = snap.units.as_ref().expect("the units section");
+    for unit in ["a.socket", "c.socket", "o.socket"] {
+        let path = etc_path(unit);
+        let changes: Vec<_> = units
+            .state_changes
+            .iter()
+            .filter(|c| c.unit().name().as_str() == unit)
+            .collect();
+        assert_eq!(changes.len(), 1, "{unit}: {:?}", units.state_changes);
+        assert_eq!(changes[0].current_state(), UnitState::Masked, "{unit}");
+        assert!(
+            matches!(
+                fragment_of(&snap, unit),
+                UnitFragment::Vendor { file, owning_package: Some(p) }
+                    if file.as_str() == unit && p == "sockpkg"
+            ),
+            "{unit}: {:?}",
+            fragment_of(&snap, unit)
+        );
+        assert!(
+            !units.drop_ins.iter().any(|d| d.path == path),
+            "{unit}: {:?}",
+            units.drop_ins
+        );
+        assert!(!config.files.iter().any(|f| f.path == path), "{unit}");
+    }
+
+    let full = scan(host(VENDOR_SOCKET));
+    let units = full.units.as_ref().expect("the units section");
+    for unit in ["a.socket", "c.socket", "o.socket"] {
+        assert!(
+            !units
+                .state_changes
+                .iter()
+                .any(|c| c.unit().name().as_str() == unit),
+            "{unit}"
+        );
+    }
+    let warned = |unit: &str, detail: &str| {
+        full.warnings
+            .iter()
+            .any(|w| w.message.starts_with(&format!("unit {unit} ")) && w.message.contains(detail))
+    };
+    assert!(
+        warned("a.socket", "unit is an alias of b.socket"),
+        "{:?}",
+        full.warnings
+    );
+    assert!(warned("c.socket", "unit is an alias of b.socket"));
+    assert!(warned("o.socket", "linked unit requires manual handling"));
+}
+
 /// T11: a comment-only file over a vendor unit is a full shadow, staged by
 /// the drop-in writer, and no `mask` names its unit. Control: the
 /// zero-length form of the same file over the same unit is a mask, in the

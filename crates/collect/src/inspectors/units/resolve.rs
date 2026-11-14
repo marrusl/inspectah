@@ -24,10 +24,12 @@ const DEV_NULL: &str = "/dev/null";
 pub(super) enum Resolved {
     /// A unit file loads.
     File { fragment: UnitFragment },
-    /// A link to `/dev/null`, or a zero-length regular file, is at the unit's
-    /// path. `hidden` is the unit file under the mask: `Vendor` or `Absent`.
+    /// A zero-length regular file, or a link that ends at `/dev/null` or at
+    /// a zero-length file, is at the unit's path. `hidden` is the unit file
+    /// under the mask: `Vendor` or `Absent`.
     Masked { hidden: UnitFragment },
-    /// A link to another unit's file in one of the two unit directories.
+    /// A link that ends at another unit's non-empty file in one of the two
+    /// unit directories.
     AliasOf(UnitName),
     /// No file in the two directories this collector reads.
     NotFound,
@@ -36,8 +38,8 @@ pub(super) enum Resolved {
 /// A name the collector cannot resolve to a unit it models.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResolveError {
-    /// A link to a file outside both unit directories, or to nothing: the
-    /// unit is `linked`, which is excluded.
+    /// A link that ends at a non-empty file outside both unit directories,
+    /// or at nothing: the unit is `linked`, which is excluded.
     Linked { path: String, target: String },
     /// A path that exists and could not be read.
     Read { path: String, error: String },
@@ -131,8 +133,13 @@ fn hidden_fragment(exec: &dyn Executor, file: &UnitName) -> Result<UnitFragment,
     Ok(UnitFragment::Absent)
 }
 
-/// What a link at `path` makes the unit. The whole chain is followed, so a
-/// link to a link to `/dev/null` is a mask.
+/// What a link at `path` makes the unit. The whole chain is followed, and
+/// the final target's form is decided before anything else, as systemd's
+/// `unit_file_load_or_readlink` does: a link that ends at `/dev/null` or at
+/// a zero-length regular file is a mask, wherever that file is, so a link
+/// to a link to `/dev/null` is a mask and so is a link to an empty unit
+/// file. Only a link that ends at a file with content is an alias or
+/// linked.
 fn link_form(
     exec: &dyn Executor,
     path: &str,
@@ -147,7 +154,14 @@ fn link_form(
     let Ok(resolved) = exec.resolve_final_target(Path::new(path)) else {
         return Err(linked());
     };
-    if resolved == Path::new(DEV_NULL) {
+    // A target that cannot be read is a read failure, as systemd fails on a
+    // target it cannot stat: either form could hide a mask.
+    let masked = resolved == Path::new(DEV_NULL)
+        || matches!(
+            entry(exec, &resolved.to_string_lossy())?,
+            Entry::File { empty: true }
+        );
+    if masked {
         let hidden = if under_etc {
             hidden_fragment(exec, file)?
         } else {
@@ -328,6 +342,67 @@ mod tests {
         for (unit, expected) in cases {
             assert_eq!(resolve(&exec, &name(unit)), Ok(expected), "{unit}");
         }
+    }
+
+    /// A link whose final target is a zero-length file is a mask, as one to
+    /// `/dev/null` is: systemd tests the final target for null or empty
+    /// before it calls a link an alias or linked. The hidden fragment is the
+    /// original name's vendor file. Control: the same links ending at a
+    /// non-empty file are an alias and linked.
+    #[test]
+    fn a_link_ending_at_an_empty_file_is_a_mask() {
+        let links = |end: &str| {
+            MockExecutor::new()
+                .with_file("/usr/lib/systemd/system/a.socket", UNIT)
+                .with_file("/usr/lib/systemd/system/c.socket", UNIT)
+                .with_file("/usr/lib/systemd/system/o.socket", UNIT)
+                .with_file("/etc/systemd/system/b.socket", end)
+                .with_file("/opt/masks/off", end)
+                .with_file("/usr/lib/systemd/system/e.socket", end)
+                // Direct, inside the unit directories.
+                .with_link("/etc/systemd/system/a.socket", "b.socket")
+                // Chained through a link outside them.
+                .with_link("/etc/systemd/system/c.socket", "/etc/alternatives/c")
+                .with_link("/etc/alternatives/c", "/etc/systemd/system/b.socket")
+                // Direct, to a file outside both directories.
+                .with_link("/etc/systemd/system/o.socket", "/opt/masks/off")
+                // A vendor link, with no file under it.
+                .with_link("/usr/lib/systemd/system/v.socket", "e.socket")
+        };
+
+        let empty = links("");
+        let masked = |unit: &str, hidden: UnitFragment| {
+            assert_eq!(
+                resolve(&empty, &name(unit)),
+                Ok(Resolved::Masked { hidden }),
+                "{unit}"
+            );
+        };
+        masked("a.socket", vendor("a.socket"));
+        masked("c.socket", vendor("c.socket"));
+        masked("o.socket", vendor("o.socket"));
+        masked("v.socket", UnitFragment::Absent);
+
+        let full = links(UNIT);
+        assert_eq!(
+            resolve(&full, &name("a.socket")),
+            Ok(Resolved::AliasOf(name("b.socket")))
+        );
+        assert_eq!(
+            resolve(&full, &name("c.socket")),
+            Ok(Resolved::AliasOf(name("b.socket")))
+        );
+        assert_eq!(
+            resolve(&full, &name("o.socket")),
+            Err(ResolveError::Linked {
+                path: "/etc/systemd/system/o.socket".into(),
+                target: "/opt/masks/off".into(),
+            })
+        );
+        assert_eq!(
+            resolve(&full, &name("v.socket")),
+            Ok(Resolved::AliasOf(name("e.socket")))
+        );
     }
 
     #[test]
