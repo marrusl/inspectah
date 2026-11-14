@@ -301,10 +301,10 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Files:** Modify `crates/pipeline/src/render/unit_plan.rs`, `crates/core/src/baseline.rs` (both constants), `crates/collect/src/inspectors/units/mod.rs` (attention reason). Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** T12 table over the protected names for `disable` and `mask`: the FIXME and no command, `enable` carried; a masked `tmp.mount` gives its FIXME while its `enable` and `disable` are carried and a masked `dev-hugepages.mount` is carried; a zero-length file for a protected unit from a scan and imported as a drop-in and as a config entry (with a `unit` field naming another unit, an interior `.`, a doubled separator) gives no `mask` and no staged file. T8: a package-owned mount unit enabled against preset is in `RUN systemctl enable`, masked in `mask`; with an administrator's file staged at its name, `StorageFileStaged`. T16: a mask and a staged unit file of one name give `MaskPathOccupied`; excluding the file brings the mask back. T11 staged-file and command half, through the scan: each mask form over a vendor unit gives one `RUN systemctl mask` line and no staged file at the unit's path; a mask with no vendor file (`Absent`) and a masked template are in the `mask` line under their own names; for each storage kind and both mask forms, a package-owned vendor file gives a `mask` line and an unowned one or none gives the mount advisory and no instruction; the comment-only full shadow is staged by the drop-in writer and no `mask` names its unit.
+- [ ] **Step 1: Failing tests first:** T12 table over the protected names for `disable` and `mask`: the FIXME and no command, `enable` carried; a masked `tmp.mount` gives its FIXME while its `enable` and `disable` are carried and a masked `dev-hugepages.mount` is carried; a zero-length file for a protected unit from a scan and imported as a drop-in and as a config entry (with a `unit` field naming another unit, an interior `.`, a doubled separator) gives no `mask` and no staged file. T8: a package-owned mount unit enabled against preset is in `RUN systemctl enable`, masked in `mask`; with an administrator's file staged at its name, `StorageFileStaged`. T16: a mask and a staged unit file of one name give `MaskPathOccupied`; excluding the file brings the mask back. T11 staged-file and command half, through the scan: each mask form over a vendor unit gives one `RUN systemctl mask` line and no staged file at the unit's path; a mask with no vendor file (`Absent`) and a masked template are in the `mask` line under their own names; for each storage kind and both mask forms, a package-owned vendor file gives a `mask` line and an unowned one or none gives a mount finding with state `Masked` and no instruction (its rendered advisory is Task 2.10's); the comment-only full shadow is staged by the drop-in writer and no `mask` names its unit.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): refuse commands the image cannot take`.
 
-**Acceptance:** T12 (except its view-response sentence, Task 2.13), T8 render cases, T11 and T16 pass.
+**Acceptance:** T12 (except its view-response sentence, Task 2.13), T8 render cases, T11 (except the rendered advisory for unowned storage masks, Task 2.10) and T16 pass.
 
 ### Task 2.9: Section order, every `systemctl` site quoted, README sentences (Rust lane, S)
 
@@ -323,10 +323,10 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Files:** Modify `crates/pipeline/src/render/unit_plan.rs`, `crates/pipeline/src/render/selinux.rs`. Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** T9 (a local `srv.mount`: the `/var` rename line; `Where=/opt/vendor`: the `/opt` line and no rename line; under `/usr`: the `/usr` line; the unit-file line follows the config row's toggle; no instruction names any of them); T8 advisory cases (a local unit of each storage kind enabled, and a vendor one whose owner lookup fails: advisory and no instruction; a `tmp.mount` full copy in `/etc`: the advisory with the `tmp.mount` line, and its config row's toggle removes and restores the staged file); a mount without `nofail` gets the `nofail` line and a swap with it does not.
+- [ ] **Step 1: Failing tests first:** T9 (a local `srv.mount`: the `/var` rename line; `Where=/opt/vendor`: the `/opt` line and no rename line; under `/usr`: the `/usr` line; the unit-file line follows the config row's toggle; no instruction names any of them); T8 advisory cases (a local unit of each storage kind enabled, and a vendor one whose owner lookup fails: advisory and no instruction; a `tmp.mount` full copy in `/etc`: the advisory with the `tmp.mount` line, and its config row's toggle removes and restores the staged file); a mount without `nofail` gets the `nofail` line and a swap with it does not. T11's unowned storage masks, on Task 2.8's fixtures: for each storage kind and both mask forms, an unowned vendor file or none gives the advisory with state `masked` and, for a name other than `tmp.mount`, the `To carry it` line, and no instruction.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): explain the administrator's mount units instead of carrying them`.
 
-**Acceptance:** T8 and T9 pass in full.
+**Acceptance:** T8 and T9 pass in full, and with Task 2.8, T11.
 
 ### Task 2.11: Runtime package updaters (Rust lane, M)
 
@@ -787,7 +787,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 10.3 units the target needs | 2.8; via `Also=` 4.8 |
 | § 10.4 runtime updaters, normalizer | 2.11 |
 | § 10.5 default target render | 4.10 |
-| § 10.6 mount advisories | 2.10 |
+| § 10.6 mount advisories | 2.10 (T8, T9, and T11's unowned storage masks) |
 | § 10.7 order | 2.9; generated units 3.4 |
 | § 10.8 instance configuration, data advisory | 5.2, 5.3 |
 | § 10.9 link advisories | 4.5 |
@@ -834,7 +834,7 @@ Each test, and each lettered case, in the task that carries it. Every task liste
 | T8 | render 2.8; advisories 2.10 |
 | T9 | 2.10 |
 | T10 | snapshot and exports 2.5; view response 2.13 |
-| T11 | collector 2.4; staged file and commands 2.8 |
+| T11 | collector 2.4; staged file and commands 2.8; rendered advisory for unowned storage masks 2.10 |
 | T12 | staging 2.6; commands 2.8; view response 2.13 |
 | T13 | quoting 2.7; order 2.9 |
 | T14 | None: the spec's numbering has no T14 |
