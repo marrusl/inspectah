@@ -714,6 +714,10 @@ pub struct ManualLink {
     pub parent: UnitName,
     pub unit: UnitName,
     pub cause: ManualLinkCause,
+    /// For the two install-difference causes: the `/etc` install files
+    /// of `unit` that produce the difference (§ 7.4). Empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub install_files: Vec<String>,
     pub aggregate: Option<AggregatePrevalence>,
 }
 ```
@@ -739,6 +743,7 @@ read from a host file has one of three answers:
 | `MountUnitFinding.mount_point` | `Where=` | Stored only when it is an absolute path; otherwise `None`. Classified as an identifier. |
 | `MountUnitFinding.nofail` | `Options=` | A boolean. Nothing to scrub. |
 | `required_config`, `data_paths` | Paths in the template's unit file, expanded | Stored only when the expanded value is an absolute path under `/etc` or `/var`. Classified as identifiers. |
+| `ManualLink.install_files` | A directory listing | Paths under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
@@ -1063,7 +1068,19 @@ the vendor links, and `enable` after the `COPY` lines adds the ones the
 run R5). Rule 5 holds the row to the file that supplies the added links:
 the shadow, or every drop-in in `install_drop_ins`, must be staged. Rule 7
 applies if the unit has `Also=` members, and since the unit has an install
-file, it is then an advisory.
+file, it is then an advisory. With the shadow or a drop-in excluded, rule
+5 omits the command as `InstallEvidenceChanged`, and the unit gets no
+command and no advisory. That is right: the image then loads the package's
+unit, and it is at its preset by that unit's links.
+
+**An install-difference advisory holds only while the files that cause it
+are in the export.** Each `HostInstallOnly` and `VendorInstallOnly` link
+records, in `install_files`, the `/etc` install files of the unit that
+produce the difference: its shadow and its install drop-ins. The advisory
+is rendered only when every one of them is in `staged_writes`. When one is
+excluded, the advisory is not rendered and nothing else is written for it:
+the image loads the package's unit, its links are the ones that unit
+makes, and a line to add or remove a link would make it wrong.
 
 With any other preset the rule above already decides. Under a `disable`
 preset an `Enabled` unit has a row, the image has no links before the
@@ -1997,7 +2014,9 @@ like every other. For a `VendorInstallOnly` alias the removal line names
 `/etc/systemd/system/<alias>`. With relation `Also` there is no link and
 no command: the text says which side names `<unit>` in `Also=`, that the
 package install in the image acted on the package's list, and to check
-`<unit>` with `systemctl is-enabled` in the image.
+`<unit>` with `systemctl is-enabled` in the image. None of the
+install-difference blocks is rendered while one of the link's
+`install_files` is excluded (§ 7.4).
 
 `add-wants` is offered in place of a literal `ln -s` because of what was
 measured for it: it works at build time, links to the `/etc` file when the
@@ -2017,7 +2036,7 @@ The view response carries, in place of `service_states`:
 | `unit_dropins[]` | As `service_dropins` today, with `kind` of the parent. A drop-in whose parent has no state change is still listed, since a unit at its preset has a drop-in and no parent row. A full shadow carries its `shadow_type` and rationale here, which is where the "base image updates to this unit are ignored" explanation is shown. |
 | `default_target` | `target`, `include`, `locked`, `declined`, or absent. |
 | `mount_findings[]` | `unit`, `kind`, `state`, `mount_point`, `fragment` (`local`, `shadowed`, `vendor` for an unowned one, or `absent` for a mask with no unit file), `unit_file_path` (the config row that holds the unit file and its toggle), and `advisories[]`, the same strings § 10.6 renders. No `include`: these rows have no toggle. No mount source: the row links to the config entry, which holds the scrubbed file (§ 6.5). |
-| `manual_links[]` | `relation` (`also` included), `parent`, `unit`, `cause` (`host_install_only` and `vendor_install_only` included), and `advisories[]`, the same strings § 10.9 renders. No `include`. |
+| `manual_links[]` | `relation` (`also` included), `parent`, `unit`, `cause` (`host_install_only` and `vendor_install_only` included), and `advisories[]`, the same strings § 10.9 renders. No `include`. An install-difference row whose `install_files` are not all staged stays in the list, as a withheld file's row does, with `advisories[]` empty and `not_applied` holding the excluded path, so the operator sees why the advisory left the Containerfile and that re-including the file brings it back. |
 | `scheduled_tasks` timers | Each row gains `unit` (`<name>.timer`) and `unit_row` (whether `unit_states` holds it), so the row can link to its control. No `include`. |
 
 `declined` is computed by calling `plan_units` on the session's current
@@ -2108,8 +2127,9 @@ narrowing are unchanged.
   recorded by the first host that has the winning state.
 - `mount_findings` merge by unit name, and `manual_links` by relation,
   parent and unit. Neither has an include flag to narrow. The two
-  install-difference causes of § 7.4 merge the same way, so an aggregate
-  shows the advisory with its prevalence. An additive row is a state
+  install-difference causes of § 7.4 merge the same way, with
+  `install_files` the union, so an aggregate shows the advisory with its
+  prevalence. An additive row is a state
   change like any other and is held to rule 5 on the aggregate.
 - A template instance merges as the `UnitStateChange` it is. The list
   fields of every state change (`also`, `install_drop_ins`,
@@ -2448,7 +2468,10 @@ Phase 4 (the `/etc/systemd/system` scan):
   `rm` line, no `systemctl` instruction naming the unit, and two refine
   rows with no include field. For (f): the removal line. For (g): the
   `Also` text and no command line. A `VendorInstallOnly` alias names
-  `/etc/systemd/system/<alias>`.
+  `/etc/systemd/system/<alias>`. With the replacing shadow of (d)
+  excluded: no `rm` line, no `add-wants` line, no command for the unit,
+  and the two refine rows marked `not_applied` with the shadow's path;
+  included again, both blocks return.
 
 Phase 5 (carried instances):
 
@@ -2624,19 +2647,18 @@ is removed, so that after this phase every `systemctl` line in the
 Containerfile is a planned one. Tests T19 to T21.
 
 **Phase 4: the `/etc/systemd/system` scan. Size L, at the upper end.**
-The `[Install]` reader with `install_drop_ins`, `vendor_drop_ins` and the drop-in half of rule 5
-(the fragment half is phase 2), and the search-path test (§ 7.1, § 7.2);
-the link scan with
-vendor links, the install state, the instance preset lookup and the
-stock-state list (§ 7.3, § 7.4); the `also` list and rule 7 of § 10.2;
-`ManualLink` and its advisories (§ 10.9); the vendor-side read and the
-install comparison for a unit at its preset (§ 7.2, § 7.4); the `.upholds`
-exclusion in the
-config walk; the default target (§ 7.6, § 10.5); and the overlap contract
-text. Enabled instances are collected as state changes and every one is
-omitted at render with a placeholder reason, `template instances are not
-carried yet`, on an `# Omitted:` line and a refine row. Tests T22 to T27
-and T30 to T32.
+The `[Install]` reader with `install_drop_ins`, `vendor_drop_ins` and the
+drop-in half of rule 5 (the fragment half is phase 2), and the search-path
+test (§ 7.1, § 7.2); the link scan with vendor links, the install state,
+the instance preset lookup and the stock-state list (§ 7.3, § 7.4); the
+`also` list and rule 7 of § 10.2; `ManualLink` and its advisories
+(§ 10.9); the vendor-side read and the install comparison for a unit at
+its preset (§ 7.2, § 7.4); the `.upholds` exclusion in the config walk;
+the default target (§ 7.6, § 10.5); and the overlap contract text. Enabled
+instances are collected as state changes and every one is omitted at
+render with a placeholder reason, `template instances are not carried
+yet`, on an `# Omitted:` line and a refine row. Tests T22 to T27 and T30
+to T32.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
@@ -2738,7 +2760,12 @@ Other objections worth weighing:
   `[Install]` for every shadowed unit, two more causes and a relation that
   is not a link, to carry what one more verb (`reenable`) would carry
   whole. That verb was not measured at build time and is not one of the
-  two the Containerfile renders.
+  two the Containerfile renders. Two smaller costs: a shadow that drops an
+  `Also=` name is advised with text and no line, because the collector
+  knows what the host's files name and not what state the dropped member
+  should have; and the line that removes a `VendorInstallOnly` link is an
+  `rm`, the one place an advisory offers something other than `systemctl`,
+  because `disable` would remove every link to the unit.
 - **Rules 5 and 7 decline commands an operator would expect.** A libvirt
   service that is enabled while one of its sockets is disabled loses its
   line, although the two lines the advisory prints reproduce that host
