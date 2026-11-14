@@ -1,15 +1,25 @@
 import { EmptyState, EmptyStateBody } from "@patternfly/react-core";
 import { CubesIcon } from "@patternfly/react-icons";
-import type { ReferenceSection } from "../api/types";
+import type {
+  ContextItem as ContextItemType,
+  DeclinedView,
+  ReferenceSection,
+} from "../api/types";
 import { ContextItem } from "./ContextItem";
 
 export interface ContextListProps {
   section: ReferenceSection;
   /** Opens the unit row a scheduled timer row names. */
   onNavigateToUnit?: (unit: string) => void;
+  /** The declined generated unit a row shows, if any. */
+  declinedFor?: (item: ContextItemType) => DeclinedView | undefined;
 }
 
-export function ContextList({ section, onNavigateToUnit }: ContextListProps) {
+export function ContextList({
+  section,
+  onNavigateToUnit,
+  declinedFor,
+}: ContextListProps) {
   const subsections = (section.subsections ?? []).filter(
     (sub) => sub.items.length > 0,
   );
@@ -38,6 +48,7 @@ export function ContextList({ section, onNavigateToUnit }: ContextListProps) {
               key={item.id}
               item={item}
               onNavigateToUnit={onNavigateToUnit}
+              declined={declinedFor?.(item)}
             />
           ))}
         </div>
@@ -61,6 +72,7 @@ export function ContextList({ section, onNavigateToUnit }: ContextListProps) {
                 key={item.id}
                 item={item}
                 onNavigateToUnit={onNavigateToUnit}
+                declined={declinedFor?.(item)}
               />
             ))}
           </div>

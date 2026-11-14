@@ -528,6 +528,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         mount_findings: decisions.mount_findings.clone(),
         quadlets,
         flatpaks,
+        declined_generated: decisions.declined_generated.clone(),
         sysctl: project_sysctl(&session.snapshot_projected()),
         tuned,
         users_groups_decisions: decisions.users_groups.clone(),

@@ -17,6 +17,9 @@ import type {
   RefinementOp,
   ReferenceSection,
   NotCarriedRow,
+  ContextItem,
+  DeclinedGeneratedView,
+  DeclinedView,
 } from "../api/types";
 import { isIncluded, isToggleable } from "../api/disposition";
 import { applyOp, ungroupGroup } from "../api/client";
@@ -60,6 +63,23 @@ const SECTION_LABELS: Record<string, string> = {
   language_packages: "Language Packages",
   unmanaged_files: "Unmanaged Files",
 };
+
+/**
+ * The declined generated unit a Scheduled Tasks row shows: the one whose
+ * request came from the generated-timer row of that id. A collected timer
+ * row can share the id, since a generated timer is declined exactly when a
+ * collected unit has its name; that row names its unit, and a generated
+ * row does not.
+ */
+function scheduledDeclined(
+  declined: DeclinedGeneratedView[],
+  item: ContextItem,
+): DeclinedView | undefined {
+  if (item.unit !== undefined) return undefined;
+  return declined.find(
+    (d) => d.row.row === "scheduled" && d.row.name === item.id,
+  )?.declined;
+}
 
 export interface MainContentProps {
   activeSection: string;
@@ -774,6 +794,10 @@ export function MainContent({
         <ContainerSection
           quadlets={viewData?.quadlets ?? []}
           flatpaks={viewData?.flatpaks ?? []}
+          flatpakDeclined={
+            viewData?.declined_generated.find((d) => d.row.row === "flatpak")
+              ?.declined
+          }
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={containerGuard}
@@ -916,7 +940,16 @@ export function MainContent({
         <ContextList
           key={lookupId}
           section={section}
-          onNavigateToUnit={(unit) => onNavigateToItem?.("units", unit)}
+          onNavigateToUnit={
+            onNavigateToItem &&
+            ((unit) => onNavigateToItem("units", unit))
+          }
+          declinedFor={
+            lookupId === "scheduled_tasks"
+              ? (item) =>
+                  scheduledDeclined(viewData?.declined_generated ?? [], item)
+              : undefined
+          }
         />
       </>
     );

@@ -1,14 +1,26 @@
 import { useState, useCallback } from "react";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
-import type { ContextItem as ContextItemType } from "../api/types";
+import type {
+  ContextItem as ContextItemType,
+  DeclinedView,
+} from "../api/types";
 
 export interface ContextItemProps {
   item: ContextItemType;
   /** Opens the unit row a scheduled timer row names. */
   onNavigateToUnit?: (unit: string) => void;
+  /**
+   * Why the export does not write the unit this row generates. The text
+   * is the server's, shown as given.
+   */
+  declined?: DeclinedView;
 }
 
-export function ContextItem({ item, onNavigateToUnit }: ContextItemProps) {
+export function ContextItem({
+  item,
+  onNavigateToUnit,
+  declined,
+}: ContextItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasDetail = item.detail != null && item.detail.trim().length > 0;
   const unit = item.unit;
@@ -73,6 +85,15 @@ export function ContextItem({ item, onNavigateToUnit }: ContextItemProps) {
           </button>
         )}
       </div>
+      {declined && (
+        <div
+          id={`declined-generated-${item.id}`}
+          data-testid={`declined-generated-${item.id}`}
+          className={`inspectah-decision-row__helper-text inspectah-unit-note inspectah-unit-declined inspectah-unit-declined--${declined.renders}`}
+        >
+          {declined.text}
+        </div>
+      )}
       {hasDetail && isExpanded && (
         <pre className="inspectah-context-row__detail">{item.detail}</pre>
       )}

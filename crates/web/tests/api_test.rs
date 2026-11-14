@@ -823,6 +823,125 @@ async fn api_op_refuses_the_removed_timer_operation() {
     );
 }
 
+/// The generated cron timer in [`generated_collision_state`].
+const GENERATED_TIMER: &str = "cron-backup";
+/// The flatpak provisioning service inspectah generates.
+const FLATPAK_PROVISION: &str = "flatpak-provision.service";
+
+/// A host with a generated cron timer `cron-backup` and an included
+/// flatpak application. With `collected`, the host also has a collected
+/// unit of each generated unit's name, `cron-backup.timer` and
+/// `flatpak-provision.service`, both enabled against a `disable` preset,
+/// so both generated requests are declined for the name collision.
+fn generated_collision_state(collected: bool) -> Arc<AppState> {
+    use inspectah_core::types::scheduled::GeneratedTimerUnit;
+    let mut snap = InspectionSnapshot::new();
+    if collected {
+        let change = |unit: &str| {
+            UnitStateChange::new(
+                test_carried_unit(unit.to_owned().try_into().unwrap(), None),
+                UnitState::Enabled,
+                Some(PresetDefault::Disable),
+            )
+            .unwrap()
+        };
+        snap.units = Some(UnitSection {
+            state_changes: vec![
+                change(&format!("{GENERATED_TIMER}.timer")),
+                change(FLATPAK_PROVISION),
+            ],
+            drop_ins: vec![],
+            inventory: vec![],
+            mount_findings: Vec::new(),
+        });
+    }
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: GENERATED_TIMER.into(),
+            cron_expr: "0 2 * * *".into(),
+            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+            service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.gimp.GIMP".into(),
+            origin: "flathub".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// The view's `declined` for a generated `unit` declined for the name
+/// collision: the plan's own marker, reason name and text.
+fn collision_declined(unit: &str) -> serde_json::Value {
+    use inspectah_core::types::units::UnitAction;
+    use inspectah_pipeline::render::unit_plan::{OmissionReason, declined_line};
+    let reason = OmissionReason::GeneratedNameCollision;
+    let line = declined_line(
+        &unit.to_owned().try_into().unwrap(),
+        UnitAction::Enable,
+        &reason,
+    );
+    serde_json::json!({
+        "renders": "fixme",
+        "reason": "GeneratedNameCollision",
+        "text": line.text,
+    })
+}
+
+/// § 11.1 and T21's refine half through the production handlers: a
+/// generated cron timer and the flatpak provisioning service, each named
+/// for a collected unit, are declined on the scheduled row and on the
+/// flatpak row that asked for them, with the plan's reason and text.
+/// Control: without the collected units nothing is declined.
+#[tokio::test]
+async fn a_declined_generated_unit_is_carried_for_its_row() {
+    let (status, view) = get_json(&app(generated_collision_state(true)), "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let timer = format!("{GENERATED_TIMER}.timer");
+    assert_eq!(
+        view["declined_generated"],
+        serde_json::json!([
+            {
+                "row": {"row": "scheduled", "name": GENERATED_TIMER},
+                "unit": timer,
+                "declined": collision_declined(&timer),
+            },
+            {
+                "row": {"row": "flatpak"},
+                "unit": FLATPAK_PROVISION,
+                "declined": collision_declined(FLATPAK_PROVISION),
+            },
+        ]),
+        "{view}"
+    );
+    let text = view["declined_generated"][0]["declined"]["text"]
+        .as_str()
+        .expect("a text");
+    assert!(
+        text.starts_with("cron-backup.timer (inspectah generates this unit"),
+        "{text}"
+    );
+
+    let (status, control) = get_json(&app(generated_collision_state(false)), "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        control["declined_generated"],
+        serde_json::json!([]),
+        "{control}"
+    );
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 

@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
+  DeclinedView,
   QuadletDecisionDto,
   FlatpakDecisionDto,
   ViewResponse,
@@ -19,6 +20,11 @@ import {
 export interface ContainerSectionProps {
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
+  /**
+   * Why the export does not write the provisioning service the flatpak
+   * applications share. The text is the server's, shown as given.
+   */
+  flatpakDeclined?: DeclinedView;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -54,6 +60,9 @@ function flatpakGuardKey(
   return JSON.stringify(["flatpak", appId, remote, branch]);
 }
 
+/** The note naming the declined flatpak provisioning service. */
+const FLATPAK_DECLINED_ID = "declined-generated-flatpak";
+
 function badgeTextForTriage(triage: TriageTag): string | null {
   const level = triageBucketToAttention(triage);
   if (level === "routine") return null;
@@ -63,6 +72,7 @@ function badgeTextForTriage(triage: TriageTag): string | null {
 export function ContainerSection({
   quadlets,
   flatpaks,
+  flatpakDeclined,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -280,6 +290,19 @@ export function ContainerSection({
         );
       })}
 
+      {flatpaks.length > 0 && flatpakDeclined && (
+        <div role="row">
+          <div
+            role="gridcell"
+            id={FLATPAK_DECLINED_ID}
+            data-testid={FLATPAK_DECLINED_ID}
+            className={`inspectah-decision-row__helper-text inspectah-unit-note inspectah-unit-declined inspectah-unit-declined--${flatpakDeclined.renders}`}
+          >
+            {flatpakDeclined.text}
+          </div>
+        </div>
+      )}
+
       {flatpaks.map((f) => {
         const idx = rowIndex++;
         const bucket = extractTriageBucket(f.triage);
@@ -298,6 +321,7 @@ export function ContainerSection({
             aria-label={f.app_id}
             tabIndex={idx === 0 ? 0 : -1}
             data-testid={`flatpak-item-${f.app_id}`}
+            aria-describedby={flatpakDeclined ? FLATPAK_DECLINED_ID : undefined}
             className="inspectah-decision-row"
             style={{ borderLeft }}
             onKeyDown={(e) => {

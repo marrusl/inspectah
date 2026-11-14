@@ -480,6 +480,23 @@ export interface DeclinedView {
 }
 
 /**
+ * The row a generated unit's request came from (Rust: `GeneratedRowView`,
+ * tagged on `row`): a scheduled generated-timer row by its name, or the
+ * flatpak applications, which share one provisioning service.
+ */
+export type GeneratedRowView =
+  | { row: "scheduled"; name: string }
+  | { row: "flatpak" };
+
+/** A generated unit's request the export declined, and its row. */
+export interface DeclinedGeneratedView {
+  row: GeneratedRowView;
+  /** The unit the request would have enabled. */
+  unit: string;
+  declined: DeclinedView;
+}
+
+/**
  * Why the export does not write a file a row offered (Rust:
  * `WithheldView`, tagged on `outcome`). `text` is shown as given.
  */
@@ -771,6 +788,11 @@ export interface ViewResponse extends RefinedView {
   mount_findings: MountFindingDto[];
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
+  /**
+   * Each request for a unit inspectah generates that the export does not
+   * write, with the row it is shown on. Always present.
+   */
+  declined_generated: DeclinedGeneratedView[];
   /** The read-only sysctl panel. Always present. */
   sysctl: SysctlViewDto;
   tuned: TunedDecisionDto[];

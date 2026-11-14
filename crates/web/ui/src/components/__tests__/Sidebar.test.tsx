@@ -136,6 +136,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
   mount_findings: [],
   quadlets: [],
   flatpaks: [],
+  declined_generated: [],
   sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],
@@ -1044,6 +1045,7 @@ describe("Sidebar", () => {
         unit_states: [],
         quadlets: [],
         flatpaks: [],
+        declined_generated: [],
       };
 
       render(

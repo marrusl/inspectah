@@ -13,7 +13,8 @@ use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::projection::{
-    DeclinedView, FragmentView, MountFindingView, NotCarriedRow, WithheldView,
+    DeclinedGeneratedView, DeclinedView, FragmentView, MountFindingView, NotCarriedRow,
+    WithheldView,
 };
 use inspectah_refine::types::{
     ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoProvenance, RepoTier, TriageTag,
@@ -593,6 +594,10 @@ pub struct ViewResponse {
     pub mount_findings: Vec<MountFindingView>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
+    /// Each request for a unit inspectah generates that the export does
+    /// not write, with the scheduled or flatpak row it is shown on
+    /// (§ 11.1). Always present; empty when nothing is declined.
+    pub declined_generated: Vec<DeclinedGeneratedView>,
     /// The read-only sysctl panel. Always present.
     pub sysctl: SysctlViewDto,
     pub tuned: Vec<TunedDecisionDto>,
