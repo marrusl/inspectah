@@ -1378,12 +1378,22 @@ fn fleet_host(hostname: &str, content: &str) -> InspectionSnapshot {
 const APP_UNIT: &str = "/etc/systemd/system/app.service";
 
 /// T18 (d): two hosts with a full shadow of one unit and different
-/// content. Whichever variant is selected, the unit's command is declined
-/// with `InstallEvidenceChanged`: the row may have been recorded from the
-/// other variant. Control: the same content on both hosts is one variant,
-/// and the enable is carried.
+/// content. Through a refine session, the operator includes the shadow's
+/// row and selects each variant in turn with `SelectVariant`, the
+/// operation refine's view uses: whichever is selected, the unit's command
+/// is declined with `InstallEvidenceChanged`, since the row may have been
+/// recorded from the other variant. Presence first: a shadow is staged at
+/// the unit's path. Control: the same content on both hosts is one
+/// variant, and the enable is carried through the same route.
+///
+/// Which variant's bytes land is not asserted: `SelectVariant` changes
+/// which row is `Selected`, while `SetInclude` on the path includes the
+/// first-ranked row, so the staged bytes do not follow the selection. That
+/// is recorded for the project owner, not pinned here.
 #[test]
 fn t18_d_a_shadow_with_two_variants_declines_the_command() {
+    use inspectah_core::types::aggregate::VariantSelection;
+    use inspectah_refine::types::ContentHash;
     let a = "[Service]\nExecStart=/usr/bin/app --a\n[Install]\nWantedBy=multi-user.target\n";
     let b = "[Service]\nExecStart=/usr/bin/app --b\n[Install]\nWantedBy=multi-user.target\n";
     let (merged, _) = merge_snapshots(
@@ -1411,23 +1421,41 @@ fn t18_d_a_shadow_with_two_variants_declines_the_command() {
     let contents = variants(&merged);
     assert_eq!(contents.len(), 2, "one drop-in row per variant");
 
+    let drop_in = ItemId::DropIn {
+        path: APP_UNIT.into(),
+    };
+    let mut fleet_session = session(&merged);
+    fleet_session
+        .apply(set_include(drop_in.clone(), true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
     for selected in &contents {
-        let mut snap = merged.clone();
-        for row in snap
+        fleet_session
+            .apply(RefinementOp::SelectVariant {
+                item_id: drop_in.clone(),
+                target: ContentHash::from_content(selected.as_bytes()),
+            })
+            .unwrap_or_else(|e| panic!("SelectVariant: {e:?}"));
+        let projected = fleet_session.snapshot_projected();
+        let selection: Vec<_> = projected
             .units
-            .as_mut()
+            .as_ref()
             .expect("a units section")
             .drop_ins
-            .iter_mut()
+            .iter()
             .filter(|d| d.path == APP_UNIT)
-        {
-            row.disposition = FindingKind::from_bool(row.content == *selected);
-        }
-        let tree = render_export(&snap);
-        assert_eq!(
-            std::fs::read_to_string(tree.path().join("drop-ins").join(&APP_UNIT[1..])).ok(),
-            Some(selected.clone()),
-            "the selected variant is staged"
+            .map(|d| (d.content == *selected, d.variant_selection))
+            .collect();
+        assert!(
+            selection.contains(&(true, VariantSelection::Selected)),
+            "the operator's variant is selected: {selection:?}"
+        );
+        let tree = export_session(&fleet_session);
+        assert!(
+            contents.contains(
+                &std::fs::read_to_string(tree.path().join("drop-ins").join(&APP_UNIT[1..]))
+                    .expect("a shadow is staged")
+            ),
+            "a variant is staged"
         );
         let containerfile = containerfile_in(&tree);
         assert!(
@@ -1449,9 +1477,157 @@ fn t18_d_a_shadow_with_two_variants_declines_the_command() {
     .expect("the two hosts merge");
     let same = reload(&same);
     assert_eq!(variants(&same).len(), 1, "one variant");
-    let control = containerfile_in(&render_export(&same));
+    let mut same_session = session(&same);
+    same_session
+        .apply(set_include(drop_in, true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&same_session);
+    assert!(staged_at_drop_ins(&tree, APP_UNIT), "the shadow is staged");
+    let control = containerfile_in(&tree);
     assert!(acts(&control, "enable", "app.service"), "{control}");
     assert!(omitted(&control, "app.service").is_none(), "{control}");
+}
+
+/// Whether the export tree stages `path` under `drop-ins/`.
+fn staged_at_drop_ins(tree: &tempfile::TempDir, path: &str) -> bool {
+    tree.path().join("drop-ins").join(&path[1..]).is_file()
+}
+
+/// The vendor socket file of the fleet matrix below.
+const MATRIX_VENDOR: &str = "[Socket]\nListenStream=9000\n[Install]\nWantedBy=sockets.target\n";
+/// The administrator's file of the matrix: a local unit or a full shadow.
+const MATRIX_ETC: &str = "[Socket]\nListenStream=9001\n[Install]\nWantedBy=sockets.target\n";
+const MATRIX_UNIT: &str = "app.socket";
+
+/// What the other host of the matrix has for `app.socket`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MatrixOther {
+    /// Its own file in `/etc` and no vendor file: a `Local` row and a
+    /// config entry.
+    Local,
+    /// The vendor file and a full copy in `/etc`: a `Shadowed` row and a
+    /// drop-in row.
+    Shadowed,
+}
+
+/// A fleet host for the matrix: `sockpkg` installed and `app.socket`
+/// enabled against a `disable` preset, with the vendor file (`other` is
+/// `None`) or what `other` names.
+fn matrix_host(hostname: &str, other: Option<MatrixOther>) -> InspectionSnapshot {
+    let host = UnitHost::new()
+        .package("sockpkg")
+        .unit(MATRIX_UNIT, "enabled")
+        .preset("disable app.socket");
+    let host = match other {
+        Some(MatrixOther::Local) => host.etc_unit(MATRIX_UNIT, MATRIX_ETC),
+        Some(MatrixOther::Shadowed) => host
+            .vendor_unit(MATRIX_UNIT, MATRIX_VENDOR, Some("sockpkg"))
+            .etc_unit(MATRIX_UNIT, MATRIX_ETC),
+        None => host.vendor_unit(MATRIX_UNIT, MATRIX_VENDOR, Some("sockpkg")),
+    };
+    named(host, hostname)
+}
+
+/// § 12's merged `Vendor` row beside another host's `Local` or `Shadowed`
+/// row for one ordinary unit, in both hostname orders, through
+/// `merge_snapshots`, a refine session, its projection and its export.
+/// The two state change rows tie, so the merged row is the first host's.
+/// The other host's file (its config entry or drop-in row) is then
+/// included and excluded:
+///
+/// - a `Vendor` row: with the file included, the command is declined with
+///   `InstallEvidenceChanged`; excluded, the enable is carried;
+/// - a `Local` row: included, carried; excluded, `UnitFileNotStaged`;
+/// - a `Shadowed` row: included, carried; excluded,
+///   `InstallEvidenceChanged`.
+///
+/// Included, the file's bytes are what the export stages.
+#[test]
+fn a_merged_vendor_row_beside_a_local_or_shadowed_row_in_both_orders() {
+    let path = etc_path(MATRIX_UNIT);
+    for other in [MatrixOther::Local, MatrixOther::Shadowed] {
+        for vendor_first in [true, false] {
+            let label = format!("{other:?}, vendor host first {vendor_first}");
+            let (first, second) = if vendor_first {
+                (None, Some(other))
+            } else {
+                (Some(other), None)
+            };
+            let merged = merged(matrix_host("host-a", first), matrix_host("host-b", second));
+            let mut session = session(&merged);
+            // Refine sorts an aggregate's packages with no leaf data as
+            // excluded; the unit's package is in the image here.
+            session
+                .apply(set_include(package_item("sockpkg"), true))
+                .unwrap_or_else(|e| panic!("{label}: {e:?}"));
+            let representative = |session: &RefineSession| match fragment_of(
+                &session.snapshot_projected(),
+                MATRIX_UNIT,
+            ) {
+                UnitFragment::Vendor { .. } => "vendor",
+                UnitFragment::Local { .. } => "local",
+                UnitFragment::Shadowed { .. } => "shadowed",
+                UnitFragment::Absent => "absent",
+            };
+            let expected_row = match (vendor_first, other) {
+                (true, _) => "vendor",
+                (false, MatrixOther::Local) => "local",
+                (false, MatrixOther::Shadowed) => "shadowed",
+            };
+            assert_eq!(representative(&session), expected_row, "{label}");
+            let file_item = match other {
+                MatrixOther::Local => config_item(&path),
+                MatrixOther::Shadowed => ItemId::DropIn { path: path.clone() },
+            };
+            let root = match other {
+                MatrixOther::Local => "config",
+                MatrixOther::Shadowed => "drop-ins",
+            };
+            for included in [true, false] {
+                let step = format!("{label}, file included {included}");
+                session
+                    .apply(set_include(file_item.clone(), included))
+                    .unwrap_or_else(|e| panic!("{step}: {e:?}"));
+                assert_eq!(representative(&session), expected_row, "{step}");
+                let tree = export_session(&session);
+                let staged = std::fs::read_to_string(tree.path().join(root).join(&path[1..])).ok();
+                assert_eq!(
+                    staged.as_deref(),
+                    included.then_some(MATRIX_ETC),
+                    "{step}: what is staged"
+                );
+                let containerfile = containerfile_in(&tree);
+                let declined = match (expected_row, included) {
+                    ("vendor", true) | ("shadowed", false) => Some(evidence_changed(&path)),
+                    ("local", false) => Some(NOT_STAGED.to_owned()),
+                    _ => None,
+                };
+                match declined {
+                    Some(reason) => {
+                        assert!(
+                            omitted(&containerfile, MATRIX_UNIT)
+                                .is_some_and(|l| l.ends_with(&reason)),
+                            "{step}: declined with {reason}:\n{containerfile}"
+                        );
+                        assert!(
+                            in_no_systemctl_instruction(&containerfile, MATRIX_UNIT),
+                            "{step}:\n{containerfile}"
+                        );
+                    }
+                    None => {
+                        assert!(
+                            acts(&containerfile, "enable", MATRIX_UNIT),
+                            "{step}:\n{containerfile}"
+                        );
+                        assert!(
+                            omitted(&containerfile, MATRIX_UNIT).is_none(),
+                            "{step}:\n{containerfile}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// T13 quoting and plan review focus 1: an instance name with `\x2d`, the
@@ -3115,24 +3291,36 @@ fn package_item(name: &str) -> ItemId {
 /// the enable.
 #[test]
 fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
+    for (package_hostname, copy_hostname) in [("host-a", "host-b"), ("host-b", "host-a")] {
+        t18_a_case(package_hostname, copy_hostname);
+    }
+}
+
+/// T18 (a) with the package-owned unit on `package_hostname` and the
+/// administrator's copy on `copy_hostname`.
+fn t18_a_case(package_hostname: &str, copy_hostname: &str) {
     const UNIT: &str = "var-lib-pkg.mount";
     const PACKAGE: &str = "pkgmount";
     let path = etc_path(UNIT);
     let drop_in = format!("{path}.d/x.conf");
     let vendor = mount_file("/var/lib/pkg", None);
-    let package_host = named(owned_unit_host(UNIT, PACKAGE, "enabled", &vendor), "host-a");
+    let copy = mount_file("/var/lib/pkg", Some("nofail"));
+    let package_host = named(
+        owned_unit_host(UNIT, PACKAGE, "enabled", &vendor),
+        package_hostname,
+    );
     let copy_host = named(
         owned_unit_host(UNIT, PACKAGE, "enabled", &vendor)
-            .etc_unit(UNIT, &mount_file("/var/lib/pkg", Some("nofail")))
+            .etc_unit(UNIT, &copy)
             .file(&drop_in, "[Mount]\nTimeoutSec=30\n"),
-        "host-b",
+        copy_hostname,
     );
     assert!(
         matches!(
             change(&package_host, UNIT).unit(),
             CarriedUnit::PackagedStorage(_)
         ),
-        "host-a records a package-owned state change"
+        "{package_hostname} records a package-owned state change"
     );
     let copy_units = copy_host.units.as_ref().expect("a units section");
     assert!(
@@ -3140,18 +3328,36 @@ fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
             .state_changes
             .iter()
             .all(|c| c.unit().name().as_str() != UNIT),
-        "host-b records no state change for the unit"
+        "{copy_hostname} records no state change for the unit"
     );
     assert!(
         copy_units
             .mount_findings
             .iter()
             .any(|f| f.unit.name().as_unit_name().as_str() == UNIT),
-        "host-b records a finding"
+        "{copy_hostname} records a finding"
     );
 
     let merged = merged(package_host, copy_host);
     let units = merged.units.as_ref().expect("a units section");
+    assert_eq!(
+        change(&merged, UNIT)
+            .aggregate
+            .as_ref()
+            .map(|a| a.hosts.clone()),
+        Some(vec![package_hostname.to_owned()]),
+        "the state change is {package_hostname}'s row"
+    );
+    assert_eq!(
+        units
+            .mount_findings
+            .iter()
+            .find(|f| f.unit.name().as_unit_name().as_str() == UNIT)
+            .and_then(|f| f.aggregate.as_ref())
+            .map(|a| a.hosts.clone()),
+        Some(vec![copy_hostname.to_owned()]),
+        "the finding is {copy_hostname}'s row"
+    );
     assert!(matches!(
         change(&merged, UNIT).unit(),
         CarriedUnit::PackagedStorage(_)
@@ -3179,7 +3385,11 @@ fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
         let tree = export_session(&session);
         let containerfile = containerfile_in(&tree);
         let step = format!("file included, unit row included {unit_included}");
-        assert!(staged_at(&tree, &path), "{step}: the file is staged");
+        assert_eq!(
+            std::fs::read_to_string(tree.path().join("config").join(&path[1..])).ok(),
+            Some(copy.clone()),
+            "{step}: {copy_hostname}'s file is staged"
+        );
         assert_eq!(
             carriage_of(&session.snapshot_projected(), &drop_in).reaches_image(),
             unit_included,
@@ -3251,13 +3461,7 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
         owned_unit_host(UNIT, "kexec-tools", "masked", VENDOR_SERVICE),
         "host-a",
     );
-    let local = named(
-        UnitHost::new()
-            .unit(UNIT, "enabled")
-            .preset("disable *")
-            .etc_unit(UNIT, "[Service]\nExecStart=/usr/local/bin/kdump\n[Install]\nWantedBy=multi-user.target\n"),
-        "host-b",
-    );
+    let local = named(t18_c_local_host(), "host-b");
     assert!(
         matches!(fragment_of(&local, UNIT), UnitFragment::Local { .. }),
         "host-b records a local unit"
@@ -3271,7 +3475,11 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
         .unwrap_or_else(|e| panic!("{e:?}"));
     let tree = export_session(&session);
     let occupied = containerfile_in(&tree);
-    assert!(staged_at(&tree, &path), "the unit file is staged");
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("config").join(&path[1..])).ok(),
+        Some(T18_C_LOCAL.to_owned()),
+        "host-b's unit file is staged"
+    );
     assert_eq!(
         omitted(&occupied, UNIT),
         Some(
@@ -3293,6 +3501,68 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
     assert!(!staged_at(&tree, &path), "the file is excluded");
     assert!(acts(&freed, "mask", UNIT), "{freed}");
     assert!(omitted(&freed, UNIT).is_none(), "{freed}");
+}
+
+/// The administrator's own `kdump.service` of T18 (c).
+const T18_C_LOCAL: &str =
+    "[Service]\nExecStart=/usr/local/bin/kdump\n[Install]\nWantedBy=multi-user.target\n";
+
+/// The T18 (c) host with a local `kdump.service`, enabled.
+fn t18_c_local_host() -> UnitHost {
+    UnitHost::new()
+        .unit("kdump.service", "enabled")
+        .preset("disable *")
+        .etc_unit("kdump.service", T18_C_LOCAL)
+}
+
+/// T18 (c) with the hostnames swapped: the local unit file's host is first,
+/// so the two state change rows tie and the merged row is that host's,
+/// `enabled` from a `Local` fragment, not the mask. With the file
+/// included, the file's bytes are staged and the enable is carried; with
+/// it excluded, the enable is declined because its unit file is not in the
+/// export, and nothing masks the unit.
+#[test]
+fn t18_c_with_the_local_host_first_the_row_is_the_local_unit() {
+    const UNIT: &str = "kdump.service";
+    let path = etc_path(UNIT);
+    let local = named(t18_c_local_host(), "host-a");
+    let masked = named(
+        owned_unit_host(UNIT, "kexec-tools", "masked", VENDOR_SERVICE),
+        "host-b",
+    );
+    let merged = merged(local, masked);
+    assert_eq!(change(&merged, UNIT).current_state(), UnitState::Enabled);
+    assert!(
+        matches!(fragment_of(&merged, UNIT), UnitFragment::Local { .. }),
+        "host-a's row"
+    );
+
+    let mut session = session(&merged);
+    session
+        .apply(set_include(config_item(&path), true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("config").join(&path[1..])).ok(),
+        Some(T18_C_LOCAL.to_owned()),
+        "host-a's unit file is staged"
+    );
+    let included = containerfile_in(&tree);
+    assert!(acts(&included, "enable", UNIT), "{included}");
+    assert!(omitted(&included, UNIT).is_none(), "{included}");
+
+    session
+        .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    let excluded = containerfile_in(&tree);
+    assert!(!staged_at(&tree, &path), "the file is excluded");
+    assert!(in_no_systemctl_instruction(&excluded, UNIT), "{excluded}");
+    assert_eq!(
+        omitted(&excluded, UNIT),
+        Some(format!("# Omitted: {UNIT} ({NOT_STAGED}").as_str()),
+        "{excluded}"
+    );
 }
 
 /// A local mount unit whose file has no `nofail` but which has a drop-in:

@@ -4558,3 +4558,87 @@ fn withheld_lands_on_the_included_variant_rows_only() {
         "ZeroLengthUnitFile"
     );
 }
+
+/// Plan review focus 1 at the web response: an escaped instance name, the
+/// root slice `-.slice` and a 255-byte name round-trip through the
+/// production `/api/view` handler byte for byte, and a `SetInclude` naming
+/// each through `/api/op` is accepted and moves that row alone.
+///
+/// Built by hand: the collector records no instance state changes until a
+/// later phase, so the instance is a vendor unit whose file is its
+/// template, which the state change type admits for an enabled instance.
+#[tokio::test]
+async fn unusual_unit_names_round_trip_through_the_view_and_an_op() {
+    use inspectah_core::types::units::{CarriedUnit, UnitFragment, UnitName, UnitSubject};
+    let long = format!("{}.service", "a".repeat(255 - ".service".len()));
+    assert_eq!(long.len(), 255);
+    let names = [r"probe@a\x2db.service", "-.slice", long.as_str()];
+    let name = |s: &str| UnitName::try_from(s.to_owned()).expect("a unit name");
+    let change = |unit: &str, file: &str| {
+        let subject = UnitSubject::new(
+            name(unit),
+            UnitFragment::Vendor {
+                file: name(file),
+                owning_package: None,
+            },
+        )
+        .expect("a subject");
+        UnitStateChange::new(
+            CarriedUnit::try_from(subject).expect("a carried unit"),
+            UnitState::Enabled,
+            None,
+        )
+        .expect("a state change")
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.units = Some(UnitSection {
+        state_changes: vec![
+            change(names[0], "probe@.service"),
+            change(names[1], names[1]),
+            change(names[2], names[2]),
+        ],
+        ..Default::default()
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+
+    let row = |json: &serde_json::Value, unit: &str| -> serde_json::Value {
+        json["unit_states"]
+            .as_array()
+            .expect("the view carries unit_states")
+            .iter()
+            .find(|s| s["unit"].as_str() == Some(unit))
+            .cloned()
+            .unwrap_or_else(|| panic!("no unit_states row named {unit:?}: {json}"))
+    };
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    for unit in names {
+        assert_eq!(row(&json, unit)["unit"], unit, "byte for byte");
+        assert_eq!(row(&json, unit)["include"], true, "{unit}");
+    }
+
+    for (generation, unit) in (1..).zip(names) {
+        let (status, response) = post_json(
+            &app,
+            "/api/op",
+            serde_json::json!({
+                "kind": "Op",
+                "op": "SetInclude",
+                "target": {
+                    "item_id": {"kind": "Unit", "key": {"unit": unit}},
+                    "include": false
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{unit}: {response}");
+        assert_eq!(response["generation"], generation, "{unit}");
+        let (_, json) = get_json(&app, "/api/view").await;
+        assert_eq!(row(&json, unit)["include"], false, "{unit} is excluded");
+        for later in names.iter().skip(generation) {
+            assert_eq!(row(&json, later)["include"], true, "{later} is untouched");
+        }
+    }
+}
