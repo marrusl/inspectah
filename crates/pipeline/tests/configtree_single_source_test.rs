@@ -669,45 +669,138 @@ fn with_generated(mut snap: InspectionSnapshot, units: &[(&str, &str)]) -> Inspe
 }
 
 const CRON_TIMER: &str = "/etc/systemd/system/cron-backup.timer";
+const CRON_SERVICE: &str = "/etc/systemd/system/cron-backup.service";
+/// The cron-generated pair named `cron-backup`.
+const GENERATED_TIMER: &str = "[Timer]\nOnCalendar=*-*-* 01:00:00\n";
+const GENERATED_SERVICE: &str = "[Service]\nExecStart=/bin/true\n";
+/// The host's own `cron-backup` pair in `/etc/systemd/system`, as a rescan
+/// of a host built from an inspectah image finds it.
+const HOST_TIMER: &str = "[Timer]\nOnCalendar=weekly\n";
+const HOST_SERVICE: &str = "[Service]\nExecStart=/usr/local/bin/backup\n";
 
-/// A generated cron timer whose name matches a collected unit file with
-/// different content: as before, the generated file is written last over
-/// the same staging file, nothing is withheld, and the enable names a
-/// file the export wrote.
+/// The `source: "local"` row the collector records for every timer in
+/// `/etc/systemd/system`, here the host's own `cron-backup` pair.
+fn with_host_timer(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    use inspectah_core::types::scheduled::SystemdTimer;
+    snap.scheduled_tasks
+        .get_or_insert_with(Default::default)
+        .systemd_timers
+        .push(SystemdTimer {
+            name: "cron-backup".into(),
+            source: "local".into(),
+            path: CRON_TIMER[1..].into(),
+            timer_content: HOST_TIMER.into(),
+            service_content: HOST_SERVICE.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    snap
+}
+
+/// A generated cron timer named like the host's own timer never replaces
+/// it: whatever records the host's file (the local row, with or without a
+/// config entry or a drop-in row), the host's content is what the export
+/// stages, nothing is withheld, and the enable names a file a `COPY`
+/// carries. A config entry with no local row (a scan records a local row
+/// for every timer file, so this is a hand-built case) keeps the earlier
+/// result: the generated file is written over it. Control: with no host
+/// file of that name, the generated content lands.
 #[test]
-fn a_generated_timer_stays_beside_a_collected_file_of_its_name() {
-    let snap = with_generated(
-        staged_snapshot(
-            vec![config_entry(CRON_TIMER, "[Timer]\nOnCalendar=weekly\n")],
-            vec![],
+fn a_generated_timer_never_replaces_the_hosts_own_timer() {
+    let generated = &[(GENERATED_TIMER, GENERATED_SERVICE)];
+    for (label, snap, timer_root, timer, service, copy) in [
+        (
+            "config entries and the local row, as a scan records them",
+            with_host_timer(with_generated(
+                staged_snapshot(
+                    vec![
+                        config_entry(CRON_TIMER, HOST_TIMER),
+                        config_entry(CRON_SERVICE, HOST_SERVICE),
+                    ],
+                    vec![],
+                ),
+                generated,
+            )),
+            "config",
+            HOST_TIMER,
+            HOST_SERVICE,
+            SCHEDULED_COPY,
         ),
-        &[(
-            "[Timer]\nOnCalendar=*-*-* 01:00:00\n",
-            "[Service]\nExecStart=/bin/true\n",
-        )],
-    );
-    let staged = staged_writes(&snap);
-    assert!(staged.withheld.is_empty(), "{:?}", staged.withheld);
-    let (dir, containerfile) = export(&snap);
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("config").join(&CRON_TIMER[1..])).unwrap(),
-        "[Timer]\nOnCalendar=*-*-* 01:00:00\n"
-    );
-    assert!(
-        dir.path()
-            .join("config/etc/systemd/system/cron-backup.service")
-            .is_file()
-    );
-    assert!(
-        containerfile
-            .lines()
-            .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer")),
-        "{containerfile}"
-    );
-    assert!(
-        fixme_naming(&containerfile, CRON_TIMER).is_none(),
-        "{containerfile}"
-    );
+        (
+            "the local row alone",
+            with_host_timer(with_generated(staged_snapshot(vec![], vec![]), generated)),
+            "config",
+            HOST_TIMER,
+            HOST_SERVICE,
+            SCHEDULED_COPY,
+        ),
+        (
+            "a drop-in row and the local row",
+            with_host_timer(with_generated(
+                staged_snapshot(
+                    vec![],
+                    vec![drop_in("cron-backup.timer", CRON_TIMER, HOST_TIMER)],
+                ),
+                generated,
+            )),
+            "drop-ins",
+            HOST_TIMER,
+            HOST_SERVICE,
+            DROP_INS_COPY,
+        ),
+        (
+            "a config entry with no local row",
+            with_generated(
+                staged_snapshot(vec![config_entry(CRON_TIMER, HOST_TIMER)], vec![]),
+                generated,
+            ),
+            "config",
+            GENERATED_TIMER,
+            GENERATED_SERVICE,
+            SCHEDULED_COPY,
+        ),
+        (
+            "control: no host file of that name",
+            with_generated(staged_snapshot(vec![], vec![]), generated),
+            "config",
+            GENERATED_TIMER,
+            GENERATED_SERVICE,
+            SCHEDULED_COPY,
+        ),
+    ] {
+        let staged = staged_writes(&snap);
+        assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        let (dir, containerfile) = export(&snap);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(timer_root).join(&CRON_TIMER[1..])).unwrap(),
+            timer,
+            "{label}: the timer that lands"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config").join(&CRON_SERVICE[1..])).unwrap(),
+            service,
+            "{label}: the service that lands"
+        );
+        if timer_root != "config" {
+            // The scheduled section's COPY comes after the drop-ins COPY,
+            // so a generated file under config/ would replace the host's.
+            assert!(
+                !dir.path().join("config").join(&CRON_TIMER[1..]).exists(),
+                "{label}: nothing under config/ to copy over the host's timer"
+            );
+        }
+        assert!(containerfile.contains(copy), "{label}:\n{containerfile}");
+        assert!(
+            containerfile
+                .lines()
+                .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer")),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            fixme_naming(&containerfile, CRON_TIMER).is_none(),
+            "{label}:\n{containerfile}"
+        );
+    }
 }
 
 /// Two generated units of one name (one cron file with two lines): the
@@ -732,8 +825,8 @@ fn two_generated_units_of_one_name_are_written_in_order() {
 }
 
 /// Control: two collected entries with different content at the flatpak
-/// service's path are both withheld, and the FIXME says another section
-/// offers a different file there.
+/// service's path, both from one section, are both withheld, and the FIXME
+/// says another offer there has different content.
 #[test]
 fn two_collected_files_at_a_generated_units_path_are_withheld() {
     let snap = staged_snapshot(
@@ -752,7 +845,7 @@ fn two_collected_files_at_a_generated_units_path_are_withheld() {
     let (_, containerfile) = export(&snap);
     let fixme = fixme_naming(&containerfile, FLATPAK_UNIT).expect("named in a FIXME");
     assert!(
-        fixme.contains("another section also offers a different file at this path"),
+        fixme.contains("another offer at this path has different content; exclude one of the two"),
         "{fixme}"
     );
 }

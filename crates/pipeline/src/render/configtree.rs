@@ -126,7 +126,7 @@ impl WithheldWhy {
                  the export carries a mask only as a systemctl mask command"
                 .to_owned(),
             Self::Conflict { other } if other == at => {
-                "another section also offers a different file at this path; \
+                "another offer at this path has different content; \
                  exclude one of the two"
                     .to_owned()
             }
@@ -151,6 +151,13 @@ pub struct StagedWrite<'a> {
 /// not write. The stager writes `writes`, then `beside`, and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StagedWrites<'a> {
+    /// One write per destination, keyed by where the file lands in the
+    /// image. Where `beside` holds a write at the same destination in the
+    /// same `config/` tree, the content and `source` here can differ from
+    /// what lands: a generated unit written beside a collected file, or
+    /// two generated units of one name, where the first is here and the
+    /// last lands. A reader that needs the landed content or source
+    /// consults `beside` too. `is_staged` stays a correct yes or no.
     pub writes: BTreeMap<Destination, StagedWrite<'a>>,
     /// Interim: generated units (`GeneratedUnit`, `FlatpakService`)
     /// written at a destination that another offer also has, in offer
@@ -519,8 +526,10 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 /// 2. A config entry at a destination another section carries
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
-/// 3. Interim: a local timer's file yields to any other offer at its
-///    destination.
+/// 3. Interim: where a local timer offers a file, a generated unit at the
+///    same destination is not written, so the host's own timer is never
+///    replaced. The local timer's file yields to a collected offer (config
+///    entry or drop-in row) at its destination, never to a generated one.
 /// 4. Collected offers at one destination with the same content are one
 ///    write: the config walk and the repo, GPG key or firewall inventory
 ///    record one host file twice. Collected offers with different
@@ -565,14 +574,24 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     }
 
     for offered in by_dest.values_mut() {
-        // Interim: a local timer's file yields to the config entry or
-        // drop-in row that records the same host file. Removed together
-        // with the scheduled section's local-timer writer (§ 8).
+        // Interim, removed together with the scheduled section's
+        // local-timer writer (§ 8). Where the host has its own timer file,
+        // a generated unit of that name is not written: it would be
+        // written over the host's file, or, beside a drop-in row, copied
+        // over it later in the Containerfile. The local timer's file then
+        // yields to the config entry or drop-in row that records the same
+        // host file, and never to a generated offer.
         if offered
             .iter()
-            .any(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit)
+            .any(|(kind, _)| *kind == StagedFileKind::LocalTimerUnit)
         {
-            offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
+            offered.retain(|(kind, _)| *kind != StagedFileKind::GeneratedUnit);
+            if offered
+                .iter()
+                .any(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit && !kind.is_generated())
+            {
+                offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
+            }
         }
         // Collected offers with one content are one write.
         let first_collected = offered
