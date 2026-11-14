@@ -338,7 +338,11 @@ expression: value
   "unit_dropins": [],
   "unit_states": [
     {
+      "current_state": "enabled",
+      "fragment": "vendor",
       "include": true,
+      "kind": "service",
+      "locked": false,
       "owning_package": "httpd",
       "triage": {
         "annotations": [],
@@ -351,7 +355,11 @@ expression: value
       "unit": "httpd.service"
     },
     {
+      "current_state": "enabled",
+      "fragment": "local",
       "include": false,
+      "kind": "service",
+      "locked": false,
       "owning_package": null,
       "triage": {
         "annotations": [
@@ -367,7 +375,8 @@ expression: value
           "mode": "single_host"
         }
       },
-      "unit": "custom-agent.service"
+      "unit": "custom-agent.service",
+      "unit_file_path": "/etc/systemd/system/custom-agent.service"
     }
   ],
   "users_groups_decisions": [

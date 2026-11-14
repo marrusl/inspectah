@@ -226,6 +226,10 @@
   "unit_states": [
     {
       "unit": "httpd.service",
+      "kind": "service",
+      "fragment": "vendor",
+      "locked": false,
+      "current_state": "enabled",
       "triage": {
         "triage": { "mode": "single_host", "baseline": "site" },
         "primary_reason": "service_non_default",
@@ -236,6 +240,11 @@
     },
     {
       "unit": "custom-agent.service",
+      "kind": "service",
+      "fragment": "local",
+      "unit_file_path": "/etc/systemd/system/custom-agent.service",
+      "locked": false,
+      "current_state": "enabled",
       "triage": {
         "triage": { "mode": "single_host", "baseline": "investigate" },
         "primary_reason": "service_non_default",

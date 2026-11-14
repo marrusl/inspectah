@@ -53,10 +53,13 @@ function makeDropin(overrides: Partial<DropInDecisionDto> = {}): DropInDecisionD
   };
 }
 
+// The lines the server writes for an enabled srv.mount whose unit file is
+// staged, with nofail set (`mount_advisory_lines`): no command to add by
+// hand, since the advisory says to rename the unit for /var.
 const ADVISORY_LINES = [
   "# Advisory: srv.mount is enabled on the source host. inspectah does not enable, disable or mask a mount, automount or swap unit the administrator wrote.",
-  "#   Its unit file is copied into the image.",
-  "#   To carry it, add after the configuration COPY: RUN systemctl enable -- 'srv.mount'",
+  "#   Its unit file is copied into the image. No enable line is written, but the unit still starts if another unit requires it or names its mount point in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.",
+  "#   /srv is a symlink into /var in the RHEL bootc base image. The unit must be renamed for the resolved path (for /srv: var-srv.mount with Where=/var/srv).",
 ];
 
 function makeFinding(overrides: Partial<MountFindingDto> = {}): MountFindingDto {
