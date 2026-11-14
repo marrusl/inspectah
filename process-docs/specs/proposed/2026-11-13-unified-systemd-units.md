@@ -1357,7 +1357,7 @@ pub enum WithheldWhy {
     GeneratedNameCollision { unit: UnitName },
 }
 
-pub(crate) fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
+pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
 
 /// A unit and the one command the plan will write for it. The fields are
 /// private to the planning module, the only place a value is built.
@@ -2077,8 +2077,8 @@ package owned the unit is not consulted.
 
 ## 13. Verification
 
-Tests the implementation plan must contain. Three rules apply to all of
-them:
+Tests the implementation plan must contain. The numbering has no T14.
+Three rules apply to all of them:
 
 - **A refusal test names what refused.** A snapshot that must fail to load
   is written at the current schema version and asserts the error that
@@ -2368,9 +2368,9 @@ The runs below are still open (§ 15 says when). **Do not use the CentOS9
 or fedora44 VMs for them.**
 
 - **R1. `cockpit.socket` end to end.** On a RHEL 9 and a RHEL 10 host:
-  record `systemctl is-enabled cockpit.socket` in the unmodified base
-  image. Switch the socket against its preset on the host (`disable` on
-  RHEL 9, `enable` on RHEL 10), scan, confirm the Containerfile holds the
+  record the socket's preset on the host and `systemctl is-enabled
+  cockpit.socket` in the unmodified base image. Switch the socket against
+  its preset on the host, scan, confirm the Containerfile holds the
   line, build, and confirm the image reads the host's state.
 - **R2. With the branch build.** A local service with no paired timer
   builds (the § 4 ordering defect, before and after). A full shadow,
@@ -2525,7 +2525,7 @@ there, so the merge carries the evidence with the code.
 
 | When | Runs | Why then |
 |---|---|---|
-| Before phase 4 is planned | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. |
+| Before phase 4's code starts | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. A phase 4 task an answer changes is rewritten before it starts. |
 | After phase 2 | R1, R3 | R1 is the driving fix. R3 (a) to (c) can change how "off" has to be rendered. |
 | At the branch tip, after phase 5 | R1, R2 and R4 | The merge gate. The branch does not merge to `main` until they pass. |
 
