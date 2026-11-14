@@ -123,8 +123,10 @@ fn overlapping_paths_mock() -> MockExecutor {
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         // `custom.service` in /etc shadows the vendor unit in /usr/lib,
         // so the full-shadow scan records it in `units.drop_ins`.
-        .with_command("test -f /etc/systemd/system/custom.service", ok(""))
-        .with_command("test -f /usr/lib/systemd/system/custom.service", ok(""))
+        .with_file(
+            "/usr/lib/systemd/system/custom.service",
+            "[Unit]\nDescription=Vendor custom unit\n",
+        )
         .with_command("test -d /etc/systemd/system/httpd.service.d", ok(""))
 }
 

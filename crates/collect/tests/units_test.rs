@@ -1,16 +1,19 @@
 //! Integration tests for the Services inspector.
 
 use inspectah_collect::executor::mock::MockExecutor;
+use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::traits::executor::ExecResult;
-use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError, RpmState};
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
+use inspectah_core::types::config::ConfigFileEntry;
+use inspectah_core::types::finding::{AdvisoryType, FindingKind, ShadowType};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::units::{
     AdminStorageFragment, CarriedUnit, OrdinaryKind, PresetDefault, UnitAction, UnitFragment,
-    UnitKind, UnitSection, UnitState,
+    UnitKind, UnitName, UnitSection, UnitState,
 };
 
 /// Standard fixture: `systemctl list-unit-files` output.
@@ -1761,30 +1764,495 @@ fn stock_state_away_from_preset_is_not_a_state_change() {
     assert_eq!(state_change_names(&section), vec![other]);
 }
 
-/// The shadow scan stays the services' own until the drop-in and shadow
-/// task: a shadowed service changed against its preset is recorded as a
-/// full shadow; a shadowed socket in the same state is not.
+// ── One owner per path (§ 7.7 of the units spec) ───────────────────
+
+/// The admin unit directory.
+const ETC_UNITS: &str = "/etc/systemd/system";
+
+/// The two forms a mask takes on the host.
+#[derive(Debug, Clone, Copy)]
+enum MaskForm {
+    /// `systemctl mask`: a link to `/dev/null`.
+    DevNullLink,
+    /// A zero-length regular file, which systemd also reads as a mask.
+    EmptyFile,
+}
+
+const MASK_FORMS: [MaskForm; 2] = [MaskForm::DevNullLink, MaskForm::EmptyFile];
+
+/// Write a mask on `unit` under `/etc/systemd/system` in `form`.
+fn with_mask(exec: MockExecutor, unit: &str, form: MaskForm) -> MockExecutor {
+    let path = format!("{ETC_UNITS}/{unit}");
+    match form {
+        MaskForm::DevNullLink => exec.with_link(&path, "/dev/null"),
+        MaskForm::EmptyFile => exec.with_file(&path, ""),
+    }
+}
+
+/// Make `/etc` hold only `/etc/systemd/system` with `entries`, so the units
+/// scan and the config walk read the same tree.
+fn with_etc_units(exec: MockExecutor, entries: Vec<&str>) -> MockExecutor {
+    exec.with_dir("/etc", vec!["systemd"])
+        .with_dir("/etc/systemd", vec!["system"])
+        .with_dir(ETC_UNITS, entries)
+}
+
+/// The config entries the real config inspector records over `exec`, on a
+/// host where no package owns anything under `/etc`.
+fn config_entries(exec: &MockExecutor) -> Vec<ConfigFileEntry> {
+    let source = pkg_source();
+    let rpm_state = RpmState::default();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let section = match ConfigInspector::new().inspect(&ctx, &NullProgress) {
+        Ok(output) => output.section,
+        Err(InspectorError::Degraded { partial, .. }) => partial.section,
+        Err(e) => panic!("the config inspector failed: {e:?}"),
+    };
+    let SectionData::Config(config) = section else {
+        panic!("expected the config section");
+    };
+    config.files
+}
+
+fn config_paths(exec: &MockExecutor) -> Vec<String> {
+    config_entries(exec).into_iter().map(|f| f.path).collect()
+}
+
+fn drop_in_paths(section: &UnitSection) -> Vec<&str> {
+    section.drop_ins.iter().map(|d| d.path.as_str()).collect()
+}
+
+/// A comment-only file over a vendor unit: the positive control for every
+/// mask below. It is a unit file, not a mask, so its path is a full shadow
+/// in `drop_ins` and a config entry, which the pipeline then marks
+/// `Inventory` (shadowed by the units section).
+const CONTROL: &str = "comment.service";
+const CONTROL_PATH: &str = "/etc/systemd/system/comment.service";
+
+fn with_control(exec: MockExecutor) -> MockExecutor {
+    let exec = exec
+        .with_file(CONTROL_PATH, "# replaced\n\n")
+        .with_file(&format!("/usr/lib/systemd/system/{CONTROL}"), UNIT_FILE);
+    owner_answer(exec, CONTROL, Some("comment-pkg"))
+}
+
+fn assert_control_is_a_full_shadow(section: &UnitSection, config: &[String], case: &str) {
+    let row = section
+        .drop_ins
+        .iter()
+        .find(|d| d.path == CONTROL_PATH)
+        .unwrap_or_else(|| panic!("{case}: the comment-only file is a full shadow row"));
+    assert_eq!(row.unit, CONTROL, "{case}");
+    assert_eq!(row.shadow_type, Some(ShadowType::FullShadow), "{case}");
+    assert_eq!(row.content, "# replaced\n\n", "{case}");
+    assert!(row.disposition.is_included(), "{case}");
+    assert_eq!(
+        fragment_of(section, CONTROL),
+        &UnitFragment::Shadowed {
+            file: file(CONTROL),
+            owning_package: Some("comment-pkg".into()),
+        },
+        "{case}"
+    );
+    assert!(
+        config.iter().any(|p| p == CONTROL_PATH),
+        "{case}: the comment-only file is a config entry: {config:?}"
+    );
+}
+
+/// T11, collector half. Each mask form over a vendor unit, with no vendor
+/// file, and on a template, gives one `Masked` state change and nothing
+/// else: no drop-in row and no config entry. The comment-only file beside
+/// it, the same path kind with bytes in it, is a full shadow and a config
+/// entry on the same host.
 #[test]
-fn shadow_scan_is_not_extended_to_other_kinds() {
-    let mut exec = kinds_mock(
-        &[("app.service", "enabled"), ("app.socket", "enabled")],
+fn t11_each_mask_form_is_one_masked_state_change_and_nothing_else() {
+    struct Case {
+        unit: &'static str,
+        vendor_owner: Option<&'static str>,
+        expected: UnitFragment,
+    }
+    let cases = [
+        Case {
+            unit: "cups.service",
+            vendor_owner: Some("cups"),
+            expected: UnitFragment::Vendor {
+                file: file("cups.service"),
+                owning_package: Some("cups".into()),
+            },
+        },
+        Case {
+            unit: "gone.service",
+            vendor_owner: None,
+            expected: UnitFragment::Absent,
+        },
+        Case {
+            unit: "worker@.service",
+            vendor_owner: Some("worker"),
+            expected: UnitFragment::Vendor {
+                file: file("worker@.service"),
+                owning_package: Some("worker".into()),
+            },
+        },
+    ];
+    for case in &cases {
+        for form in MASK_FORMS {
+            let label = format!("{} {form:?}", case.unit);
+            let exec = kinds_mock(
+                &[(case.unit, "masked"), (CONTROL, "enabled")],
+                "disable *\n",
+            );
+            let mut exec = with_control(with_mask(exec, case.unit, form));
+            if let Some(owner) = case.vendor_owner {
+                exec = owner_answer(
+                    with_vendor_units(exec, &[case.unit]),
+                    case.unit,
+                    Some(owner),
+                );
+            }
+            let exec = with_etc_units(exec, vec![case.unit, CONTROL]);
+            let (section, warnings) = scan(&exec);
+            let config = config_paths(&exec);
+            assert!(warnings.is_empty(), "{label}: {warnings:?}");
+            assert_control_is_a_full_shadow(&section, &config, &label);
+
+            let masked: Vec<_> = section
+                .state_changes
+                .iter()
+                .filter(|s| s.unit().name().as_str() == case.unit)
+                .collect();
+            assert_eq!(masked.len(), 1, "{label}: {:?}", section.state_changes);
+            assert_eq!(masked[0].current_state(), UnitState::Masked, "{label}");
+            assert_eq!(fragment_of(&section, case.unit), &case.expected, "{label}");
+
+            let path = format!("{ETC_UNITS}/{}", case.unit);
+            assert!(
+                !drop_in_paths(&section).contains(&path.as_str()),
+                "{label}: a mask is no drop-in row: {:?}",
+                section.drop_ins
+            );
+            assert!(
+                section.drop_ins.iter().all(|d| d.unit != case.unit),
+                "{label}: {:?}",
+                section.drop_ins
+            );
+            assert!(
+                !config.contains(&path),
+                "{label}: a mask is no config entry: {config:?}"
+            );
+        }
+    }
+}
+
+/// The storage kinds and a name for each.
+const STORAGE_UNITS: [&str; 3] = ["srv-data.mount", "srv-data.automount", "dev-sdb.swap"];
+
+/// T11, storage half. For each storage kind and both mask forms: a mask on
+/// a package-owned vendor file is a carried `Masked` state change; on an
+/// unowned vendor file, or on no file, it is a mount finding with state
+/// `Masked` and no state change. None of them is a drop-in row or a config
+/// entry; the comment-only control on the same host is both.
+#[test]
+fn t11_storage_masks_route_by_owner() {
+    #[derive(Debug, Clone, Copy)]
+    enum Vendor {
+        Owned,
+        Unowned,
+        NoFile,
+    }
+    for unit in STORAGE_UNITS {
+        for form in MASK_FORMS {
+            for vendor in [Vendor::Owned, Vendor::Unowned, Vendor::NoFile] {
+                let label = format!("{unit} {form:?} {vendor:?}");
+                let exec = kinds_mock(&[(unit, "masked"), (CONTROL, "enabled")], "disable *\n");
+                let mut exec = with_control(with_mask(exec, unit, form));
+                match vendor {
+                    Vendor::Owned => {
+                        exec = owner_answer(with_vendor_units(exec, &[unit]), unit, Some("systemd"))
+                    }
+                    Vendor::Unowned => {
+                        exec = owner_answer(with_vendor_units(exec, &[unit]), unit, None)
+                    }
+                    Vendor::NoFile => {}
+                }
+                let exec = with_etc_units(exec, vec![unit, CONTROL]);
+                let (section, warnings) = scan(&exec);
+                let config = config_paths(&exec);
+                assert!(warnings.is_empty(), "{label}: {warnings:?}");
+                assert_control_is_a_full_shadow(&section, &config, &label);
+
+                let change = section
+                    .state_changes
+                    .iter()
+                    .find(|s| s.unit().name().as_str() == unit);
+                let finding = section
+                    .mount_findings
+                    .iter()
+                    .find(|f| f.unit.name().as_unit_name().as_str() == unit);
+                match vendor {
+                    Vendor::Owned => {
+                        let change = change.unwrap_or_else(|| panic!("{label}: carried"));
+                        assert_eq!(change.current_state(), UnitState::Masked, "{label}");
+                        assert!(
+                            matches!(change.unit(), CarriedUnit::PackagedStorage(u)
+                                if u.owning_package() == "systemd"),
+                            "{label}: {:?}",
+                            change.unit()
+                        );
+                        assert!(finding.is_none(), "{label}: {finding:?}");
+                    }
+                    Vendor::Unowned | Vendor::NoFile => {
+                        assert!(change.is_none(), "{label}: {change:?}");
+                        let finding = finding.unwrap_or_else(|| panic!("{label}: a finding"));
+                        assert_eq!(
+                            finding.state_change,
+                            Some((UnitState::Masked, Some(PresetDefault::Disable))),
+                            "{label}"
+                        );
+                        let expected = match vendor {
+                            Vendor::Unowned => AdminStorageFragment::UnownedVendor,
+                            _ => AdminStorageFragment::MaskOnly,
+                        };
+                        assert_eq!(finding.unit.fragment(), &expected, "{label}");
+                    }
+                }
+
+                let path = format!("{ETC_UNITS}/{unit}");
+                assert!(
+                    section
+                        .drop_ins
+                        .iter()
+                        .all(|d| d.path != path && d.unit != unit),
+                    "{label}: {:?}",
+                    section.drop_ins
+                );
+                assert!(!config.contains(&path), "{label}: {config:?}");
+            }
+        }
+    }
+}
+
+/// § 7.7: a regular, non-empty file of a storage kind beside its vendor
+/// file is a config entry and a mount finding, never a full shadow. A
+/// socket in the same layout is a full shadow row (the positive control).
+/// A timer in the same layout stays with the scheduled section, which
+/// writes every timer file under `/etc`: no row here, or two sections
+/// would write one file.
+#[test]
+fn regular_storage_file_is_a_config_entry_and_a_mount_finding_never_a_shadow() {
+    for unit in STORAGE_UNITS {
+        let socket = "app.socket";
+        let timer = "app.timer";
+        let exec = kinds_mock(
+            &[(unit, "enabled"), (socket, "enabled"), (timer, "enabled")],
+            "disable *\n",
+        );
+        let mut exec = with_etc_units(exec, vec![unit, socket, timer]);
+        for name in [unit, socket, timer] {
+            exec = exec.with_file(
+                &format!("{ETC_UNITS}/{name}"),
+                "[Unit]\nDescription=admin\n",
+            );
+            exec = owner_answer(with_vendor_units(exec, &[name]), name, Some("vendor-pkg"));
+        }
+        let (section, warnings) = scan(&exec);
+        let config = config_paths(&exec);
+        assert!(warnings.is_empty(), "{unit}: {warnings:?}");
+
+        // Positive control: the socket is a full shadow.
+        let socket_path = format!("{ETC_UNITS}/{socket}");
+        let row = section
+            .drop_ins
+            .iter()
+            .find(|d| d.path == socket_path)
+            .unwrap_or_else(|| {
+                panic!("{unit}: the socket shadow is a row: {:?}", section.drop_ins)
+            });
+        assert_eq!(row.shadow_type, Some(ShadowType::FullShadow));
+        assert!(config.contains(&socket_path), "{config:?}");
+
+        let path = format!("{ETC_UNITS}/{unit}");
+        assert!(
+            section.drop_ins.iter().all(|d| d.path != path),
+            "{unit}: a storage file is no full shadow: {:?}",
+            section.drop_ins
+        );
+        assert!(config.contains(&path), "{unit}: a config entry: {config:?}");
+        let finding = section
+            .mount_findings
+            .iter()
+            .find(|f| f.unit.name().as_unit_name().as_str() == unit)
+            .unwrap_or_else(|| panic!("{unit}: a mount finding"));
+        assert!(
+            matches!(
+                finding.unit.fragment(),
+                AdminStorageFragment::Shadowed { .. }
+            ),
+            "{unit}: {:?}",
+            finding.unit.fragment()
+        );
+        assert!(!state_change_names(&section).contains(&unit));
+
+        let timer_path = format!("{ETC_UNITS}/{timer}");
+        assert!(
+            section.drop_ins.iter().all(|d| d.path != timer_path),
+            "{unit}: {:?}",
+            section.drop_ins
+        );
+    }
+}
+
+/// § 7.7 drop-ins and plan review focus 5: drop-ins are collected for every
+/// parsed name of every kind, for `*.device.d` and `*.scope.d`, for a unit
+/// systemd lists as generated, and for a `.d` directory whose name does not
+/// parse. Each row keeps its `unit` string as written; the names that do
+/// not parse stay text and never become a state change. A `.conf` in a
+/// type-wide directory (`service.d`) is no row: it stays a config entry.
+#[test]
+fn drop_ins_are_collected_for_every_kind_and_for_names_that_do_not_parse() {
+    let dirs = [
+        ("httpd.service", "override.conf"),
+        ("cockpit.socket", "listen.conf"),
+        ("tmp.mount", "options.conf"),
+        ("backup.timer", "schedule.conf"),
+        ("dev-sda.device", "tag.conf"),
+        ("session-1.scope", "limits.conf"),
+        ("run-gen.mount", "gen.conf"),
+        ("foo.servic", "typo.conf"),
+    ];
+    let exec = kinds_mock(
+        &[
+            ("httpd.service", "disabled"),
+            ("run-gen.mount", "generated"),
+        ],
         "disable *\n",
     );
-    for unit in ["app.service", "app.socket"] {
-        let etc = format!("/etc/systemd/system/{unit}");
-        let usr = format!("/usr/lib/systemd/system/{unit}");
+    let mut entries: Vec<String> = dirs.iter().map(|(u, _)| format!("{u}.d")).collect();
+    entries.push("service.d".into());
+    let mut exec = with_etc_units(exec, entries.iter().map(String::as_str).collect());
+    for (unit, conf) in dirs {
+        let dir = format!("{ETC_UNITS}/{unit}.d");
         exec = exec
-            .with_file(&etc, UNIT_FILE)
-            .with_file(&usr, UNIT_FILE)
-            .with_command(&format!("test -f {etc}"), ExecResult::default())
-            .with_command(&format!("test -f {usr}"), ExecResult::default());
+            .with_dir(&dir, vec![conf])
+            .with_file(&format!("{dir}/{conf}"), "[Unit]\nDescription=x\n");
     }
-    let (section, _) = scan(&exec);
+    let type_wide = format!("{ETC_UNITS}/service.d/10-timeout.conf");
+    exec = exec
+        .with_dir(&format!("{ETC_UNITS}/service.d"), vec!["10-timeout.conf"])
+        .with_file(&type_wide, "[Service]\nTimeoutStopSec=10\n");
+    let exec = with_vendor_units(exec, &["httpd.service"]);
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let rows: Vec<(&str, &str)> = section
+        .drop_ins
+        .iter()
+        .map(|d| (d.unit.as_str(), d.path.as_str()))
+        .collect();
+    let expected: Vec<(String, String)> = dirs
+        .iter()
+        .map(|(u, c)| (u.to_string(), format!("{ETC_UNITS}/{u}.d/{c}")))
+        .collect();
+    let expected: Vec<(&str, &str)> = expected
+        .iter()
+        .map(|(u, p)| (u.as_str(), p.as_str()))
+        .collect();
+    assert_eq!(rows, expected);
+    for row in &section.drop_ins {
+        assert!(row.disposition.is_included(), "{row:?}");
+    }
+
+    // The rows for names that do not parse hold text, not a proved name,
+    // and none of them is a state change or an inventory entry.
+    for unparsed in ["dev-sda.device", "session-1.scope", "foo.servic"] {
+        assert!(
+            UnitName::try_from(unparsed.to_owned()).is_err(),
+            "{unparsed}"
+        );
+    }
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    assert!(
+        section.mount_findings.is_empty(),
+        "{:?}",
+        section.mount_findings
+    );
+    assert_eq!(inventory_names(&section), vec!["httpd.service"]);
+
+    // The type-wide drop-in is no row and stays a config entry.
+    assert!(section.drop_ins.iter().all(|d| d.path != type_wide));
+    let config = config_paths(&exec);
+    assert!(config.contains(&type_wide), "{config:?}");
+}
+
+/// A full shadow over a vendor unit whose `/etc` file is not text, or is
+/// over the executor's size cap (`InvalidData`), keeps its state change and
+/// does not degrade the scan. Its content cannot be carried, so it is no
+/// drop-in row: an empty drop-in would stage an empty file, which systemd
+/// reads as a mask. The config entry the config inspector records for it,
+/// a `ContentNotCaptured` advisory, is its one row, as for any file under
+/// `/etc` that cannot be read as text. The readable twin is a full shadow
+/// row.
+#[test]
+fn full_shadow_that_is_not_text_keeps_its_state_change_and_does_not_degrade() {
+    let exec = kinds_mock(
+        &[("latin1.service", "enabled"), ("twin.service", "enabled")],
+        "disable *\n",
+    )
+    .with_file_error(
+        "/etc/systemd/system/latin1.service",
+        std::io::ErrorKind::InvalidData,
+    )
+    .with_file("/etc/systemd/system/twin.service", UNIT_FILE);
+    let exec = with_etc_units(exec, vec!["latin1.service", "twin.service"]);
+    let exec = with_vendor_units(exec, &["latin1.service", "twin.service"]);
+    let exec = owner_answer(exec, "latin1.service", Some("a"));
+    let exec = owner_answer(exec, "twin.service", Some("b"));
+    let (section, warnings) = scan(&exec);
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // Control: the readable twin.
+    assert_eq!(
+        fragment_of(&section, "twin.service"),
+        &UnitFragment::Shadowed {
+            file: file("twin.service"),
+            owning_package: Some("b".into()),
+        }
+    );
+    assert_eq!(
+        drop_in_paths(&section),
+        vec!["/etc/systemd/system/twin.service"]
+    );
 
     assert_eq!(
-        state_change_names(&section),
-        vec!["app.service", "app.socket"]
+        fragment_of(&section, "latin1.service"),
+        &UnitFragment::Shadowed {
+            file: file("latin1.service"),
+            owning_package: Some("a".into()),
+        }
     );
-    let shadows: Vec<&str> = section.drop_ins.iter().map(|d| d.unit.as_str()).collect();
-    assert_eq!(shadows, vec!["app.service"]);
+    let config = config_entries(&exec);
+    let entry = config
+        .iter()
+        .find(|f| f.path == "/etc/systemd/system/latin1.service")
+        .unwrap_or_else(|| panic!("a config entry: {config:?}"));
+    assert!(
+        matches!(
+            entry.disposition,
+            FindingKind::Advisory {
+                advisory_type: AdvisoryType::ContentNotCaptured,
+                ..
+            }
+        ),
+        "{:?}",
+        entry.disposition
+    );
 }

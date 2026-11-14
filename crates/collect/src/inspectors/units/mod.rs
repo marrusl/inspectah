@@ -9,8 +9,9 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    Classified, MountUnitFinding, OrdinaryKind, PresetDefault, SystemdDropIn, UnitFragment,
-    UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
+    Classified, MountUnitFinding, OrdinaryKind, PresetDefault, SystemdDropIn, UNIT_TYPE_SUFFIXES,
+    UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange,
+    UnitSubject,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::HashSet;
@@ -18,10 +19,15 @@ use std::path::Path;
 
 mod resolve;
 
-use resolve::{ResolveError, Resolved, VENDOR_UNIT_DIR};
+use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
 const SECRET_PATTERNS: &[&str] = &["PASSWORD", "SECRET", "TOKEN", "KEY", "CREDENTIAL"];
+
+/// Why a full shadow matters, recorded on its drop-in row.
+const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd/system/ overrides \
+     the vendor unit in /usr/lib/systemd/system/. Base image updates to this unit will be \
+     silently ignored.";
 
 /// The prefix of a D-Bus activation alias (`dbus-org.freedesktop.*`): a
 /// link D-Bus activation manages, not a unit an administrator switched.
@@ -343,8 +349,8 @@ fn build_state_changes(
 
 /// Inspects systemd unit state for every unit kind: enabled, disabled or
 /// masked against what the image would have, where each unit's file lives
-/// and which package owns it. Also collects service drop-in overrides and
-/// flags environment variables that may contain secrets.
+/// and which package owns it. Also collects drop-ins and full shadows of
+/// every kind and flags environment variables that may contain secrets.
 pub struct UnitsInspector;
 
 impl UnitsInspector {
@@ -508,106 +514,9 @@ impl Inspector for UnitsInspector {
             value: state_changes.len(),
         });
 
-        // 5. Scan drop-in directories
-        let (mut drop_ins, redaction_hints, mut dropin_read_failures) = collect_drop_ins(exec);
-
-        // 5b. Detect full shadows for services that have no drop-in coverage.
-        // A full shadow at /etc/systemd/system/<unit> that overrides
-        // /usr/lib/systemd/system/<unit> should be surfaced even when no
-        // .service.d/ directory exists for that unit.
-        {
-            let dropin_units: std::collections::HashSet<&str> =
-                drop_ins.iter().map(|d| d.unit.as_str()).collect();
-            let mut shadow_entries = Vec::new();
-            for sc in &state_changes {
-                // Services only: masks, drop-ins and shadows of the other
-                // kinds are collected by a later step.
-                if sc.unit().name().kind() != UnitKind::Ordinary(OrdinaryKind::Service) {
-                    continue;
-                }
-                let unit = sc.unit().name().as_str();
-                if dropin_units.contains(unit) {
-                    continue;
-                }
-                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, unit) {
-                    let etc_path = format!("/etc/systemd/system/{unit}");
-                    let content = match exec.read_file(Path::new(&etc_path)) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            dropin_read_failures.push(etc_path);
-                            continue;
-                        }
-                    };
-                    shadow_entries.push(SystemdDropIn {
-                        unit: unit.to_owned(),
-                        path: etc_path,
-                        content,
-                        disposition: FindingKind::included(),
-                        shadow_type: Some(ShadowType::FullShadow),
-                        shadow_rationale: Some(
-                            "Full shadow: this unit file in /etc/systemd/system/ overrides \
-                             the vendor unit in /usr/lib/systemd/system/. Base image updates \
-                             to this unit will be silently ignored."
-                                .to_string(),
-                        ),
-                        ..Default::default()
-                    });
-                }
-            }
-            drop_ins.extend(shadow_entries);
-        }
-
-        // 5c. Independent full-shadow scan of /etc/systemd/system/.
-        // Step 5b only checks units in state_changes. Services that match
-        // their preset (e.g., sshd enabled with preset=enable) are only in
-        // the inventory, not state_changes, so a full shadow at
-        // /etc/systemd/system/sshd.service would be invisible. This scan
-        // catches those by listing /etc/systemd/system/ directly.
-        {
-            let already_covered: std::collections::HashSet<String> =
-                drop_ins.iter().map(|d| d.unit.clone()).collect();
-
-            if let Ok(etc_entries) = exec.read_dir(Path::new("/etc/systemd/system")) {
-                for entry in &etc_entries {
-                    // Only bare .service files — skip .d dirs, .wants, etc.
-                    if !entry.ends_with(".service") {
-                        continue;
-                    }
-                    // Skip units already covered by drop-in or step 5b.
-                    if already_covered.contains(entry.as_str()) {
-                        continue;
-                    }
-                    // Check if a vendor counterpart exists — if so, it's a shadow.
-                    let usr_path = format!("/usr/lib/systemd/system/{}", entry);
-                    if exec.run("test", &["-f", &usr_path]).exit_code == 0 {
-                        let etc_path = format!("/etc/systemd/system/{}", entry);
-                        let content = match exec.read_file(Path::new(&etc_path)) {
-                            Ok(c) => c,
-                            Err(_) => {
-                                dropin_read_failures.push(etc_path);
-                                continue;
-                            }
-                        };
-                        drop_ins.push(SystemdDropIn {
-                            unit: entry.clone(),
-                            path: etc_path,
-                            content,
-                            disposition: FindingKind::included(),
-                            shadow_type: Some(ShadowType::FullShadow),
-                            shadow_rationale: Some(
-                                "Full shadow: this unit file in /etc/systemd/system/ overrides \
-                                 the vendor unit in /usr/lib/systemd/system/. Base image updates \
-                                 to this unit will be silently ignored."
-                                    .to_string(),
-                            ),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-            // If /etc/systemd/system is unreadable, step 5 already recorded
-            // the failure via collect_drop_ins — no need to duplicate.
-        }
+        // 5. Drop-ins and full shadows of every kind: one owner per path
+        //    under /etc/systemd/system (§ 7.7 of the units spec).
+        let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
 
         // 6. Build result
         let section = UnitSection {
@@ -875,12 +784,21 @@ fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Option<ShadowType
     }
 }
 
-/// Collect drop-in `.conf` files from `/etc/systemd/system/*.service.d/`.
+/// Collect what the units section owns under `/etc/systemd/system` (§ 7.7
+/// of the units spec): every `.conf` in a unit's drop-in directory, then
+/// every full shadow ([`full_shadow`]).
+///
+/// A drop-in directory is collected for any name, whether or not it parses
+/// as a [`UnitName`]: a `.device` or `.scope` unit, a generated unit, or a
+/// name with a typo. The row keeps the name as text in `unit`. A type-wide
+/// directory (`service.d`) belongs to no unit: its files stay config
+/// entries.
+///
 /// Returns (drop_ins, redaction_hints, read_failures).
 /// Read failures on listed `.conf` files are correctness-bearing — the
-/// snapshot would look complete when a service override was actually missed.
+/// snapshot would look complete when an override was actually missed.
 fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHint>, Vec<String>) {
-    let dropin_base = Path::new("/etc/systemd/system");
+    let dropin_base = Path::new(ETC_UNIT_DIR);
     let mut drop_ins = Vec::new();
     let mut hints = Vec::new();
     let mut read_failures = Vec::new();
@@ -900,11 +818,13 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
     };
 
     for entry in &entries {
-        if !entry.ends_with(".service.d") {
+        // "httpd.service.d" → "httpd.service"
+        let Some(unit) = entry.strip_suffix(".d") else {
+            continue;
+        };
+        if UNIT_TYPE_SUFFIXES.contains(&unit) {
             continue;
         }
-        // Extract unit name: "httpd.service.d" → "httpd.service"
-        let unit = entry.trim_end_matches(".d");
         let dir_path = dropin_base.join(entry);
 
         let conf_files = match exec.read_dir(&dir_path) {
@@ -974,7 +894,77 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
         }
     }
 
+    for entry in &entries {
+        match full_shadow(exec, entry) {
+            Ok(Some(shadow)) => drop_ins.push(shadow),
+            Ok(None) => {}
+            Err(failure) => read_failures.push(failure),
+        }
+    }
+
     (drop_ins, hints, read_failures)
+}
+
+/// The full shadow row for `entry`, a name directly under
+/// `/etc/systemd/system`: a regular, non-empty file of an ordinary kind
+/// with a vendor file of the same name (§ 7.7 of the units spec). Any
+/// other path is `None`, because another section, or a state, owns it:
+///
+/// - a name that is not a unit, such as a `.wants` directory;
+/// - a storage kind: its file is a config entry and the unit a mount
+///   finding;
+/// - a timer: the scheduled section writes every timer file under `/etc`
+///   until a later phase moves timers here;
+/// - a link (a mask or an alias) or a zero-length file (a mask): the unit's
+///   state change records it, and the image gets it from `systemctl`;
+/// - no vendor file: a local unit, whose file is a config entry;
+/// - a file that is not text or is over the executor's size cap: its
+///   config entry records that the content was not captured. A drop-in
+///   row would stage an empty file, which systemd reads as a mask.
+///
+/// The form test is the one [`resolve::resolve`] applies, so a full shadow
+/// row and a `Shadowed` fragment agree. An `Err` names a file that could
+/// not be read.
+fn full_shadow(exec: &dyn Executor, entry: &str) -> Result<Option<SystemdDropIn>, String> {
+    let Ok(name) = UnitName::try_from(entry.to_owned()) else {
+        return Ok(None);
+    };
+    match name.kind() {
+        UnitKind::Storage(_) | UnitKind::Ordinary(OrdinaryKind::Timer) => return Ok(None),
+        UnitKind::Ordinary(_) => {}
+    }
+    let read_failure = |e: ResolveError| match e {
+        ResolveError::Read { path, error } => format!("{path}: {error}"),
+        ResolveError::Linked { path, target } => format!("{path}: link to {target}"),
+    };
+    let vendor = format!("{VENDOR_UNIT_DIR}/{entry}");
+    if matches!(
+        resolve::entry(exec, &vendor).map_err(read_failure)?,
+        Entry::Missing
+    ) {
+        return Ok(None);
+    }
+    let path = format!("{ETC_UNIT_DIR}/{entry}");
+    if !matches!(
+        resolve::entry(exec, &path).map_err(read_failure)?,
+        Entry::File { empty: false }
+    ) {
+        return Ok(None);
+    }
+    let content = match exec.read_file(Path::new(&path)) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    Ok(Some(SystemdDropIn {
+        unit: entry.to_owned(),
+        path,
+        content,
+        disposition: FindingKind::included(),
+        shadow_type: Some(ShadowType::FullShadow),
+        shadow_rationale: Some(FULL_SHADOW_RATIONALE.to_string()),
+        ..Default::default()
+    }))
 }
 
 #[cfg(test)]
@@ -2123,13 +2113,7 @@ mod tests {
                 std::io::ErrorKind::PermissionDenied,
             )
             // Vendor counterpart exists
-            .with_command(
-                "test -f /usr/lib/systemd/system/sshd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            );
+            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),

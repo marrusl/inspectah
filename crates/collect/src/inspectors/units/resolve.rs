@@ -44,7 +44,7 @@ pub(super) enum ResolveError {
 }
 
 /// What sits at one path.
-enum Entry {
+pub(super) enum Entry {
     Missing,
     Link(String),
     /// A regular file, and whether it is exactly zero bytes long.
@@ -170,7 +170,7 @@ fn link_form(
 }
 
 /// Read what sits at `path` without following a link.
-fn entry(exec: &dyn Executor, path: &str) -> Result<Entry, ResolveError> {
+pub(super) fn entry(exec: &dyn Executor, path: &str) -> Result<Entry, ResolveError> {
     let read_error = |error: io::Error| ResolveError::Read {
         path: path.to_owned(),
         error: error.to_string(),

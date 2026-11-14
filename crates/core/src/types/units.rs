@@ -40,6 +40,23 @@ pub enum StorageKind {
     Swap,
 }
 
+/// Every unit type suffix systemd reads under `/etc/systemd/system`,
+/// `device` and `scope` included: a file or drop-in directory may name
+/// those kinds even though [`UnitName`] does not admit them.
+pub const UNIT_TYPE_SUFFIXES: &[&str] = &[
+    "service",
+    "socket",
+    "device",
+    "mount",
+    "automount",
+    "swap",
+    "target",
+    "path",
+    "timer",
+    "slice",
+    "scope",
+];
+
 /// The kind of a unit, read from its name's suffix.
 ///
 /// `.device` and `.scope` have no variant: they never exist as unit files.

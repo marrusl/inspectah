@@ -255,13 +255,17 @@ pub fn collect(
 /// silently not run on hosts that take them, which no test or gate here
 /// would catch.
 pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
-    shadow_service_owned_paths(snapshot);
+    shadow_unit_owned_paths(snapshot);
 }
 
 /// A config file whose path appears in `units.drop_ins[].path` is
-/// materialized by the services renderer, under that entry's own
-/// decision, and the config tree subtracts the path unconditionally
-/// (`render::configtree::service_owned_paths`). Two live toggles over
+/// materialized by the units section, under that entry's own decision.
+/// That list holds every path the units section owns under
+/// `/etc/systemd/system`: drop-ins of every kind, including those under a
+/// name that does not parse, and full shadows (§ 7.7 of the units spec).
+/// A mask has no file, and a storage unit's file is a config entry, so
+/// neither is in it. The config tree subtracts each listed path
+/// unconditionally (`render::configtree::service_owned_paths`). Two live toggles over
 /// one carriage decision let an included config entry ship nothing and
 /// an excluded one ship anyway; marking the config entry inventory
 /// leaves exactly one decision and makes that subtraction correct by
@@ -271,7 +275,7 @@ pub fn finalize_cross_inspector(snapshot: &mut InspectionSnapshot) {
 /// degraded flag: the services inspector returns `Err` when its
 /// collection fails, so a path can appear here only when the entry that
 /// owns it was really collected.
-fn shadow_service_owned_paths(snapshot: &mut InspectionSnapshot) {
+fn shadow_unit_owned_paths(snapshot: &mut InspectionSnapshot) {
     let Some(services) = snapshot.units.as_ref() else {
         return;
     };
@@ -1996,6 +2000,41 @@ mod finalize_tests {
         finalize_cross_inspector(&mut snap);
 
         assert_eq!(only_entry(&snap).shadowed_by, Some(ConfigShadow::Units));
+    }
+
+    /// The pass follows the drop-in list, not a unit kind: a drop-in of a
+    /// socket, of a `.device`, and under a name that does not parse each
+    /// shadows the config entry at its path.
+    #[test]
+    fn a_drop_in_of_any_kind_shadows_its_config_entry() {
+        for unit in ["cockpit.socket", "dev-sda.device", "foo.servic"] {
+            let path = format!("/etc/systemd/system/{unit}.d/override.conf");
+            let mut snap = InspectionSnapshot::new();
+            snap.units = Some(UnitSection {
+                drop_ins: vec![SystemdDropIn {
+                    unit: unit.into(),
+                    path: path.clone(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            snap.config = Some(ConfigSection {
+                files: vec![ConfigFileEntry {
+                    path,
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }],
+            });
+
+            finalize_cross_inspector(&mut snap);
+
+            assert_eq!(
+                only_entry(&snap).shadowed_by,
+                Some(ConfigShadow::Units),
+                "{unit}"
+            );
+            assert!(only_entry(&snap).disposition.is_inventory(), "{unit}");
+        }
     }
 
     /// An empty `path` is not a match for every config entry that also
