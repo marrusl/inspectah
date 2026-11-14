@@ -715,7 +715,9 @@ pub struct ManualLink {
     pub unit: UnitName,
     pub cause: ManualLinkCause,
     /// For the two install-difference causes: the `/etc` install files
-    /// of `unit` that produce the difference (§ 7.4). Empty otherwise.
+    /// that produce the difference (§ 7.4). They are the files of the
+    /// unit whose `[Install]` was compared: `unit` for a link, `parent`
+    /// for relation `Also`. Empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_files: Vec<String>,
     pub aggregate: Option<AggregatePrevalence>,
@@ -743,7 +745,7 @@ read from a host file has one of three answers:
 | `MountUnitFinding.mount_point` | `Where=` | Stored only when it is an absolute path; otherwise `None`. Classified as an identifier. |
 | `MountUnitFinding.nofail` | `Options=` | A boolean. Nothing to scrub. |
 | `required_config`, `data_paths` | Paths in the template's unit file, expanded | Stored only when the expanded value is an absolute path under `/etc` or `/var`. Classified as identifiers. |
-| `ManualLink.install_files` | A directory listing | Paths under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
+| `ManualLink.install_files` | A directory listing | Paths under `/etc/systemd/system` of the files of the unit whose `[Install]` was compared (`unit` for a link, `parent` for relation `Also`). Not validated on load: each is read through `Destination` when the plan uses it, and one that does not parse counts as not staged, so the advisory is withheld. Classified as identifiers. |
 | `install_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
@@ -1059,7 +1061,7 @@ It compares two pairs of sets, read by the same reader (§ 7.2):
 |---|---|
 | Both pairs equal | Nothing. No row and no advisory. |
 | Every vendor link is an effective link, at least one effective link is not a vendor link, and the `Also=` names are equal | **Additive.** A `UnitStateChange` of `Enabled`, whatever the preset says, with the fragment as resolved (`Shadowed`, or `Vendor` with its `install_drop_ins`) and an `attention_reason` saying its `/etc` files add links the package's unit does not make. |
-| Anything else | **Not additive.** No state change. One `ManualLink` per difference: cause `HostInstallOnly` for an effective link that is not a vendor link, `VendorInstallOnly` for a vendor link that is not an effective link, and relation `Also` with the same two causes for a name only one side assigns. |
+| Anything else | **Not additive.** No state change. One `ManualLink` per difference: cause `HostInstallOnly` for an effective link that is not a vendor link, `VendorInstallOnly` for a vendor link that is not an effective link and is not on the host, and relation `Also` with the same two causes for a name only one side assigns. |
 | The vendor-side section is `Undetermined` | No state change. Each of the unit's links is a `ManualLink` with cause `Undetermined`. |
 
 An additive row is planned like any other (§ 10.2). The image already has
@@ -1070,22 +1072,50 @@ the shadow, or every drop-in in `install_drop_ins`, must be staged. Rule 7
 applies if the unit has `Also=` members, and since the unit has an install
 file, it is then an advisory. With the shadow or a drop-in excluded, rule
 5 omits the command as `InstallEvidenceChanged`, and the unit gets no
-command and no advisory. That is right: the image then loads the package's
-unit, and it is at its preset by that unit's links.
+command and no advisory. With its one install file excluded, the image
+loads the package's unit and is at its preset by that unit's links. With
+one of several excluded, what the image loads is a mix nobody recorded,
+and declining is the conservative result, not a claim that the image is
+right.
+
+**A link that is on the host is never advised for removal.** A vendor
+link the effective `[Install]` does not name can still be on the host,
+made by hand, and § 7.3 already reports it as a `NotInInstall` link. The
+comparison is therefore checked against the admin links of § 7.3: such a
+link is not `VendorInstallOnly`, since the host and the image both have
+it.
 
 **An install-difference advisory holds only while the files that cause it
 are in the export.** Each `HostInstallOnly` and `VendorInstallOnly` link
 records, in `install_files`, the `/etc` install files of the unit that
 produce the difference: its shadow and its install drop-ins. The advisory
 is rendered only when every one of them is in `staged_writes`. When one is
-excluded, the advisory is not rendered and nothing else is written for it:
-the image loads the package's unit, its links are the ones that unit
-makes, and a line to add or remove a link would make it wrong.
+excluded, the advisory is not rendered and nothing else is written for it.
+Its premise, the difference between those files and the package's, no
+longer holds for the export, so a line to add or remove a link can no
+longer be trusted. That is conservative and is not a claim that the image
+is then right: a remaining shadow or hiding drop-in may still change what
+is installed. The refine row shows the advisory as `not_applied`
+(§ 11.1).
 
-With any other preset the rule above already decides. Under a `disable`
-preset an `Enabled` unit has a row, the image has no links before the
-command, and `enable` after the `COPY` makes the host's. A `Disabled` unit
-under an `enable` preset gets `disable`, which removes every link to it.
+Under the other matching presets the rule above already gives a row. An
+`Enabled` unit under a `disable` preset gets `enable` after the `COPY`,
+which makes the host's links. A `Disabled` unit under an `enable` preset
+gets `disable`, which removes every link to it. Three cases stay
+uncovered, and § 17 lists them:
+
+- **A unit that matches no preset rule** gets no row from the rule above
+  and is outside this test, so it has no command and no advisory whatever
+  its `/etc` files do.
+- **A unit under a `disable` preset that the package install enabled
+  anyway,** through another unit's `Also=` (the second class below). The
+  image then has the vendor's links before the command, and an `enable`
+  for a shadow that changed the target adds the host's link and leaves the
+  vendor's.
+- **A changed `DefaultInstance=`.** If the `/etc` files change it from
+  `old` to `new`, the image's package install linked the `old` instance.
+  An additive row enables the `new` one (§ 7.5) and nothing removes the
+  `old` link.
 
 **The preset for an instance** is looked up under the instance's own name
 and, when no rule matches it, under its template's name if the template's
@@ -1130,7 +1160,9 @@ collected and excluded by default (§ 10.4).
 An instance whose install state is `Enabled` is a `UnitStateChange` of
 `Enabled`, with the fragment and owner of its effective unit, under the
 same rule as § 7.4 applied to the instance name. An instance linked from
-two parents is one state change.
+two parents is one state change. Cleanup of an instance the image linked
+and the host no longer has, after a changed `DefaultInstance=`, is not
+carried (§ 7.4).
 
 A masked instance needs nothing new: its mask under `/etc/systemd/system`
 is found by form and its name parses. An instance that is disabled leaves
@@ -1594,7 +1626,8 @@ section in the image would not be the one recorded on the source host
 (<path>)`.
 
 So a unit recorded `Shadowed` whose shadow is excluded gets no `enable`
-and no `disable`: the vendor file's `[Install]` was never read. A unit
+and no `disable`: the vendor file's `[Install]` is not the row's install
+evidence. A unit
 whose install drop-in is excluded gets no `enable` that would exit 0 and
 link nothing. A generated unit's request needs only its own file, which is
 in `staged_writes` by construction. `mask` reads no `[Install]`, succeeds
@@ -1989,7 +2022,7 @@ the install differences of a unit at its preset (§ 7.4) are here too:
 | `Undetermined` | `# Advisory: <parent>.<relation>/<unit> is not carried: the unit's [Install] section cannot be relied on (<cause>).` The cause is the `InstallUnknown` variant in words; for `UpheldBy=`, that enabling the unit would also make an `.upholds` link. |
 | `HostDevice` | `# Advisory: <unit> is tied to a device of the source host. Not carried.` |
 | `HostInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is on the source host because <unit>'s files under /etc/systemd/system name it, and the package's unit does not. The image was linked from the package's unit, so it lacks this link. Not carried.` |
-| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then: `#   To remove it, add after the configuration COPY: RUN rm /etc/systemd/system/<parent>.<relation>/<unit>` |
+| `VendorInstallOnly` | `# Advisory: <parent>.<relation>/<unit> is not on the source host: <unit>'s files under /etc/systemd/system do not name it, and the package's unit does. The image was linked from the package's unit, so it has this link.` Then: `#   To remove it, add after the configuration COPY: RUN rm -- '/etc/systemd/system/<parent>.<relation>/<unit>'` |
 
 For a link with relation `Alias` the first words are `<parent> is a link to
 <unit>` in place of the directory path.
@@ -2010,8 +2043,10 @@ is `Upholds=` in a drop-in for the parent. An `Alias` link gets no command
 line either, since no verb but `enable` makes one (measured); the text
 says to add `Alias=` in a drop-in or make the link in the Containerfile.
 A `HostDevice` link gets no command at all, and both operands are quoted
-like every other. For a `VendorInstallOnly` alias the removal line names
-`/etc/systemd/system/<alias>`. With relation `Also` there is no link and
+like every other. The removal line's path is single-quoted after `--` for
+the same reason: an escaped unit name holds backslashes the shell would
+otherwise take. For a `VendorInstallOnly` alias it names
+`'/etc/systemd/system/<alias>'`. With relation `Also` there is no link and
 no command: the text says which side names `<unit>` in `Also=`, that the
 package install in the image acted on the package's list, and to check
 `<unit>` with `systemctl is-enabled` in the image. None of the
@@ -2129,8 +2164,12 @@ narrowing are unchanged.
   parent and unit. Neither has an include flag to narrow. The two
   install-difference causes of § 7.4 merge the same way, with
   `install_files` the union, so an aggregate shows the advisory with its
-  prevalence. An additive row is a state
-  change like any other and is held to rule 5 on the aggregate.
+  prevalence. The cause is not part of the identity. When two hosts record
+  opposing causes for one relation, parent and unit, the merged row keeps
+  the cause of the first host in hostname order, and its prevalence
+  counts every host that recorded either. The advisory is then wrong for
+  the other hosts, which is a fleet limit (§ 17). An additive row is a
+  state change like any other and is held to rule 5 on the aggregate.
 - A template instance merges as the `UnitStateChange` it is. The list
   fields of every state change (`also`, `install_drop_ins`,
   `vendor_drop_ins`, `required_config`, `data_paths`) are the union across
@@ -2443,9 +2482,10 @@ Phase 4 (the `/etc/systemd/system` scan):
 - **T30. A unit at its preset whose `/etc` files change `[Install]`:
   the collector.** Each through the real inspectors, with an `enable`
   preset and the unit enabled. (a) A full shadow with the vendor's
-  `[Install]` unchanged, and one with the same values reordered: no row
-  and no advisory. (b) A drop-in that adds `WantedBy=extra.target`: an
-  `Enabled` state change with a `Vendor` fragment, the drop-in in
+  `[Install]` unchanged, and one with the same values reordered: first the
+  shadow is in `drop_ins` and the unit has an `Enabled` inventory entry,
+  then there is no row and no advisory. (b) A drop-in that adds
+  `WantedBy=extra.target`: an `Enabled` state change with a `Vendor` fragment, the drop-in in
   `install_drop_ins`, and the attention note. (c) A full shadow that adds
   a second `WantedBy=` and one that adds an `Alias=`: an `Enabled` state
   change with a `Shadowed` fragment. (d) A full shadow that replaces
@@ -2458,17 +2498,24 @@ Phase 4 (the `/etc/systemd/system` scan):
   change and one `VendorInstallOnly` link. (g) A shadow that drops
   `Also=helper.service`: no state change and one `ManualLink` with
   relation `Also` and cause `VendorInstallOnly`. (h) The same shadows
-  under a `disable` preset: the ordinary row and no advisory.
+  under a `disable` preset: the ordinary row and no advisory. (i) A vendor
+  unit whose own `[Install]` holds a specifier the reader does not expand,
+  shadowed by a file with a plain `WantedBy=`: no state change, and each
+  of the unit's links is a `ManualLink` with cause `Undetermined`. (j) The
+  replacing shadow of (d) on a host that also has a hand-made
+  `multi-user.target.wants/` link: the `NotInInstall` link of § 7.3 and
+  no `VendorInstallOnly` link for it.
 - **T31. The additive row, rendered.** For T30 (b), (c) and (e): the unit
   is in `RUN systemctl enable` after the configuration `COPY`. With the
   drop-in of (b) or the shadow of (c) excluded: `InstallEvidenceChanged`
   and no enable. The unit of (a) is in no `systemctl` line.
 - **T32. The advisories, rendered.** For T30 (d): the `HostInstallOnly`
-  block with its `add-wants` line, the `VendorInstallOnly` block with its
-  `rm` line, no `systemctl` instruction naming the unit, and two refine
+  block with its `add-wants` line, the `VendorInstallOnly` block with
+  `RUN rm -- '<path>'`, a unit named with `\x2d` keeping its backslashes
+  inside the quotes, no `systemctl` instruction naming the unit, and two refine
   rows with no include field. For (f): the removal line. For (g): the
   `Also` text and no command line. A `VendorInstallOnly` alias names
-  `/etc/systemd/system/<alias>`. With the replacing shadow of (d)
+  `'/etc/systemd/system/<alias>'`. With the replacing shadow of (d)
   excluded: no `rm` line, no `add-wants` line, no command for the unit,
   and the two refine rows marked `not_applied` with the shadow's path;
   included again, both blocks return.
@@ -2746,6 +2793,14 @@ Other objections worth weighing:
   And an edited snapshot whose recorded `also` list disagrees with its own
   unit file is believed: the plan checks that the files are the recorded
   ones, not that the record is true (§ 10.2).
+- **The install comparison leaves four cases.** A unit that matches no
+  preset rule gets no row and no advisory, whatever its `/etc` files do.
+  A unit under a `disable` preset that the package install enabled through
+  another unit's `Also=` keeps the vendor's links beside the host's when
+  its shadow changed the target. A changed `DefaultInstance=` leaves the
+  old instance linked in the image (all § 7.4). And on a fleet, two hosts
+  that record opposing causes for one link merge to the first host's, so
+  the advisory is wrong for the others (§ 12).
 - **The type split costs ergonomics.** `CarriedUnit` is an enum over two
   name types and a fragment, where one struct and a render `match` would
   do, and it still needs § 10.2 behind it. The types earn their place only
