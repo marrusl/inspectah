@@ -4480,6 +4480,50 @@ async fn the_mount_source_is_nowhere_in_the_view_response() {
     assert!(!body.contains(MOUNT_TOKEN), "the mount source leaked");
 }
 
+/// T10 for a `What=` continued onto the next line: systemd reads the
+/// `Where=/opt/token=...` line after it as part of the mount source. The
+/// finding row has the mount point systemd uses, and the token is nowhere
+/// in the `/api/view` body as the handler sends it.
+#[tokio::test]
+async fn a_continued_mount_source_is_nowhere_in_the_view_response() {
+    use unit_hosts::{CONTINUED_MOUNT_POINT, CONTINUED_MOUNT_TOKEN, CONTINUED_MOUNT_UNIT};
+    // Presence first: the host's unit file holds the token before redaction.
+    let raw = unit_hosts::scan_unredacted(unit_hosts::continued_mount_host());
+    assert!(
+        serde_json::to_string(&raw)
+            .expect("the snapshot serializes")
+            .contains(CONTINUED_MOUNT_TOKEN),
+        "the fixture plants the token"
+    );
+    let snap = unit_hosts::scan(unit_hosts::continued_mount_host());
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    }));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/view")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).expect("the view is UTF-8");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("the view is JSON");
+
+    let finding = row_by(&json["mount_findings"], "unit", CONTINUED_MOUNT_UNIT);
+    assert_eq!(finding["mount_point"], CONTINUED_MOUNT_POINT, "{finding}");
+    assert!(body.contains(CONTINUED_MOUNT_UNIT), "presence first");
+    assert!(
+        !body.contains(CONTINUED_MOUNT_TOKEN),
+        "the continued mount source leaked"
+    );
+}
+
 /// Two aggregate variants at one unit path, the selected one with content
 /// and the alternative zero-length. The projection's `config_withheld`
 /// lists one entry per included row at the path; the view puts each on
