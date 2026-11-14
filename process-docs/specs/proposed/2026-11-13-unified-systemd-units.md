@@ -1126,7 +1126,9 @@ One rule decides who owns each thing found at
   back. A `.conf` in a type-wide directory (`service.d`) belongs to no
   unit and is not a drop-in row: it reaches the snapshot as a config
   entry, like any other unowned file under `/etc`, which is where rules 5
-  and 7 of § 10.2 find it.
+  and 7 of § 10.2 find it. That holds for an unowned file. Whether a
+  package-owned, unmodified one there reaches a single-host snapshot is
+  not verified in source and not measured (§ 13 run R2).
 
 `SystemdDropIn` keeps its fields. `unit` stays a `String`, because a drop-in
 may name a `.device` or `.scope` that `UnitName` does not admit.
@@ -1616,9 +1618,12 @@ recorded on the other side: `Unlinked` under an `enable`, `Installed`
 under a `disable`. That pair reproduced the host exactly for
 `cups.service` and `cups.socket` (measured). An `InstallFile` advisory
 names the file and gives `U`'s command alone, to be added after reading
-that file, and a `FleetAggregate` advisory gives `U`'s command and names
-every recorded member. For the other two reasons the block names the
-member and gives no line.
+that file. A `FleetAggregate` advisory gives `U`'s command and names
+every recorded member, and its text says that fleet evidence may omit
+install metadata, so before adding the command after the configuration
+`COPY` lines the operator should check the unit's effective `[Install]`
+and `Also=` in the image and the intended state of each member. For the
+other two reasons the block names the member and gives no line.
 
 **The no-RPM path runs every rule.** `render_service_intent` returns early
 into `render_without_rpm` when the snapshot has no package section
@@ -2002,14 +2007,23 @@ narrowing are unchanged.
 - A template instance merges as the `UnitStateChange` it is. The list
   fields of every state change (`also`, `install_drop_ins`,
   `vendor_drop_ins`, `required_config`, `data_paths`) are the union across
-  every host that has the unit.
+  every host that has the unit. Within `also`, a member two hosts record
+  with different `links` becomes `Other`, and a member's `vendor_drop_ins`
+  is the union of the names. Neither can produce a carried `Also=`
+  command, because of the next rule.
 - **A command for a unit with a non-empty `also` list is always an
   advisory in an aggregate (§ 10.2 rule 7).** An aggregate is a snapshot
   whose rows carry `aggregate`. The merge keeps one `file_ownership` entry
-  per package name (`merge.rs:1332`), so a
-  package-owned, unmodified `[Install]` drop-in that one host has can be
-  absent from the aggregate, and rule 7 cannot establish that no install
-  file exists. The merge is not changed.
+  per package name (`merge.rs:1332`), so a package-owned, unmodified
+  `[Install]` drop-in that one host has can be absent from the aggregate,
+  and rule 7 cannot establish that no install file exists. The merge is
+  not changed.
+- **A limit for rows without `Also=`.** Rule 5 compares a row's install
+  drop-ins with the same aggregate, which may lack another host's
+  package-owned, unmodified drop-in. If the image's package ships that
+  drop-in and it holds `[Install]`, a carried `enable` could link more
+  than any source host had. It needs a package that ships an `[Install]`
+  drop-in under `/etc`, which none of the surveyed packages does.
 - `default_target` takes the most prevalent target, and is excluded when the
   hosts do not all agree, the same rule `narrow_non_universal` applies.
 - `SystemdTimer` no longer has an include flag to narrow.
@@ -2353,7 +2367,10 @@ or fedora44 VMs for them.**
   key: whether the config walk recorded the file, and that the enable is
   omitted. An instance with clean configuration is active after boot. A
   libvirt service with one socket disabled: the rendered advisory against
-  the host's links.
+  the host's links. A package that owns an unmodified
+  `/etc/systemd/system/service.d/*.conf` holding an `[Install]` section,
+  scanned on a single host: whether the snapshot holds any entry for that
+  path, in `config.files`, in `units.drop_ins` or in `file_ownership`.
 - **R3. Boot checks.** (a) RHEL 9: the journal of a first boot with
   rendered `disable`, `enable` and `mask` lines. The unit states are
   measured from the console; the journal is not. (b) A control image with
@@ -2569,7 +2586,12 @@ Other objections worth weighing:
   effect nobody recorded, silently. The spec does not close it: comparing
   against the target image is a non-goal (§ 3), and no version check is
   made.
-- **Four limits are stated and not closed.** A rescan of a host built
+- **Five limits are stated and not closed.** On a fleet aggregate, a row
+  without `Also=` is compared against a snapshot that may lack another
+  host's package-owned, unmodified install drop-in, so a carried `enable`
+  could link more than any source had; it needs a package that ships an
+  `[Install]` drop-in under `/etc`, which none of the surveyed packages
+  does (§ 12). A rescan of a host built
   from an inspectah image carries the old flatpak provisioning unit and
   withholds the new one (§ 10.2). A fleet whose hosts disagree about a
   unit's fragment is judged on one host's owner when nothing is staged
