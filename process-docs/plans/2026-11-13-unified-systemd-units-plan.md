@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `94099a0a`. The spec is the contract. Section numbers (§) and test ids (T1 to T29) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `284af14d`. The spec is the contract. Section numbers (§) and test ids (T1 to T32) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -158,7 +158,7 @@ Spec: § 6.1, § 6.4, § 9, § 9.1, § 11.3, § 12 (inventory). Tests T1, T3, T4
 - [ ] **Step 2-4:** run (fails: a synthetic row exists), implement, gate.
 - [ ] **Step 5: Commit** `refactor(refine): stop inventing state changes for shadowed units`.
 
-**Acceptance:** T4's session assertions pass. The frontend shadow count is Task 1.6's.
+**Acceptance:** T4's session assertions pass. The frontend shadow count is Task 1.6's. The `systemctl` line the synthetic row produced in a refine export is the one thing § 11.3 says is not kept: where the shadow leaves `[Install]` alone the image already has the links, and where it changes `[Install]`, Tasks 4.5a and 4.5b carry or advise it.
 
 ### Task 1.5: Refine projection and operation rename (Rust lane, M)
 
@@ -495,9 +495,9 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 ---
 
-## Phase 4: the `/etc/systemd/system` scan (size L, above § 15's estimate; 13 tasks)
+## Phase 4: the `/etc/systemd/system` scan (size L, above § 15's estimate; 15 tasks)
 
-Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sources 3 to 5 and the search path, § 7.2 (all), § 7.3, § 7.4 (instance preset, stock state), § 7.5 (first three paragraphs), § 7.6, § 7.7 (`*.upholds/*`), § 10.2 (install files, rule 5 drop-in half, rule 7), § 10.5, § 10.9, § 11.1 (`manual_links`, `default_target`, `also`, `install_drop_ins`), § 12 (list fields, `manual_links`, `default_target`). Tests T22 to T27, T25 (a) to (l).
+Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sources 3 to 5 and the search path, § 7.2 (all), § 7.3, § 7.4 (instance preset, stock state, a unit at its preset whose `/etc` files change `[Install]`), § 7.5 (first three paragraphs), § 7.6, § 7.7 (`*.upholds/*`), § 10.2 (install files, rule 5 drop-in half, rule 7), § 10.5, § 10.9, § 11.1 (`manual_links`, `default_target`, `also`, `install_drop_ins`), § 12 (list fields, `manual_links`, `default_target`). Tests T22 to T27, T25 (a) to (l), T30 to T32.
 
 ### Task 4.0: Run R5 before phase 4 (real host, M)
 
@@ -507,7 +507,9 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 - [ ] Run each R5 question as § 13 states it, on both releases. Record under a dated Measured subsection. Revert both VMs. Commit `docs(skills): record the small systemd facts phase 4 relies on`.
 
-**Gate:** phase 4 code does not start until each answer is checked against Tasks 4.1 to 4.8. An answer that matches the spec's assumption lets its guard stand. An answer on § 17's R5 line (a drop-in reset behaving as documented, a different search-path order, `disable` failing on an absent `Also=` member) goes to the project owner for a spec change, and this plan's affected task is rewritten before it starts.
+- [ ] Include the sequence § 7.4's additive row rests on, on both bases: in an image where the package install has already linked a preset-enabled unit, `COPY` an `/etc` drop-in that adds `WantedBy=extra.target`, then `systemctl enable`; and the same with a full shadow that adds a target. Record the links before and after.
+
+**Gate:** phase 4 code does not start until each answer is checked against Tasks 4.1 to 4.8, 4.5a and 4.5b. If the additive sequence does not give one new link with the existing ones untouched, § 13 says the additive case becomes a `HostInstallOnly` advisory per added link: Task 4.5a's additive row and Task 4.5b's T31 are rewritten to that before they start, with the project owner told. An answer that matches the spec's assumption lets its guard stand. An answer on § 17's R5 line (a drop-in reset behaving as documented, a different search-path order, `disable` failing on an absent `Also=` member) goes to the project owner for a spec change, and this plan's affected task is rewritten before it starts.
 
 Before Task 4.1: merge `main` into the branch and run the gate.
 
@@ -562,6 +564,34 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 
 **Acceptance:** T23 passes, and with Task 4.4, T22.
 
+### Task 4.5a: The vendor-side read and the install comparison (Rust lane, M)
+
+**Spec:** § 7.2 "The vendor-side read"; § 7.4 "A unit at its preset whose `/etc` files change `[Install]`" (the decision, the two pairs of sets, the four-row table, the other-preset paragraph); § 6.6 `LinkRelation::Also`, `ManualLinkCause::HostInstallOnly` and `VendorInstallOnly`; T30.
+
+**Needs:** Task 4.1 (`read_install`), Task 4.3 (`install_drop_ins`, `vendor_drop_ins`), Task 4.4 (install state), Task 4.5 (`ManualLink`).
+
+**Files:** `crates/core/src/types/units.rs` (the relation and the two causes), `crates/collect/src/inspectors/units/install.rs` (a second call of `read_install` over the vendor fragment and vendor drop-ins only), `crates/collect/src/inspectors/units/mod.rs` (the comparison, after the install state is known). Test: `crates/collect/tests/units_test.rs`.
+
+**Interfaces (Produces):** `pub(crate) fn compare_install(effective: &InstallRead, vendor: &InstallRead) -> InstallDifference`, where `InstallDifference` is `Same`, `Additive`, `NotAdditive { host_only, vendor_only, also_host_only, also_vendor_only }` or `VendorUndetermined`. It is internal to the collector and is not stored.
+
+- [ ] **Step 1: Failing tests first,** T30 (a) to (j) through the real inspectors ((a) asserts first that the shadow is in `drop_ins` and the unit has an `Enabled` inventory entry, then that no row and no advisory exist; (i) is the `Undetermined` vendor-side section; (j) is a vendor link that is on the host by hand, which is not `VendorInstallOnly`), asserting the state change or its absence, the fragment, `install_drop_ins`, the attention note, and each `ManualLink` with its relation, cause and `install_files`. A unit test on `compare_install`: reordered values are `Same`; an added `Alias=` is `Additive`; equal links with a differing `Also=` name are `NotAdditive`; an `Undetermined` vendor section is `VendorUndetermined`.
+- [ ] **Step 2-4:** run (fails: no row and no link finding for any divergent unit), implement, gate. **Step 5: Commit** `feat(collect): compare a unit's /etc [Install] with its package's`.
+
+**Acceptance:** T30 passes. A shadow that leaves `[Install]` alone produces no row and no finding.
+
+### Task 4.5b: The added links carried, the changed ones advised (Rust lane, M)
+
+**Spec:** § 7.4 "An additive row is planned like any other" (rule 5 on the shadow or the drop-ins, rule 7 if the unit has members); § 7.4 "An install-difference advisory holds only while the files that cause it are in the export" (`ManualLink.install_files`, read through `Destination`); § 10.9 the `HostInstallOnly` and `VendorInstallOnly` rows, the `add-wants` line for the first, the quoted `rm --` line for the second, the alias and `Also` wording; § 11.1 `manual_links[]` with the new relation and causes, and `not_applied`; § 6.7 row for `install_files`; § 11.3 "The command, which is the exception"; T31, T32.
+
+**Needs:** Task 4.5a; Task 4.3 (rule 5's drop-in half); Task 4.5 (the link advisory renderer).
+
+**Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/refine/src/projection/`. Test: `crates/cli/tests/units_scan_test.rs`, `crates/pipeline/tests/unit_plan_test.rs`.
+
+- [ ] **Step 1: Failing tests first,** T31: the units of T30 (b), (c) and (e) are in `RUN systemctl enable` after the configuration `COPY`; with the drop-in of (b) or the shadow of (c) excluded, `InstallEvidenceChanged` and no enable; the unit of (a) is in no `systemctl` line. T32: for (d), the `HostInstallOnly` block with its `add-wants` line, the `VendorInstallOnly` block with `RUN rm -- '<path>'`, a unit named with `\x2d` keeping its backslashes inside the quotes, no `systemctl` instruction naming the unit, and two refine rows with no include field; for (f), the removal line; for (g), the `Also` text and no command line; a `VendorInstallOnly` alias names `'/etc/systemd/system/<alias>'`. With the replacing shadow of (d) excluded: no `rm` line, no `add-wants` line, no command for the unit, and the two refine rows marked `not_applied` with the shadow's path; included again, both blocks return.
+- [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): carry added [Install] links and advise changed ones`.
+
+**Acceptance:** T31 and T32 pass. No `systemctl` verb other than `enable`, `disable`, `mask` and `set-default` is rendered.
+
 ### Task 4.6: Enabled instances, omitted for now (Rust lane, S)
 
 **Spec:** § 7.5 first two paragraphs; § 15 phase 4 placeholder (`template instances are not carried yet`); T27.
@@ -591,11 +621,11 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 
 ### Task 4.9: Fleet merge of the phase 4 fields, and rule 7 on an aggregate (Rust lane, M)
 
-**Spec:** § 12 bullets on list-field union for the lists that exist in phase 4 (`also`, `install_drop_ins`, `vendor_drop_ins`; `required_config` and `data_paths` are Task 5.1's), member `links` disagreement becoming `Other`, `vendor_drop_ins` union, `manual_links` by relation, parent and unit, "always an advisory in an aggregate", the rows-without-`Also=` limit (no product text); § 10.2 `AlsoWhy::FleetAggregate` and its advisory text; T25 (j).
+**Spec:** § 12 bullets on list-field union for the lists that exist in phase 4 (`also`, `install_drop_ins`, `vendor_drop_ins`; `required_config` and `data_paths` are Task 5.1's), member `links` disagreement becoming `Other`, `vendor_drop_ins` union, `manual_links` by relation, parent and unit, the install-difference causes merging the same way with `install_files` the union and the first host's cause kept when two hosts record opposing causes, "always an advisory in an aggregate", the rows-without-`Also=` limit (no product text); § 10.2 `AlsoWhy::FleetAggregate` and its advisory text; T25 (j).
 
 **Files:** `crates/core/src/aggregate/merge.rs`, `crates/pipeline/src/render/unit_plan.rs`. Test: `crates/core/tests/aggregate_merge_test.rs`, `crates/refine/tests/aggregate_export_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` on the refine row with the fleet text); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; two hosts with different `install_drop_ins` and `vendor_drop_ins` for one unit merge to the union of each, and a member's `vendor_drop_ins` to the union of names; manual links from two hosts merge by the triple.
+- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` on the refine row with the fleet text); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; two hosts with different `install_drop_ins` and `vendor_drop_ins` for one unit merge to the union of each, and a member's `vendor_drop_ins` to the union of names; manual links from two hosts merge by the triple; two hosts with the same `VendorInstallOnly` link and different `install_files` merge to one row with the union and the prevalence of both; two hosts with opposing causes for one triple merge to the first host's cause in hostname order, with the prevalence of both.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(core): merge Also= and link findings across hosts`.
 
 ### Task 4.10: The default target (Rust lane, M)
@@ -611,11 +641,11 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 
 **Spec:** § 11.1 `manual_links[]`, `default_target`, `unit_states[].also[]` and `install_drop_ins[]`, `ItemId::DefaultTarget`. See Readings and plan choices, item 1.
 
-**Parallel:** can start beside Tasks 4.5, 4.7 and 4.10 against their projection Interfaces; merges after the last of them.
+**Parallel:** can start beside Tasks 4.5, 4.5b, 4.7 and 4.10 against their projection Interfaces; merges after the last of them.
 
 **Files:** `crates/web/src/{web_types,adapter,handlers}.rs`, `crates/web/ui/src/api/types.ts`, the units list component. Test: `crates/web/tests/api_test.rs`, Vitest.
 
-- [ ] **Step 1: Failing tests first:** a manual link renders as a row with its advisories and no toggle; the default target renders with a toggle that sends `ItemId::DefaultTarget` and changes the Containerfile; a unit row lists its `also` members with their links.
+- [ ] **Step 1: Failing tests first:** a manual link renders as a row with its advisories and no toggle, the `also` relation and the two install-difference causes of Task 4.5b included; the default target renders with a toggle that sends `ItemId::DefaultTarget` and changes the Containerfile; a unit row lists its `also` members with their links.
 - [ ] **Step 2-4:** run, implement, frontend checks, gate. **Step 5: Commit** `feat(web): show unit links, Also= members and the default target`.
 
 ### Task 4.12: Phase 4 close (Rust lane, S)
@@ -623,13 +653,13 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 **Spec:** § 14 row for `inspectah-write-the-collector-overlap-contract` ("Phase 4 writes this part into `process-docs/` and fixes `docs/reference/inspector-coverage.md`").
 
 - [ ] Write the `/etc/systemd/system` ownership contract (§ 7.7 table, § 8 table, the three dependency-directory exclusions) as `process-docs/skills/etc-systemd-system-ownership.md`, add it to `process-docs/skills/index.md`; fix `docs/reference/inspector-coverage.md:110-133` (sources, what becomes a state change, links, the default target); update `service-omission-model.md` (rules 5 and 7).
-- [ ] **CHANGELOG.md**: **Added** hand-made unit link advisories with the `add-wants` or `add-requires` line; the default target is carried. **Changed** enablement is read from the links, so a unit enabled only by a hand-made link is reported, not enabled; a command whose `Also=` members differ on the source is an advisory with the lines to add by hand.
+- [ ] **CHANGELOG.md**: **Added** hand-made unit link advisories with the `add-wants` or `add-requires` line; the default target is carried. **Changed** enablement is read from the links, so a unit enabled only by a hand-made link is reported, not enabled; a command whose `Also=` members differ on the source is an advisory with the lines to add by hand; a unit at its preset whose `/etc` files add `[Install]` links is enabled after the `COPY`, and one whose files drop or replace a link is advised with the line to add or remove.
 - [ ] The phase report names `inspectah-write-the-collector-overlap-contract` as partly covered (what remains, per § 14) and notes that the blocker of `inspectah-etc-unit-files-accessor` has moved.
 - [ ] Gate; commit `docs: write the /etc/systemd/system ownership contract`.
 
-**Phase 4 ends:** a scan reads enablement from the links, reports hand-made links, carries the default target, records `Also=` members and carries a command only when they agree, and names every enabled instance in an `# Omitted:` line.
+**Phase 4 ends:** a scan reads enablement from the links, reports hand-made links, carries the default target, records `Also=` members and carries a command only when they agree, carries or advises a unit at its preset whose `/etc` files change `[Install]`, and names every enabled instance in an `# Omitted:` line.
 
-**Review gate 4:** implementation review before Task 5.1. Focus: **the interaction of rule 5's drop-in half and rule 7 with `staged_writes` and the fleet merge** (T24, T25 (h), (j), (k)): an install file staged, excluded, or present on another host only; a same-named `/etc` drop-in hiding a vendor one; a member's toggle changing its owner's command.
+**Review gate 4:** implementation review before Task 5.1. Focus: **the interaction of rule 5's drop-in half and rule 7 with `staged_writes` and the fleet merge** (T24, T25 (h), (j), (k)): an install file staged, excluded, or present on another host only; a same-named `/etc` drop-in hiding a vendor one; a member's toggle changing its owner's command. And **the install comparison** (T30 to T32): that an unchanged shadow is a no-op, and that the additive test compares link sets and not text.
 
 ---
 
@@ -723,12 +753,12 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 | 1 the rename | 7 (6 / 1 / 0) | M | M |
 | 2 every kind | 17 (13 / 1 / 2 runs; 1 close) | L, upper end | XL: about one and a half L |
 | 3 one control per fact | 7 (5 / 2 / 0) | M | M |
-| 4 the `/etc/systemd/system` scan | 13 (11 / 1 / 1 run) | L | L+: about a third over L |
+| 4 the `/etc/systemd/system` scan | 15 (13 / 1 / 1 run) | L, upper end | L+: about a half over L |
 | 5 carried instances | 7 (4 / 1 / 1 run; 1 merge) | S to M | M |
 
 Task sizes: S is one short dispatch, M one full dispatch, L one dispatch at the limit of what a single review can check from the diff. The L tasks (1.2, 2.7, 4.4, 4.8, 2.17, 5.6) are the ones to watch for a split.
 
-**The whole is larger than § 15 estimates, by roughly a third.** Phases 2 and 4 carry most of it: phase 2 holds staging, the plan, three rule tasks, mount findings, updaters, fleet and refine rows, and phase 4 holds a reader, a resolver, link state, links, members, rule 7 and the default target. § 15's sizes also do not count the five real-host tasks or the frontend lane's five tasks after phase 1 (2.14, 3.3, 3.6, 4.11, 5.4).
+**The whole is larger than § 15 estimates, by roughly a third.** Phases 2 and 4 carry most of it: phase 2 holds staging, the plan, three rule tasks, mount findings, updaters, fleet and refine rows, and phase 4 holds a reader, a resolver, link state, links, the install comparison, members, rule 7 and the default target. § 15's sizes also do not count the five real-host tasks or the frontend lane's five tasks after phase 1 (2.14, 3.3, 3.6, 4.11, 5.4).
 
 ## Readings and plan choices
 
@@ -753,17 +783,19 @@ Each spec section that states a requirement, and the task that implements it.
 | § 6.3 state change, refusals | 2.2; `also` 4.7; drop-in lists 4.3; instance lists 5.1 |
 | § 6.4 section, inventory | 1.3; derived state 4.4 |
 | § 6.5 mount findings | 2.1, 2.5 |
-| § 6.6 hand-made links | 4.5 |
+| § 6.6 hand-made links | 4.5; the `Also` relation and the two install-difference causes 4.5a |
 | § 6.7 extracted fields and guard | 2.5; `AlsoMember` 4.7; `ManualLink` 4.5; `DefaultTarget` 4.10; `vendor_drop_ins` 4.3; instance lists 5.1; timers 3.1 |
 | § 7.1 sources 1, 2 | 2.3 |
 | § 7.1 sources 3 to 5, search path | 4.2, 4.4 |
 | § 7.2 steps 2, 3 | 2.2 |
 | § 7.2 step 1, step 4, install files recorded | 4.1, 4.2, 4.3 |
+| § 7.2 the vendor-side read | 4.5a |
 | § 7.3 install state, table | 4.4 |
 | § 7.3 `ManualLink`, aliases, `.upholds` | 4.5 |
 | § 7.3 `Also=` members | 4.7 |
 | § 7.4 state change rules, name gate | 2.3 |
 | § 7.4 instance preset, stock-state list | 4.4 |
+| § 7.4 a unit at its preset whose `/etc` files change `[Install]` | 4.5a (comparison, row, findings); 4.5b (render) |
 | § 7.4 updaters, protected units at collect | 2.11, 2.8 |
 | § 7.5 instances collected, host-device list | 4.6, 4.5 |
 | § 7.5 what an instance needs, fixed tables | 5.1 |
@@ -790,23 +822,23 @@ Each spec section that states a requirement, and the task that implements it.
 | § 10.6 mount advisories | 2.10 (T8, T9, and T11's unowned storage masks) |
 | § 10.7 order | 2.9; generated units 3.4 |
 | § 10.8 instance configuration, data advisory | 5.2, 5.3 |
-| § 10.9 link advisories | 4.5 |
+| § 10.9 link advisories | 4.5; install differences 4.5b |
 | § 11.1 rename of fields and operation | 1.5, 1.6 |
 | § 11.1 `unit_states`, `declined`, `withheld`, `mount_findings` | 2.13, 2.14 |
 | § 11.1 scheduled rows, timer operation removed | 3.2, 3.3 |
-| § 11.1 `manual_links`, `default_target`, `also` | 4.5, 4.7, 4.10, 4.11 |
+| § 11.1 `manual_links`, `default_target`, `also` | 4.5, 4.5b, 4.7, 4.10, 4.11 |
 | § 11.1 generated units declined on their rows | 3.4, 3.6 |
 | § 11.1 instance fields | 5.1, 5.3, 5.4 |
 | § 11.2 section design | Phase 6 |
-| § 11.3 synthesis retired | 1.4, 1.6 |
+| § 11.3 synthesis retired | 1.4, 1.6; the command it produced 4.5a, 4.5b |
 | § 12 inventory merge | 1.3 |
 | § 12 identity, mount findings, updater exception, render-time validation | 2.11, 2.12 |
-| § 12 list fields, `manual_links`, `default_target`, aggregate `Also=` | 4.9, 4.10; `required_config` and `data_paths` 5.1 |
+| § 12 list fields, `manual_links`, `default_target`, aggregate `Also=` | 4.9, 4.10; install-difference causes and `install_files` 4.9; `required_config` and `data_paths` 5.1 |
 | § 13 tests | Per test in the table below |
 | § 13 R1 | 2.16, 5.6 |
 | § 13 R2 (six observations), R4 | 5.6 |
 | § 13 R3 (a) to (f), (c) on its own install routes | 2.17 |
-| § 13 R5 | 4.0 |
+| § 13 R5, the additive sequence included | 4.0 |
 | § 13 unrecorded measurements | 2.15 |
 | § 14 backlog items | Backlog items section; closures named in 2.15, 3.7, 4.12, 5.6 |
 | § 14 overlap contract text | 4.12 |
@@ -817,6 +849,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 17 limit: `disable` with an absent `Also=` member | 4.0 (R5 measures it); no product text |
 | § 17 limit: an edited `also` list is believed | Non-goal (stated limit, no product text) |
 | § 17 limit: fleet evidence may omit install metadata | 4.9 (the `FleetAggregate` advisory text) |
+| § 17 cost: a changed `[Install]` is carried only when it adds | 4.5b (the two advisory texts) |
 
 ### Tests
 
@@ -853,3 +886,6 @@ Each test, and each lettered case, in the task that carries it. Every task liste
 | T27 | 4.6; placeholder assertions replaced 5.2 |
 | T28 | collector 5.1; carry 5.2; `dirsrv` advisory 5.3 |
 | T29 | 5.2 |
+| T30 | 4.5a |
+| T31 | 4.5b |
+| T32 | render and the excluded-file case 4.5b; rows 4.11 |
