@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `284af14d`. The spec is the contract. Section numbers (§) and test ids (T1 to T32) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `de4f6479`. The spec is the contract. Section numbers (§) and test ids (T1 to T32) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -625,7 +625,7 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 
 **Files:** `crates/core/src/aggregate/merge.rs`, `crates/pipeline/src/render/unit_plan.rs`. Test: `crates/core/tests/aggregate_merge_test.rs`, `crates/refine/tests/aggregate_export_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` on the refine row with the fleet text); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; two hosts with different `install_drop_ins` and `vendor_drop_ins` for one unit merge to the union of each, and a member's `vendor_drop_ins` to the union of names; manual links from two hosts merge by the triple; two hosts with the same `VendorInstallOnly` link and different `install_files` merge to one row with the union and the prevalence of both; two hosts with opposing causes for one triple merge to the first host's cause in hostname order, with the prevalence of both.
+- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` in the plan's `declined` list and the fleet advisory text in the Containerfile, and the fleet refine row carries no reason, as § 12 says); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; two hosts with different `install_drop_ins` and `vendor_drop_ins` for one unit merge to the union of each, and a member's `vendor_drop_ins` to the union of names; manual links from two hosts merge by the triple; two hosts with the same `VendorInstallOnly` link and different `install_files` merge to one row with the union and the prevalence of both; two hosts with opposing causes for one triple merge to the first host's cause in hostname order, with the prevalence of both.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(core): merge Also= and link findings across hosts`.
 
 ### Task 4.10: The default target (Rust lane, M)
@@ -849,6 +849,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 17 limit: `disable` with an absent `Also=` member | 4.0 (R5 measures it); no product text |
 | § 17 limit: an edited `also` list is believed | Non-goal (stated limit, no product text) |
 | § 17 limit: fleet evidence may omit install metadata | 4.9 (the `FleetAggregate` advisory text) |
+| § 11.1 single-host scope of `declined` and `withheld`; § 12 what a fleet refine row shows; § 17 limit: the fleet view does not say why a command was not written | No product code: the fleet view is unchanged. 2.13 and 2.14 implement the reasons for the single-host view only. The changelog line saying the fleet view does not yet show them is Task 2.15's. |
 | § 17 cost: a changed `[Install]` is carried only when it adds | 4.5b (the two advisory texts) |
 
 ### Tests
