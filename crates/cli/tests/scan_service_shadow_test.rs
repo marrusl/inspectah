@@ -488,8 +488,11 @@ fn a_drop_in_over_a_preset_matched_parent_toggles_both_ways() {
 fn a_drop_in_cannot_contradict_an_explicit_parent_exclusion() {
     let snapshot = scan_like(&overlapping_paths_mock());
     let mut session = RefineSession::new(snapshot);
-    let parent = ItemId::Service {
-        unit: PRESET_DIVERGING_UNIT.into(),
+    let parent = ItemId::Unit {
+        unit: PRESET_DIVERGING_UNIT
+            .to_string()
+            .try_into()
+            .expect("the fixture unit name is valid"),
     };
 
     session

@@ -51,3 +51,55 @@ fn test_repo_provenance_roundtrip() {
         assert_eq!(*prov, parsed);
     }
 }
+
+/// A unit row's id is `{"kind":"Unit","key":{"unit":...}}` and survives a
+/// round trip unchanged.
+#[test]
+fn item_id_unit_round_trips() {
+    let wire = serde_json::json!({"kind": "Unit", "key": {"unit": "sshd.service"}});
+    let id: ItemId = serde_json::from_value(wire.clone()).expect("a `Unit` id must deserialize");
+    assert_eq!(serde_json::to_value(&id).unwrap(), wire);
+
+    let op = RefinementOp::SetInclude {
+        item_id: id,
+        include: false,
+    };
+    let back: RefinementOp = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+    assert_eq!(op, back);
+}
+
+/// The old `Service` kind is refused with no alias, and the refusal names
+/// it. The same key under the `Unit` kind is the positive control.
+#[test]
+fn item_id_service_kind_is_refused() {
+    let err = serde_json::from_value::<ItemId>(
+        serde_json::json!({"kind": "Service", "key": {"unit": "sshd.service"}}),
+    )
+    .expect_err("the `Service` kind must be refused");
+    assert!(
+        err.to_string().contains("`Service`"),
+        "the refusal must name the refused kind, got: {err}"
+    );
+
+    serde_json::from_value::<ItemId>(
+        serde_json::json!({"kind": "Unit", "key": {"unit": "sshd.service"}}),
+    )
+    .expect("the same key under the `Unit` kind must be accepted");
+}
+
+/// A unit name the unit type refuses is refused in an op too.
+#[test]
+fn item_id_unit_refuses_an_invalid_unit_name() {
+    serde_json::from_value::<ItemId>(
+        serde_json::json!({"kind": "Unit", "key": {"unit": "sshd.service"}}),
+    )
+    .expect("positive control: a valid unit name is accepted");
+    let err = serde_json::from_value::<ItemId>(
+        serde_json::json!({"kind": "Unit", "key": {"unit": "sshd.device"}}),
+    )
+    .expect_err("a unit name with no known type suffix must be refused");
+    assert!(
+        err.to_string().contains("sshd.device"),
+        "the refusal must name the refused unit, got: {err}"
+    );
+}

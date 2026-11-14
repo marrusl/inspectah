@@ -129,7 +129,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
     // Map service decisions from Refined types to DTOs. A unit's shadow
     // is reported on its drop-in row, not on the state change.
     let service_states: Vec<ServiceDecisionDto> = decisions
-        .service_states
+        .unit_states
         .iter()
         .map(|s| ServiceDecisionDto {
             unit: s.entry.unit.as_str().to_owned(),
@@ -144,7 +144,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .collect();
 
     let service_dropins: Vec<DropInDecisionDto> = decisions
-        .service_dropins
+        .unit_dropins
         .iter()
         .map(|d| DropInDecisionDto {
             unit: d.entry.unit.clone(),
@@ -2684,27 +2684,6 @@ mod tests {
         assert!(
             json.get("ifcfg_note").is_none(),
             "ifcfg_note None must be skipped in serialization"
-        );
-    }
-
-    #[test]
-    fn ref_service_item_carries_shadow_fields() {
-        use inspectah_core::types::ShadowType;
-        use inspectah_refine::projection::RefServiceItem;
-
-        let item = RefServiceItem {
-            unit: "httpd.service".into(),
-            current_state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
-            owning_package: Some("httpd".into()),
-            dropin_contents: vec![],
-            shadow_type: Some(ShadowType::FullShadow),
-            shadow_rationale: Some("full override by custom unit".into()),
-        };
-        assert!(item.shadow_type.is_some());
-        assert_eq!(
-            item.shadow_rationale.as_deref(),
-            Some("full override by custom unit")
         );
     }
 

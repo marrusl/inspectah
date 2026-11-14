@@ -162,8 +162,6 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
                 .get(sc.unit.as_str())
                 .cloned()
                 .unwrap_or_default(),
-            shadow_type: None,
-            shadow_rationale: None,
         });
     }
 
@@ -177,8 +175,6 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
                 default_state: None, // matched means current == default; no divergence to record
                 owning_package: None,
                 dropin_contents: contents.clone(),
-                shadow_type: None,
-                shadow_rationale: None,
             });
         }
     }
@@ -194,8 +190,6 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
                 default_state: None,
                 owning_package: None,
                 dropin_contents: dropin_by_unit.get(unit_name).cloned().unwrap_or_default(),
-                shadow_type: None,
-                shadow_rationale: None,
             });
         }
     }
@@ -211,8 +205,6 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
                 default_state: None,
                 owning_package: None,
                 dropin_contents: Vec::new(),
-                shadow_type: None,
-                shadow_rationale: None,
             });
         }
     }

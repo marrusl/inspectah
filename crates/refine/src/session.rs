@@ -307,10 +307,10 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             .and_then(|c| c.files.iter().find(|e| e.path == *path))
             .map(|e| e.locked)
             .unwrap_or(false),
-        ItemId::Service { unit } => snapshot
+        ItemId::Unit { unit } => snapshot
             .units
             .as_ref()
-            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit.as_str() == *unit))
+            .and_then(|s| s.state_changes.iter().find(|sc| sc.unit == *unit))
             .map(|sc| sc.locked)
             .unwrap_or(false),
         ItemId::DropIn { path } => snapshot
@@ -1878,7 +1878,7 @@ impl RefineSession {
     const VALID_SECTIONS: &'static [&'static str] = &[
         "packages",
         "configs",
-        "services",
+        "units",
         "containers",
         "users_groups",
         "network",
@@ -2066,15 +2066,15 @@ impl RefineSession {
                             )));
                         }
                     }
-                    ItemId::Service { unit } => {
+                    ItemId::Unit { unit } => {
                         let found = self
                             .original
                             .units
                             .as_ref()
-                            .map(|s| s.state_changes.iter().any(|sc| sc.unit.as_str() == *unit))
+                            .map(|s| s.state_changes.iter().any(|sc| sc.unit == *unit))
                             .unwrap_or(false);
                         if !found {
-                            return Err(RefineError::UnknownTarget(unit.clone()));
+                            return Err(RefineError::UnknownTarget(unit.as_str().to_owned()));
                         }
                     }
                     ItemId::DropIn { path } => {
@@ -2797,19 +2797,19 @@ impl RefineSession {
                                     }
                                 }
                             }
-                            ItemId::Service { unit } => {
+                            ItemId::Unit { unit } => {
                                 if let Some(ref mut services) = snap.units {
-                                    if let Some(svc) = services
-                                        .state_changes
-                                        .iter_mut()
-                                        .find(|s| s.unit.as_str() == *unit)
+                                    if let Some(svc) =
+                                        services.state_changes.iter_mut().find(|s| s.unit == *unit)
                                     {
                                         svc.disposition = FindingKind::from_bool(*include);
                                     }
-                                    // Symmetric cascade: toggling a service cascades
+                                    // Symmetric cascade: toggling a unit cascades
                                     // to all drop-ins for that unit.
-                                    for dropin in
-                                        services.drop_ins.iter_mut().filter(|d| d.unit == *unit)
+                                    for dropin in services
+                                        .drop_ins
+                                        .iter_mut()
+                                        .filter(|d| d.unit == unit.as_str())
                                     {
                                         dropin.disposition = FindingKind::from_bool(*include);
                                     }
@@ -4566,6 +4566,11 @@ mod tests {
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use inspectah_core::types::users::UserGroupSection;
 
+    fn unit_name(unit: &str) -> inspectah_core::types::units::UnitName {
+        inspectah_core::types::units::UnitName::try_from(unit.to_string())
+            .expect("test unit names are valid")
+    }
+
     /// Build a minimal snapshot suitable for RefineSession tests.
     fn test_snapshot() -> InspectionSnapshot {
         InspectionSnapshot {
@@ -5261,8 +5266,8 @@ mod tests {
 
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
@@ -5311,8 +5316,8 @@ mod tests {
         // Exclude first.
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
@@ -5321,8 +5326,8 @@ mod tests {
         // Re-include.
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })
@@ -5408,8 +5413,8 @@ mod tests {
         // Exclude the parent service (cascades to drop-ins).
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: false,
             })
@@ -5440,8 +5445,8 @@ mod tests {
         let mut session = RefineSession::new(snap);
 
         let result = session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "nonexistent.service".into(),
+            item_id: ItemId::Unit {
+                unit: unit_name("nonexistent.service"),
             },
             include: false,
         });
@@ -5890,8 +5895,8 @@ mod tests {
 
         // decisions() should return without panic and contain the service
         let dec = session.decisions();
-        assert_eq!(dec.service_states.len(), 1);
-        assert_eq!(dec.service_states[0].entry.unit.as_str(), "httpd.service");
+        assert_eq!(dec.unit_states.len(), 1);
+        assert_eq!(dec.unit_states[0].entry.unit.as_str(), "httpd.service");
 
         // reference() should return without panic
         let _ref_proj = session.reference();
@@ -5972,7 +5977,7 @@ mod tests {
         // httpd.service starts with include=false
         assert!(
             dec_before
-                .service_states
+                .unit_states
                 .iter()
                 .any(|s| s.entry.unit.as_str() == "httpd.service"
                     && !s.entry.disposition.is_included()),
@@ -5982,8 +5987,8 @@ mod tests {
         // Mutate: flip httpd.service include false -> true
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })
@@ -5993,7 +5998,7 @@ mod tests {
         let dec_after = session.decisions();
         assert!(
             dec_after
-                .service_states
+                .unit_states
                 .iter()
                 .any(|s| s.entry.unit.as_str() == "httpd.service"
                     && s.entry.disposition.is_included()),
@@ -6036,8 +6041,8 @@ mod tests {
 
         // Attempting to re-include a locked service must be a silent no-op
         let result = session.apply(RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "httpd.service".into(),
+            item_id: ItemId::Unit {
+                unit: unit_name("httpd.service"),
             },
             include: true,
         });
@@ -6076,8 +6081,8 @@ mod tests {
         // Apply a valid include op while unlocked
         session
             .apply(RefinementOp::SetInclude {
-                item_id: ItemId::Service {
-                    unit: "httpd.service".into(),
+                item_id: ItemId::Unit {
+                    unit: unit_name("httpd.service"),
                 },
                 include: true,
             })

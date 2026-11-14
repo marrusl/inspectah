@@ -6,7 +6,7 @@ use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
-use inspectah_core::types::units::{SystemdDropIn, UnitStateChange};
+use inspectah_core::types::units::{SystemdDropIn, UnitName, UnitStateChange};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -76,9 +76,9 @@ pub enum ItemId {
         path: String,
     },
 
-    // Services section
-    Service {
-        unit: String,
+    // Units section
+    Unit {
+        unit: UnitName,
     },
     DropIn {
         path: String,
@@ -904,10 +904,10 @@ mod item_id_tests {
     }
 
     #[test]
-    fn set_include_with_service_serde_roundtrip() {
+    fn set_include_with_unit_serde_roundtrip() {
         let op = RefinementOp::SetInclude {
-            item_id: ItemId::Service {
-                unit: "sshd.service".into(),
+            item_id: ItemId::Unit {
+                unit: UnitName::try_from("sshd.service".to_string()).unwrap(),
             },
             include: true,
         };

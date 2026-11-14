@@ -6,7 +6,6 @@ use crate::types::{
     RefinedTunedSelection, RepoProvenance, RepoTier,
 };
 use inspectah_core::types::FindingKind;
-use inspectah_core::types::ShadowType;
 use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
@@ -21,8 +20,8 @@ use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionProjection {
-    pub service_states: Vec<RefinedServiceState>,
-    pub service_dropins: Vec<RefinedDropIn>,
+    pub unit_states: Vec<RefinedServiceState>,
+    pub unit_dropins: Vec<RefinedDropIn>,
     pub quadlets: Vec<RefinedQuadlet>,
     pub flatpaks: Vec<RefinedFlatpak>,
     pub tuned: Vec<RefinedTunedSelection>,
@@ -50,11 +49,12 @@ pub struct NotCarriedRow {
     pub display_name: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `units.enabled_units` the package owns, sorted.
+    /// Units the package owns that the unit inventory records as
+    /// enabled, sorted.
     pub enabled_units: Vec<String>,
     /// The package owns an enabled unit. Exactly these rows are the
     /// packages `not_carried_notice` names, so a client reads this and
-    /// never decides it from `enabled_units` or the services view.
+    /// never decides it from `enabled_units` or the unit rows.
     pub owns_enabled_unit: bool,
 }
 
@@ -122,8 +122,6 @@ pub struct RefServiceItem {
     pub default_state: Option<PresetDefault>,
     pub owning_package: Option<String>,
     pub dropin_contents: Vec<String>,
-    pub shadow_type: Option<ShadowType>,
-    pub shadow_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone)]

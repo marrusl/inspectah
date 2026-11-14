@@ -690,8 +690,8 @@ fn build_aggregate_sections(
         let mut items: Vec<AggregateItem> = states
             .iter()
             .map(|s| {
-                let item_id = ItemId::Service {
-                    unit: s.entry.unit.as_str().to_owned(),
+                let item_id = ItemId::Unit {
+                    unit: s.entry.unit.clone(),
                 };
                 let fp = s.entry.aggregate.as_ref();
                 AggregateItem {

@@ -1282,7 +1282,7 @@ async fn viewed_roundtrip() {
     let status = post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1302,7 +1302,7 @@ async fn viewed_roundtrip() {
     let ids = json["ids"].as_array().unwrap();
     assert_eq!(ids.len(), 2);
     let id_strs: Vec<&str> = ids.iter().filter_map(|v| v.as_str()).collect();
-    assert!(id_strs.contains(&"services:httpd.service"));
+    assert!(id_strs.contains(&"units:httpd.service"));
     assert!(id_strs.contains(&"storage:/boot"));
 }
 
@@ -1315,13 +1315,13 @@ async fn viewed_idempotent() {
     post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
     post_raw(
         &app,
         "/api/viewed",
-        serde_json::json!({"id": "services:httpd.service"}),
+        serde_json::json!({"id": "units:httpd.service"}),
     )
     .await;
 

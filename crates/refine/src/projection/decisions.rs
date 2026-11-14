@@ -23,8 +23,8 @@ use super::types::{DecisionProjection, NotCarriedRow, RepoGroup};
 pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let snap = session.snapshot_projected();
 
-    // Classify services → tuple of (states, dropins)
-    let (service_states, service_dropins) = classify_services(&snap);
+    // Classify units → tuple of (states, dropins)
+    let (unit_states, unit_dropins) = classify_services(&snap);
 
     // Classify containers → tuple of (quadlets, flatpaks)
     let (quadlets, flatpaks) = classify_containers(&snap);
@@ -63,8 +63,8 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let baseline_summary = session.baseline_summary();
 
     DecisionProjection {
-        service_states,
-        service_dropins,
+        unit_states,
+        unit_dropins,
         quadlets,
         flatpaks,
         tuned,
@@ -198,8 +198,8 @@ mod tests {
         let session = RefineSession::new(snapshot_with_service());
         let proj = project_decisions(&session);
 
-        assert_eq!(proj.service_states.len(), 1);
-        assert_eq!(proj.service_states[0].entry.unit.as_str(), "httpd.service");
+        assert_eq!(proj.unit_states.len(), 1);
+        assert_eq!(proj.unit_states[0].entry.unit.as_str(), "httpd.service");
     }
 
     #[test]
@@ -212,8 +212,8 @@ mod tests {
         let session = RefineSession::new(snap);
         let proj = project_decisions(&session);
 
-        assert!(proj.service_states.is_empty());
-        assert!(proj.service_dropins.is_empty());
+        assert!(proj.unit_states.is_empty());
+        assert!(proj.unit_dropins.is_empty());
         assert!(proj.quadlets.is_empty());
         assert!(proj.flatpaks.is_empty());
         assert!(proj.tuned.is_empty());

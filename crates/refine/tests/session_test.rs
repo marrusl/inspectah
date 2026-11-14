@@ -438,7 +438,7 @@ fn mark_viewed_accepts_all_valid_sections() {
     let sections = [
         "packages",
         "configs",
-        "services",
+        "units",
         "containers",
         "users_groups",
         "network",
@@ -2129,7 +2129,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     // and the shadow count is read from the drop-in rows.
     let decisions = session.decisions();
     let shadows: Vec<_> = decisions
-        .service_dropins
+        .unit_dropins
         .iter()
         .filter(|d| d.entry.shadow_type == Some(ShadowType::FullShadow))
         .collect();
@@ -2145,7 +2145,7 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     // and hold no row for the shadowed unit, in the session and in the
     // projected snapshot.
     let session_rows: Vec<&str> = decisions
-        .service_states
+        .unit_states
         .iter()
         .map(|s| s.entry.unit.as_str())
         .collect();
@@ -2239,4 +2239,221 @@ fn a_full_shadow_at_its_preset_is_copied_with_no_systemctl_line() {
         !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
         "no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
     );
+}
+
+// ── The units view fields and operation ──────────────────────────────
+
+/// The decision view names its unit rows `unit_states` and `unit_dropins`;
+/// the old `service_*` keys are gone.
+#[test]
+fn the_decision_view_serializes_unit_keys_and_no_service_keys() {
+    let session = RefineSession::new(full_shadow_snapshot());
+    let view = serde_json::to_value(session.decisions()).unwrap();
+
+    // Presence first: the new keys carry the fixture's rows.
+    let states = view["unit_states"]
+        .as_array()
+        .expect("the view must carry `unit_states` as an array");
+    assert_eq!(states.len(), 1, "one state row, got {states:?}");
+    assert_eq!(states[0]["entry"]["unit"], CHANGED_UNIT);
+    let dropins = view["unit_dropins"]
+        .as_array()
+        .expect("the view must carry `unit_dropins` as an array");
+    assert_eq!(dropins.len(), 1, "one drop-in row, got {dropins:?}");
+    assert_eq!(dropins[0]["entry"]["path"], FULL_SHADOW_PATH);
+    assert_eq!(dropins[0]["entry"]["shadow_type"], "full_shadow");
+
+    // Then absence: neither old key is serialized.
+    for old in ["service_states", "service_dropins"] {
+        assert!(
+            view.get(old).is_none(),
+            "the view must not carry the old key `{old}`"
+        );
+    }
+}
+
+const CASCADE_UNIT: &str = "httpd.service";
+const CASCADE_DROP_IN: &str = "/etc/systemd/system/httpd.service.d/override.conf";
+const CASCADE_FULL_SHADOW: &str = "/etc/systemd/system/httpd.service";
+const OTHER_UNIT: &str = "chronyd.service";
+const OTHER_DROP_IN: &str = "/etc/systemd/system/chronyd.service.d/override.conf";
+const DROP_IN_ONLY_UNIT: &str = "sshd.service";
+const DROP_IN_ONLY_PATH: &str = "/etc/systemd/system/sshd.service.d/override.conf";
+
+/// One unit with a state change, an ordinary drop-in and a full shadow;
+/// a second unit with a state change and a drop-in, as the control; and a
+/// unit with a drop-in and no state change.
+fn cascade_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::ShadowType;
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
+    };
+
+    let change = |unit: &str| UnitStateChange {
+        unit: UnitName::try_from(unit.to_string()).unwrap(),
+        current_state: UnitState::Enabled,
+        default_state: Some(PresetDefault::Disable),
+        disposition: FindingKind::included(),
+        locked: false,
+        owning_package: None,
+        aggregate: None,
+        attention_reason: None,
+    };
+    let drop_in = |unit: &str, path: &str| SystemdDropIn {
+        unit: unit.into(),
+        path: path.into(),
+        content: "[Service]\nNice=5\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.units = Some(UnitSection {
+        state_changes: vec![change(CASCADE_UNIT), change(OTHER_UNIT)],
+        inventory: vec![],
+        drop_ins: vec![
+            drop_in(CASCADE_UNIT, CASCADE_DROP_IN),
+            SystemdDropIn {
+                shadow_type: Some(ShadowType::FullShadow),
+                shadow_rationale: Some("replaces the vendor unit".into()),
+                ..drop_in(CASCADE_UNIT, CASCADE_FULL_SHADOW)
+            },
+            drop_in(OTHER_UNIT, OTHER_DROP_IN),
+            drop_in(DROP_IN_ONLY_UNIT, DROP_IN_ONLY_PATH),
+        ],
+    });
+    snap
+}
+
+/// A `SetInclude` on a unit row, in the wire form the web client sends.
+fn unit_op(unit: &str, include: bool) -> RefinementOp {
+    serde_json::from_value(serde_json::json!({
+        "op": "SetInclude",
+        "target": {
+            "item_id": {"kind": "Unit", "key": {"unit": unit}},
+            "include": include,
+        },
+    }))
+    .expect("a `Unit` SetInclude op must deserialize")
+}
+
+/// Each row's key and whether it is included.
+type Inclusion = Vec<(String, bool)>;
+
+/// Whether the projected snapshot includes each state row and each drop-in.
+fn unit_inclusion(session: &RefineSession) -> (Inclusion, Inclusion) {
+    let units = session.snapshot_projected().units.unwrap();
+    let states = units
+        .state_changes
+        .iter()
+        .map(|s| (s.unit.as_str().to_string(), s.disposition.is_included()))
+        .collect();
+    let dropins = units
+        .drop_ins
+        .iter()
+        .map(|d| (d.path.clone(), d.disposition.is_included()))
+        .collect();
+    (states, dropins)
+}
+
+/// Toggling a unit row cascades to every drop-in of that unit, the full
+/// shadow included, and to nothing else.
+#[test]
+fn toggling_a_unit_cascades_to_every_drop_in_of_that_unit() {
+    let mut session = RefineSession::new(cascade_snapshot());
+
+    let all_in = (
+        vec![
+            (CASCADE_UNIT.to_string(), true),
+            (OTHER_UNIT.to_string(), true),
+        ],
+        vec![
+            (CASCADE_DROP_IN.to_string(), true),
+            (CASCADE_FULL_SHADOW.to_string(), true),
+            (OTHER_DROP_IN.to_string(), true),
+            (DROP_IN_ONLY_PATH.to_string(), true),
+        ],
+    );
+    assert_eq!(
+        unit_inclusion(&session),
+        all_in,
+        "everything starts included"
+    );
+
+    session.apply(unit_op(CASCADE_UNIT, false)).unwrap();
+    assert_eq!(
+        unit_inclusion(&session),
+        (
+            vec![
+                (CASCADE_UNIT.to_string(), false),
+                (OTHER_UNIT.to_string(), true)
+            ],
+            vec![
+                (CASCADE_DROP_IN.to_string(), false),
+                (CASCADE_FULL_SHADOW.to_string(), false),
+                (OTHER_DROP_IN.to_string(), true),
+                (DROP_IN_ONLY_PATH.to_string(), true),
+            ],
+        ),
+        "excluding {CASCADE_UNIT} excludes its row and both its drop-ins, the full shadow \
+         included, and leaves the other units alone"
+    );
+
+    session.apply(unit_op(CASCADE_UNIT, true)).unwrap();
+    assert_eq!(
+        unit_inclusion(&session),
+        all_in,
+        "including {CASCADE_UNIT} again restores its row and both its drop-ins"
+    );
+}
+
+/// The membership check stays: a unit with a drop-in and no state change
+/// has no unit row, so an op naming it is refused with the unit's name.
+#[test]
+fn a_unit_op_for_a_unit_with_no_state_row_is_refused() {
+    let mut session = RefineSession::new(cascade_snapshot());
+
+    // Positive control: a unit with a state row is accepted.
+    session.apply(unit_op(CASCADE_UNIT, false)).unwrap();
+    let before = session.timeline_len();
+
+    let result = session.apply(unit_op(DROP_IN_ONLY_UNIT, false));
+    match result {
+        Err(RefineError::UnknownTarget(target)) => assert_eq!(target, DROP_IN_ONLY_UNIT),
+        other => panic!("expected UnknownTarget({DROP_IN_ONLY_UNIT}), got {other:?}"),
+    }
+    assert_eq!(
+        session.timeline_len(),
+        before,
+        "a refused op must not extend the timeline"
+    );
+    let (_, dropins) = unit_inclusion(&session);
+    assert!(
+        dropins.contains(&(DROP_IN_ONLY_PATH.to_string(), true)),
+        "a refused op must not cascade, got {dropins:?}"
+    );
+}
+
+/// A viewed id in the unit section uses the section id `units`; the old
+/// `services` id is refused, and the refusal names it.
+#[test]
+fn mark_viewed_takes_the_units_section_and_refuses_services() {
+    let mut session = RefineSession::new(test_snapshot());
+
+    // Accepted first.
+    session
+        .mark_viewed("units:sshd.service")
+        .expect("`units` must be a valid viewed section");
+    assert!(session.is_viewed("units:sshd.service"));
+
+    // Then refused, by name.
+    match session.mark_viewed("services:sshd.service") {
+        Err(RefineError::BadRequest(msg)) => assert!(
+            msg.contains("'services'"),
+            "the refusal must name the refused section, got: {msg}"
+        ),
+        other => panic!("`services` must be refused as a BadRequest, got {other:?}"),
+    }
+    assert!(!session.is_viewed("services:sshd.service"));
 }

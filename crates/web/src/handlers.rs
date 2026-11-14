@@ -887,8 +887,8 @@ pub async fn batch_toggle_group(
                         continue;
                     }
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::Service {
-                            unit: sc.unit.as_str().to_owned(),
+                        item_id: inspectah_refine::types::ItemId::Unit {
+                            unit: sc.unit.clone(),
                         },
                         include: payload.include,
                     });
