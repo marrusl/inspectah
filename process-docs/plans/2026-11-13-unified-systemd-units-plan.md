@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `205181a6`. The spec is the contract. Section numbers (§) and test ids (T1 to T29) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `94099a0a`. The spec is the contract. Section numbers (§) and test ids (T1 to T29) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -25,7 +25,21 @@ Phase 6, the Systemd units section of § 11.2, waits on the frontend's own desig
 - **Rust lane:** the workspace crates `core`, `collect`, `pipeline`, `refine`, `cli`.
 - **Frontend lane:** `crates/web/src` (Axum handlers, `web_types.rs`, `adapter.rs`, `aggregate_handlers.rs`) and `crates/web/ui` (TypeScript types, components, hooks, Vitest suites). A different implementer takes these tasks.
 
-A Rust-lane task whose type change stops `crates/web` from compiling makes only the compile-forced edits there: renames and deletions, no new behavior. Every addition in `crates/web` is a frontend-lane task's. Each frontend-lane task says whether it can run in parallel with the Rust task beside it.
+A Rust-lane task whose type change stops `crates/web` from compiling makes the compile-forced edits there in the same commit: renames, deletions, and mechanical conversions at the boundary between a new core type and an existing DTO or operation, such as `UnitName::as_str().to_owned()` where a DTO holds a `String` (`crates/web/src/adapter.rs:135`), passing the unit's name where an operation takes it (`crates/web/src/handlers.rs:891`), or a match arm for a new `ItemId` variant that forwards it unchanged. No new DTO field, endpoint, route or user-visible behavior: every addition in `crates/web` is a frontend-lane task's. The Rust tasks expected to make such edits are 1.2 (`UnitName` in the adapter and the bulk operation), 1.3 (inventory consumers), 1.4 (the two shadow fields leave the state DTO), 1.5 (`ItemId::Unit`), 2.2 (name and owner read out of `CarriedUnit`), 3.1 (the reduced `SystemdTimer`), 3.2 (the removed timer operation) and 4.10 (`ItemId::DefaultTarget`); any other task that needs one says so in its commit body. Each frontend-lane task says whether it can run in parallel with the Rust task beside it.
+
+## Backlog items
+
+Named by slug, in the phase that closes each, per § 14. The phase report says which it closes; the items themselves are updated outside this repository.
+
+- `inspectah-socket-units-are-never-collected`: closed by phase 2 (Tasks 2.3, 2.7, 2.9) and confirmed by R1 (Task 2.16).
+- `inspectah-masked-units-are-recorded-as-full-shadows`: closed by phase 2 (Tasks 2.4, 2.8), both mask forms.
+- `inspectah-timer-enable-lines-unquoted-and-trust-empty-units`: closed by phases 2 (quoting, Task 2.9; the file check, Task 2.7) and 3 (one writer, Task 3.1).
+- `inspectah-local-timer-has-two-controls-and-neither-works`: closed by phase 3 (Tasks 3.1 to 3.3).
+- `inspectah-write-the-collector-overlap-contract`: partly covered by phase 4 (Task 4.12, with the exclusions of Tasks 2.4 and 4.5). The general rules document and the non-systemd claimants remain.
+- `inspectah-full-shadow-wants-link-points-at-the-vendor-path`: partly covered: the order change (Task 2.9), `add-wants` in link advisories (Task 4.5), and the booted-host check in R2 (Task 5.6).
+- `inspectah-srv-mount-units-must-target-var-srv`: partly covered by the mount advisory (Task 2.10). No automatic rewrite; fstab lines and the audit report are untouched.
+- `inspectah-etc-unit-files-accessor`: out of scope; its blocker moves after phase 4, when the `/etc/systemd/system` claimants are config and units.
+- `inspectah-var-unit-grep-matches-comments-and-longer-names`, `inspectah-etc-systemd-user-has-no-symlink-rule`, `inspectah-redaction-pseudo-paths-miss-systemd-comment-rule`, `inspectah-unredacted-export-carries-no-marker`, `inspectah-redaction-token-eats-the-key-it-replaces`: out of scope (§ 14).
 
 ## Global constraints
 
@@ -200,24 +214,24 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 ### Task 2.1: Carried and advisory types (Rust lane, M)
 
-**Spec:** § 6.2 (all types and `classify`), § 6.3 (`UnitStateChange` checked constructor, the two refusals), § 6.5 (`MountUnitFinding`), § 7.6 (`TargetUnit` only); T2 type cases.
+**Spec:** § 6.2 (all types and `classify`), § 6.5 (`MountUnitFinding`), § 7.6 (`TargetUnit` only); T2 cases on the types themselves. The `UnitStateChange` constructor and T2's `state_changes` cases are Task 2.2's, where the field changes type.
 
 **Files:** Modify `crates/core/src/types/units.rs`. Test: `#[cfg(test)]` there and `crates/core/tests/snapshot_test.rs`.
 
 **Interfaces (Produces):** `OrdinaryUnitName`, `StorageUnitName`, `TargetUnitName`, `UnitFragment`, `UnitSubject`, `CarriedUnit`, `TargetUnit`, `AdminStorageFragment`, `AdvisoryUnit`, `Classified`, `UnitSubject::classify`, `MountUnitFinding`, `UnitSection.mount_findings`. Added beside the phase 1 fields; `UnitStateChange.unit` switches to `CarriedUnit` in Task 2.2.
 
-- [ ] **Step 1: Failing tests first,** T2 type cases: for each storage kind, a `state_changes` entry with `local`, `shadowed` or `absent`, or `vendor` with a null owner, fails to load naming `classify`; `vendor` with an owner loads, and fails in `mount_findings`; `TargetUnit` refuses `cockpit.socket` and a packaged `tmp.mount` and round-trips a `.target`; a template loads `masked` and fails `enabled`, likewise an `absent` fragment; a `file` that is neither the unit nor its template fails. A proptest: `classify` is total over generated names and fragments and stable through serialize then deserialize.
+- [ ] **Step 1: Failing tests first,** T2 on the types: for each storage kind, a `CarriedUnit` wire value with `local`, `shadowed` or `absent`, or `vendor` with a null owner, fails `try_from` naming `classify`; `vendor` with an owner deserializes as `CarriedUnit`, and the same value fails as the `unit` of a `MountUnitFinding` in `mount_findings`; `TargetUnit` refuses `cockpit.socket` and a packaged `tmp.mount` and round-trips a `.target`; a `UnitSubject` whose `file` is neither the unit nor its template fails. A proptest: `classify` is total over generated names and fragments and stable through serialize then deserialize.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(core): add carried and advisory unit types`.
 
-**Acceptance:** T2 type cases pass. (T2's signature test is Task 2.7's.)
+**Acceptance:** the type-level T2 cases pass. T2's `state_changes` cases are Task 2.2's and its signature test Task 2.7's.
 
 ### Task 2.2: Fragment resolution and owner lookup (Rust lane, M)
 
-**Spec:** § 7.2 steps 2 and 3 (two directories, instance falls back to template, form test, size-zero mask), § 7.8; § 6.3 (`unit: CarriedUnit` replaces `owning_package`); T5 second sentence; T11 collector half for services.
+**Spec:** § 7.2 steps 2 and 3 (two directories, instance falls back to template, form test, size-zero mask), § 7.8; § 6.3 (`unit: CarriedUnit` replaces `owning_package`, the checked constructor and its two refusals); T2 `state_changes` cases; T5 second sentence, collector half (the render half is Task 2.7's).
 
-**Files:** Modify `crates/collect/src/inspectors/services.rs` (`populate_owning_packages`, `:113`), `crates/core/src/types/units.rs` (switch the field), `crates/pipeline/src/render/service_intent.rs` (`classify_service_presence`, `:359`, reads the owner from the fragment; mechanical), consumers the compiler names. Create `crates/collect/src/inspectors/units/resolve.rs` (the `Resolved` enum with `File`, `Masked`, `AliasOf`, `NotFound`; `Unsupported` arrives in Task 4.2). Test: `crates/collect/tests/services_test.rs`.
+**Files:** `git mv crates/collect/src/inspectors/services.rs crates/collect/src/inspectors/units/mod.rs` and `git mv crates/collect/tests/services_test.rs crates/collect/tests/units_test.rs` (the inspector type keeps its name until Task 2.3); modify `populate_owning_packages` (`:113`), `crates/core/src/types/units.rs` (switch the field, add the checked constructor), `crates/pipeline/src/render/service_intent.rs` (`classify_service_presence`, `:359`, reads the owner from the fragment; mechanical), consumers the compiler names, and the compile-forced conversions in `crates/web`. Create `crates/collect/src/inspectors/units/resolve.rs` (the `Resolved` enum with `File`, `Masked`, `AliasOf`, `NotFound`; `Unsupported` arrives in Task 4.2). Test: `crates/collect/tests/units_test.rs`, `crates/core/tests/snapshot_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** a local unit and a vendor unit whose owner lookup fails get `Local` and `Vendor { owning_package: None }` (T5); a `/dev/null` link and a zero-length file over a vendor unit are `Masked { hidden: Vendor }`; a comment-only file is a regular fragment; a two-hop link ending at `/dev/null` is a mask and a link to a file outside both directories is `linked` with today's warning (Review focus 2); a storage unit's owner is looked up before classification.
+- [ ] **Step 1: Failing tests first,** T2 `state_changes` cases: for each storage kind, a `state_changes` entry with `local`, `shadowed` or `absent`, or `vendor` with a null owner, fails to load naming `classify`; `vendor` with an owner loads; a template loads `masked` and fails `enabled`, likewise an `absent` fragment; a `file` that is neither the unit nor its template fails. Collector: a local unit and a vendor unit whose owner lookup fails get `Local` and `Vendor { owning_package: None }` (T5); a `/dev/null` link and a zero-length file over a vendor unit are `Masked { hidden: Vendor }`; a comment-only file is a regular fragment; a two-hop link ending at `/dev/null` is a mask and a link to a file outside both directories is `linked` with today's warning (Review focus 2); a storage unit's owner is looked up before classification.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): resolve each unit's fragment and owner`.
 
 **Acceptance:** the listed cases pass; render output for existing service fixtures is unchanged (insta snapshots unmodified).
@@ -226,20 +240,20 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Spec:** § 5 table, § 7.1 sources 1 and 2, § 7.4 (all of it except the instance preset and stock-state list, which are Task 4.4); § 4 "The `dbus-` filter"; T5 first sentence, T7.
 
-**Files:** `git mv crates/collect/src/inspectors/services.rs crates/collect/src/inspectors/units/mod.rs`; `ServicesInspector` becomes `UnitsInspector`; `list-unit-files` loses `--type=service` (`:226`); the `@` skip at `:303` and `is_real_service` (`:25-36`) become the name gate; `crates/collect/src/executor/mock.rs` keys follow `process-docs/skills/mock-executor-key-format.md`. `git mv crates/collect/tests/services_test.rs crates/collect/tests/units_test.rs`.
+**Files:** `crates/collect/src/inspectors/units/mod.rs`: `ServicesInspector` becomes `UnitsInspector`; `list-unit-files` loses `--type=service` (`:226`); the `@` skip at `:303` and `is_real_service` (`:25-36`) become the name gate; `crates/collect/src/executor/mock.rs` keys follow `process-docs/skills/mock-executor-key-format.md`. Test: `crates/collect/tests/units_test.rs`.
 
 - [ ] **Step 1: Failing tests first:** T5 (`cockpit.socket` enabled against a `disable` preset: one state change of kind `Socket`, `Vendor` fragment, owner from the mocked answers); T7 (`dbus-broker.service` kept, a `dbus-org.` alias dropped; a local enabled unit with no preset rule is a state change; a disabled local unit is not; `generated` and each runtime state give none, with today's warning); a masked template is a `Masked` state change on the template name; an unmasked template is skipped; a storage entry that classifies advisory goes to `mount_findings`, never `state_changes`.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): collect unit state for every unit kind`.
 
-**Acceptance:** T5 and T7 pass.
+**Acceptance:** T5's collector assertions and T7 pass.
 
 ### Task 2.4: Masks, drop-ins and shadows, one owner per path (Rust lane, M)
 
-**Spec:** § 7.7 (table and bullets except the `*.upholds/*` exclusion, which is Task 4.5); § 4 "A masked unit is recorded twice"; T11 collector half.
+**Spec:** § 7.7 (table and bullets except the `*.upholds/*` exclusion, which is Task 4.5); § 4 "A masked unit is recorded twice"; T11 collector half (the staged-file and command half is Task 2.8's).
 
 **Files:** Modify `crates/collect/src/inspectors/units/mod.rs` (shadow scan, today `:456-485`; drop-in scan, today `:763`), `crates/collect/src/inspectors/config/walk.rs:241` (`is_systemd_unit_symlink` also excludes a zero-length regular file with a unit suffix), `crates/pipeline/src/collect.rs:274` (`shadow_service_owned_paths`, renamed for units). Test: `crates/collect/tests/units_test.rs`, `crates/collect/tests/config_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T11 collector cases: each mask form over a vendor unit gives one `Masked` state change, no drop-in entry and no config entry; a mask with no vendor file is `Absent` and carried; a masked template under its own name; for each storage kind and both mask forms, a package-owned vendor file gives a carried mask and an unowned one or none gives a mount finding with state `Masked`. A regular non-empty storage file is a config entry and a mount finding, never a full shadow. Drop-ins are collected for every parsed name, `*.device.d`, `*.scope.d` and generated parents; a `.d` directory whose name does not parse (`foo.servic.d`) is a drop-in row with its `unit` string and no state change (Review focus 5).
+- [ ] **Step 1: Failing tests first,** T11 collector cases: each mask form over a vendor unit gives one `Masked` state change, no drop-in entry and no config entry; a mask with no vendor file is `Absent` and carried; a masked template under its own name; for each storage kind and both mask forms, a package-owned vendor file gives a carried mask and an unowned one or none gives a mount finding with state `Masked`. A comment-only file over a vendor unit is a full shadow in `drop_ins`, not a mask. A regular non-empty storage file is a config entry and a mount finding, never a full shadow. Drop-ins are collected for every parsed name, `*.device.d`, `*.scope.d` and generated parents; a `.d` directory whose name does not parse (`foo.servic.d`) is a drop-in row with its `unit` string and no state change (Review focus 5).
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `fix(collect): give masks, shadows and drop-ins of every kind one owner`.
 
 **Acceptance:** T11 collector cases pass; a zero-length unit file appears in neither `config.files` nor `drop_ins`.
@@ -250,10 +264,10 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Files:** Modify `crates/collect/src/inspectors/units/mod.rs`, `crates/pipeline/src/redaction/engine.rs:978`, `crates/pipeline/src/render/mod.rs:305` (`every_field_of_a_content_bearing_type_is_classified`). Test: `crates/pipeline/tests/redaction_new_surfaces_test.rs`, `crates/cli/tests/units_scan_test.rs` (new).
 
-- [ ] **Step 1: Failing tests first:** T10 (a local mount unit whose `What=` holds a token the generic pattern matches: the token is absent from the whole serialized snapshot after scan and after a refine export, and from the view response); `Where=srv` (relative) gives `mount_point: None`; `Where=/srv \r\n` gives `/srv` and `Options=defaults,nofail\r\n` gives `nofail: true` (Review focus 3); an unowned vendor mount unit gives a finding only when enabled or masked. The field guard destructures the three types with no `..`.
+- [ ] **Step 1: Failing tests first:** T10 (a local mount unit whose `What=` holds a token the generic pattern matches: the token is absent from the whole serialized snapshot after scan and after a refine export; the view-response half is Task 2.13's, once the finding is in the view); `Where=srv` (relative) gives `mount_point: None`; `Where=/srv \r\n` gives `/srv` and `Options=defaults,nofail\r\n` gives `nofail: true` (Review focus 3); an unowned vendor mount unit gives a finding only when enabled or masked. The field guard destructures the three types with no `..`.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): record the administrator's mount units as findings`.
 
-**Acceptance:** T10 passes on both export routes.
+**Acceptance:** T10's snapshot and export assertions pass on both routes.
 
 ### Task 2.6: `staged_writes` and `Destination` (Rust lane, M)
 
@@ -261,7 +275,7 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Files:** Modify `crates/pipeline/src/render/configtree.rs` (`validate_path` `:35`, `safe_write_file` `:158`, `staged_sources` `:257`, the drop and refuse tests at `:375-388`; `unstaged_files` carries withheld files to the FIXME); `crates/pipeline/src/render/containerfile.rs` callers. Test: `crates/pipeline/tests/configtree_single_source_test.rs`.
 
-**Interfaces (Produces):** `Destination::new(&str) -> Result<Destination, PathError>`; `pub(crate) fn staged_writes(&InspectionSnapshot) -> StagedWrites<'_>`; the stager writes `writes` and nothing else and returns an I/O error on any failed write.
+**Interfaces (Produces):** `Destination::new(&str) -> Result<Destination, PathError>`; `pub fn staged_writes(&InspectionSnapshot) -> StagedWrites<'_>` (public, as § 10.2 declares it, because refine calls it in Task 2.13); the stager writes `writes` and nothing else and returns an I/O error on any failed write.
 
 - [ ] **Step 1: Failing tests first:** config entries for `/etc/systemd/system/worker.service/extra.conf` and `/etc/systemd/system/worker.service`, in either order: neither is in `writes`, both are withheld as `Conflict` and named in the FIXME; without the first, the second is written (T15). Two entries at one destination: both withheld. `/etc/systemd/./system//bootc-x.timer` and the plain spelling are one destination; `..` is refused. A zero-length file at `/etc/systemd/system/<name>.service` offered as a config entry and as a drop-in, including with a `unit` field naming another unit: withheld as `ZeroLengthUnitFile` (T12 staging half). A write into a read-only directory fails the export.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `fix(pipeline): decide every staged file once, and fail on a write that does not land`.
@@ -276,10 +290,10 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Interfaces (Produces):** `pub fn plan_units(&InspectionSnapshot, &StagedWrites<'_>) -> UnitPlan`; `PlannedUnit` with private fields and no public constructor; `UnitPlan.declined: Vec<(UnitName, UnitAction, OmissionReason)>`; `OmissionReason::describe(&self) -> String`, the one text source.
 
-- [ ] **Step 1: Failing tests first:** T2 signature (a compile-fail doctest that `PlannedUnit` cannot be built outside the module, and `systemctl_lines` accepts `&[PlannedUnit]` only); T6 (the socket snapshot yields the enable; the owner excluded yields `# Omitted: cockpit.socket (...)`); T13 quoting (`probe@a\x2db.service` and `-.slice` render as quoted operands after `--`, and so does a 255-byte name, each surviving a refine export unchanged: Review focus 1); T15: a local enabled socket whose config entry is excluded gives no staged file, the `UnitFileNotStaged` line and no enable, each of the two toggles driven through `RefineSession` alone and shown to change the staged tree or the Containerfile (as `process-docs/skills/cross-inspector-shadow-passes.md` requires), and the same with no package section; a `Shadowed` row whose shadow is excluded gives no `enable` and no `disable` with `InstallEvidenceChanged`; a `Vendor` row with a unit file staged at its name by another row gives the same; each returns when the export matches again. T18 (d): two hosts with a full shadow of one unit and different content give `InstallEvidenceChanged` whichever variant is selected. Review focus 4: scan and refine export give equal unit lines for the T6 snapshot.
+- [ ] **Step 1: Failing tests first:** T2 signature (a compile-fail doctest that `PlannedUnit` cannot be built outside the module, and `systemctl_lines` accepts `&[PlannedUnit]` only); T6 (the socket snapshot yields the enable; the owner excluded yields `# Omitted: cockpit.socket (...)`); T13 quoting (`probe@a\x2db.service` and `-.slice` render as quoted operands after `--`, and so does a 255-byte name, each surviving a refine export unchanged: Review focus 1); T15: a local enabled socket whose config entry is excluded gives no staged file, the `UnitFileNotStaged` line and no enable, each of the two toggles driven through `RefineSession` alone and shown to change the staged tree or the Containerfile (as `process-docs/skills/cross-inspector-shadow-passes.md` requires), and the same with no package section; the Task 2.6 conflict case (`worker.service/extra.conf` and `worker.service`, either order) omits the enable, and without the conflicting child the enable is carried; T5 render half: a local unit and a vendor unit whose owner lookup fails, from the same scan, render differently (the local unit is omitted with `UnitFileNotStaged` when its file is excluded and carried when it is staged; the unknown-owner vendor unit is emitted by Tier 1 and omitted with `InstallEvidenceChanged` when a unit file is staged at its name); a `Shadowed` row whose shadow is excluded gives no `enable` and no `disable` with `InstallEvidenceChanged`; a `Vendor` row with a unit file staged at its name by another row gives the same; each returns when the export matches again. T18 (d): two hosts with a full shadow of one unit and different content give `InstallEvidenceChanged` whichever variant is selected. Review focus 4: scan and refine export give equal unit lines for the T6 snapshot.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): plan every unit command against the staged export`.
 
-**Acceptance:** the listed tests pass. The refine row half of T15 ("shows the reason and the path") is Task 2.13's.
+**Acceptance:** the listed tests pass; T5 and T15 pass in full apart from the refine row half of T15 ("shows the reason and the path"), which is Task 2.13's.
 
 ### Task 2.8: Rules 2, 3 and 4, and the units the target needs (Rust lane, M)
 
@@ -287,10 +301,10 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Files:** Modify `crates/pipeline/src/render/unit_plan.rs`, `crates/core/src/baseline.rs` (both constants), `crates/collect/src/inspectors/units/mod.rs` (attention reason). Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** T12 table over the protected names for `disable` and `mask`: the FIXME and no command, `enable` carried; a masked `tmp.mount` gives its FIXME while its `enable` and `disable` are carried and a masked `dev-hugepages.mount` is carried; a zero-length file for a protected unit from a scan and imported as a drop-in and as a config entry (with a `unit` field naming another unit, an interior `.`, a doubled separator) gives no `mask` and no staged file. T8: a package-owned mount unit enabled against preset is in `RUN systemctl enable`, masked in `mask`; with an administrator's file staged at its name, `StorageFileStaged`. T16: a mask and a staged unit file of one name give `MaskPathOccupied`; excluding the file brings the mask back.
+- [ ] **Step 1: Failing tests first:** T12 table over the protected names for `disable` and `mask`: the FIXME and no command, `enable` carried; a masked `tmp.mount` gives its FIXME while its `enable` and `disable` are carried and a masked `dev-hugepages.mount` is carried; a zero-length file for a protected unit from a scan and imported as a drop-in and as a config entry (with a `unit` field naming another unit, an interior `.`, a doubled separator) gives no `mask` and no staged file. T8: a package-owned mount unit enabled against preset is in `RUN systemctl enable`, masked in `mask`; with an administrator's file staged at its name, `StorageFileStaged`. T16: a mask and a staged unit file of one name give `MaskPathOccupied`; excluding the file brings the mask back. T11 staged-file and command half, through the scan: each mask form over a vendor unit gives one `RUN systemctl mask` line and no staged file at the unit's path; a mask with no vendor file (`Absent`) and a masked template are in the `mask` line under their own names; for each storage kind and both mask forms, a package-owned vendor file gives a `mask` line and an unowned one or none gives the mount advisory and no instruction; the comment-only full shadow is staged by the drop-in writer and no `mask` names its unit.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): refuse commands the image cannot take`.
 
-**Acceptance:** T12 (except its view-response sentence, Task 2.13), T8 render cases and T16 pass.
+**Acceptance:** T12 (except its view-response sentence, Task 2.13), T8 render cases, T11 and T16 pass.
 
 ### Task 2.9: Section order, every `systemctl` site quoted, README sentences (Rust lane, S)
 
@@ -338,13 +352,13 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 ### Task 2.13: Refine rows carry the plan's reasons (Rust lane, M)
 
-**Spec:** § 11.1 `unit_states[]` fields that exist now (`unit`, `kind`, `instance_of`, `current_state`, `default_state`, `fragment`, `unit_file_path`, `owning_package`, `include`, `locked`, `triage`, `attention_reason`, `declined`), `unit_dropins[]` `kind`, `mount_findings[]` (all fields, `advisories[]` from the § 10.6 strings), `withheld` on the offering config or drop-in row, the paragraph on results caused by another row; T12 last sentence, T15 last clause.
+**Spec:** § 11.1 `unit_states[]` fields that exist now (`unit`, `kind`, `instance_of`, `current_state`, `default_state`, `fragment`, `unit_file_path`, `owning_package`, `include`, `locked`, `triage`, `attention_reason`, `declined`), `unit_dropins[]` `kind`, `mount_findings[]` (all fields, `advisories[]` from the § 10.6 strings), `withheld` on the offering config or drop-in row, the paragraph on results caused by another row; T10 view half, T12 last sentence, T15 last clause.
 
 **Files:** Modify `crates/refine/src/projection/{types,decisions}.rs` (calls `staged_writes` and `plan_units` on the session snapshot). Test: `crates/refine/tests/session_test.rs`, `crates/refine/tests/export_contract_test.rs`.
 
 **Interfaces (Produces):** projection types `UnitStateView`, `DeclinedView { renders: Omitted|Fixme|Advisory, reason: <variant name>, text: String }`, `WithheldView`, `MountFindingView`.
 
-- [ ] **Step 1: Failing tests first:** each T12 refusal appears as a structured `declined` on its row for a row whose `attention_reason` is null; the T15 `Shadowed` case shows `InstallEvidenceChanged` with the shadow's path on the unit row while declined; a withheld conflict file shows `withheld: Conflict` on its config row; a mount finding row has no `include`.
+- [ ] **Step 1: Failing tests first:** each T12 refusal appears as a structured `declined` on its row for a row whose `attention_reason` is null; the T15 `Shadowed` case and the T15 `Vendor` row with another row's unit file staged at its name each show `InstallEvidenceChanged` with that file's path on the unit row while declined, and neither shows it once the export matches again; T10 view half: the mount finding row for the planted unit exists, and the token is absent from the whole view response; a withheld conflict file shows `withheld: Conflict` on its config row; a mount finding row has no `include`.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(refine): show why the export declines a unit command`.
 
 **Acceptance:** the listed assertions pass.
@@ -369,6 +383,7 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 - [ ] Add to `process-docs/skills/real-host-validation-runs.md` § Measured, 2026-11-13, the facts § 13 lists as not yet recorded, copied as the spec states them: the stock and drifted survey (what differed from preset, the one enabled instance), the rows a package install makes through `Also=`, that packaged units with `Also=` have nothing under `/etc` but links, the `cups` enable then disable pair, the contents of the four template units of § 7.5, the upheld-unit restart loop, `/tmp` on a package-mode host with `tmp.mount` masked.
 - [ ] Update `process-docs/skills/service-omission-model.md` (rules 1 to 5, kinds), `containerfile-value-quoting.md` (unit operands are quoted after `--`, no refusal), `cross-inspector-shadow-passes.md` (masks are states; storage files belong to config), `codebase-layout.md` (`inspectors/units/`, `render/unit_plan.rs`), `docs/reference/inspector-coverage.md` (every kind, mount findings, the protected list).
 - [ ] **CHANGELOG.md** under `## [Unreleased]`: **Added** unit state for sockets, paths, timers, targets, slices and package-owned mount, automount and swap units; mount advisories. **Changed** unit commands are quoted and run after the configuration `COPY`; in-place package updaters are excluded by default. **Fixed** a masked unit is no longer also recorded as an empty full shadow; a local service's enable no longer runs before its file is copied; `dbus-broker.service` is no longer dropped; a staged file that cannot be written fails the export.
+- [ ] The phase report names `inspectah-masked-units-are-recorded-as-full-shadows` as closed, `inspectah-socket-units-are-never-collected` as closed pending R1 (Task 2.16), and `inspectah-srv-mount-units-must-target-var-srv` as partly covered.
 - [ ] Gate; commit `docs: record unit state for every kind in skills and coverage`.
 
 **Phase 2 ends:** a scan carries enable, disable and mask for every ordinary kind and package-owned storage unit, after the configuration `COPY`, quoted; reports the administrator's mount units; and declines, with a stated reason, any command the export would not reproduce.
@@ -379,12 +394,12 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Spec:** § 13 R1; § 15 real-host table, "After phase 2".
 
-**Needs:** the branch build at the end of phase 2; the `rhel9` and `rhel10` VMs, each reverted to its clean snapshot; the driftify **standard** profile, which sets `cockpit.socket` against its preset (enabled on RHEL 9, disabled on RHEL 10); the project's VM operating notes, supplied at dispatch.
+**Needs:** the branch build at the end of phase 2; the `rhel9` and `rhel10` VMs, each reverted to its clean snapshot; the driftify **standard** profile, which reads `cockpit.socket`'s preset at run time and sets the socket against it; the project's VM operating notes, supplied at dispatch.
 
-- [ ] On each VM: record `systemctl is-enabled cockpit.socket` in the unmodified base image; run driftify standard; scan; confirm the Containerfile holds the socket's line in the unit state section after the configuration `COPY`; build; confirm the image reads the host's state. Record under a new `### Measured, <date>: cockpit.socket end to end` in `process-docs/skills/real-host-validation-runs.md`. Revert both VMs.
+- [ ] On each VM, first record `cockpit.socket`'s preset on the host (the preset column of `systemctl list-unit-files cockpit.socket`), then `systemctl is-enabled cockpit.socket` in the unmodified base image; run driftify standard; scan; confirm the Containerfile holds the socket's line in the unit state section after the configuration `COPY`; build; confirm the image reads the host's state. Record under a new `### Measured, <date>: cockpit.socket end to end` in `process-docs/skills/real-host-validation-runs.md`. Revert both VMs.
 - [ ] Commit `docs(skills): record the cockpit.socket run on the units branch`.
 
-**Gate:** phase 3 does not start until the image reads the host's state on both releases. A failure is a phase 2 defect, fixed and reviewed before phase 3. See Spec questions 1 on the run's stated direction.
+**Gate:** phase 3 does not start until the image reads the host's state on both releases. A failure is a phase 2 defect, fixed and reviewed before phase 3.
 
 ### Task 2.17: Run R3 after phase 2 (real host, L)
 
@@ -392,14 +407,14 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Needs:** reverted `rhel9` and `rhel10` VMs; the phase 2 branch build for (a); probe images built from `rhel9/rhel-bootc:9.8` and `rhel10/rhel-bootc:10.2` for (b) to (f), with no inspectah build; the VM operating notes. (a) uses the driftify **standard** profile on `rhel9`, whose cases should render an `enable` (`cockpit.socket`), a `disable` (`kdump`, planted at minimal) and a `mask` (`bluetooth`); if the rendered Containerfile lacks one of the three verbs, plant one by hand and record it. (b) to (f) need no driftify profile.
 
-- [ ] Run each sub-case as § 13 states it, booting with `bootc install to-existing-root` and reading results through a oneshot unit and the console, as the notes describe. Record each under a dated Measured subsection. Revert both VMs.
+- [ ] Run each sub-case as § 13 states it, reading results through a oneshot unit and the console, as the notes describe. (a), (b), (d), (e) and (f) install with `bootc install to-existing-root`. (c) is about the other routes and does not use it: install once with `bootc install to-disk`, once through Anaconda, and once from an image whose `/etc/machine-id` reads `uninitialized`, and for each record whether first boot applies presets. A route the test guests cannot run is recorded as not run, with the reason. Record each under a dated Measured subsection. Revert both VMs.
 - [ ] Commit `docs(skills): record the units boot checks`.
 
 **Gate:** may run beside phase 3. A result on § 17's list (presets applied at first boot on any route; `/tmp` writable on RHEL 9 with `tmp.mount` masked) stops the branch before phase 4 for a spec change by the project owner. Other results are recorded and change nothing.
 
 ---
 
-## Phase 3: one control per fact (size M; 6 tasks)
+## Phase 3: one control per fact (size M; 7 tasks)
 
 Spec: § 8, § 10.2 "What the plan takes" item 3 and the tuned decision, § 11.1 `scheduled_tasks` row, § 9.1 "Aggregate timer control". Tests T19 to T21.
 
@@ -456,9 +471,21 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 **Acceptance:** T21 passes in full.
 
-### Task 3.6: Phase 3 close (Rust lane, S)
+### Task 3.6: Declined generated units on their rows (frontend lane, S)
+
+**Spec:** § 11.1 "A declined generated unit is shown on its scheduled or flatpak row"; T21 refine half.
+
+**Parallel:** can run beside Task 3.5 against Task 3.4's projection Interfaces; merges after Task 3.4.
+
+**Files:** `crates/web/src/{web_types,adapter}.rs`, `crates/web/ui/src/api/types.ts`, the scheduled tasks component and `crates/web/ui/src/components/ContainerSection.tsx` (where flatpak applications are listed). Test: `crates/web/tests/api_test.rs`, Vitest.
+
+- [ ] **Step 1: Failing tests first:** through the production handlers, a generated cron timer declined for a name collision carries its `declined` reason and text on its scheduled row; the flatpak provisioning service declined the same way shows it on the flatpak row; Vitest renders both with the reason text.
+- [ ] **Step 2-4:** run, implement, frontend checks, gate. **Step 5: Commit** `feat(web): show a declined generated unit on its row`.
+
+### Task 3.7: Phase 3 close (Rust lane, S)
 
 - [ ] Update `process-docs/skills/service-omission-model.md` (generated units and flatpak in the plan), `docs/reference/inspector-coverage.md` (scheduled tasks describe; units control), `codebase-layout.md` if a module moved.
+- [ ] The phase report names `inspectah-local-timer-has-two-controls-and-neither-works` and `inspectah-timer-enable-lines-unquoted-and-trust-empty-units` as closed.
 - [ ] **CHANGELOG.md**: **Fixed** a disabled local timer is no longer enabled in the image, and a vendor timer enabled against its preset is carried. **Removed** the scheduled timer toggle, which applied nothing, and the unconditional `tuned.service` enable (the unit's own row decides it).
 - [ ] Gate; commit `docs: record one control per timer fact`.
 
@@ -474,13 +501,15 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 ### Task 4.0: Run R5 before phase 4 (real host, M)
 
-**Spec:** § 13 R5; § 15 real-host table, "Before phase 4 is planned" (see Spec questions 3).
+**Spec:** § 13 R5; § 15 real-host table, "Before phase 4's code starts".
 
 **Needs:** reverted `rhel9` and `rhel10` VMs, no inspectah build, no driftify profile: every case is a unit planted by hand. The `systemd-cryptsetup@` and `systemd-fsck@` case needs a host with an encrypted volume or a separate filesystem; if the VMs have neither, record that and do not fabricate one.
 
 - [ ] Run each R5 question as § 13 states it, on both releases. Record under a dated Measured subsection. Revert both VMs. Commit `docs(skills): record the small systemd facts phase 4 relies on`.
 
 **Gate:** phase 4 code does not start until each answer is checked against Tasks 4.1 to 4.8. An answer that matches the spec's assumption lets its guard stand. An answer on § 17's R5 line (a drop-in reset behaving as documented, a different search-path order, `disable` failing on an absent `Also=` member) goes to the project owner for a spec change, and this plan's affected task is rewritten before it starts.
+
+Before Task 4.1: merge `main` into the branch and run the gate.
 
 ### Task 4.1: The `[Install]` reader (Rust lane, M)
 
@@ -499,7 +528,7 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 **Files:** Modify `crates/collect/src/inspectors/units/resolve.rs`, `crates/collect/src/inspectors/units/mod.rs`. Test: `crates/collect/tests/units_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** a concrete `worker@site.service` under `/etc` beside a vendor template is `Local` with `file` the instance; an instance with no file has the template as `file`; a concrete instance file under `/run/systemd/system`, a copy under `/usr/local/lib/systemd/system`, and a drop-in with `[Install]` under `/run/systemd/system` each give a warning naming the path and no state change, and the same unit without the extra file gives its row.
+- [ ] **Step 1: Failing tests first:** a concrete `worker@site.service` under `/etc` beside a vendor template is `Local` with `file` the instance; an instance with no file has the template as `file`; a concrete instance file under `/run/systemd/system`, a copy under `/usr/local/lib/systemd/system`, and a drop-in with `[Install]` under `/run/systemd/system` each give a warning naming the path and no state change, and the same unit without the extra file gives its row. T24's render assertions for the concrete instance (carried with the template's package excluded and its own file staged; `UnitFileNotStaged` with its file excluded) are deferred to Task 5.2: until then every instance is omitted by Task 4.6's placeholder, which would decide first.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): refuse units the systemd search path would change`.
 
 ### Task 4.3: Install drop-ins and the drop-in half of rule 5 (Rust lane, M)
@@ -508,7 +537,7 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 **Files:** `crates/core/src/types/units.rs`, `crates/collect/src/inspectors/units/mod.rs`, `crates/pipeline/src/render/unit_plan.rs`. Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T24: a `WantedBy=` only from a drop-in is carried with the drop-in in `install_drop_ins`; that drop-in excluded, or a second `[Install]` drop-in staged that the row does not list, gives `InstallEvidenceChanged` and no enable; an `install_drop_ins` path holding `..` gives the same; an `/etc` drop-in with no `[Install]` and a vendor drop-in's file name is in `install_drop_ins`, and one with its own file name is not; a drop-in that assigns an empty `WantedBy=` is advised. T25 (k) first half: the vendor `bundle.service.d/10-members.conf` case with the `/etc` file included carries the enable and lists the file, excluded gives `InstallEvidenceChanged`. A `vendor_drop_ins` value with `/` or without `.conf` fails to load. The lexical test is true for `  [Install]  `, `[Install]\r`, and a backslash-continued assignment (Review focus 3).
+- [ ] **Step 1: Failing tests first,** T24: a `WantedBy=` only from a drop-in is carried with the drop-in in `install_drop_ins`; that drop-in excluded, or a second `[Install]` drop-in staged that the row does not list, gives `InstallEvidenceChanged` and no enable; an `install_drop_ins` path holding `..` gives the same; an `/etc` drop-in with no `[Install]` and a vendor drop-in's file name is in `install_drop_ins`, and one with its own file name is not; a drop-in that assigns an empty `WantedBy=` makes the unit's section `Undetermined(DropInReset)`, with no state change and no enable (its advisory is Task 4.5's). T25 (k) first half: the vendor `bundle.service.d/10-members.conf` case with the `/etc` file included carries the enable and lists the file, excluded gives `InstallEvidenceChanged`. A `vendor_drop_ins` value with `/` or without `.conf` fails to load. The lexical test is true for `  [Install]  `, `[Install]\r`, and a backslash-continued assignment (Review focus 3).
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): carry an enable only with the [Install] files it was recorded from`.
 
 ### Task 4.4: Install state from the links (Rust lane, L)
@@ -517,19 +546,21 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 **Files:** `crates/collect/src/inspectors/units/mod.rs`, `crates/core/src/baseline.rs` (stock-state constant, one entry: `remote-cryptsetup.target`, `Disabled`). Test: `crates/collect/tests/units_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T22 in full, the first four cases repeated for an instance.
+- [ ] **Step 1: Failing tests first,** T22's state assertions: for each T22 case, the install state, the state change or its absence, the inventory entry and the absence of an enable, as T22 states them (`backup.service` with only a `rescue.target.wants/` link: no state change and inventory `Disabled` under a `disable` preset, a `Disabled` state change under an `enable` preset; both links: `Enabled`; two `WantedBy=` and one link: no state; the second link under `/usr/lib`: `Enabled`; only vendor links: `Disabled`; `Also=` only: no state change and no inventory entry; `getty@tty1.service` and `getty@tty2.service`; `remote-cryptsetup.target`). The first four cases repeated for an instance assert the install state and inventory here; their state-change assertions are Task 4.6's, which creates instance state changes. T22's link findings and advisories (the `NotInInstall` link, the advisory for the extra link, `PartialInstall`, no advisory for the vendor link) are Task 4.5's.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `fix(collect): read enablement from the links, not systemctl's word`.
 
-**Acceptance:** T22 passes; the inventory state is the derived one.
+**Acceptance:** T22's state assertions pass; the inventory state is the derived one.
 
 ### Task 4.5: Hand-made links and their advisories (Rust lane, M)
 
-**Spec:** § 6.6, § 7.3 rows producing `ManualLink`, alias handling, `.upholds` advising, unparseable link names warned; § 7.5 "Instances tied to one host's devices" (constant); § 7.7 `*.upholds/*` walk exclusion (`walk.rs:154-155`); § 10.9; § 6.7 guard gains `ManualLink`; § 11.1 `manual_links[]` projection; T23.
+**Spec:** § 6.6, § 7.3 rows producing `ManualLink`, alias handling, `.upholds` advising, unparseable link names warned; § 7.5 "Instances tied to one host's devices" (constant); § 7.7 `*.upholds/*` walk exclusion (`walk.rs:154-155`); § 10.9; § 6.7 guard gains `ManualLink`; § 11.1 `manual_links[]` projection; T23; T22's link findings and advisories; T24's empty-`WantedBy=` advisory.
 
 **Files:** `crates/core/src/types/units.rs`, `crates/collect/src/inspectors/units/mod.rs`, `crates/collect/src/inspectors/config/walk.rs`, `crates/pipeline/src/render/unit_plan.rs`, `crates/pipeline/src/render/mod.rs`, `crates/refine/src/projection/`. Test: `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T23: the `StaticUnit` link and its refine row exist; then the advisory holds the `add-wants` line, no `RUN` names the unit, the row has no include; table cases for `.requires`, an unexpanded specifier, `systemd-fsck@` (no command line) and a hand-made alias; `UpheldBy=multi-user.target` with its `.upholds` link through the units and config inspectors: no state change, no enable, the restart-loop text, the link's path absent from `config.files` and the staged tree.
+- [ ] **Step 1: Failing tests first,** T23: the `StaticUnit` link and its refine row exist; then the advisory holds the `add-wants` line, no `RUN` names the unit, the row has no include; table cases for `.requires`, an unexpanded specifier, `systemd-fsck@` (no command line) and a hand-made alias; `UpheldBy=multi-user.target` with its `.upholds` link through the units and config inspectors: no state change, no enable, the restart-loop text, the link's path absent from `config.files` and the staged tree. T22 link half, on Task 4.4's fixtures: one `NotInInstall` link for the `rescue.target.wants/` case, an advisory for the extra link when both links exist, `PartialInstall` for two `WantedBy=` and one link, and no advisory for the link shipped under `/usr/lib`. T24: a drop-in that assigns an empty `WantedBy=` gives the `Undetermined` advisory for the unit's links.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): report hand-made unit links with the command that recreates them`.
+
+**Acceptance:** T23 passes, and with Task 4.4, T22.
 
 ### Task 4.6: Enabled instances, omitted for now (Rust lane, S)
 
@@ -537,7 +568,7 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 **Files:** `crates/collect/src/inspectors/units/mod.rs`, `crates/pipeline/src/render/unit_plan.rs` (a placeholder `OmissionReason` variant, removed in Task 5.2). Test: `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing test first,** T27: an enabled instance found through the directory scan has a state change and a refine row, an `# Omitted:` line with the placeholder reason, and no enable; an instance linked only under `/run` is not found; an instance linked from two parents is one state change.
+- [ ] **Step 1: Failing test first,** T27: an enabled instance found through the directory scan has a state change and a refine row, an `# Omitted:` line with the placeholder reason, and no enable; an instance linked only under `/run` is not found; an instance linked from two parents is one state change. T22's instance repeats, state-change half: the instance versions of the first four T22 cases give the state changes T22 states.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): collect enabled template instances`.
 
 ### Task 4.7: `Also=` members recorded (Rust lane, M)
@@ -555,16 +586,16 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 **Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/refine/src/projection/`. Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T25 (a) to (i) and the (k) member case, each asserting the block or the carried line and the structured reason on the refine row; (c) expects `RowNotCarried` while instances are omitted (Task 5.2 changes it). Review focus 4: scan and refine export give equal unit lines for case (a).
+- [ ] **Step 1: Failing tests first,** T25 (a) to (i) and the (k) member case, each asserting the block or the carried line and the structured reason on the refine row; (c) expects `RowNotCarried` while instances are omitted (Task 5.2 changes it). T25 (h)'s instance case (an instance recorded from a vendor template, with a `name@.service` that sets `Also=` staged from another row, omitted by rule 5) is deferred to Task 5.2, since the phase 4 placeholder decides first. Review focus 4: scan and refine export give equal unit lines for case (a).
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): carry an enable or disable with Also= only when every member agrees`.
 
 ### Task 4.9: Fleet merge of the phase 4 fields, and rule 7 on an aggregate (Rust lane, M)
 
-**Spec:** § 12 bullets on list-field union, member `links` disagreement becoming `Other`, `vendor_drop_ins` union, `manual_links` by relation, parent and unit, "always an advisory in an aggregate", the rows-without-`Also=` limit (no product text); § 10.2 `AlsoWhy::FleetAggregate` and its advisory text; T25 (j).
+**Spec:** § 12 bullets on list-field union for the lists that exist in phase 4 (`also`, `install_drop_ins`, `vendor_drop_ins`; `required_config` and `data_paths` are Task 5.1's), member `links` disagreement becoming `Other`, `vendor_drop_ins` union, `manual_links` by relation, parent and unit, "always an advisory in an aggregate", the rows-without-`Also=` limit (no product text); § 10.2 `AlsoWhy::FleetAggregate` and its advisory text; T25 (j).
 
 **Files:** `crates/core/src/aggregate/merge.rs`, `crates/pipeline/src/render/unit_plan.rs`. Test: `crates/core/tests/aggregate_merge_test.rs`, `crates/refine/tests/aggregate_export_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` on the refine row with the fleet text); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; manual links from two hosts merge by the triple.
+- [ ] **Step 1: Failing tests first,** T25 (j) through the real collector and merge (host A alone carries the enable; merged gives `FleetAggregate` on the refine row with the fleet text); two hosts recording one member `Installed` and `Unlinked` merge to `Other`; two hosts with different `install_drop_ins` and `vendor_drop_ins` for one unit merge to the union of each, and a member's `vendor_drop_ins` to the union of names; manual links from two hosts merge by the triple.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(core): merge Also= and link findings across hosts`.
 
 ### Task 4.10: The default target (Rust lane, M)
@@ -578,7 +609,7 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 ### Task 4.11: Links, default target and members in the flat list (frontend lane, M)
 
-**Spec:** § 11.1 `manual_links[]`, `default_target`, `unit_states[].also[]` and `install_drop_ins[]`, `ItemId::DefaultTarget`. See Spec questions 4.
+**Spec:** § 11.1 `manual_links[]`, `default_target`, `unit_states[].also[]` and `install_drop_ins[]`, `ItemId::DefaultTarget`. See Readings and plan choices, item 1.
 
 **Parallel:** can start beside Tasks 4.5, 4.7 and 4.10 against their projection Interfaces; merges after the last of them.
 
@@ -593,6 +624,7 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 - [ ] Write the `/etc/systemd/system` ownership contract (§ 7.7 table, § 8 table, the three dependency-directory exclusions) as `process-docs/skills/etc-systemd-system-ownership.md`, add it to `process-docs/skills/index.md`; fix `docs/reference/inspector-coverage.md:110-133` (sources, what becomes a state change, links, the default target); update `service-omission-model.md` (rules 5 and 7).
 - [ ] **CHANGELOG.md**: **Added** hand-made unit link advisories with the `add-wants` or `add-requires` line; the default target is carried. **Changed** enablement is read from the links, so a unit enabled only by a hand-made link is reported, not enabled; a command whose `Also=` members differ on the source is an advisory with the lines to add by hand.
+- [ ] The phase report names `inspectah-write-the-collector-overlap-contract` as partly covered (what remains, per § 14) and notes that the blocker of `inspectah-etc-unit-files-accessor` has moved.
 - [ ] Gate; commit `docs: write the /etc/systemd/system ownership contract`.
 
 **Phase 4 ends:** a scan reads enablement from the links, reports hand-made links, carries the default target, records `Also=` members and carries a command only when they agree, and names every enabled instance in an `# Omitted:` line.
@@ -609,11 +641,11 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 
 ### Task 5.1: What an instance needs (Rust lane, M)
 
-**Spec:** § 7.5 "What an instance needs" table, the fixed tables (decided), "Every `required_config` path is kept", "`data_paths` holds persistent data only"; § 6.7 row for both lists; T28 collector cases.
+**Spec:** § 7.5 "What an instance needs" table, the fixed tables (decided), "Every `required_config` path is kept", "`data_paths` holds persistent data only"; § 6.7 row for both lists; § 12 list-field union for `required_config` and `data_paths`; T28 collector cases.
 
-**Files:** Create `crates/collect/src/inspectors/units/instance.rs`; modify `crates/core/src/types/units.rs`. Test: `crates/collect/tests/units_test.rs`.
+**Files:** Create `crates/collect/src/inspectors/units/instance.rs`; modify `crates/core/src/types/units.rs`, `crates/core/src/aggregate/merge.rs` (the merge keeps a representative's fields today, so the two new lists need their own union). Test: `crates/collect/tests/units_test.rs`, `crates/core/tests/aggregate_merge_test.rs`.
 
-- [ ] **Step 1: Failing tests first:** `wg-quick@wg0` gives `required_config = ["/etc/wireguard/wg0.conf"]` from the table; a template with `EnvironmentFile=/etc/x/%i.env` and `EnvironmentFile=-/etc/y/%i.env` keeps only the first; `dirsrv@example` gives `/var/lib/dirsrv/slapd-example` when it exists and nothing when it does not; `PIDFile=/var/run/worker/%i.pid` gives an empty `data_paths`; `StateDirectory=worker/%i` gives `/var/lib/worker/<i>`; a value that expands outside `/etc` or `/var` is dropped.
+- [ ] **Step 1: Failing tests first:** `wg-quick@wg0` gives `required_config = ["/etc/wireguard/wg0.conf"]` from the table; a template with `EnvironmentFile=/etc/x/%i.env` and `EnvironmentFile=-/etc/y/%i.env` keeps only the first; `dirsrv@example` gives `/var/lib/dirsrv/slapd-example` when it exists and nothing when it does not; `PIDFile=/var/run/worker/%i.pid` gives an empty `data_paths`; `StateDirectory=worker/%i` gives `/var/lib/worker/<i>`; a value that expands outside `/etc` or `/var` is dropped. Merge: two hosts with one instance whose `required_config` and `data_paths` differ merge to the union of each list.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(collect): record what an enabled instance reads and keeps`.
 
 ### Task 5.2: Rule 6 and carried instances (Rust lane, M)
@@ -622,25 +654,29 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 
 **Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/collect/src/inspectors/units/mod.rs` (attention reasons). Test: `crates/cli/tests/units_scan_test.rs`, `crates/pipeline/tests/unit_plan_test.rs`.
 
-- [ ] **Step 1: Failing tests first,** T28 (the `openvpn-client@site` case through the real inspectors: one state change with the template's owner, the instance in `RUN systemctl enable`); T29 in full, positive controls included, the WireGuard case through the real redaction pass asserting the staged file holds no key; update T25 (c) to the phase 5 result (the member row carried, so the owner's command carried when the member passes, `RowNotCarried` when the member's configuration is excluded), matching T29's last sentence. An instance of a template on no list with both lists empty is carried with its attention note.
+- [ ] **Step 1: Failing tests first,** T28 (the `openvpn-client@site` case through the real inspectors: one state change with the template's owner, the instance in `RUN systemctl enable`); T29 in full, positive controls included, the WireGuard case through the real redaction pass asserting the staged file holds no key; update T25 (c) to the phase 5 result (the member row carried, so the owner's command carried when the member passes, `RowNotCarried` when the member's configuration is excluded), matching T29's last sentence. An instance of a template on no list with both lists empty is carried with its attention note. Deferred from phase 4: T24's concrete `worker@site.service` under `/etc` is carried with the template's package excluded and its own file staged, and omitted with `UnitFileNotStaged` when its file is excluded; T25 (h)'s instance recorded from a vendor template, with a `name@.service` that sets `Also=` staged from another row, is omitted by rule 5. T27: the placeholder reason and its no-enable assertion are obsolete once the placeholder goes; replace them with the phase 5 result for the same instance (omitted under rule 6 when it has a `required_config` path missing from the export, carried otherwise), and keep T27's directory-discovery and `/run` exclusion checks unchanged.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): carry an instance's enable when its configuration is in the export`.
 
-### Task 5.3: The instance data advisory (Rust lane, S)
+### Task 5.3: The instance data advisory, and the instance lists in the view (Rust lane, S)
 
-**Spec:** § 10.8 "Data under `/var`" (one comment per instance before the `RUN` lines, same sentence on `attention_reason`); T28 `dirsrv` case.
+**Spec:** § 10.8 "Data under `/var`" (one comment per instance before the `RUN` lines, same sentence on `attention_reason`); § 11.1 `unit_states[]` `required_config[]` and `data_paths[]`; T28 `dirsrv` case.
 
-**Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/collect/src/inspectors/units/mod.rs`. Test: `crates/cli/tests/units_scan_test.rs`.
+**Files:** `crates/pipeline/src/render/unit_plan.rs`, `crates/collect/src/inspectors/units/mod.rs`, `crates/refine/src/projection/`. Test: `crates/cli/tests/units_scan_test.rs`, `crates/refine/tests/session_test.rs`.
 
-- [ ] **Step 1: Failing test first:** `dirsrv@example.service` with an existing data directory has the advisory beside a carried enable and the same sentence on its row; with the enable omitted there is no data advisory.
+**Interfaces (Produces):** `UnitStateView.required_config: Vec<String>` and `UnitStateView.data_paths: Vec<String>`.
+
+- [ ] **Step 1: Failing test first:** `dirsrv@example.service` with an existing data directory has the advisory beside a carried enable and the same sentence on its row; with the enable omitted there is no data advisory. The projected `unit_states` row for `wg-quick@wg0.service` holds its `required_config`, and the `dirsrv` row its `data_paths`.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): warn that a carried instance's data stays behind`.
 
 ### Task 5.4: Instance fields in the flat list (frontend lane, S)
 
 **Spec:** § 11.1 `instance_of`, `required_config[]`, `data_paths[]`.
 
-**Parallel:** can run beside Task 5.2; merges after Task 5.3.
+**Parallel:** can run beside Task 5.2 against Task 5.3's Interfaces; merges after Task 5.3.
 
-- [ ] **Step 1: Failing test first:** an instance row shows its template, its required configuration paths and its data paths. **Step 2-4:** implement, frontend checks, gate. **Step 5: Commit** `feat(web): show what an instance needs on its row`.
+**Files:** `crates/web/src/{web_types,adapter}.rs`, `crates/web/ui/src/api/types.ts`, the units list component. Test: `crates/web/tests/api_test.rs`, Vitest.
+
+- [ ] **Step 1: Failing test first:** through the production handlers the view response carries `required_config` and `data_paths`; an instance row shows its template, its required configuration paths and its data paths. **Step 2-4:** implement, frontend checks, gate. **Step 5: Commit** `feat(web): show what an instance needs on its row`.
 
 ### Task 5.5: Merge preparation (Rust lane, M)
 
@@ -662,11 +698,17 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 **Needs:** the branch build at the end of Task 5.5 (and, for R2's ordering case, a `main` build from before the merge); reverted `rhel9` and `rhel10` VMs, reverted before each run; the VM operating notes.
 
 - [ ] **R1:** as Task 2.16, driftify **standard**.
-- [ ] **R2:** driftify **kitchen-sink** (it plants `wg-quick@wg0` with a key and the `cups`, `iscsid` and `virtnetworkd` service-on, socket-off pairs), plus by hand: a local service with no paired timer (built with the `main` build, then the branch build), a full shadow built and booted, an instance with clean configuration checked active after boot, and the `service.d` package case. If no package in the enabled repositories owns an `[Install]`-bearing `/etc/systemd/system/service.d/*.conf`, record that and what was searched.
+- [ ] **R2:** driftify **kitchen-sink** (it plants `wg-quick@wg0` with a key and the `cups`, `iscsid` and `virtnetworkd` service-on, socket-off pairs), plus by hand where the profile has no case. Each of § 13 R2's six observations, recorded:
+  1. A local service with no paired timer builds: with the `main` build (expected to fail at its enable) and with the branch build (expected to build).
+  2. A full shadow, built and booted: which file loads, and that the unit runs.
+  3. The enabled `wg-quick@wg0`, whose configuration holds a key: whether the config walk recorded `/etc/wireguard/wg0.conf` in `config.files`, and that the enable is omitted with the redaction reason.
+  4. An instance with clean configuration: carried, and active after boot.
+  5. The libvirt service with its sockets disabled (`virtnetworkd.service`): the rendered `Also=` advisory compared line by line with the host's links (`ls -l` of the relevant `.wants` directories and `systemctl is-enabled` of the service and each socket); the advisory's lines, applied by hand to a build, reproduce the host's states.
+  6. A package that owns an unmodified `/etc/systemd/system/service.d/*.conf` holding an `[Install]` section, scanned on one host: whether the snapshot holds any entry for that path in `config.files`, in `units.drop_ins` or in `file_ownership`. If no package in the enabled repositories owns such a file, record that and what was searched.
 - [ ] **R4:** scan each VM stock (no driftify) and then after driftify **kitchen-sink** (cumulative, so every unit-state case of all three levels). Classify every row the new kinds add, every link advisory, every instance and every `Also=` advisory, and keep the classified list with its reasons. Known before the run: `remote-cryptsetup.target` on RHEL 9 and the rows a package install makes through `Also=` (§ 7.4).
-- [ ] Record each under a dated Measured subsection. Revert both VMs. Commit `docs(skills): record the units branch merge-gate runs`.
+- [ ] Record each under a dated Measured subsection. Revert both VMs. The run report names `inspectah-full-shadow-wants-link-points-at-the-vendor-path` as partly covered by observation 2. Commit `docs(skills): record the units branch merge-gate runs`.
 
-**Gate (the merge gate):** the branch merges only when R1 shows the image reading the host's socket state on both releases; R2's builds succeed with the enable after its file, the WireGuard enable omitted and the clean instance active; and R4 finds no unexplained stock row. A stock row beyond the known ones either joins the stock-state constant (a reviewed change on the branch) or, if the list is shown to be the wrong tool, goes to the project owner before the merge.
+**Gate (the merge gate):** the branch merges only when R1 shows the image reading the host's socket state on both releases; R2's branch build succeeds with the enable after its file, the full shadow loads from `/etc`, the WireGuard enable is omitted, the clean instance is active, and the libvirt advisory matches the host's links (observation 6 is recorded and gates nothing); and R4 finds no unexplained stock row. A stock row beyond the known ones either joins the stock-state constant (a reviewed change on the branch) or, if the list is shown to be the wrong tool, goes to the project owner before the merge.
 
 ### Task 5.7: Merge (project owner)
 
@@ -680,23 +722,22 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 |---|---|---|---|
 | 1 the rename | 7 (6 / 1 / 0) | M | M |
 | 2 every kind | 17 (13 / 1 / 2 runs; 1 close) | L, upper end | XL: about one and a half L |
-| 3 one control per fact | 6 (5 / 1 / 0) | M | M |
+| 3 one control per fact | 7 (5 / 2 / 0) | M | M |
 | 4 the `/etc/systemd/system` scan | 13 (11 / 1 / 1 run) | L | L+: about a third over L |
 | 5 carried instances | 7 (4 / 1 / 1 run; 1 merge) | S to M | M |
 
 Task sizes: S is one short dispatch, M one full dispatch, L one dispatch at the limit of what a single review can check from the diff. The L tasks (1.2, 2.7, 4.4, 4.8, 2.17, 5.6) are the ones to watch for a split.
 
-**The whole is larger than § 15 estimates, by roughly a third.** Phases 2 and 4 carry most of it: phase 2 holds staging, the plan, three rule tasks, mount findings, updaters, fleet and refine rows, and phase 4 holds a reader, a resolver, link state, links, members, rule 7 and the default target. § 15's sizes also do not count the five real-host tasks or the frontend lane's four flat-list tasks.
+**The whole is larger than § 15 estimates, by roughly a third.** Phases 2 and 4 carry most of it: phase 2 holds staging, the plan, three rule tasks, mount findings, updaters, fleet and refine rows, and phase 4 holds a reader, a resolver, link state, links, members, rule 7 and the default target. § 15's sizes also do not count the five real-host tasks or the frontend lane's five tasks after phase 1 (2.14, 3.3, 3.6, 4.11, 5.4).
 
-## Spec questions
+## Readings and plan choices
 
-Found while planning. None is resolved here; each says what the plan does meanwhile.
+Where the plan reads the spec or chooses between valid approaches. None changes the design.
 
-1. **R1's direction is inverted against the measured presets.** § 13 R1 says "disable on RHEL 9, enable on RHEL 10". The recorded package states (`cockpit.socket` preset `disabled` on RHEL 9, `enabled` on RHEL 10) and the driftify standard profile make "against its preset" an `enable` on RHEL 9 and a `disable` on RHEL 10. T5's "enabled against a `disable` preset" agrees with the measured direction. The plan runs R1 against the preset as driftify sets it.
-2. **There is no T14.** § 13 numbers T13 then T15. The plan keeps the spec's ids and assumes no test was lost; if one was, it belongs in phase 2.
-3. **R5 is scheduled "before phase 4 is planned", and this plan plans phase 4 now.** The plan runs R5 as Task 4.0, before any phase 4 code, and rewrites an affected phase 4 task before it starts if an answer departs from the spec.
-4. **The flat list and rows with no toggle.** § 15 says units are shown in the existing flat list at the merge, and § 11.2 leaves presentation to phase 6. The spec does not say whether mount findings, hand-made links and the default target appear in refine before phase 6. The default target has a toggle (§ 10.5) that is unreachable without a row. The plan adds a minimal row for each in the flat list in the phase that adds its data (Tasks 2.14, 4.11), with no grouping.
-5. **Changelog timing.** `process-docs/changelog-policy.md` writes a feature branch's entry at merge time; this plan writes each phase's lines in its close task and rewrites the block at Task 5.5. Not a spec question, a plan choice, listed so the review sees it.
+1. **Minimal flat-list rows before phase 6.** Mount findings, hand-made links and the default target get a minimal row each in the existing flat list in the phase that adds their data (Tasks 2.14, 4.11), with no grouping. § 11.1 defines these rows, and the default target's toggle (§ 10.5) has no other way to be reached in the merged product. Grouping and presentation stay with phase 6.
+2. **Changelog timing.** `process-docs/changelog-policy.md` writes a feature branch's entry at merge time. Each phase's close task writes that phase's lines, and Task 5.5 rewrites the block into the net change against `main` before the merge, so what reaches `main` is one merge-time entry.
+3. **Compile-forced edits in `crates/web`.** Rust tasks make renames, deletions and mechanical boundary conversions there, with no new DTO field or behavior (Lanes). The alternative, landing a frontend-lane change with each type change, couples two implementers on one commit.
+4. **`staged_writes` is public.** Refine calls it to compute `declined` and `withheld` (Task 2.13), as the spec's § 10.2 signature now declares.
 
 ## Coverage
 
@@ -709,7 +750,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 5 per-kind table | 2.3, 2.4, 2.5, 4.5, 4.6, 5.2 |
 | § 6.1 `UnitName` | 1.1 |
 | § 6.2 carried and advisory types, `classify` | 2.1, 2.2 |
-| § 6.3 state change, refusals | 2.1, 2.2; `also` 4.7; drop-in lists 4.3; instance lists 5.1 |
+| § 6.3 state change, refusals | 2.2; `also` 4.7; drop-in lists 4.3; instance lists 5.1 |
 | § 6.4 section, inventory | 1.3; derived state 4.4 |
 | § 6.5 mount findings | 2.1, 2.5 |
 | § 6.6 hand-made links | 4.5 |
@@ -730,7 +771,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 7.7 one owner per path, masks, drop-ins | 2.4 |
 | § 7.7 `*.upholds/*` exclusion | 4.5 |
 | § 7.8 owning package | 2.2 |
-| § 8 scheduled tasks | 3.1, 3.2, 3.3; generated units 3.4 |
+| § 8 scheduled tasks | 3.1, 3.2, 3.3; generated units 3.4, 3.6 |
 | § 9 schema, one bump, refusal test | 1.2; re-run 5.5 |
 | § 9.1 string consumers | 1.2, 1.5, 1.6, 1.7; aggregate timer control 3.3 |
 | § 10.1 lines, quoting, order within section | 2.7, 2.9 |
@@ -754,22 +795,20 @@ Each spec section that states a requirement, and the task that implements it.
 | § 11.1 `unit_states`, `declined`, `withheld`, `mount_findings` | 2.13, 2.14 |
 | § 11.1 scheduled rows, timer operation removed | 3.2, 3.3 |
 | § 11.1 `manual_links`, `default_target`, `also` | 4.5, 4.7, 4.10, 4.11 |
-| § 11.1 instance fields | 5.1, 5.4 |
+| § 11.1 generated units declined on their rows | 3.4, 3.6 |
+| § 11.1 instance fields | 5.1, 5.3, 5.4 |
 | § 11.2 section design | Phase 6 |
 | § 11.3 synthesis retired | 1.4, 1.6 |
 | § 12 inventory merge | 1.3 |
 | § 12 identity, mount findings, updater exception, render-time validation | 2.11, 2.12 |
-| § 12 list fields, `manual_links`, `default_target`, aggregate `Also=` | 4.9, 4.10 |
-| § 13 T1, T3, T4 | 1.2, 1.4, 1.5, 1.6 |
-| § 13 T2, T5 to T13, T15 to T18 | 2.1 to 2.13 |
-| § 13 T19 to T21 | 3.1 to 3.5 |
-| § 13 T22 to T27 | 4.2 to 4.10 |
-| § 13 T28, T29 | 5.1 to 5.3 |
+| § 12 list fields, `manual_links`, `default_target`, aggregate `Also=` | 4.9, 4.10; `required_config` and `data_paths` 5.1 |
+| § 13 tests | Per test in the table below |
 | § 13 R1 | 2.16, 5.6 |
-| § 13 R2, R4 | 5.6 |
-| § 13 R3 | 2.17 |
+| § 13 R2 (six observations), R4 | 5.6 |
+| § 13 R3 (a) to (f), (c) on its own install routes | 2.17 |
 | § 13 R5 | 4.0 |
 | § 13 unrecorded measurements | 2.15 |
+| § 14 backlog items | Backlog items section; closures named in 2.15, 3.7, 4.12, 5.6 |
 | § 14 overlap contract text | 4.12 |
 | § 15 branch, phases, merge after phase 5 | Whole plan; 5.7 |
 | § 17 limit: fleet rows without `Also=` | Non-goal (stated limit, no product text) |
@@ -778,3 +817,39 @@ Each spec section that states a requirement, and the task that implements it.
 | § 17 limit: `disable` with an absent `Also=` member | 4.0 (R5 measures it); no product text |
 | § 17 limit: an edited `also` list is believed | Non-goal (stated limit, no product text) |
 | § 17 limit: fleet evidence may omit install metadata | 4.9 (the `FleetAggregate` advisory text) |
+
+### Tests
+
+Each test, and each lettered case, in the task that carries it. Every task listed comes after the tasks that create the types and rules its assertions need.
+
+| Test | Task(s) |
+|---|---|
+| T1 | 1.2; re-run 5.5 |
+| T2 | types 2.1; `state_changes` cases 2.2; signature 2.7 |
+| T3 | core half 1.2; projection 1.5; handlers and frontend 1.6 |
+| T4 | session 1.4; count 1.6 |
+| T5 | collector 2.2, 2.3; render 2.7 |
+| T6 | 2.7 |
+| T7 | 2.3 |
+| T8 | render 2.8; advisories 2.10 |
+| T9 | 2.10 |
+| T10 | snapshot and exports 2.5; view response 2.13 |
+| T11 | collector 2.4; staged file and commands 2.8 |
+| T12 | staging 2.6; commands 2.8; view response 2.13 |
+| T13 | quoting 2.7; order 2.9 |
+| T14 | None: the spec's numbering has no T14 |
+| T15 | conflict staging 2.6; commands and toggles 2.7; refine row 2.13 |
+| T16 | 2.8 |
+| T17 | 2.11 |
+| T18 | (a) 2.12; (b) 2.11; (c) 2.12; (d) 2.7 |
+| T19 | 3.1 |
+| T20 | refine 3.2; handlers and frontend 3.3 |
+| T21 | generated and flatpak 3.4; tuned and every line planned 3.5; rows 3.6 |
+| T22 | state 4.4; instance state changes 4.6; links and advisories 4.5 |
+| T23 | 4.5 |
+| T24 | search path and concrete-instance fragment 4.2; drop-ins 4.3; empty `WantedBy=` advisory 4.5; concrete-instance render 5.2 |
+| T25 | (a) to (g), (i), (k) member case 4.8; (h) 4.8, its instance case 5.2; (j) 4.9; (k) first half 4.3; (l) 4.7; (c) revised 5.2 |
+| T26 | 4.10 |
+| T27 | 4.6; placeholder assertions replaced 5.2 |
+| T28 | collector 5.1; carry 5.2; `dirsrv` advisory 5.3 |
+| T29 | 5.2 |
