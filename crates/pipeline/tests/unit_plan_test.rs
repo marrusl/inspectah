@@ -2041,3 +2041,314 @@ fn planned_unit_has_no_public_field_or_constructor() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// § 10.2 rules 2, 3 and 4, and § 10.3
+// ---------------------------------------------------------------------------
+
+/// A vendor unit owned by `owner`: a package-owned storage unit for a
+/// storage kind, an ordinary vendor unit otherwise.
+fn owned(unit: &str, owner: &str) -> UnitFragment {
+    UnitFragment::Vendor {
+        file: unit.to_owned().try_into().expect("a unit name"),
+        owning_package: Some(owner.into()),
+    }
+}
+
+/// The plan's declined entries as `(unit, action, reason)` strings and
+/// reasons, for exact comparison.
+fn declined_of(snap: &InspectionSnapshot) -> Vec<(String, UnitAction, OmissionReason)> {
+    plan_units(snap, &staged_writes(snap))
+        .declined
+        .into_iter()
+        .map(|(name, action, reason)| (name.as_str().to_owned(), action, reason))
+        .collect()
+}
+
+/// T12: for each protected name, a `disable` and a `mask` give § 10.3's
+/// FIXME and no command; an `enable` of the same unit is carried (the
+/// control). The names cover each entry of the list: both globs and the
+/// whole name.
+#[test]
+fn t12_a_protected_unit_is_never_disabled_or_masked() {
+    for unit in [
+        "bootc-fetch-apply-updates.timer",
+        "bootc-fetch-apply-updates.service",
+        "ostree-remount.service",
+        "ostree-finalize-staged.service",
+        "systemd-remount-fs.service",
+    ] {
+        for (state, verb, participle) in [
+            (UnitState::Disabled, UnitAction::Disable, "disabled"),
+            (UnitState::Masked, UnitAction::Mask, "masked"),
+        ] {
+            let snap = units_snapshot(vec![change_with(unit, vendor(unit), state)], vec![]);
+            let lines = render(&snap).lines;
+            assert_eq!(
+                lines,
+                [format!(
+                    "# FIXME: {unit} is {participle} on the source host. Not carried: the \
+                     image needs this unit."
+                )],
+                "{unit} {verb:?}"
+            );
+            assert!(in_no_systemctl_instruction(&lines, unit), "{unit}");
+            assert_eq!(
+                declined_of(&snap),
+                [(unit.to_owned(), verb, OmissionReason::TargetNeedsUnit)],
+                "{unit} {verb:?}"
+            );
+        }
+        let snap = units_snapshot(
+            vec![change_with(unit, vendor(unit), UnitState::Enabled)],
+            vec![],
+        );
+        assert_eq!(
+            render(&snap).lines,
+            [
+                "RUN systemctl enable -- \\".to_owned(),
+                format!("    '{unit}'")
+            ],
+            "{unit}: the enable is carried"
+        );
+    }
+}
+
+/// The FIXME is the spec's text, character for character.
+#[test]
+fn t12_the_fixme_is_the_spec_text() {
+    let snap = units_snapshot(
+        vec![change_with(
+            "bootc-fetch-apply-updates.timer",
+            vendor("bootc-fetch-apply-updates.timer"),
+            UnitState::Disabled,
+        )],
+        vec![],
+    );
+    assert_eq!(
+        render(&snap).lines,
+        [
+            "# FIXME: bootc-fetch-apply-updates.timer is disabled on the source host. Not \
+             carried: the image needs this unit."
+        ]
+    );
+}
+
+/// § 10.3: a masked `tmp.mount` gives its own FIXME and no command, while
+/// its `enable` and `disable` are carried, and a mask of another
+/// package-owned storage unit, `dev-hugepages.mount`, is carried.
+#[test]
+fn t12_a_masked_tmp_mount_is_refused_and_its_other_states_are_carried() {
+    let tmp = |state| {
+        units_snapshot(
+            vec![change_with(
+                "tmp.mount",
+                owned("tmp.mount", "systemd"),
+                state,
+            )],
+            vec![],
+        )
+    };
+    let masked = tmp(UnitState::Masked);
+    let lines = render(&masked).lines;
+    assert_eq!(
+        lines,
+        [
+            "# FIXME: tmp.mount is masked on the source host, where /tmp is then a directory on \
+             the root filesystem. Not carried: the bootc base image mounts /tmp from this unit, \
+             and without it /tmp is read-only."
+        ]
+    );
+    assert!(in_no_systemctl_instruction(&lines, "tmp.mount"));
+    assert_eq!(
+        declined_of(&masked),
+        [(
+            "tmp.mount".to_owned(),
+            UnitAction::Mask,
+            OmissionReason::TargetNeedsUnit
+        )]
+    );
+    for (state, verb) in [
+        (UnitState::Enabled, "enable"),
+        (UnitState::Disabled, "disable"),
+    ] {
+        assert_eq!(
+            render(&tmp(state)).lines,
+            [
+                format!("RUN systemctl {verb} -- \\"),
+                "    'tmp.mount'".to_owned()
+            ],
+            "{verb}"
+        );
+    }
+    let hugepages = units_snapshot(
+        vec![change_with(
+            "dev-hugepages.mount",
+            owned("dev-hugepages.mount", "systemd"),
+            UnitState::Masked,
+        )],
+        vec![],
+    );
+    assert_eq!(
+        render(&hugepages).lines,
+        ["RUN systemctl mask -- \\", "    'dev-hugepages.mount'"]
+    );
+}
+
+/// T8, render: a package-owned mount unit is acted on like a service:
+/// enabled in `RUN systemctl enable`, disabled in `disable`, masked in
+/// `mask`. With an administrator's unit file staged at its name, each
+/// command is declined with `StorageFileStaged` and the file's path, since
+/// the image would load that file (rule 2).
+#[test]
+fn t8_a_package_owned_mount_unit_acts_only_on_the_package_file() {
+    const UNIT: &str = "var-lib-pkg.mount";
+    const PATH: &str = "/etc/systemd/system/var-lib-pkg.mount";
+    for (state, verb, action) in [
+        (UnitState::Enabled, "enable", UnitAction::Enable),
+        (UnitState::Disabled, "disable", UnitAction::Disable),
+        (UnitState::Masked, "mask", UnitAction::Mask),
+    ] {
+        let change = || change_with(UNIT, owned(UNIT, "pkgmount"), state);
+        let carried = units_snapshot(vec![change()], vec![]);
+        assert_eq!(
+            render(&carried).lines,
+            [
+                format!("RUN systemctl {verb} -- \\"),
+                format!("    '{UNIT}'")
+            ],
+            "{verb}: the package's file"
+        );
+
+        let staged = units_snapshot(vec![change()], vec![(PATH, "[Mount]\nWhat=/dev/x\n")]);
+        let lines = render(&staged).lines;
+        assert_eq!(
+            lines,
+            [format!(
+                "# Omitted: {UNIT} (the export carries an administrator's unit file for it \
+                 ({PATH}))"
+            )],
+            "{verb}"
+        );
+        assert!(in_no_systemctl_instruction(&lines, UNIT), "{verb}");
+        assert_eq!(
+            declined_of(&staged),
+            [(
+                UNIT.to_owned(),
+                action,
+                OmissionReason::StorageFileStaged { path: PATH.into() }
+            )],
+            "{verb}"
+        );
+    }
+}
+
+/// T16, render: a masked unit and a staged unit file of the same name give
+/// `MaskPathOccupied` and no mask, since `systemctl mask` exits 1 on a
+/// regular file there (rule 4). The file is found by `Destination`, so an
+/// odd spelling of its path counts. Control: without the file the mask is
+/// carried.
+#[test]
+fn t16_a_mask_needs_its_path_free() {
+    const PATH: &str = "/etc/systemd/system/kdump.service";
+    for spelling in [PATH, "/etc/systemd//system/./kdump.service"] {
+        let snap = units_snapshot(
+            vec![change_with(
+                "kdump.service",
+                vendor("kdump.service"),
+                UnitState::Masked,
+            )],
+            vec![(spelling, "[Service]\nExecStart=/bin/true\n")],
+        );
+        let lines = render(&snap).lines;
+        assert_eq!(
+            lines,
+            [format!(
+                "# Omitted: kdump.service (the export also carries a unit file at {PATH}; \
+                 exclude one of the two)"
+            )],
+            "{spelling}"
+        );
+        assert!(in_no_systemctl_instruction(&lines, "kdump.service"));
+        assert_eq!(
+            declined_of(&snap),
+            [(
+                "kdump.service".to_owned(),
+                UnitAction::Mask,
+                OmissionReason::MaskPathOccupied { path: PATH.into() }
+            )],
+            "{spelling}"
+        );
+    }
+    let control = units_snapshot(
+        vec![change_with(
+            "kdump.service",
+            vendor("kdump.service"),
+            UnitState::Masked,
+        )],
+        vec![],
+    );
+    assert_eq!(
+        render(&control).lines,
+        ["RUN systemctl mask -- \\", "    'kdump.service'"]
+    );
+}
+
+/// The rules run in the spec's order and the first that fails decides: a
+/// package-owned storage mask with a file at its name is rule 2's, not
+/// rule 4's; a protected unit's mask with a file at its name is rule 3's,
+/// not rule 4's; a protected unit's `disable` whose recorded file is not
+/// staged is rule 3's, not rule 5's.
+#[test]
+fn the_first_failing_rule_decides() {
+    let storage = units_snapshot(
+        vec![change_with(
+            "dev-hugepages.mount",
+            owned("dev-hugepages.mount", "systemd"),
+            UnitState::Masked,
+        )],
+        vec![("/etc/systemd/system/dev-hugepages.mount", "[Mount]\n")],
+    );
+    assert_eq!(
+        declined_of(&storage),
+        [(
+            "dev-hugepages.mount".to_owned(),
+            UnitAction::Mask,
+            OmissionReason::StorageFileStaged {
+                path: "/etc/systemd/system/dev-hugepages.mount".into()
+            }
+        )]
+    );
+    let protected_mask = units_snapshot(
+        vec![change_with(
+            "ostree-remount.service",
+            vendor("ostree-remount.service"),
+            UnitState::Masked,
+        )],
+        vec![("/etc/systemd/system/ostree-remount.service", "[Unit]\n")],
+    );
+    assert_eq!(
+        declined_of(&protected_mask),
+        [(
+            "ostree-remount.service".to_owned(),
+            UnitAction::Mask,
+            OmissionReason::TargetNeedsUnit
+        )]
+    );
+    let protected_local = units_snapshot(
+        vec![change_with(
+            "bootc-local.service",
+            local("bootc-local.service"),
+            UnitState::Disabled,
+        )],
+        vec![],
+    );
+    assert_eq!(
+        declined_of(&protected_local),
+        [(
+            "bootc-local.service".to_owned(),
+            UnitAction::Disable,
+            OmissionReason::TargetNeedsUnit
+        )]
+    );
+}

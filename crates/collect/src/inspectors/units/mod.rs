@@ -1,4 +1,4 @@
-use inspectah_core::baseline::STOCK_STATE;
+use inspectah_core::baseline::{STOCK_STATE, target_needs_unit, target_needs_unit_text};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
@@ -353,7 +353,16 @@ fn build_state_changes(
             }
         };
         match UnitStateChange::new(unit, candidate.state, candidate.default_state) {
-            Ok(change) => state_changes.push(change),
+            Ok(mut change) => {
+                // § 10.3: the plan refuses this command, and refine shows
+                // why in the plan's own words.
+                let name = change.unit().name().as_str();
+                let action = change.implied_action();
+                if target_needs_unit(name, action) {
+                    change.attention_reason = Some(target_needs_unit_text(name, action));
+                }
+                state_changes.push(change);
+            }
             Err(e) => warnings.push(warn(&e.to_string())),
         }
     }

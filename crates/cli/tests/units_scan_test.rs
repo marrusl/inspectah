@@ -1447,3 +1447,557 @@ fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
     let refined = unit_lines(&containerfile_in(&export_session(&session(&snap))));
     assert_eq!(refined, expected, "refine route");
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 rules 2, 3 and 4, § 10.3, and T11's commands, through the scan.
+// ---------------------------------------------------------------------
+
+/// The `/etc/systemd/system` path of `unit`.
+fn etc_path(unit: &str) -> String {
+    format!("/etc/systemd/system/{unit}")
+}
+
+/// Whether the export tree stages a file at `path`, in either tree.
+fn staged_at(tree: &tempfile::TempDir, path: &str) -> bool {
+    ["config", "drop-ins"]
+        .iter()
+        .any(|root| tree.path().join(root).join(&path[1..]).exists())
+}
+
+/// The `# FIXME:` line that starts with `unit`'s name, if any.
+fn fixme_for<'a>(containerfile: &'a str, unit: &str) -> Option<&'a str> {
+    let prefix = format!("# FIXME: {unit} ");
+    containerfile.lines().find(|l| l.starts_with(&prefix))
+}
+
+/// The § 10.3 FIXME for a protected unit in `state`.
+fn protected_fixme(unit: &str, state: &str) -> String {
+    format!(
+        "# FIXME: {unit} is {state} on the source host. Not carried: the image needs this unit."
+    )
+}
+
+/// § 10.3's FIXME for a masked `tmp.mount`.
+const TMP_MOUNT_FIXME: &str = "# FIXME: tmp.mount is masked on the source host, where /tmp is \
+     then a directory on the root filesystem. Not carried: the bootc base image mounts /tmp \
+     from this unit, and without it /tmp is read-only.";
+
+/// A vendor unit file with an `[Install]` section.
+const VENDOR_SERVICE: &str =
+    "[Service]\nExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target\n";
+
+/// T12 through the scan and through a refine export: a protected unit
+/// disabled against its preset and one masked get the FIXME, no command and
+/// the same sentence as their `attention_reason`; a protected unit enabled
+/// against its preset is enabled, with no attention reason (the control).
+#[test]
+fn t12_protected_units_through_the_scan() {
+    const TIMER: &str = "bootc-fetch-apply-updates.timer";
+    const OSTREE: &str = "ostree-remount.service";
+    const REMOUNT: &str = "systemd-remount-fs.service";
+    let snap = scan(
+        UnitHost::new()
+            .unit(TIMER, "disabled")
+            .unit(OSTREE, "masked")
+            .unit(REMOUNT, "enabled")
+            .preset(&format!("enable {TIMER}"))
+            .preset("disable *")
+            .vendor_unit(
+                TIMER,
+                "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
+                Some("bootc"),
+            )
+            .vendor_unit(OSTREE, VENDOR_SERVICE, Some("ostree"))
+            .vendor_unit(REMOUNT, VENDOR_SERVICE, Some("systemd"))
+            .mask(OSTREE),
+    );
+    let expected = [
+        (TIMER, Some(protected_fixme(TIMER, "disabled"))),
+        (OSTREE, Some(protected_fixme(OSTREE, "masked"))),
+        (REMOUNT, None),
+    ];
+    for (unit, fixme) in &expected {
+        assert_eq!(
+            change(&snap, unit).attention_reason.as_deref(),
+            fixme.as_deref().and_then(|l| l.strip_prefix("# FIXME: ")),
+            "{unit}"
+        );
+    }
+    let scanned = containerfile_in(&render_export(&snap));
+    let refined = containerfile_in(&export_session(&session(&snap)));
+    for (route, containerfile) in [("scan", &scanned), ("refine", &refined)] {
+        for (unit, fixme) in &expected {
+            match fixme {
+                Some(line) => {
+                    assert_eq!(
+                        fixme_for(containerfile, unit),
+                        Some(line.as_str()),
+                        "{route}:\n{containerfile}"
+                    );
+                    assert!(
+                        in_no_systemctl_instruction(containerfile, unit),
+                        "{route}:\n{containerfile}"
+                    );
+                }
+                None => {
+                    assert!(
+                        acts(containerfile, "enable", unit),
+                        "{route}:\n{containerfile}"
+                    );
+                    assert!(fixme_for(containerfile, unit).is_none(), "{route}");
+                }
+            }
+        }
+    }
+}
+
+/// T12, every route: a zero-length file over a protected unit's vendor
+/// file, from a scan, gives a `Masked` row whose mask is refused, and no
+/// file is staged at the unit's path. The same snapshot with the
+/// zero-length file also offered by hand (an imported snapshot the
+/// collector cannot produce) as a drop-in or a config entry, with a `unit`
+/// field naming another unit, an interior `.` or a doubled separator,
+/// stages nothing at the path either: the stager's FIXME names it. Control:
+/// the same for `kdump.service`, which is not protected, carries the mask
+/// and still stages no file.
+#[test]
+fn t12_a_zero_length_protected_unit_file_is_neither_a_mask_nor_a_file() {
+    for (unit, protected) in [
+        ("bootc-fetch-apply-updates.service", true),
+        ("kdump.service", false),
+    ] {
+        let path = etc_path(unit);
+        let snap = scan(
+            UnitHost::new()
+                .unit(unit, "masked")
+                .vendor_unit(unit, VENDOR_SERVICE, Some("pkg"))
+                .etc_unit(unit, ""),
+        );
+        assert_eq!(
+            change(&snap, unit).current_state(),
+            UnitState::Masked,
+            "{unit}"
+        );
+        let check = |label: &str, snap: &InspectionSnapshot| {
+            let tree = render_export(snap);
+            let containerfile = containerfile_in(&tree);
+            assert!(!staged_at(&tree, &path), "{unit}, {label}");
+            if protected {
+                assert_eq!(
+                    fixme_for(&containerfile, unit),
+                    Some(protected_fixme(unit, "masked").as_str()),
+                    "{unit}, {label}:\n{containerfile}"
+                );
+                assert!(
+                    in_no_systemctl_instruction(&containerfile, unit),
+                    "{unit}, {label}:\n{containerfile}"
+                );
+            } else {
+                assert!(
+                    acts(&containerfile, "mask", unit),
+                    "{unit}, {label}:\n{containerfile}"
+                );
+            }
+            containerfile
+        };
+        check("scan", &snap);
+
+        for (label, spelling, as_drop_in, unit_field) in [
+            ("drop-in", path.clone(), true, unit.to_owned()),
+            (
+                "drop-in naming another unit",
+                path.clone(),
+                true,
+                "sshd.service".to_owned(),
+            ),
+            ("config entry", path.clone(), false, String::new()),
+            (
+                "config entry, interior .",
+                format!("/etc/systemd/./system/{unit}"),
+                false,
+                String::new(),
+            ),
+            (
+                "drop-in, doubled separator",
+                format!("/etc/systemd//system/{unit}"),
+                true,
+                unit.to_owned(),
+            ),
+        ] {
+            let mut imported = snap.clone();
+            if as_drop_in {
+                imported
+                    .units
+                    .as_mut()
+                    .expect("a units section")
+                    .drop_ins
+                    .push(inspectah_core::types::units::SystemdDropIn {
+                        unit: unit_field,
+                        path: spelling.clone(),
+                        content: String::new(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    });
+            } else {
+                imported
+                    .config
+                    .as_mut()
+                    .expect("a config section")
+                    .files
+                    .push(inspectah_core::types::config::ConfigFileEntry {
+                        path: spelling.clone(),
+                        category: inspectah_core::types::config::ConfigCategory::Other,
+                        content: String::new(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    });
+            }
+            let containerfile = check(label, &imported);
+            assert!(
+                containerfile
+                    .lines()
+                    .any(|l| l.starts_with("# FIXME:") && l.contains(&path)),
+                "{unit}, {label}: the offer is named as withheld:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// § 10.3 through the scan: a masked `tmp.mount` gets its FIXME, no
+/// command and the same sentence as its attention reason, while a masked
+/// `dev-hugepages.mount` on the same host is in the `mask` line. With
+/// `tmp.mount` enabled or disabled against its preset, the command is
+/// carried and there is no attention reason.
+#[test]
+fn t12_a_masked_tmp_mount_through_the_scan() {
+    let mount = "[Mount]\nWhat=tmpfs\nWhere=/tmp\n[Install]\nWantedBy=local-fs.target\n";
+    let snap = scan(
+        UnitHost::new()
+            .unit("tmp.mount", "masked")
+            .unit("dev-hugepages.mount", "masked")
+            .vendor_unit("tmp.mount", mount, Some("systemd"))
+            .vendor_unit("dev-hugepages.mount", mount, Some("systemd"))
+            .mask("tmp.mount")
+            .mask("dev-hugepages.mount"),
+    );
+    assert_eq!(
+        change(&snap, "tmp.mount").attention_reason.as_deref(),
+        TMP_MOUNT_FIXME.strip_prefix("# FIXME: ")
+    );
+    assert_eq!(change(&snap, "dev-hugepages.mount").attention_reason, None);
+    let containerfile = containerfile_in(&render_export(&snap));
+    assert_eq!(
+        fixme_for(&containerfile, "tmp.mount"),
+        Some(TMP_MOUNT_FIXME),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, "tmp.mount"),
+        "{containerfile}"
+    );
+    assert!(
+        acts(&containerfile, "mask", "dev-hugepages.mount"),
+        "{containerfile}"
+    );
+
+    for (state, preset, verb) in [
+        ("enabled", "disable", "enable"),
+        ("disabled", "enable", "disable"),
+    ] {
+        let snap = scan(
+            UnitHost::new()
+                .unit("tmp.mount", state)
+                .preset(&format!("{preset} tmp.mount"))
+                .vendor_unit("tmp.mount", mount, Some("systemd")),
+        );
+        assert_eq!(change(&snap, "tmp.mount").attention_reason, None, "{verb}");
+        let containerfile = containerfile_in(&render_export(&snap));
+        assert!(
+            acts(&containerfile, verb, "tmp.mount"),
+            "{verb}:\n{containerfile}"
+        );
+        assert!(fixme_for(&containerfile, "tmp.mount").is_none(), "{verb}");
+    }
+}
+
+/// A host whose package `owner` owns a vendor `unit`, in `state`, scanned
+/// against a base image so refine keeps the package included.
+fn owned_unit_host(unit: &str, owner: &str, state: &str, content: &str) -> UnitHost {
+    let host = UnitHost::new()
+        .base_package("glibc")
+        .package(owner)
+        .unit(unit, state)
+        .preset(&format!("disable {unit}"))
+        .vendor_unit(unit, content, Some(owner));
+    if state == "masked" {
+        host.mask(unit)
+    } else {
+        host
+    }
+}
+
+/// `snap` with a config entry at `path`, as an imported snapshot may hold
+/// one (the collector records an administrator's file at a vendor unit's
+/// name as a shadow of that unit, not beside a package-owned row).
+fn with_config_entry(snap: &InspectionSnapshot, path: &str, content: &str) -> InspectionSnapshot {
+    let mut imported = snap.clone();
+    imported
+        .config
+        .as_mut()
+        .expect("a config section")
+        .files
+        .push(inspectah_core::types::config::ConfigFileEntry {
+            path: path.into(),
+            category: inspectah_core::types::config::ConfigCategory::Other,
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    imported
+}
+
+/// T8, render, and rule 2 through refine: a package-owned mount unit
+/// enabled against its preset is in `RUN systemctl enable`, and masked, in
+/// `mask`. With an administrator's file at its name staged by an imported
+/// config entry, the refine export declines the command with
+/// `StorageFileStaged` and stages the file; excluding that entry through
+/// `RefineSession` alone removes the file and brings the command back.
+#[test]
+fn t8_a_package_owned_mount_unit_through_the_scan_and_refine() {
+    const UNIT: &str = "var-lib-pkg.mount";
+    let path = etc_path(UNIT);
+    let mount = "[Mount]\nWhat=/dev/vdb\nWhere=/var/lib/pkg\n[Install]\nWantedBy=local-fs.target\n";
+    for (state, verb) in [("enabled", "enable"), ("masked", "mask")] {
+        let snap = scan(owned_unit_host(UNIT, "pkgmount", state, mount));
+        assert!(
+            matches!(change(&snap, UNIT).unit(), CarriedUnit::PackagedStorage(_)),
+            "{verb}"
+        );
+        let scanned = containerfile_in(&render_export(&snap));
+        assert!(acts(&scanned, verb, UNIT), "{verb}:\n{scanned}");
+
+        let imported = with_config_entry(&snap, &path, "[Mount]\nWhat=/dev/vdc\n");
+        let tree = export_session(&session(&imported));
+        let declined = containerfile_in(&tree);
+        assert!(
+            staged_at(&tree, &path),
+            "{verb}: the administrator's file is staged"
+        );
+        assert_eq!(
+            omitted(&declined, UNIT),
+            Some(
+                format!(
+                    "# Omitted: {UNIT} (the export carries an administrator's unit file for it \
+                     ({path}))"
+                )
+                .as_str()
+            ),
+            "{verb}:\n{declined}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&declined, UNIT),
+            "{verb}:\n{declined}"
+        );
+
+        let tree = exported_after(&imported, &[(config_item(&path), false)]);
+        let restored = containerfile_in(&tree);
+        assert!(!staged_at(&tree, &path), "{verb}: the file is excluded");
+        assert!(acts(&restored, verb, UNIT), "{verb}:\n{restored}");
+        assert!(omitted(&restored, UNIT).is_none(), "{verb}:\n{restored}");
+    }
+}
+
+/// T16 through refine: a masked unit and a unit file of the same name,
+/// staged by an imported config entry, give `MaskPathOccupied` and no
+/// mask. Excluding the entry through `RefineSession` alone removes the file
+/// and brings the mask back.
+#[test]
+fn t16_excluding_the_file_brings_the_mask_back() {
+    const UNIT: &str = "kdump.service";
+    let path = etc_path(UNIT);
+    let snap = scan(owned_unit_host(
+        UNIT,
+        "kexec-tools",
+        "masked",
+        VENDOR_SERVICE,
+    ));
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "mask", UNIT), "{scanned}");
+
+    let imported = with_config_entry(&snap, &path, "[Service]\nExecStart=/usr/bin/kdump\n");
+    let tree = export_session(&session(&imported));
+    let occupied = containerfile_in(&tree);
+    assert!(staged_at(&tree, &path), "the unit file is staged");
+    assert_eq!(
+        omitted(&occupied, UNIT),
+        Some(
+            format!(
+                "# Omitted: {UNIT} (the export also carries a unit file at {path}; exclude one \
+                 of the two)"
+            )
+            .as_str()
+        ),
+        "{occupied}"
+    );
+    assert!(in_no_systemctl_instruction(&occupied, UNIT), "{occupied}");
+
+    let tree = exported_after(&imported, &[(config_item(&path), false)]);
+    let freed = containerfile_in(&tree);
+    assert!(!staged_at(&tree, &path), "the file is excluded");
+    assert!(acts(&freed, "mask", UNIT), "{freed}");
+    assert!(omitted(&freed, UNIT).is_none(), "{freed}");
+}
+
+/// The two mask forms the collector reads: a link to `/dev/null`, and a
+/// zero-length file.
+const MASK_FORMS: [&str; 2] = ["link", "zero-length file"];
+
+/// `host` with `unit` masked in `form`.
+fn masked_by(host: UnitHost, unit: &str, form: &str) -> UnitHost {
+    if form == "link" {
+        host.mask(unit)
+    } else {
+        host.etc_unit(unit, "")
+    }
+}
+
+/// The `systemctl` instructions that name `unit` in any form.
+fn instructions_naming(containerfile: &str, unit: &str) -> usize {
+    systemctl_instructions(containerfile)
+        .iter()
+        .filter(|i| i.contains(unit))
+        .count()
+}
+
+/// T11, command half: each mask form over a vendor unit gives one
+/// `RUN systemctl mask` instruction naming the unit, and no file staged at
+/// its path.
+#[test]
+fn t11_each_mask_form_over_a_vendor_unit_is_one_mask_command() {
+    const UNIT: &str = "kdump.service";
+    for form in MASK_FORMS {
+        let snap = scan(masked_by(
+            UnitHost::new().unit(UNIT, "masked").vendor_unit(
+                UNIT,
+                VENDOR_SERVICE,
+                Some("kexec-tools"),
+            ),
+            UNIT,
+            form,
+        ));
+        assert!(
+            matches!(
+                fragment_of(&snap, UNIT),
+                UnitFragment::Vendor { owning_package: Some(p), .. } if p == "kexec-tools"
+            ),
+            "{form}: {:?}",
+            fragment_of(&snap, UNIT)
+        );
+        let tree = render_export(&snap);
+        let containerfile = containerfile_in(&tree);
+        assert!(
+            acts(&containerfile, "mask", UNIT),
+            "{form}:\n{containerfile}"
+        );
+        assert_eq!(
+            instructions_naming(&containerfile, UNIT),
+            1,
+            "{form}:\n{containerfile}"
+        );
+        assert!(!staged_at(&tree, &etc_path(UNIT)), "{form}");
+    }
+}
+
+/// T11: a mask with no vendor file (`Absent`) and a masked template are in
+/// the `mask` instruction under their own names.
+#[test]
+fn t11_an_absent_unit_and_a_template_are_masked_by_their_own_names() {
+    let snap = scan(
+        UnitHost::new()
+            .unit("ghost.service", "masked")
+            .unit("getty@.service", "masked")
+            .vendor_unit("getty@.service", VENDOR_SERVICE, Some("systemd"))
+            .mask("ghost.service")
+            .mask("getty@.service"),
+    );
+    assert_eq!(fragment_of(&snap, "ghost.service"), &UnitFragment::Absent);
+    let containerfile = containerfile_in(&render_export(&snap));
+    for unit in ["ghost.service", "getty@.service"] {
+        assert!(
+            acts(&containerfile, "mask", unit),
+            "{unit}:\n{containerfile}"
+        );
+    }
+}
+
+/// T11, storage kinds: for each kind and both mask forms, a package-owned
+/// vendor file gives a `mask` command; an unowned vendor file, or none,
+/// gives a mount finding with state `Masked` and no instruction.
+#[test]
+fn t11_a_storage_mask_is_carried_only_over_a_package_file() {
+    for unit in ["srv-data.mount", "srv-data.automount", "dev-vdb1.swap"] {
+        for form in MASK_FORMS {
+            for owner in ["owned", "unowned", "no vendor file"] {
+                let label = format!("{unit}, {form}, {owner}");
+                let host = UnitHost::new().unit(unit, "masked");
+                let host = match owner {
+                    "owned" => host.vendor_unit(unit, "[Unit]\n", Some("pkg")),
+                    "unowned" => host.vendor_unit(unit, "[Unit]\n", None),
+                    _ => host,
+                };
+                let snap = scan(masked_by(host, unit, form));
+                let containerfile = containerfile_in(&render_export(&snap));
+                if owner == "owned" {
+                    assert!(
+                        acts(&containerfile, "mask", unit),
+                        "{label}:\n{containerfile}"
+                    );
+                    continue;
+                }
+                let findings: Vec<_> = snap
+                    .units
+                    .as_ref()
+                    .expect("a units section")
+                    .mount_findings
+                    .iter()
+                    .filter(|f| f.unit.name().as_unit_name().as_str() == unit)
+                    .collect();
+                assert_eq!(findings.len(), 1, "{label}");
+                assert!(
+                    matches!(findings[0].state_change, Some((UnitState::Masked, _))),
+                    "{label}: {:?}",
+                    findings[0].state_change
+                );
+                assert!(
+                    in_no_systemctl_instruction(&containerfile, unit),
+                    "{label}:\n{containerfile}"
+                );
+            }
+        }
+    }
+}
+
+/// T11: a comment-only file over a vendor unit is a full shadow, staged by
+/// the drop-in writer, and no `mask` names its unit.
+#[test]
+fn t11_a_comment_only_shadow_is_staged_and_not_masked() {
+    const UNIT: &str = "quiet.service";
+    let content = "# switched off by hand\n";
+    let snap = scan(
+        UnitHost::new()
+            .unit(UNIT, "static")
+            .vendor_unit(UNIT, VENDOR_SERVICE, Some("quietpkg"))
+            .etc_unit(UNIT, content),
+    );
+    let tree = render_export(&snap);
+    assert_eq!(
+        std::fs::read_to_string(tree.path().join("drop-ins").join(&etc_path(UNIT)[1..])).ok(),
+        Some(content.to_owned()),
+        "the shadow is staged under drop-ins/"
+    );
+    let containerfile = containerfile_in(&tree);
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+}

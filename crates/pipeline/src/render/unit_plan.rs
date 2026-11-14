@@ -4,6 +4,7 @@
 //! it uses, and the package installability helpers the package sections
 //! share, live here too.
 
+use inspectah_core::baseline::{TARGET_NEEDS_UNIT, target_needs_unit, target_needs_unit_text};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
@@ -218,6 +219,16 @@ pub enum OmissionReason {
     /// The file that supplies `[Install]` in the image is not the one the
     /// row recorded (§ 10.2 rule 5). `path` is that file's image path.
     InstallEvidenceChanged { path: String },
+    /// The export carries an administrator's unit file at a package-owned
+    /// storage unit's name, which the image would load in place of the
+    /// package's file (§ 10.2 rule 2). `path` is that file's image path.
+    StorageFileStaged { path: String },
+    /// The target needs the unit, or needs it unmasked (§ 10.2 rule 3,
+    /// § 10.3). Rendered as a FIXME, not an `# Omitted:` line.
+    TargetNeedsUnit,
+    /// A mask and a staged unit file claim one path: `systemctl mask`
+    /// exits 1 on a regular file there (§ 10.2 rule 4).
+    MaskPathOccupied { path: String },
 }
 
 impl OmissionReason {
@@ -239,6 +250,13 @@ impl OmissionReason {
                 "the [Install] section in the image would not be the one recorded on the \
                  source host ({path})"
             ),
+            Self::StorageFileStaged { path } => {
+                format!("the export carries an administrator's unit file for it ({path})")
+            }
+            Self::TargetNeedsUnit => TARGET_NEEDS_UNIT.to_owned(),
+            Self::MaskPathOccupied { path } => {
+                format!("the export also carries a unit file at {path}; exclude one of the two")
+            }
         }
     }
 
@@ -249,7 +267,11 @@ impl OmissionReason {
             Self::PackageExcluded { package }
             | Self::NotInTargetImage { package }
             | Self::NotCarried { package } => Some(package),
-            Self::UnitFileNotStaged | Self::InstallEvidenceChanged { .. } => None,
+            Self::UnitFileNotStaged
+            | Self::InstallEvidenceChanged { .. }
+            | Self::StorageFileStaged { .. }
+            | Self::TargetNeedsUnit
+            | Self::MaskPathOccupied { .. } => None,
         }
     }
 }
@@ -376,9 +398,10 @@ pub fn systemctl_lines(units: &[PlannedUnit]) -> Vec<String> {
     lines
 }
 
-/// The unit state section's lines for `plan`: an `# Omitted:` line per
-/// declined command, then [`systemctl_lines`], then the note naming the
-/// enables left to the Scheduled Tasks section.
+/// The unit state section's lines for `plan`: a line per declined command,
+/// a `# FIXME:` for [`OmissionReason::TargetNeedsUnit`] (§ 10.3) and an
+/// `# Omitted:` line for every other reason, then [`systemctl_lines`], then
+/// the note naming the enables left to the Scheduled Tasks section.
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
     // line is escaped here rather than inside `describe`, which refine
@@ -386,12 +409,16 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     let mut lines: Vec<String> = plan
         .declined
         .iter()
-        .map(|(name, _, reason)| {
-            escape_comment_text(&format!(
-                "# Omitted: {} ({})",
-                name.as_str(),
-                reason.describe()
-            ))
+        .map(|(name, action, reason)| {
+            escape_comment_text(&match reason {
+                OmissionReason::TargetNeedsUnit => {
+                    format!(
+                        "# FIXME: {}",
+                        target_needs_unit_text(name.as_str(), *action)
+                    )
+                }
+                _ => format!("# Omitted: {} ({})", name.as_str(), reason.describe()),
+            })
         })
         .collect();
     lines.extend(systemctl_lines(&plan.planned));
@@ -431,6 +458,62 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
         }
     }
     units
+}
+
+// ---------------------------------------------------------------------------
+// Rules 2, 3 and 4
+// ---------------------------------------------------------------------------
+
+/// Rule 2 (§ 10.2), every verb: a package-owned storage unit acts only on
+/// its package's file. A unit file staged at its name is what the image
+/// would load, so the command is declined with that file's path. Any write
+/// at the destination is a unit file there, whatever offered it, so the
+/// stager's yes or no ([`is_staged`]) is the whole question.
+fn rule_2_storage_file(
+    unit: &CarriedUnit,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    match unit {
+        CarriedUnit::PackagedStorage(_) => {
+            let path = etc_unit_path(unit.name());
+            if is_staged(staged, &path) {
+                Err(OmissionReason::StorageFileStaged { path })
+            } else {
+                Ok(())
+            }
+        }
+        CarriedUnit::Ordinary(_) => Ok(()),
+    }
+}
+
+/// Rule 3 (§ 10.2, § 10.3): no `disable` or `mask` of a unit the target
+/// needs, and no `mask` of `tmp.mount` ([`target_needs_unit`]). Rendered as
+/// a FIXME.
+fn rule_3_target_needs_unit(name: &UnitName, action: UnitAction) -> Result<(), OmissionReason> {
+    if target_needs_unit(name.as_str(), action) {
+        Err(OmissionReason::TargetNeedsUnit)
+    } else {
+        Ok(())
+    }
+}
+
+/// Rule 4 (§ 10.2), `mask` only: `systemctl mask` makes a link at
+/// `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular
+/// file there, so a mask needs that path free of any staged file.
+fn rule_4_mask_path(
+    name: &UnitName,
+    action: UnitAction,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    if action != UnitAction::Mask {
+        return Ok(());
+    }
+    let path = etc_unit_path(name);
+    if is_staged(staged, &path) {
+        Err(OmissionReason::MaskPathOccupied { path })
+    } else {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -765,18 +848,26 @@ impl<'a> Presence<'a> {
 /// single authority for which unit-state `systemctl` lines the
 /// Containerfile carries; refine reads the same plan.
 ///
-/// Per state change, in order:
+/// Per state change, the rules of the § 10.2 table in its order; the first
+/// that fails decides:
 ///
-/// 1. A `mask` reads no `[Install]` and succeeds on an absent unit, so rule
-///    5 does not apply to it and it is planned.
-/// 2. Rule 5, the row's own file ([`rule_5_file`]): the export stages the
-///    unit file the row recorded and no other.
-/// 3. Rule 5, the package, for a `Vendor` or package-owned storage unit
+/// 1. Rule 2 ([`rule_2_storage_file`]), every verb: a package-owned
+///    storage unit with a unit file staged at its name is declined.
+/// 2. Rule 3 ([`rule_3_target_needs_unit`]), `disable` and `mask`: a unit
+///    the target needs is not switched off (§ 10.3).
+/// 3. Rule 4 ([`rule_4_mask_path`]), `mask` only: the mask's path must be
+///    free of a staged unit file. A `mask` that passes is planned: it reads
+///    no `[Install]` and succeeds on an absent unit, so rule 5 does not
+///    apply to it.
+/// 4. Rule 5, the row's own file ([`rule_5_file`]), `enable` and
+///    `disable`: the export stages the unit file the row recorded and no
+///    other.
+/// 5. Rule 5, the package, for a `Vendor` or package-owned storage unit
 ///    only ([`needs_its_package`]): the presence tiers
 ///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
 ///    alone). With no package section there is nothing to read and the unit
 ///    is emitted: there is no separate path without one.
-/// 4. An `enable` of a unit the Scheduled Tasks section carries is left to
+/// 6. An `enable` of a unit the Scheduled Tasks section carries is left to
 ///    that section and recorded in `deferred`.
 ///
 /// Every other command is planned.
@@ -795,6 +886,13 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
     {
         let name = sc.unit().name().clone();
         let action = sc.implied_action();
+        let rules_2_to_4 = rule_2_storage_file(sc.unit(), staged)
+            .and_then(|()| rule_3_target_needs_unit(&name, action))
+            .and_then(|()| rule_4_mask_path(&name, action, staged));
+        if let Err(reason) = rules_2_to_4 {
+            plan.declined.push((name, action, reason));
+            continue;
+        }
         if action != UnitAction::Mask {
             if let Err(reason) = rule_5_file(snap, sc.unit(), staged) {
                 plan.declined.push((name, action, reason));

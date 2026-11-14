@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::types::os::OsRelease;
-use crate::types::units::UnitState;
+use crate::types::units::{UnitAction, UnitState};
 
 /// Strategy used to resolve the base image reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +163,63 @@ pub const STOCK_STATE: &[StockStateEntry] = &[
         state: UnitState::Disabled,
     },
 ];
+
+/// Units the target needs to boot or update, so inspectah never carries a
+/// `disable` or `mask` of one (§ 10.3 of the units spec). A trailing `*`
+/// matches any rest of the name; any other entry is a whole name.
+pub const TARGET_NEEDED_UNITS: &[&str] = &["bootc-*", "ostree-*", "systemd-remount-fs.service"];
+
+/// The unit the bootc base images mount `/tmp` from, through a
+/// `local-fs.target.wants` link they ship. A mask of it is never carried
+/// (§ 10.3); its `enable` and `disable` are.
+pub const TMP_MOUNT: &str = "tmp.mount";
+
+/// Why § 10.3 refuses a command, as the FIXME and the row's attention
+/// reason say it after the unit's state on the source host.
+pub const TARGET_NEEDS_UNIT: &str = "the image needs this unit";
+
+/// § 10.3's FIXME text for a masked [`TMP_MOUNT`], after its name.
+const TMP_MOUNT_MASKED: &str = "is masked on the source host, where /tmp is then a directory on \
+     the root filesystem. Not carried: the bootc base image mounts /tmp from this unit, and \
+     without it /tmp is read-only.";
+
+/// Whether `unit` is on [`TARGET_NEEDED_UNITS`].
+pub fn is_target_needed_unit(unit: &str) -> bool {
+    TARGET_NEEDED_UNITS
+        .iter()
+        .any(|entry| match entry.strip_suffix('*') {
+            Some(prefix) => unit.starts_with(prefix),
+            None => unit == *entry,
+        })
+}
+
+/// Whether the image cannot take `action` on `unit` (§ 10.3, rule 3 of
+/// § 10.2): a `disable` or `mask` of a unit on [`TARGET_NEEDED_UNITS`], or
+/// a `mask` of [`TMP_MOUNT`]. An `enable` is always carried.
+pub fn target_needs_unit(unit: &str, action: UnitAction) -> bool {
+    match action {
+        UnitAction::Enable => false,
+        UnitAction::Disable => is_target_needed_unit(unit),
+        UnitAction::Mask => is_target_needed_unit(unit) || unit == TMP_MOUNT,
+    }
+}
+
+/// The text of § 10.3's FIXME for `action` on `unit`, without the
+/// `# FIXME: ` prefix: the one source for the Containerfile line and the
+/// collector's attention reason. Meaningful where [`target_needs_unit`]
+/// holds.
+pub fn target_needs_unit_text(unit: &str, action: UnitAction) -> String {
+    let state = match action {
+        UnitAction::Enable => UnitState::Enabled,
+        UnitAction::Disable => UnitState::Disabled,
+        UnitAction::Mask => UnitState::Masked,
+    };
+    if action == UnitAction::Mask && unit == TMP_MOUNT {
+        format!("{unit} {TMP_MOUNT_MASKED}")
+    } else {
+        format!("{unit} is {state} on the source host. Not carried: {TARGET_NEEDS_UNIT}.")
+    }
+}
 
 /// Minimum RHEL bootc versions: (major, min_version).
 ///
@@ -1260,6 +1317,59 @@ mod tests {
         match result.unwrap_err() {
             ResolutionError::MalformedUblueMetadata { .. } => {}
             other => panic!("expected MalformedUblueMetadata, got {:?}", other),
+        }
+    }
+
+    /// § 10.3's two lists, exactly as the spec gives them.
+    #[test]
+    fn the_target_needed_lists_are_the_spec_lists() {
+        assert_eq!(
+            TARGET_NEEDED_UNITS,
+            ["bootc-*", "ostree-*", "systemd-remount-fs.service"]
+        );
+        assert_eq!(TMP_MOUNT, "tmp.mount");
+    }
+
+    /// A trailing `*` is a prefix; any other entry is a whole name. Each
+    /// refusal has a near miss beside it.
+    #[test]
+    fn target_needed_names_match_by_prefix_or_whole_name() {
+        for (unit, needed) in [
+            ("bootc-fetch-apply-updates.timer", true),
+            ("bootc-status-updated.path", true),
+            ("ostree-remount.service", true),
+            ("ostree-finalize-staged.path", true),
+            ("systemd-remount-fs.service", true),
+            ("xbootc-fetch.service", false),
+            ("bootc.service", false),
+            ("ostreeremount.service", false),
+            ("systemd-remount-fs.socket", false),
+            ("tmp.mount", false),
+        ] {
+            assert_eq!(is_target_needed_unit(unit), needed, "{unit}");
+        }
+    }
+
+    /// Which commands § 10.3 refuses: `disable` and `mask` of a protected
+    /// unit, a `mask` of `tmp.mount`, never an `enable`.
+    #[test]
+    fn target_needs_unit_refuses_by_name_and_verb() {
+        use UnitAction::{Disable, Enable, Mask};
+        for (unit, action, refused) in [
+            ("bootc-fetch-apply-updates.timer", Enable, false),
+            ("bootc-fetch-apply-updates.timer", Disable, true),
+            ("bootc-fetch-apply-updates.timer", Mask, true),
+            ("tmp.mount", Enable, false),
+            ("tmp.mount", Disable, false),
+            ("tmp.mount", Mask, true),
+            ("dev-hugepages.mount", Mask, false),
+            ("kdump.service", Disable, false),
+        ] {
+            assert_eq!(
+                target_needs_unit(unit, action),
+                refused,
+                "{unit} {action:?}"
+            );
         }
     }
 }
