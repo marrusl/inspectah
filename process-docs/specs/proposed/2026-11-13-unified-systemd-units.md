@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-13 |
-| Status | Proposed. Scope and the rules marked with a name and date are decided (§ 2 and where each rule is written). The rest of §§ 5 to 12 is the spec author's design and is open to review. § 16 lists what still needs the project owner's call. |
+| Status | Proposed. Scope and the rules marked with a name and date are decided (§ 2 and where each rule is written). The rest of §§ 5 to 12 is the spec author's design. No question is open (§ 16). |
 | Scope | One model of systemd unit state for every unit type that exists as a static unit file, replacing the service-only collection. Collector, core types, snapshot schema, Containerfile render, the data contract for refine, and what the fleet merge does meanwhile. |
 | Backlog items | Driving: `inspectah-socket-units-are-never-collected`. Folded in: `inspectah-local-timer-has-two-controls-and-neither-works`, `inspectah-timer-enable-lines-unquoted-and-trust-empty-units`, `inspectah-write-the-collector-overlap-contract` (the systemd half). Others in § 14. |
 | Verified | Code citations read at `70aa8996` (2026-11-13); no source file has changed since. Line numbers are a convenience; the symbol name is the identifier. "Measured" means the 2026-11-13 host and build measurements recorded in `process-docs/skills/real-host-validation-runs.md` (§ 13). Claims about systemd behavior that were not measured are marked as such and listed in § 13. |
@@ -66,8 +66,10 @@ unit. Links made by hand in a `.wants` or `.requires` directory are detected
 and reported with the command that recreates them; they have no toggle and no
 carried line. (Mark Russell, 2026-11-13)**
 
-**The work lands on one feature branch and `main` takes one schema bump, 27
-to 28. (Mark Russell, 2026-11-13)**
+**Phases 1 to 5 land on one feature branch, which merges to `main` after
+phase 5 and gives `main` one schema bump, 27 to 28. Phase 6, the refine
+section, follows the merge as its own change (§ 15). (Mark Russell,
+2026-11-13)**
 
 Standing constraints this spec is written under:
 
@@ -473,20 +475,23 @@ mount unit's state change sits beside another host's administrator-written
 file of the same name. Each observation is valid, and the enable would run
 against the administrator's file. § 10.2 closes that.
 
-Three cases fall on the advisory side by this design. They are the spec
-author's reading of the decision, not part of it (§ 16 question 1):
+**Two cases the § 2 rule does not name count as the administrator's, and
+are advisory: a vendor mount, automount or swap unit with a full copy in
+`/etc`, and one under the vendor directory with no known owner. (Mark
+Russell, 2026-11-13)**
 
 - **`Shadowed`: a vendor mount unit with a full copy in `/etc`.** The `/etc`
   file replaces the vendor one, so `What=`, `Where=` and `Options=` are what
   the administrator wrote, and an enable would activate that content, which
   is what the advisory rule exists to stop. The advisory carries the line
   to add by hand, and the file is a config entry (§ 7.7).
-- **A vendor mount unit with a drop-in** stays `Vendor` and is carried. A
-  drop-in is collected and toggled on its own (§ 7.7).
-- **`UnownedVendor`.** The decision names a unit "owned by a package". A
+- **`UnownedVendor`.** The rule names a unit "owned by a package". A
   vendor file no package claims, or whose owner could not be read, does
   not meet it, so for storage kinds the owner lookup runs before
   classification.
+
+A vendor mount unit with a drop-in stays `Vendor` and is carried. A
+drop-in is collected and toggled on its own (§ 7.7).
 
 ### 6.3 State changes
 
@@ -1054,6 +1059,11 @@ two lists on the state change from two sources each:
 | `required_config` | Every path under `/etc` in the file that holds `%i` or `%I`, expanded for the instance. An `EnvironmentFile=` value with the `-` prefix is optional to systemd and is left out. | `wg-quick@` reads `/etc/wireguard/%i.conf`; `openvpn-client@` reads `/etc/openvpn/client/%i.conf`; `openvpn-server@` reads `/etc/openvpn/server/%i.conf`. |
 | `data_paths` | Every path under `/var` in the file that holds `%i` or `%I`, and `/var/lib/<value>` for a `StateDirectory=` value that holds one. | `dirsrv@` keeps `/var/lib/dirsrv/slapd-%i`. |
 
+**The three fixed lists start with exactly these contents: instance
+configuration for `wg-quick@`, `openvpn-client@` and `openvpn-server@`;
+instance data for `dirsrv@`; tied to a host's devices,
+`systemd-cryptsetup@` and `systemd-fsck@`. (Mark Russell, 2026-11-13)**
+
 **Every `required_config` path is kept**, whether or not anything exists
 there. § 10.8 decides, from what the export holds.
 
@@ -1068,9 +1078,10 @@ The table exists because the derivation cannot see the motivating cases
 `wg-quick up %i` and names no path under `/etc`. The OpenVPN templates
 pass `--config %i.conf` with a `WorkingDirectory=`. `dirsrv@.service`
 names its `/etc/dirsrv/slapd-%i` directory, which the derivation finds,
-and never names its data directory. An instance with neither list filled
-is carried on its unit file alone, with an `attention_reason` saying
-inspectah does not know what the instance reads.
+and never names its data directory. **An instance of a template on no
+list, with neither list filled, is carried on its unit file alone, with an
+`attention_reason` saying inspectah does not know what the instance
+reads. (Mark Russell, 2026-11-13)**
 
 ### 7.6 The default target
 
@@ -1113,8 +1124,8 @@ One rule decides who owns each thing found at
   some other way.
 - **A storage unit's file has one owner, the config section.** A regular
   `/etc/systemd/system/tmp.mount` beside a vendor `tmp.mount` is a config
-  entry under its own toggle, not a full shadow in `drop_ins`, whichever
-  way § 16 question 1 is answered.
+  entry under its own toggle, not a full shadow in `drop_ins`, and the
+  unit is advisory (§ 6.2).
 - **Drop-ins** are collected from `/etc/systemd/system/<unit>.d/*.conf` for
   every unit name that parses, plus `*.device.d` and `*.scope.d`, and for
   units that are generated (the parent is recorded as generated, detected by
@@ -1206,8 +1217,8 @@ state to collect, and the scheduled section stays its single control.
   `UnitSection`, with the field changes in § 6.
 - `SystemdTimer` loses four fields (§ 8).
 - **One bump.** `SCHEMA_VERSION` and `MIN_SCHEMA` move together from 27 to
-  28, once, and every phase in § 15 lands on one feature branch that merges
-  to `main` when all of them are done. (Mark Russell, 2026-11-13) The first
+  28, once, and phases 1 to 5 of § 15 land on one feature branch that
+  merges to `main` after phase 5. (Mark Russell, 2026-11-13) The first
   phase on the branch sets 28. Later phases change the serialized types
   again without a further bump, so a snapshot written by one phase is not
   valid input to a later one. Nothing outside the branch reads such a
@@ -2346,7 +2357,7 @@ Phase 5 (carried instances):
 and RHEL 10.2 (systemd 257) hosts, and builds from `rhel9/rhel-bootc:9.8`
 and `rhel10/rhel-bootc:10.2`. A few facts quoted here were measured the
 same day and are not in that record yet: the survey results quoted in § 5,
-§ 7.4, § 16 and § 17 (what differed from preset, the one enabled instance,
+§ 7.4 and § 17 (what differed from preset, the one enabled instance,
 the rows a package install makes through `Also=`, that the packaged units
 with `Also=` have nothing under `/etc` but links), the `enable` then
 `disable` pair for `cups`, the contents of the four template units in §
@@ -2422,9 +2433,12 @@ against `70aa8996`.
 
 ## 15. Phases
 
-**All phases land on one feature branch, and the branch merges to `main`
-once, carrying the single schema bump. (Mark Russell, 2026-11-13)** Each
-phase is still its own unit of work: it compiles, passes the workspace gates
+**Phases 1 to 5 land on one feature branch, and the branch merges to
+`main` once, after phase 5, carrying the single schema bump. Units are
+shown in refine's existing flat list when it merges. The branch does not
+merge before phase 5. Phase 6 waits on its frontend design pass and
+follows the merge as its own change. (Mark Russell, 2026-11-13)** Each
+phase on the branch is still its own unit of work: it compiles, passes the workspace gates
 at its last commit, and is reviewed alone before the next phase starts.
 Phase 1 sets schema 28 (§ 9). `main` is merged into the branch between
 phases, so the final merge is not the first time the two meet.
@@ -2459,8 +2473,11 @@ deferral to the scheduled section.
 
 Known limit of phases 1 to 3: `enabled` is still taken on
 `list-unit-files`'s word and `Also=` is not read, which is today's
-behavior for services extended to the new kinds. Phase 4 closes both, and
-the branch does not merge before it (§ 16 question 3).
+behavior for services extended to the new kinds. Phase 4 closes both,
+before the merge. Neither may reach `main`: a hand-made link to a unit with
+no `[Install]` makes it read `enabled` against a `disable` preset, and the
+`enable` phases 1 to 3 would write for it exits 0 in the image and links
+nothing (measured), a silently wrong line, not a missing one.
 
 **Phase 3: one control per fact. Size M.**
 Every change in § 8: the second writer and the local-timer enable removed,
@@ -2492,11 +2509,15 @@ notes for unredacted and flagged configuration; and the data advisory
 T29.
 
 **The floor for instances** is the end of phase 4: every enabled instance
-named in an `# Omitted:` line, none carried. If phase 5 slips, the branch
-is complete without it only by the project owner's call (§ 16).
+named in an `# Omitted:` line, none carried. It is a state of the branch
+between phases, not a point at which it merges.
 
 **Phase 6: the Systemd units section. Size M, frontend.** § 11.2 after its
-own design pass. Grouping and presentation only.
+own design pass. Grouping and presentation only. It is not on the feature
+branch: it starts once the design pass is done and lands on `main` after
+the merge, as its own change. It reads the view response of § 11.1, which
+phases 1 to 5 complete, and changes no serialized snapshot type, so it
+needs no schema version of its own.
 
 **Real-host runs.** What is left (§ 13) happens on the branch, before the
 merge, and results go into `process-docs/skills/real-host-validation-runs.md`
@@ -2506,45 +2527,11 @@ there, so the merge carries the evidence with the code.
 |---|---|---|
 | Before phase 4 is planned | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. |
 | After phase 2 | R1, R3 | R1 is the driving fix. R3 (a) to (c) can change how "off" has to be rendered. |
-| At the branch tip | R1, R2 and R4 | The merge gate. The branch does not merge to `main` until they pass. |
+| At the branch tip, after phase 5 | R1, R2 and R4 | The merge gate. The branch does not merge to `main` until they pass. |
 
 ## 16. Open questions
 
-These need the project owner's decision. The spec says what it does and
-does not decide.
-
-1. **Which mount units count as the administrator's (§ 6.2).** The decision
-   covers a unit a package owns under the vendor directory, and a local
-   one. The spec puts two further cases on the advisory side: a vendor
-   mount unit with a full copy in `/etc`, and a unit under the vendor
-   directory with no known owner. Confirm, or carry a shadowed mount unit
-   when a package owns its name. Under either answer the `/etc` file is a
-   config entry under the config row's toggle (§ 7.7), and rule 2 of
-   § 10.2 is what a "carry" answer would relax. Two things bear on it and
-   settle neither. The refusal of a mask on `tmp.mount` (§ 10.3) is by
-   name and verb, so a "carry" answer would bring back `enable` and
-   `disable` for a shadowed `tmp.mount` and never the mask. And on both
-   bootc bases a vendor link starts `tmp.mount` whatever `is-enabled`
-   reads, so an `enable` line adds nothing for it. No measured host had an
-   administrator-written mount unit or an `/etc` copy of `tmp.mount`.
-2. **The fixed lists (§ 7.5).** Instance configuration: `wg-quick@`,
-   `openvpn-client@`, `openvpn-server@`. Instance data: `dirsrv@`. Tied to a
-   host's devices: `systemd-cryptsetup@`, `systemd-fsck@`. Confirm or amend
-   the starting contents. And confirm the default for an instance inspectah
-   knows nothing about: the spec carries its enable with an attention note;
-   the alternative is an advisory until a template is added to a list.
-3. **What the branch must hold to merge (§ 15).** All phases land on the
-   branch. Two cases need a ruling. Phase 6 depends on a frontend design
-   pass, and the driving fix for `cockpit.socket` waits for it, though
-   phase 2 already shows every kind in the flat list. And if phase 5
-   slips, the instance floor is in place after phase 4. May the branch
-   merge after phase 5 with the flat list, or after phase 4 with the
-   floor? The spec assumes it does not merge before phase 4 (§ 15). The
-   evidence: a hand-made link to a unit with no `[Install]` makes it read
-   `enabled` against a `disable` preset, and the `enable` phases 1 to 3
-   would write for it exits 0 in the image and links nothing (measured):
-   a silently wrong line, not a missing one. No measured host had such a
-   link unless planted.
+No question is open.
 
 ## 17. The case against this design
 
@@ -2572,7 +2559,7 @@ as the cause of this cluster of defects.
 Other objections worth weighing:
 
 - **One branch holds the driving fix back.** The socket fix is complete at
-  the end of phase 2 and reaches `main` only when the last phase does,
+  the end of phase 2 and reaches `main` only when phase 5 does,
   while roughly 60 renamed files collect conflicts. The single bump buys
   one schema break in place of several.
 - **Targets, slices and storage units were noise on the hosts measured.**
