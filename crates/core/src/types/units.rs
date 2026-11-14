@@ -287,6 +287,21 @@ pub enum UnitSubjectError {
         name.as_str()
     )]
     FileNotUnitOrTemplate { name: UnitName, file: UnitName },
+    /// A mount, automount or swap unit's file is not its own name.
+    #[error(
+        "unit file {} is not {}: a mount, automount or swap unit has no template, \
+         so its file is its own name",
+        file.as_str(),
+        name.as_str()
+    )]
+    StorageFileNotUnit { name: UnitName, file: UnitName },
+    /// The fragment names an owning package that is an empty string.
+    #[error(
+        "{} names an empty owning package: an owner is a package name, or null when \
+         none is known",
+        name.as_str()
+    )]
+    EmptyOwningPackage { name: UnitName },
     /// `classify` placed the unit as advisory where a carried unit was asked
     /// for.
     #[error(
@@ -347,18 +362,40 @@ impl TryFrom<UnitSubjectWire> for UnitSubject {
 
 impl UnitSubject {
     /// A unit and its fragment, refused when the fragment's file is
-    /// neither the unit's name nor its template's.
+    /// neither the unit's name nor its template's, when a mount, automount
+    /// or swap unit's file is not its own name (systemd has no template for
+    /// those kinds), or when the owning package is an empty string.
     pub fn new(name: UnitName, fragment: UnitFragment) -> Result<Self, UnitSubjectError> {
-        if let Some(file) = fragment.file() {
+        if let Some(file) = fragment.file()
+            && *file != name
+        {
+            if let UnitKind::Storage(_) = name.kind() {
+                return Err(UnitSubjectError::StorageFileNotUnit {
+                    name,
+                    file: file.clone(),
+                });
+            }
             let is_template = name
                 .instance()
                 .is_some_and(|parts| parts.template() == *file);
-            if *file != name && !is_template {
+            if !is_template {
                 return Err(UnitSubjectError::FileNotUnitOrTemplate {
                     name,
                     file: file.clone(),
                 });
             }
+        }
+        if let UnitFragment::Vendor {
+            owning_package: Some(owner),
+            ..
+        }
+        | UnitFragment::Shadowed {
+            owning_package: Some(owner),
+            ..
+        } = &fragment
+            && owner.is_empty()
+        {
+            return Err(UnitSubjectError::EmptyOwningPackage { name });
         }
         Ok(Self { name, fragment })
     }
@@ -1353,7 +1390,7 @@ mod tests {
             ("sshd.service", "httpd.service"),
             ("getty@tty1.service", "serial-getty@.service"),
             ("getty@.service", "getty@tty1.service"),
-            ("tmp.mount", "var.mount"),
+            ("cockpit.socket", "cockpit.service"),
         ] {
             let value = serde_json::json!({
                 "name": name, "fragment": "vendor", "file": file, "owning_package": "systemd"
@@ -1367,6 +1404,61 @@ mod tests {
                 .expect_err("a file that is neither the unit nor its template fails")
                 .to_string();
             assert!(err.contains(&expected), "{name}/{file}: {err}");
+        }
+    }
+
+    #[test]
+    fn storage_subject_file_must_be_the_unit_itself() {
+        for kind in ["mount", "automount", "swap"] {
+            let name = format!("foo@bar.{kind}");
+            // Positive control: the unit's own file loads.
+            let own = serde_json::json!({"name": name, "fragment": "local", "file": name});
+            serde_json::from_value::<AdvisoryUnit>(own)
+                .unwrap_or_else(|err| panic!("{name} with its own file: {err}"));
+
+            let template = format!("foo@.{kind}");
+            let value = serde_json::json!({
+                "name": name, "fragment": "vendor", "file": template,
+                "owning_package": "systemd"
+            });
+            let expected = UnitSubjectError::StorageFileNotUnit {
+                name: unit_name(&name),
+                file: unit_name(&template),
+            }
+            .to_string();
+            let err = serde_json::from_value::<CarriedUnit>(value)
+                .expect_err("a storage unit's file is its own name")
+                .to_string();
+            assert!(err.contains(&expected), "{name}: {err}");
+            assert!(
+                err.contains("template"),
+                "{name}: error names the rule: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_owning_package_is_refused() {
+        for (name, fragment) in [
+            ("tmp.mount", "vendor"),
+            ("tmp.mount", "shadowed"),
+            ("sshd.service", "vendor"),
+            ("sshd.service", "shadowed"),
+        ] {
+            // Positive control: a named owner loads.
+            let owned = subject_json(name, fragment, Some("systemd"));
+            serde_json::from_value::<UnitSubject>(owned)
+                .unwrap_or_else(|err| panic!("{name} {fragment} with an owner: {err}"));
+
+            let value = subject_json(name, fragment, Some(""));
+            let expected = UnitSubjectError::EmptyOwningPackage {
+                name: unit_name(name),
+            }
+            .to_string();
+            let err = serde_json::from_value::<UnitSubject>(value)
+                .expect_err("an empty owner is not a known owner")
+                .to_string();
+            assert!(err.contains(&expected), "{name} {fragment}: {err}");
         }
     }
 
@@ -1406,8 +1498,13 @@ mod tests {
                         None => format!("{stem}.{suffix}"),
                     };
                     let name = UnitName::try_from(raw).expect("generated names are valid");
+                    // Only an ordinary instance may load from its template.
                     let file = match name.instance() {
-                        Some(parts) if use_template => parts.template(),
+                        Some(parts)
+                            if use_template && matches!(name.kind(), UnitKind::Ordinary(_)) =>
+                        {
+                            parts.template()
+                        }
                         _ => name.clone(),
                     };
                     let fragment = match variant {
@@ -1427,17 +1524,32 @@ mod tests {
         }
 
         proptest! {
-            /// `classify` returns one of the two for every subject, the
-            /// wire form loads as that one and is refused as the other, and
-            /// the loaded value classifies the same again.
+            /// `classify` returns one of the two for every subject, and the
+            /// one the rule names: carried exactly when the kind is not
+            /// storage, or the fragment is a vendor file with a known owner.
+            /// The wire form loads as that one and is refused as the other,
+            /// and the loaded value classifies the same again.
             #[test]
             fn classify_is_total_and_stable(subject in subject()) {
                 let name = subject.name().clone();
+                let expect_carried = !matches!(name.kind(), UnitKind::Storage(_))
+                    || matches!(
+                        subject.fragment(),
+                        UnitFragment::Vendor { owning_package: Some(_), .. }
+                    );
                 let wire = serde_json::to_value(&subject).unwrap();
                 let reloaded: UnitSubject = serde_json::from_value(wire.clone()).unwrap();
                 prop_assert_eq!(&reloaded, &subject);
 
-                match subject.classify() {
+                let classified = subject.classify();
+                prop_assert_eq!(
+                    matches!(classified, Classified::Carried(_)),
+                    expect_carried,
+                    "{} classified as {:?}",
+                    name.as_str(),
+                    classified
+                );
+                match classified {
                     Classified::Carried(unit) => {
                         prop_assert_eq!(unit.name(), &name);
                         let json = serde_json::to_value(&unit).unwrap();
