@@ -1426,9 +1426,9 @@ fn test_carried_unit(
         .expect("a test unit is carried")
 }
 
-/// § 15, phase 2: every `systemctl` site writes `--` and then single-quoted
-/// operands, the timer, `@reboot`, flatpak and tuned sites included, which
-/// do not go through the unit plan yet. Each benign value renders exactly
+/// § 15: every `systemctl` site writes `--` and then single-quoted
+/// operands, the timer, `@reboot` and flatpak requests included, which the
+/// plan writes in their own sections. Each benign value renders exactly
 /// that line, and no `systemctl` instruction anywhere in the output names
 /// an operand without the quotes. The hostile values of the timer rows are
 /// refused by `OPERAND_ROWS` as before.
@@ -1454,12 +1454,6 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         flatpak_apps: vec![flatpak_app()],
         ..Default::default()
     });
-    let mut tuned = InspectionSnapshot::new();
-    tuned.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
-        tuned_active: "my-profile".into(),
-        tuned_disposition: FindingKind::included(),
-        ..Default::default()
-    });
     let cases = [
         (
             "cron timer",
@@ -1475,11 +1469,6 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
             "flatpak",
             render_containerfile(&flatpak, None, None),
             "RUN systemctl enable -- 'flatpak-provision.service'",
-        ),
-        (
-            "tuned",
-            render_containerfile(&tuned, None, None),
-            "RUN systemctl enable -- 'tuned.service'",
         ),
     ];
     for (label, output, line) in cases {

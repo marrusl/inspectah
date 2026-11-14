@@ -457,6 +457,13 @@ fn generated_request(files: &[String], staged: &StagedWrites<'_>) -> Result<(), 
     Ok(())
 }
 
+/// [`FLATPAK_SERVICE`] as a [`UnitName`]. The constant is a literal that
+/// parses, which `the_flatpak_service_constant_is_a_unit_name` checks, so
+/// the parse cannot fail at run time.
+fn flatpak_service_unit() -> UnitName {
+    UnitName::try_from(FLATPAK_SERVICE.to_owned()).expect("FLATPAK_SERVICE is a unit name literal")
+}
+
 /// § 10.2 "What the plan takes" item 3: the enables of the units
 /// inspectah generates. A cron unit enables its timer, whose paired
 /// service must be staged too, or for `@reboot` its service. Two cron
@@ -502,8 +509,7 @@ fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &m
             .any(|app| app.disposition.is_included())
     });
     if flatpak_included {
-        let unit = UnitName::try_from(FLATPAK_SERVICE.to_owned())
-            .expect("FLATPAK_SERVICE is a unit name literal");
+        let unit = flatpak_service_unit();
         let files = [etc_unit_path(&unit)];
         match generated_request(&files, staged) {
             Ok(()) => plan.workloads.push(PlannedUnit {
@@ -1356,4 +1362,14 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .map(|finding| mount_advisory_lines(finding, staged, &units.drop_ins))
         .collect();
     plan
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_flatpak_service_constant_is_a_unit_name() {
+        assert_eq!(flatpak_service_unit().as_str(), FLATPAK_SERVICE);
+    }
 }

@@ -4778,3 +4778,227 @@ fn a_declined_generated_request_shows_on_its_scheduled_row() {
     let control = session(&scan(with_cron_backup(UnitHost::new().preset("disable *"))));
     assert!(control.decisions().declined_generated.is_empty());
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 the tuned decision, § 8 the single-control rule: every
+// `systemctl` line is planned (T21, tuned case and full scan).
+// ---------------------------------------------------------------------
+
+const TUNED: &str = "tuned.service";
+const TUNED_PROFILE: &str = "throughput-performance";
+const KERNEL_SECTION: &str = "# === Kernel and Boot Configuration ===";
+const TUNED_VENDOR_SERVICE: &str =
+    "[Service]\nExecStart=/usr/sbin/tuned -l -P\n[Install]\nWantedBy=multi-user.target\n";
+
+/// `tuned.service` in `state` against the opposite preset, its vendor file
+/// owned by the `tuned` package, on a host scanned against a base image so
+/// refine keeps the package included as the scan does.
+fn tuned_host(state: &str) -> UnitHost {
+    let preset = if state == "enabled" {
+        "disable"
+    } else {
+        "enable"
+    };
+    let host = UnitHost::new()
+        .base_package("glibc")
+        .package("tuned")
+        .unit(TUNED, state)
+        .preset(&format!("{preset} {TUNED}"))
+        .vendor_unit(TUNED, TUNED_VENDOR_SERVICE, Some("tuned"));
+    if state == "masked" {
+        host.mask(TUNED)
+    } else {
+        host
+    }
+}
+
+/// `snap` with an included tuned activation of a stock profile. The test
+/// scan runs no kernel and boot inspector, so the section is added here.
+fn with_tuned_activation(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    snap.kernel_boot = Some(inspectah_core::types::kernelboot::KernelBootSection {
+        tuned_active: TUNED_PROFILE.into(),
+        tuned_disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    snap
+}
+
+/// The kernel and boot section's lines, without its header.
+fn kernel_lines(containerfile: &str) -> Vec<String> {
+    containerfile
+        .lines()
+        .skip_while(|l| *l != KERNEL_SECTION)
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The kernel and boot section writes the active profile and no
+/// `systemctl` line.
+fn assert_kernel_section_writes_the_profile_only(containerfile: &str, label: &str) {
+    let kernel = kernel_lines(containerfile);
+    assert!(
+        kernel.contains(&format!(
+            "RUN echo \"{TUNED_PROFILE}\" > /etc/tuned/active_profile"
+        )),
+        "{label}: the profile is written:\n{containerfile}"
+    );
+    assert!(
+        kernel.iter().all(|l| !l.contains("systemctl")),
+        "{label}: the kernel section writes a systemctl line:\n{containerfile}"
+    );
+}
+
+/// T21, tuned: with tuned activation included, `tuned.service` enabled
+/// against a `disable` preset is enabled from the unit state section and
+/// nowhere else, and the kernel section writes the profile and no
+/// `systemctl` line. With the `tuned` package excluded in refine, the
+/// enable is omitted for the package and no instruction names the unit.
+#[test]
+fn t21_tuned_service_is_enabled_from_its_unit_row_only() {
+    let snap = with_tuned_activation(scan(tuned_host("enabled")));
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        assert_kernel_section_writes_the_profile_only(&cf, route);
+        assert!(acts(&cf, "enable", TUNED), "{route}:\n{cf}");
+        let instructions: Vec<String> = systemctl_instructions(&cf)
+            .into_iter()
+            .filter(|i| i.contains(TUNED))
+            .collect();
+        assert_eq!(instructions.len(), 1, "{route}: {instructions:?}");
+        assert!(
+            unit_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'tuned.service'")),
+            "{route}: the enable is the unit state section's:\n{cf}"
+        );
+    }
+
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(
+            ItemId::Package {
+                name: "tuned".into(),
+                arch: "x86_64".into(),
+            },
+            false,
+        )],
+    ));
+    assert_eq!(
+        omitted(&excluded, TUNED),
+        Some("# Omitted: tuned.service (package 'tuned' was excluded)"),
+        "{excluded}"
+    );
+    assert!(in_no_systemctl_instruction(&excluded, TUNED), "{excluded}");
+    assert_kernel_section_writes_the_profile_only(&excluded, "excluded");
+}
+
+/// The phase 2 defect this closes: the kernel section enabled
+/// `tuned.service` after the unit state section whatever the unit's row
+/// said, so a carried `disable` was undone and a carried `mask` failed the
+/// build. With tuned activation included, a disabled or masked
+/// `tuned.service` gets its own command and no `enable` anywhere, through
+/// both routes. Control: the same unit enabled gets its enable.
+#[test]
+fn a_carried_disable_or_mask_of_tuned_is_not_undone() {
+    for (state, verb) in [("disabled", "disable"), ("masked", "mask")] {
+        let snap = with_tuned_activation(scan(tuned_host(state)));
+        for (route, tree) in both_exports(&snap) {
+            let cf = containerfile_in(&tree);
+            assert!(acts(&cf, verb, TUNED), "{state}, {route}:\n{cf}");
+            assert!(!acts(&cf, "enable", TUNED), "{state}, {route}:\n{cf}");
+            assert_kernel_section_writes_the_profile_only(&cf, route);
+        }
+    }
+    let control = with_tuned_activation(scan(tuned_host("enabled")));
+    for (route, tree) in both_exports(&control) {
+        let cf = containerfile_in(&tree);
+        assert!(acts(&cf, "enable", TUNED), "control, {route}:\n{cf}");
+    }
+}
+
+/// Every `systemctl` instruction of `containerfile` as a person reads it:
+/// comment lines skipped, `\` continuations joined, and each operand of
+/// each instruction paired with its verb.
+fn systemctl_commands(containerfile: &str) -> Vec<(String, String)> {
+    systemctl_instructions(containerfile)
+        .iter()
+        .flat_map(|instruction| {
+            let (head, operands) = instruction
+                .split_once(" -- ")
+                .unwrap_or_else(|| panic!("no `--` in {instruction:?}"));
+            let verb = head
+                .strip_prefix("RUN systemctl ")
+                .unwrap_or_else(|| panic!("not a RUN systemctl instruction: {instruction:?}"))
+                .to_owned();
+            operands
+                .split_whitespace()
+                .map(|operand| {
+                    let unit = operand
+                        .strip_prefix('\'')
+                        .and_then(|o| o.strip_suffix('\''))
+                        .unwrap_or_else(|| panic!("an unquoted operand: {operand:?}"));
+                    (verb.clone(), unit.to_owned())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// T21, the full scan: a snapshot with flatpak applications, tuned
+/// activation, a generated timer and collected state changes. Every
+/// `systemctl` command in the rendered Containerfile, read from its text,
+/// is a `PlannedUnit` of the export's plan, and every planned unit is
+/// rendered. Presence first: the plan holds a collected command, the
+/// generated timer's enable, the flatpak service's enable and tuned's.
+#[test]
+fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
+    use inspectah_pipeline::render::configtree::staged_writes;
+    use inspectah_pipeline::render::unit_plan::plan_units;
+    let host = with_cron_backup(
+        tuned_host("enabled")
+            .package("cockpit-ws")
+            .unit("cockpit.socket", "enabled")
+            .preset("disable cockpit.socket")
+            .vendor_unit(
+                "cockpit.socket",
+                "[Socket]\nListenStream=9090\n[Install]\nWantedBy=sockets.target\n",
+                Some("cockpit-ws"),
+            )
+            .unit("app.service", "enabled")
+            .etc_unit(
+                "app.service",
+                "[Service]\nExecStart=/usr/local/bin/app\n[Install]\nWantedBy=multi-user.target\n",
+            ),
+    );
+    let snap = with_flatpak_app(with_tuned_activation(scan(host)));
+
+    let plan = plan_units(&snap, &staged_writes(&snap));
+    let mut planned: Vec<(String, String)> = plan
+        .planned
+        .iter()
+        .chain(&plan.scheduled)
+        .chain(&plan.workloads)
+        .map(|p| (p.action().to_string(), p.name().as_str().to_owned()))
+        .collect();
+    planned.sort();
+    for unit in [
+        "cockpit.socket",
+        "app.service",
+        TUNED,
+        CRON_BACKUP_TIMER,
+        FLATPAK_PROVISION,
+    ] {
+        assert!(
+            planned.contains(&("enable".to_owned(), unit.to_owned())),
+            "presence: {unit} is planned: {planned:?}"
+        );
+    }
+
+    let cf = containerfile_in(&render_export(&snap));
+    let mut rendered = systemctl_commands(&cf);
+    rendered.sort();
+    assert_eq!(rendered, planned, "{cf}");
+    assert_kernel_section_writes_the_profile_only(&cf, "full scan");
+}

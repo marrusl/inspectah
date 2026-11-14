@@ -23,7 +23,7 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::{RepoId, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_core::types::units::{UnitAction, UnitName};
+use inspectah_core::types::units::UnitAction;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
@@ -38,7 +38,6 @@ use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
     is_valid_tuned_profile, operand_refusal, sanitize_shell_value, shell_operand_refusal,
-    single_quote,
 };
 use super::unit_plan::{
     GeneratedSource, declined_line, generated_unit_name, is_package_installable,
@@ -1468,26 +1467,6 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     section("Scheduled Tasks", body)
 }
 
-/// `RUN systemctl enable -- 'unit' ...` for units a section copies and
-/// enables itself, outside the unit plan: every operand a proved
-/// [`UnitName`], single-quoted after `--`, as § 10.1 writes the plan's
-/// lines.
-fn systemctl_enable_line(units: &[UnitName]) -> String {
-    let operands: Vec<String> = units.iter().map(|u| single_quote(u.as_str())).collect();
-    format!("RUN systemctl enable -- {}", operands.join(" "))
-}
-
-/// The unit the kernel and boot section enables with an active tuned
-/// profile.
-const TUNED_SERVICE: &str = "tuned.service";
-
-/// A unit name constant of this module as a [`UnitName`]. The constants
-/// are literals that parse, which `the_enabled_unit_constants_are_unit_names`
-/// checks, so the parse cannot fail at run time.
-fn constant_unit(name: &'static str) -> UnitName {
-    UnitName::try_from(name.to_owned()).expect("a unit name constant of this module parses")
-}
-
 /// Push a FIXME when the generated unit `name.suffix` is no plan request
 /// ([`generated_unit_name`]): the config tree would not stage it under that
 /// name ([`staged_unit_file`]), or it is no [`UnitName`], or it starts like
@@ -1960,7 +1939,6 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 kb.tuned_active
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
-            body.push(systemctl_enable_line(&[constant_unit(TUNED_SERVICE)]));
         }
     }
 
@@ -4943,8 +4921,13 @@ RUN dnf install -y \
             "included tuned must produce tuned output"
         );
         assert!(
-            output.contains("RUN systemctl enable -- 'tuned.service'"),
-            "included tuned must enable tuned.service"
+            output.contains("RUN echo \"manual\" > /etc/tuned/profile_mode"),
+            "included tuned must set the profile mode"
+        );
+        // Whether tuned.service is enabled is its unit row's (§ 10.2).
+        assert!(
+            !output.contains("tuned.service"),
+            "the kernel section writes no tuned.service line:\n{output}"
         );
     }
 
@@ -5189,8 +5172,8 @@ RUN dnf install -y \
             "must set active_profile"
         );
         assert!(
-            output.contains("RUN systemctl enable -- 'tuned.service'"),
-            "must enable tuned.service"
+            !output.contains("systemctl"),
+            "the kernel section leaves tuned.service to its unit row:\n{output}"
         );
     }
 
@@ -6761,17 +6744,6 @@ RUN dnf install -y \
     /// name the config-tree writer refuses names a unit that was never
     /// staged. Neither may add an active line; the ordinary timers beside
     /// them are still enabled.
-    #[test]
-    fn the_enabled_unit_constants_are_unit_names() {
-        use crate::render::configtree::FLATPAK_SERVICE;
-        for name in [FLATPAK_SERVICE, TUNED_SERVICE] {
-            assert_eq!(
-                UnitName::try_from(name.to_owned()).map(|u| u.as_str().to_owned()),
-                Ok(name.to_owned())
-            );
-        }
-    }
-
     #[test]
     fn refused_timer_names_add_no_active_instruction() {
         use inspectah_core::types::scheduled::{
