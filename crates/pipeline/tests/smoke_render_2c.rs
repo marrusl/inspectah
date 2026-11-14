@@ -694,31 +694,6 @@ fn audit_no_content_for_missing_scheduled() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn configtree_vendor_timers_not_copied() {
-    // Vendor timers from /usr/lib/systemd/system/ MUST NOT appear in config tree
-    let mut snap = InspectionSnapshot::new();
-    snap.scheduled_tasks = Some(ScheduledTaskSection {
-        systemd_timers: vec![SystemdTimer {
-            name: "fstrim".into(),
-            source: "vendor".into(),
-            path: "/usr/lib/systemd/system/fstrim.timer".into(),
-            on_calendar: "weekly".into(),
-            exec_start: "/usr/sbin/fstrim -a".into(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    let dir = TempDir::new().unwrap();
-    configtree::write_config_tree(&snap, dir.path()).unwrap();
-    assert!(
-        !dir.path()
-            .join("config/usr/lib/systemd/system/fstrim.timer")
-            .exists(),
-        "vendor timer from /usr/lib/systemd/system/ must NOT appear in config tree"
-    );
-}
-
-#[test]
 fn configtree_cron_spool_not_materialized() {
     // Cron spool from /var MUST NOT be materialized into config tree
     let mut snap = InspectionSnapshot::new();

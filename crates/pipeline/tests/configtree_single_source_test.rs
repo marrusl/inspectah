@@ -699,16 +699,26 @@ fn with_host_timer(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     snap
 }
 
-/// A generated cron unit named like a file the host has never replaces it:
-/// where a config entry or a drop-in row records the host's file, the
-/// host's content is what the export stages, nothing is withheld, and the
-/// enable names a file a `COPY` carries. Each file is decided on its own:
-/// with only the timer's config entry, the generated service lands. The
-/// timer's description records no file, so with it alone the generated
-/// pair lands, as it does with no host file of that name (the control).
+/// A generated cron unit named like a file the host has never replaces it,
+/// and neither of its files lands beside the host's: where a config entry
+/// or a drop-in row records the host's file at either path of the
+/// generated pair, neither generated file is written (§ 10.2, "the paired
+/// service of a generated timer included"). The host's content is what the
+/// export stages and nothing is withheld. With both host files carried,
+/// the enable names files a `COPY` carries. With the host's service row
+/// excluded, as an operator does on a rescan, no file is at the service's
+/// path in either tree and nothing enables the timer; the same rescan with
+/// the row included (the first case) is its control. The timer's
+/// description records no file, so with it alone the generated pair lands,
+/// as it does with no host file of that name (the control).
 #[test]
 fn a_generated_timer_never_replaces_the_hosts_own_timer() {
     let generated = &[(GENERATED_TIMER, GENERATED_SERVICE)];
+    let excluded = |path: &str, content: &str| {
+        let mut entry = config_entry(path, content);
+        entry.disposition = FindingKind::excluded();
+        entry
+    };
     for (label, snap, timer_root, timer, service, copy) in [
         (
             "config entries and the description, as a scan records them",
@@ -724,7 +734,24 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             )),
             "config",
             HOST_TIMER,
-            HOST_SERVICE,
+            Some(HOST_SERVICE),
+            SCHEDULED_COPY,
+        ),
+        (
+            "the service's config row excluded on a rescan",
+            with_host_timer(with_generated(
+                staged_snapshot(
+                    vec![
+                        config_entry(CRON_TIMER, HOST_TIMER),
+                        excluded(CRON_SERVICE, HOST_SERVICE),
+                    ],
+                    vec![],
+                ),
+                generated,
+            )),
+            "config",
+            HOST_TIMER,
+            None,
             SCHEDULED_COPY,
         ),
         (
@@ -738,7 +765,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             )),
             "drop-ins",
             HOST_TIMER,
-            HOST_SERVICE,
+            Some(HOST_SERVICE),
             DROP_INS_COPY,
         ),
         (
@@ -749,7 +776,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             ),
             "config",
             HOST_TIMER,
-            GENERATED_SERVICE,
+            None,
             SCHEDULED_COPY,
         ),
         (
@@ -757,7 +784,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             with_host_timer(with_generated(staged_snapshot(vec![], vec![]), generated)),
             "config",
             GENERATED_TIMER,
-            GENERATED_SERVICE,
+            Some(GENERATED_SERVICE),
             SCHEDULED_COPY,
         ),
         (
@@ -765,7 +792,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             with_generated(staged_snapshot(vec![], vec![]), generated),
             "config",
             GENERATED_TIMER,
-            GENERATED_SERVICE,
+            Some(GENERATED_SERVICE),
             SCHEDULED_COPY,
         ),
     ] {
@@ -777,11 +804,22 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             timer,
             "{label}: the timer that lands"
         );
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("config").join(&CRON_SERVICE[1..])).unwrap(),
-            service,
-            "{label}: the service that lands"
-        );
+        match service {
+            Some(service) => assert_eq!(
+                std::fs::read_to_string(dir.path().join("config").join(&CRON_SERVICE[1..]))
+                    .unwrap(),
+                service,
+                "{label}: the service that lands"
+            ),
+            None => {
+                for tree in ["config", "drop-ins"] {
+                    assert!(
+                        !dir.path().join(tree).join(&CRON_SERVICE[1..]).exists(),
+                        "{label}: a file at the service's path under {tree}/"
+                    );
+                }
+            }
+        }
         if timer_root != "config" {
             // The scheduled section's COPY comes after the drop-ins COPY,
             // so a generated file under config/ would replace the host's.
@@ -791,11 +829,13 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             );
         }
         assert!(containerfile.contains(copy), "{label}:\n{containerfile}");
-        assert!(
-            containerfile
-                .lines()
-                .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer")),
-            "{label}:\n{containerfile}"
+        let enabled = containerfile
+            .lines()
+            .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer"));
+        assert_eq!(
+            enabled,
+            service.is_some(),
+            "{label}: the enable names a timer whose service is carried:\n{containerfile}"
         );
         assert!(
             fixme_naming(&containerfile, CRON_TIMER).is_none(),

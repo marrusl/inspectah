@@ -19,7 +19,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
 use inspectah_core::types::units::UNIT_TYPE_SUFFIXES;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::safety::{BareWord, MAX_EXPORT_PATH_LEN, has_line_break_or_control, operator_kargs};
@@ -688,6 +688,38 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
     out
 }
 
+/// The destinations of every file of each included generated unit that
+/// offers a file at one of `collected`: both files of a timer and its
+/// paired service, or an `@reboot` service alone. Interim rule 3 of
+/// [`staged_writes`].
+fn generated_unit_files_at(
+    snap: &InspectionSnapshot,
+    collected: &BTreeSet<&Destination>,
+) -> BTreeSet<Destination> {
+    let mut out = BTreeSet::new();
+    let Some(st) = &snap.scheduled_tasks else {
+        return out;
+    };
+    for u in st
+        .generated_timer_units
+        .iter()
+        .filter(|u| u.disposition.is_included())
+    {
+        let files: Vec<Destination> =
+            [("timer", &u.timer_content), ("service", &u.service_content)]
+                .into_iter()
+                .filter_map(|(suffix, content)| {
+                    Offer::scheduled_unit(StagedFileKind::GeneratedUnit, &u.name, suffix, content)
+                })
+                .filter_map(|offer| Destination::new(&offer.path).ok())
+                .collect();
+        if files.iter().any(|dest| collected.contains(dest)) {
+            out.extend(files);
+        }
+    }
+    out
+}
+
 /// The stager's decision: every file the export writes, keyed by where it
 /// lands in the image, and every offered file it withholds or refuses.
 ///
@@ -698,9 +730,11 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
 /// 3. Interim: where a config entry or a drop-in row with content is
-///    offered, a generated unit at the same destination is not written,
-///    so the host's own unit file is never replaced by a generated one. A
-///    zero-length file there is a mask, not a unit file (rule 6).
+///    offered at either file of a generated unit, neither of that unit's
+///    files is written (its timer and paired service, or an `@reboot`
+///    service alone), so the host's own unit file is never replaced by a
+///    generated one and no generated file lands beside it. A zero-length
+///    file is a mask, not a unit file (rule 6), and does not count.
 /// 4. A file two sections record: the config walk and the repo, GPG key
 ///    or firewall inventory record one host file twice. Where a config
 ///    entry is offered at the destination, the repo file, GPG key or
@@ -731,7 +765,7 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     let owned = owned_elsewhere(snap);
     let mut out = StagedWrites::default();
-    let mut by_dest: BTreeMap<Destination, Vec<(StagedFileKind, Cow<'_, str>)>> = BTreeMap::new();
+    let mut resolved = Vec::new();
     for offer in offers(snap) {
         let dest = match Destination::new(&offer.path) {
             Ok(dest) => dest,
@@ -745,26 +779,37 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         {
             continue;
         }
-        by_dest
-            .entry(dest)
-            .or_default()
-            .push((offer.kind, offer.content));
+        resolved.push((dest, offer.kind, offer.content));
+    }
+
+    // Interim, replaced by the generated-name collision rule (§ 10.2).
+    // Where the host has its own unit file, recorded by a config entry or
+    // a drop-in row with content, at either file of a generated unit,
+    // neither generated file is written: one would be written over the
+    // host's file, or, beside a drop-in row, copied over it later in the
+    // Containerfile, and the other would pair a generated file with the
+    // host's. The host's own timer kept this protection while the
+    // scheduled section offered it; its config entry or drop-in row now
+    // carries it.
+    let collected_units: BTreeSet<&Destination> = resolved
+        .iter()
+        .filter(|(_, kind, content)| {
+            matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn)
+                && !content.is_empty()
+        })
+        .map(|(dest, _, _)| dest)
+        .collect();
+    let dropped_generated = generated_unit_files_at(snap, &collected_units);
+
+    let mut by_dest: BTreeMap<Destination, Vec<(StagedFileKind, Cow<'_, str>)>> = BTreeMap::new();
+    for (dest, kind, content) in resolved {
+        if kind == StagedFileKind::GeneratedUnit && dropped_generated.contains(&dest) {
+            continue;
+        }
+        by_dest.entry(dest).or_default().push((kind, content));
     }
 
     for offered in by_dest.values_mut() {
-        // Interim, replaced by the generated-name collision rule (§ 10.2).
-        // Where the host has its own unit file, recorded by a config entry
-        // or a drop-in row with content, a generated unit of that name is
-        // not written: it would be written over the host's file, or, beside
-        // a drop-in row, copied over it later in the Containerfile. The
-        // host's own timer kept this protection while the scheduled section
-        // offered it; its config entry or drop-in row now carries it.
-        if offered.iter().any(|(kind, content)| {
-            matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn)
-                && !content.is_empty()
-        }) {
-            offered.retain(|(kind, _)| *kind != StagedFileKind::GeneratedUnit);
-        }
         // The rule for a file two sections record: the repo, GPG key and
         // firewall inventories keep one representative payload per path in
         // a fleet aggregate, while the config entry keeps the content
@@ -1604,8 +1649,9 @@ mod tests {
         );
     }
 
-    /// A local timer's description writes nothing: its files are config
-    /// entries, written on their own rows (§ 8). Control: the same files as
+    /// A timer's description writes nothing, local or vendor: a local
+    /// timer's files are config entries, written on their own rows (§ 8),
+    /// and a vendor timer's are the package's. Control: the local files as
     /// included config entries are written.
     #[test]
     fn a_local_timer_description_writes_no_file() {
@@ -1617,14 +1663,23 @@ mod tests {
             exec_start: "/usr/local/bin/myjob".to_string(),
             ..Default::default()
         };
+        let vendor = SystemdTimer {
+            name: "fstrim".to_string(),
+            source: "vendor".to_string(),
+            path: "usr/lib/systemd/system/fstrim.timer".to_string(),
+            on_calendar: "weekly".to_string(),
+            exec_start: "/usr/sbin/fstrim -a".to_string(),
+            ..Default::default()
+        };
         let mut snap = InspectionSnapshot::new();
         snap.scheduled_tasks = Some(ScheduledTaskSection {
-            systemd_timers: vec![timer],
+            systemd_timers: vec![timer, vendor],
             ..Default::default()
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
         assert!(!dir.path().join("config/etc/systemd/system").exists());
+        assert!(!dir.path().join("config/usr/lib/systemd/system").exists());
 
         snap.config = Some(ConfigSection {
             files: ["myjob.timer", "myjob.service"]
