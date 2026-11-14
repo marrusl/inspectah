@@ -27,8 +27,9 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::configtree::{
-    FLATPAK_SERVICE, StagedFileKind, UnstagedWhy, is_staged, staged_count, staged_unit_file,
-    staged_writes, stages_config_unit_dir, unstaged_files, validate_path,
+    ETC_UNIT_DIR, FLATPAK_SERVICE, StagedFileKind, StagedWrites, UnstagedWhy, is_staged,
+    staged_count, staged_unit_file, staged_writes, stages_config_unit_dir, unstaged_files,
+    validate_path,
 };
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
@@ -1362,11 +1363,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     let mut body = Vec::new();
+    let staged = staged_writes(snap);
 
     // Only when the stager writes something there: a local timer's file
     // may be carried by a drop-in row under `drop-ins/` instead.
-    if (!local_timers.is_empty() || !included_timers.is_empty())
-        && stages_config_unit_dir(&staged_writes(snap))
+    if (!local_timers.is_empty() || !included_timers.is_empty()) && stages_config_unit_dir(&staged)
     {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
@@ -1398,12 +1399,16 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Consolidate timer enables. A unit is enabled only if the config
-    // tree staged it under the same name and the name is safe in a shell
-    // word; otherwise the Containerfile says so in a FIXME.
+    // Consolidate timer enables. A unit is enabled only if its name is
+    // staged under the same name and is safe in a shell word, otherwise the
+    // Containerfile says so in a FIXME, and only if the stager writes its
+    // file and the service file it activates: a file the stager withholds
+    // is named in the config section's FIXME, and nothing here names it.
     let mut timer_names = Vec::new();
     for t in &local_timers {
-        if let Some(unit) = enableable_unit(&t.name, "timer", &mut body) {
+        if let Some(unit) = enableable_unit(&t.name, "timer", &mut body)
+            && scheduled_files_staged(&staged, &t.name, "timer", !t.service_content.is_empty())
+        {
             timer_names.push(unit);
         }
     }
@@ -1412,10 +1417,14 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         if !u.name.is_empty() {
             // @reboot entries have no timer — enable the service instead
             if u.cron_expr == "@reboot" {
-                if let Some(unit) = enableable_unit(&u.name, "service", &mut body) {
+                if let Some(unit) = enableable_unit(&u.name, "service", &mut body)
+                    && scheduled_files_staged(&staged, &u.name, "service", false)
+                {
                     reboot_service_names.push(unit);
                 }
-            } else if let Some(unit) = enableable_unit(&u.name, "timer", &mut body) {
+            } else if let Some(unit) = enableable_unit(&u.name, "timer", &mut body)
+                && scheduled_files_staged(&staged, &u.name, "timer", !u.service_content.is_empty())
+            {
                 timer_names.push(unit);
             }
         }
@@ -1442,6 +1451,23 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     section("Scheduled Tasks", body)
+}
+
+/// Whether the stager writes the scheduled unit `name.suffix` under
+/// `/etc/systemd/system` and, when `with_service`, the `name.service` that
+/// timer activates, by [`is_staged`]. Gating, not planning: these enables
+/// become plan requests in a later phase (§ 10.2).
+fn scheduled_files_staged(
+    staged: &StagedWrites<'_>,
+    name: &str,
+    suffix: &str,
+    with_service: bool,
+) -> bool {
+    let staged_at = |suffix: &str| {
+        staged_unit_file(name, suffix)
+            .is_some_and(|file| is_staged(staged, &format!("{ETC_UNIT_DIR}/{file}")))
+    };
+    staged_at(suffix) && (!with_service || staged_at("service"))
 }
 
 /// `RUN systemctl enable -- 'unit' ...` for units a section copies and
@@ -1675,14 +1701,26 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY quadlet/ /etc/containers/systemd/".into());
     }
     if included_flatpaks > 0 {
-        body.push("# Flatpak applications — installed on first boot via oneshot service".into());
+        // The provisioning service only when the stager writes it: a
+        // service it withholds is named in the config section's FIXME.
+        let service_staged = is_staged(
+            &staged_writes(snap),
+            &format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}"),
+        );
+        if service_staged {
+            body.push(
+                "# Flatpak applications — installed on first boot via oneshot service".into(),
+            );
+        }
         body.push("# Manifest: flatpak/flatpak-install.json".into());
         body.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
-        body.push(
-            "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
-                .into(),
-        );
-        body.push(systemctl_enable_line(&[FLATPAK_SERVICE]));
+        if service_staged {
+            body.push(
+                "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
+                    .into(),
+            );
+            body.push(systemctl_enable_line(&[FLATPAK_SERVICE]));
+        }
     }
     let total_workloads = included_quadlets + included_flatpaks;
     lines.extend(section(
@@ -6720,9 +6758,11 @@ RUN dnf install -y \
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
+        // With a body, so the stager writes the timer an enable names.
         let local = |name: &str| SystemdTimer {
             name: name.into(),
             source: "local".into(),
+            timer_content: "[Timer]".into(),
             disposition: FindingKind::included(),
             ..Default::default()
         };

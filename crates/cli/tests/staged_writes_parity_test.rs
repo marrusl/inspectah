@@ -154,3 +154,187 @@ fn the_scan_export_and_the_refine_export_stage_the_same_files() {
         "same Containerfile"
     );
 }
+
+// --- A generated unit the stager withholds is neither copied nor enabled --
+
+const FLATPAK_UNIT: &str = "/etc/systemd/system/flatpak-provision.service";
+const FLATPAK_STAGED: &str = "flatpak/flatpak-provision.service";
+const FLATPAK_COPY: &str =
+    "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
+const CRON_TIMER: &str = "/etc/systemd/system/cron-backup.timer";
+const CRON_SERVICE: &str = "/etc/systemd/system/cron-backup.service";
+const REPORT_TIMER: &str = "/etc/systemd/system/report.timer";
+
+/// A file under `path` as a directory, which conflicts with a file at it.
+fn child_of(path: &str) -> String {
+    format!("{path}/extra.conf")
+}
+
+/// A snapshot holding `files` as included config entries, plus what
+/// `with` adds.
+fn units_snapshot(files: &[&str], with: fn(&mut InspectionSnapshot)) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: files.iter().map(|p| entry(p, "[Service]\n")).collect(),
+    });
+    with(&mut snap);
+    snap
+}
+
+fn with_flatpak(snap: &mut InspectionSnapshot) {
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.example.App".into(),
+            remote: "flathub".into(),
+            remote_url: "https://dl.flathub.org/repo/".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+}
+
+/// A generated `cron-backup` unit from a cron entry with `cron_expr`: a
+/// timer and its service, or the service alone for `@reboot`.
+fn with_cron(snap: &mut InspectionSnapshot, cron_expr: &str) {
+    let timer = if cron_expr == "@reboot" {
+        ""
+    } else {
+        "[Timer]\nOnCalendar=*-*-* 01:00:00\n"
+    };
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-backup".into(),
+            timer_content: timer.into(),
+            service_content: "[Service]\nExecStart=/bin/true\n".into(),
+            cron_expr: cron_expr.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+}
+
+/// The host's own `report.timer`, a local timer row with no service file.
+fn with_local_timer(snap: &mut InspectionSnapshot) {
+    use inspectah_core::types::scheduled::SystemdTimer;
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        systemd_timers: vec![SystemdTimer {
+            name: "report".into(),
+            source: "local".into(),
+            path: REPORT_TIMER.into(),
+            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+}
+
+/// The scan export and the refine export of `snap`, each with its label.
+fn both_exports(snap: &InspectionSnapshot) -> [(&'static str, tempfile::TempDir); 2] {
+    [
+        ("scan export", render_export(snap)),
+        ("refine export", export_session(&session(snap))),
+    ]
+}
+
+/// Whether some `# FIXME:` line names `path`.
+fn fixme_names(containerfile: &str, path: &str) -> bool {
+    containerfile
+        .lines()
+        .any(|l| l.starts_with("# FIXME:") && l.contains(path))
+}
+
+/// The flatpak provisioning service, withheld beside a file that needs its
+/// path as a directory: neither its `COPY` nor its enable is written, on
+/// both routes, while the withheld file is named and the manifest still
+/// lands. Reversed control: with the conflict removed, the service is
+/// staged, copied and enabled.
+#[test]
+fn a_withheld_flatpak_service_is_neither_copied_nor_enabled() {
+    let conflict = child_of(FLATPAK_UNIT);
+    let snap = units_snapshot(&[&conflict], with_flatpak);
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile(tree.path());
+        assert!(fixme_names(&cf, FLATPAK_UNIT), "{route}: named:\n{cf}");
+        assert!(
+            tree.path().join("flatpak/flatpak-install.json").is_file(),
+            "{route}: the manifest still lands"
+        );
+        assert!(!tree.path().join(FLATPAK_STAGED).exists(), "{route}");
+        assert!(!cf.contains(FLATPAK_COPY), "{route}:\n{cf}");
+        assert!(
+            unit_hosts::in_no_systemctl_instruction(&cf, "flatpak-provision.service"),
+            "{route}:\n{cf}"
+        );
+    }
+
+    let snap = units_snapshot(&[], with_flatpak);
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile(tree.path());
+        assert!(tree.path().join(FLATPAK_STAGED).is_file(), "{route}");
+        assert!(cf.contains(FLATPAK_COPY), "{route}:\n{cf}");
+        assert!(
+            unit_hosts::acts(&cf, "enable", "flatpak-provision.service"),
+            "{route}:\n{cf}"
+        );
+    }
+}
+
+/// What a case adds to the snapshot.
+type AddUnits = fn(&mut InspectionSnapshot);
+
+/// A scheduled unit whose file the stager withholds is not enabled: a
+/// generated timer withheld itself, a generated timer whose paired service
+/// is withheld, an `@reboot` service, and the host's own local timer. Each
+/// on both routes, with the withheld file named. Reversed control: with
+/// the conflict removed, the same unit is enabled.
+#[test]
+fn a_withheld_scheduled_unit_is_not_enabled() {
+    let cases: [(&str, &str, &str, AddUnits); 4] = [
+        ("generated timer", CRON_TIMER, "cron-backup.timer", |s| {
+            with_cron(s, "0 1 * * *")
+        }),
+        (
+            "the generated timer's service",
+            CRON_SERVICE,
+            "cron-backup.timer",
+            |s| with_cron(s, "0 1 * * *"),
+        ),
+        (
+            "@reboot service",
+            CRON_SERVICE,
+            "cron-backup.service",
+            |s| with_cron(s, "@reboot"),
+        ),
+        (
+            "local timer",
+            REPORT_TIMER,
+            "report.timer",
+            with_local_timer,
+        ),
+    ];
+    for (label, withheld, unit, with) in cases {
+        let conflict = child_of(withheld);
+        let snap = units_snapshot(&[&conflict], with);
+        for (route, tree) in both_exports(&snap) {
+            let cf = containerfile(tree.path());
+            assert!(fixme_names(&cf, withheld), "{label}, {route}:\n{cf}");
+            assert!(
+                unit_hosts::in_no_systemctl_instruction(&cf, unit),
+                "{label}, {route}: {unit} is enabled:\n{cf}"
+            );
+        }
+
+        let snap = units_snapshot(&[], with);
+        for (route, tree) in both_exports(&snap) {
+            let cf = containerfile(tree.path());
+            assert!(
+                unit_hosts::acts(&cf, "enable", unit),
+                "{label}, {route}: control:\n{cf}"
+            );
+        }
+    }
+}

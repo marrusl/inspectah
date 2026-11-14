@@ -479,6 +479,51 @@ pub fn session(snap: &InspectionSnapshot) -> RefineSession {
     inspectah_refine::tarball::from_tarball(&tarball).expect("refine opens the scan")
 }
 
+/// Every `systemctl` instruction in `containerfile`: each non-comment
+/// instruction joined with its `\` continuation lines, kept when it runs
+/// `systemctl`, wherever in the file it is.
+pub fn systemctl_instructions(containerfile: &str) -> Vec<String> {
+    let mut instructions = Vec::new();
+    let mut current = String::new();
+    for line in containerfile.lines() {
+        if current.is_empty() && line.trim_start().starts_with('#') {
+            continue;
+        }
+        let line = line.trim_end();
+        current.push_str(line.trim_end_matches('\\'));
+        current.push(' ');
+        if !line.ends_with('\\') {
+            let instruction = std::mem::take(&mut current);
+            if instruction.contains("systemctl") {
+                instructions.push(instruction);
+            }
+        }
+    }
+    if current.contains("systemctl") {
+        instructions.push(current);
+    }
+    instructions
+}
+
+/// Whether a `RUN systemctl <verb> --` instruction in `containerfile`
+/// names `unit` as one of its quoted operands after `--`.
+pub fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
+    let prefix = format!("RUN systemctl {verb} -- ");
+    let operand = format!("'{unit}'");
+    systemctl_instructions(containerfile).iter().any(|i| {
+        i.strip_prefix(&prefix)
+            .is_some_and(|operands| operands.split_whitespace().any(|w| w == operand))
+    })
+}
+
+/// Whether `unit`'s name appears in no `systemctl` instruction of
+/// `containerfile`, whatever the verb and in any form.
+pub fn in_no_systemctl_instruction(containerfile: &str, unit: &str) -> bool {
+    systemctl_instructions(containerfile)
+        .iter()
+        .all(|i| !i.contains(unit))
+}
+
 /// `session` exported at its current generation, unpacked with the
 /// tarball's top-level directory stripped, so the tree has the layout
 /// [`render_export`] writes.

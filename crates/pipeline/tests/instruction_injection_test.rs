@@ -1449,11 +1449,15 @@ fn test_carried_unit(
 /// refused by `OPERAND_ROWS` as before.
 #[test]
 fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
+    // Each scheduled unit has a body, so the stager writes the file its
+    // enable names: an `@reboot` entry has a service and no timer.
     let timer = |cron: &str| {
         scheduled(ScheduledTaskSection {
             generated_timer_units: vec![GeneratedTimerUnit {
                 name: "backup".into(),
                 cron_expr: cron.into(),
+                timer_content: if cron == "@reboot" { "" } else { "[Timer]\n" }.into(),
+                service_content: "[Service]\n".into(),
                 disposition: FindingKind::included(),
                 ..Default::default()
             }],
@@ -1464,6 +1468,7 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         systemd_timers: vec![SystemdTimer {
             name: "report".into(),
             source: "local".into(),
+            timer_content: "[Timer]\n".into(),
             disposition: FindingKind::included(),
             ..Default::default()
         }],
