@@ -35,14 +35,29 @@ const FULL_SHADOW_RATIONALE: &str = "Full shadow: this unit file in /etc/systemd
 /// link D-Bus activation manages, not a unit an administrator switched.
 const DBUS_ACTIVATION_ALIAS_PREFIX: &str = "dbus-org.";
 
+/// The type suffixes of the unit kinds § 5 of the units spec excludes
+/// outright: no unit file of these kinds exists, and the scan records
+/// nothing of their state.
+const EXCLUDED_KIND_SUFFIXES: &[&str] = &["device", "scope"];
+
 /// The name gate (§ 7.4 of the units spec): the name and state of a listed
-/// unit the section records, or `None` for one it does not. A state that is
-/// not durable is dropped or warned about by [`parse_unit_state`]. The name
-/// must parse as a [`UnitName`] and not be a D-Bus activation alias. A
+/// unit the section records, or `None` for one it does not. A unit of a
+/// kind the scan excludes ([`EXCLUDED_KIND_SUFFIXES`]) is dropped first,
+/// with no warning whatever its state, so an open login session's
+/// transient scope is not reported on every scan. A state that is not
+/// durable is then dropped or warned about by [`parse_unit_state`]. The
+/// name must parse as a [`UnitName`] and not be a D-Bus activation alias. A
 /// template is recorded only when masked, since its mask masks every
 /// instance; enabling a template means nothing without an instance. An
 /// instance is not recorded: reading its install state is a later step.
 fn gate(unit: &UnitFileEntry, warnings: &mut Vec<Warning>) -> Option<(UnitName, UnitState)> {
+    if unit
+        .unit
+        .rsplit_once('.')
+        .is_some_and(|(_, suffix)| EXCLUDED_KIND_SUFFIXES.contains(&suffix))
+    {
+        return None;
+    }
     let state = match parse_unit_state(&unit.unit, &unit.state) {
         ParsedUnitState::Durable(state) => state,
         ParsedUnitState::SilentDrop => return None,
@@ -1947,6 +1962,11 @@ mod tests {
             ("getty@.service", "disabled", false),
             ("getty@tty1.service", "enabled", false),
             ("getty@tty1.service", "masked", false),
+            // Kinds § 5 excludes, in any state, durable or not.
+            ("session-7.scope", "transient", false),
+            ("init.scope", "static", false),
+            ("dev-sda.device", "enabled", false),
+            ("dev-sda.device", "masked-runtime", false),
         ];
         for &(unit, state, kept) in cases {
             let entry = UnitFileEntry {
@@ -1959,6 +1979,52 @@ mod tests {
             assert_eq!(gated.is_some(), kept, "{unit} {state}");
             assert!(warnings.is_empty(), "{unit} {state}: {warnings:?}");
         }
+    }
+
+    /// A unit of a kind the scan leaves out (`.scope`, `.device`) is
+    /// dropped before its state is read, so it gets no warning in any state.
+    /// Control: a service in the same transient state keeps today's warning.
+    #[test]
+    fn excluded_kinds_get_no_state_warning() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             session-7.scope                            transient       -\n\
+                             dev-sda.device                             enabled         enabled\n\
+                             run-r1.service                             transient       -\n\
+                             \n\
+                             3 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "disable *\n",
+            )
+            .with_dir("/etc/systemd/system", vec![]);
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let output = UnitsInspector::new()
+            .inspect(&ctx, &NullProgress)
+            .expect("the scan completes");
+        let messages: Vec<&str> = output.warnings.iter().map(|w| w.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["unit run-r1.service has state 'transient' - transient state is not migrated"]
+        );
     }
 
     #[test]
