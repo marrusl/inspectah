@@ -100,7 +100,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 |:---|:---|
 | **ID** | `Services` |
 | **Applies to** | `PackageBased` systems |
-| **Snapshot field** | `services` (`ServiceSection`) |
+| **Snapshot field** | `units` (`UnitSection`) |
 | **Source** | `inspectors/services.rs` |
 
 **What it reads:**

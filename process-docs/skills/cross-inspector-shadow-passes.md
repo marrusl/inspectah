@@ -8,7 +8,7 @@ description: Where a file lands in two inventories with two dispositions, one of
 Several collectors write into overlapping path space. The `/etc` walk
 records a file into `config.files`, and the services inspector records
 the same `*.service.d/*.conf` or full unit shadow into
-`services.drop_ins`. The double-listing is deliberate: each section needs
+`units.drop_ins`. The double-listing is deliberate: each section needs
 the data.
 
 The kernel/boot inspector also reads `/etc/sysctl.d/` files into
@@ -72,7 +72,7 @@ mirror); they went with the sysctl pass.
 
 ## Name the variant for the set, not the field
 
-`ConfigShadow::Services`, not `ServiceDropIn`: `services.drop_ins`
+`ConfigShadow::Units`, not `ServiceDropIn`: `units.drop_ins`
 carries full unit shadows under `/etc/systemd/system/` as well as
 `*.service.d/*.conf`, and a name describing the field would promise less
 than the variant owns. This is the same defect as the earlier
@@ -98,7 +98,7 @@ what was broken was that a second control was also accepted.
 Use collector-produced input: `MockExecutor` plus the real inspectors
 through `collect()`, as `crates/cli/tests/scan_service_shadow_test.rs`
 does. No JSON fixture in the repository had a
-non-empty `services.drop_ins` before that test, which is why this
+non-empty `units.drop_ins` before that test, which is why this
 survived a 26-task review cycle and two whole-branch reviews, and a
 hand-built fixture is free to encode a layout the collectors cannot
 produce.
@@ -118,15 +118,15 @@ Two things are easy to get wrong here:
   so it never enters `customizations_from_config`. Render the owner
   label from `shadowed_by` directly.
 - **The owner row may not render at all.** A drop-in reaches
-  `services.drop_ins` whenever the file exists, but its unit reaches
-  `services.state_changes` only when the unit's enable state diverges
+  `units.drop_ins` whenever the file exists, but its unit reaches
+  `units.state_changes` only when the unit's enable state diverges
   from its preset. A unit at its preset state therefore has a drop-in
   and no parent service row, and the web `ServiceSection` nested
   drop-ins under their parent, so the owning row rendered nowhere. That
   is the common case, not an edge one. Before pointing an operator at an
   owner, check the owner is on screen.
 
-The join key needs no new field: `service_dropins[].path` is the same
+The join key needs no new field: `unit_dropins[].path` is the same
 string `shadow_matching_config_entries` matched on. `shadowed_by` is
 `skip_serializing_if = "Option::is_none"`, so a TypeScript mirror
 declares it optional and never `null`.
@@ -175,7 +175,7 @@ Three things make the narrowed guard the right one, all measured on RHEL
   export defect, and it is the only state worth refusing.
 
 The cascade is also the answer to a question that looks open from the
-source: the web owner badge reads `service_dropins[].include`, so it
+source: the web owner badge reads `unit_dropins[].include`, so it
 cannot report "Owner included" under an excluded parent — the cascade
 has already set it false. Measured through `/api/view`.
 
@@ -197,5 +197,5 @@ reasoned from unverified premises. Measure first.
 - `crates/core/src/types/config.rs` -- `ConfigShadow`, `ConfigFileEntry::shadowed_by`
 - `crates/pipeline/src/render/configtree.rs` -- `service_owned_paths`, `container_owned_paths`
 - `crates/cli/tests/scan_service_shadow_test.rs` -- the four-state regression test, and both legs of the drop-in guard
-- `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Service` cascade
+- `crates/refine/src/session.rs` -- the `ItemId::DropIn` arm of `SetInclude` validation, and the `ItemId::Unit` cascade
 - `real-host-validation-runs.md` -- why measurement beats fixtures here

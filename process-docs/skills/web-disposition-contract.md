@@ -159,7 +159,7 @@ advisories were mis-bucketed, and said nothing.
 `advisory` bucket, on the grounds that it is the other display-only
 disposition. It is not purely a network-findings caveat: a config file
 whose path is also a Service Drop-ins entry is given
-`shadowed_by: Some(ConfigShadow::Services)` and
+`shadowed_by: Some(ConfigShadow::Units)` and
 `disposition: FindingKind::Inventory` (`ConfigFileEntry`,
 `crates/core/src/types/config.rs`), and because it is still a member of
 `config.files`, it is counted into the Config section's `advisory`

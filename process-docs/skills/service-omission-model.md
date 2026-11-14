@@ -2,7 +2,9 @@
 
 `render_service_intent` in `crates/pipeline/src/render/service_intent.rs`
 is the single authority for which `systemctl enable`, `disable` and
-`mask` lines the Containerfile carries. `containerfile.rs` delegates its
+`mask` lines the Containerfile carries. It reads the snapshot's `units`
+section (`UnitSection.state_changes`, `UnitStateChange` in
+`crates/core/src/types/units.rs`). `containerfile.rs` delegates its
 service section to it, and refine's projection reads the same plan.
 
 ## Omission versus advisory

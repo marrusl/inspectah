@@ -64,7 +64,7 @@ to know about the other -- they both speak core.
 
 Core contains several important modules:
 
-- **types/** -- One module per domain: `rpm`, `config`, `services`, `network`,
+- **types/** -- One module per domain: `rpm`, `config`, `units`, `network`,
   `containers`, `kernelboot`, `selinux`, `users`, `storage`, `scheduled`,
   `nonrpm`, `aggregate`, `subscription`, `repo`, `os`, `system`, and supporting
   types like `warnings`, `redaction`, `completeness`, `preflight`, and
