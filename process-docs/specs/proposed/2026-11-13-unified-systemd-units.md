@@ -1435,21 +1435,27 @@ all work in a `RUN` step with no manager running, on both bases
 (measured). Two more measured facts bound what a carried line means on the
 target, and the exported README states each in a sentence:
 
-- **First boot keeps it while the image's `/etc/machine-id` is
-  zero-length.** **The rendered `systemctl` lines are kept, the condition
-  is stated, and the machine-id is guarded. No preset file is written.
-  (Mark Russell, 2026-11-14)** Both bootc bases ship a zero-length
-  `/etc/machine-id`, and `bootc install to-existing-root` and `to-disk`
-  deploy it unchanged. With it, first boot applies no presets, and every
-  rendered `enable`, `disable` and `mask` holds (measured on RHEL 9.8
+- **First boot keeps it with the base's empty `/etc/machine-id`.** **The
+  rendered `systemctl` lines are kept, the condition is stated, and the
+  machine-id is guarded. No preset file is written. (Mark Russell,
+  2026-11-14)** Both bootc bases ship a zero-length `/etc/machine-id`,
+  and both were booted through `bootc install to-existing-root`, which
+  deploys it unchanged. With it, first boot applies no presets. What was
+  measured to hold: on RHEL 9.8, rendered `enable`, `disable` and `mask`,
   through a scan, build and install, three runs, each read after its
-  first boot; and on RHEL 10.2 on 2026-11-13, through two boots, with
-  `add-wants` and `set-default` as well). An image whose `/etc/machine-id` reads `uninitialized`,
-  or that has no such file, gets a preset pass at first boot. That pass
-  undoes a rendered `disable` on RHEL 9, and a rendered `enable` and
-  `disable` on RHEL 10, where a unit with no preset rule also falls under
-  `disable *`. A mask survives on both (measured for `uninitialized`; the
-  missing-file case is read from systemd's source). The two releases
+  first boot; on RHEL 10.2, on 2026-11-13, `disable`, `mask` and
+  `add-wants` through two boots. The two-boot record does not document a
+  rendered `enable` or `set-default`. `to-disk` was measured to deploy the
+  zero-length file on RHEL 10.2 only, and that disk was not booted. An
+  image whose `/etc/machine-id` reads `uninitialized`, or that has no
+  such file, gets a preset pass at first boot. The pass reverses state
+  that is contrary to the preset and leaves the rest: it undoes a
+  rendered `disable` against an `enable` preset on RHEL 9, and that and a
+  rendered `enable` against a `disable` preset on RHEL 10, where a unit
+  with no preset rule also falls under `disable *`. A mask survives on
+  both (measured for `uninitialized`; the missing-file case is read from
+  systemd's source, as is the third case, a file that already holds a
+  valid identity, which is not a first boot either). The two releases
   differ by a build option of their systemd packages, read from the
   package sources and not measured further. Read from source and not
   booted: none of bootc's install paths, the image builder's bootc disk
@@ -1457,8 +1463,8 @@ target, and the exported README states each in a sentence:
   `uninitialized` or removes the file, so the pass runs only when the
   image itself carries one or the other, which in practice means a later
   Containerfile layer or an installer `%post` did it (§ 13 run R3). A
-  later `systemctl preset-all` puts every unit back to preset in any
-  case.
+  later `systemctl preset-all` likewise puts rendered `enable` and
+  `disable` state back to preset.
 - **`disable` removes the administrator's links and nothing more.** A unit
   that a package's `.wants` link or another unit's `Wants=` pulls in
   reads `disabled` afterwards, is still wanted, and is started at boot
@@ -1548,11 +1554,13 @@ lands on disk.**
   same line for every writer: a write whose `Destination` is
   `/etc/machine-id` is withheld, whichever section of an imported snapshot
   or fleet mix offered it and however the path is spelled, and the
-  Containerfile names it in a FIXME. The exported README says, in one
-  sentence, that the rendered unit state holds at first boot only while
-  the image keeps the base's empty `/etc/machine-id`, and that a later
-  layer or installer script that writes `uninitialized` there brings back
-  the presets.
+  Containerfile names it in a FIXME. The guard runs before offers of one
+  destination are deduplicated, so every row that offered the path keeps
+  its withheld reason. The exported README says it in two sentences:
+  rendered unit state survives first boot with the base image's empty
+  `/etc/machine-id`; a later layer or installer script that removes that
+  file or writes `uninitialized` to it makes first boot apply the
+  presets, which undoes rendered `enable` and `disable` lines.
 
 **What the plan takes.** Three kinds of request. No `systemctl` line in
 the Containerfile comes from anywhere else.
@@ -1959,9 +1967,10 @@ constants beside `VAR_SYMLINKED_TOPLEVELS`
 and `/usr/local` are real directories (measured). A fedora-bootc or
 centos-bootc base creates a different set and is not covered. On a
 booted host of either release, a mount under `/opt` or `/usr` whose
-directory is in the image mounts over it and hides the image's file, one
-whose directory is missing fails and leaves the host degraded, and the
-vendor link starts a copied `tmp.mount` by name (measured).
+directory is in the image mounts over it and hides the image's file, and
+the vendor link starts a copied `tmp.mount` by name (measured). A mount
+under `/opt` whose directory is missing fails and leaves the host
+degraded (measured); the same under `/usr` is inferred from it.
 
 **The unit file itself stays a config entry, included by default, under the
 config walk's control. No enable line is written for it, and the advisory
@@ -2587,13 +2596,17 @@ Phase 4 (the `/etc/systemd/system` scan):
   and the two refine rows marked `not_applied` with the shadow's path;
   included again, both blocks return.
 
-- **T33. The machine-id is never staged.** A snapshot that offers
-  `/etc/machine-id` through a config entry, through a drop-in row's path,
-  and spelled `/etc/./machine-id`: nothing is staged there, the
-  Containerfile names it in a FIXME, and the owning row shows `withheld`
-  with `MachineId`. The control: `/etc/machine-info` offered the same
-  three ways is staged. A scan of a host never records the path. The
-  exported README holds the first-boot sentence.
+- **T33. The machine-id is never staged.** Through the scan export and
+  through the refine export, a snapshot that offers `/etc/machine-id`
+  through a config entry, and separately one that offers it through a
+  drop-in row's path, each with the path spelled relative
+  (`etc/machine-id`), with a doubled separator, with an interior `.`, and
+  with a trailing separator: nothing is staged there, the Containerfile
+  names it in a FIXME, and each offering row shows `withheld` with
+  `MachineId`, two rows that offer the one destination included. The
+  control: `/etc/machine-info` offered in each of the same ways is
+  staged. A scan of a host never records the path. The exported README
+  holds the two first-boot sentences.
 - **T34. A mask follows its package.** A masked vendor unit whose owning
   package is excluded and is not in the baseline: no `mask`, and an
   `# Omitted:` line with the package reason naming the unit. The same
@@ -2682,8 +2695,12 @@ or fedora44 VMs for them.**
   handling of the machine-id was only read from source. An image-builder
   disk image, the installer ISO route, and a plain `ostreecontainer`
   kickstart. For each, the size of the deployed `/etc/machine-id` before
-  first boot, and the journal's first-boot line. `to-disk` was measured to
-  deploy a zero-length file and was not booted.
+  first boot, and the journal's first-boot line. A route that cannot be
+  set up, or is not run, stays assessed from source and unbooted: it is
+  recorded as such and is never a passed boot result. `to-disk` is in
+  that state now: it was measured to deploy a zero-length file on RHEL
+  10.2 only, and the disk was not booted. Both bases were booted through
+  `to-existing-root`.
 - **R4. Stock-host false positives.** With the branch build, scan a stock
   host of each release before a drifted one, and review every row the new
   kinds add, every link advisory, every instance and every `Also=`
@@ -2798,7 +2815,7 @@ instances are collected as state changes and every one is omitted at
 render with a placeholder reason, `template instances are not carried
 yet`, on an `# Omitted:` line and a refine row. Two rules that do not
 depend on the scan land here as well, since the earlier phases are done:
-the machine-id guard in `staged_writes` and its README sentence (§ 10.2,
+the machine-id guard in `staged_writes` and its README sentences (§ 10.2,
 § 10.1), and the package check on `mask` (§ 10.2 rule 5). Tests T22 to
 T27 and T30 to T34.
 
@@ -2828,7 +2845,7 @@ there, so the merge carries the evidence with the code.
 
 | When | Runs | Why then |
 |---|---|---|
-| Before phase 4's code starts | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. A phase 4 task an answer changes is rewritten before it starts. |
+| Before phase 4's scan-dependent code starts | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. A phase 4 task an answer changes is rewritten before it starts. The machine-id guard and the package check on `mask` rest on none of the answers and may come before the run. |
 | After phase 2 | R1, R3 | R1 is the driving fix. R3's `to-existing-root` boots decide how "off" has to be rendered. Both were run. |
 | At the branch tip, after phase 5 | R1, R2, R4 and the open routes of R3 | The merge gate. The branch does not merge to `main` until they pass. |
 
@@ -2942,9 +2959,9 @@ Other objections worth weighing:
   while carrying, ungated, any template it does not know.
 - **Two controls operators have today go away:** the timer toggle, which
   does nothing, and the unconditional tuned enable.
-- **Rendered unit state depends on the image's machine-id.** It holds at
-  first boot only while `/etc/machine-id` is zero-length, as the bases
-  ship it. A user whose own later layer or installer script writes
+- **Rendered unit state depends on the image's machine-id.** It survives
+  first boot with the zero-length `/etc/machine-id` the bases ship. A
+  user whose own later layer or installer script writes
   `uninitialized`, or removes the file, gets a preset pass that undoes
   rendered `disable` lines on RHEL 9 and rendered `enable` and `disable`
   lines on RHEL 10, with nothing in the build to say so. inspectah guards
@@ -2954,9 +2971,10 @@ Other objections worth weighing:
   hand-made link, `add-wants`, an alias link or the default target, so it
   would be a partial guarantee beside a complete one.
 - **A mask is dropped with its package.** A mask on a unit whose package
-  is not in the image is a harmless link, and it would keep the unit off
-  if the package arrived later as a dependency or in a derived image.
-  Omitting it loses that intent except for the `# Omitted:` comment.
+  is not in the image is a harmless link. Once it is omitted, nothing
+  keeps the unit off if a dependency, another package that provides the
+  name, or a later layer supplies the unit. The `# Omitted:` comment
+  records the intent that was lost and is all that is left of it.
 - **The measurements are narrow.** One stock VM per release with synthetic
   drift, one booted install route, and RHEL only. A fleet with LUKS, NFS
   automounts or a hardening baseline could put mounts and targets in the
