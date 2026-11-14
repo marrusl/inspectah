@@ -27,17 +27,17 @@ use inspectah_core::types::rpm::{PackageEntry, RpmSection};
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
 use super::configtree::{
-    ETC_UNIT_DIR, FLATPAK_SERVICE, StagedFileKind, StagedWrites, UnstagedWhy, is_staged,
-    staged_count, staged_unit_file, staged_writes, stages_config_unit_dir, unstaged_files,
-    validate_path,
+    ETC_UNIT_DIR, FLATPAK_SERVICE, KARGS_PATH, StagedFileKind, StagedWrites, UnstagedWhy,
+    is_staged, staged_count, staged_unit_file, staged_writes, stages_config_unit_dir,
+    unstaged_files, validate_path,
 };
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repoless::PackageRoute;
 use super::safety::{
     BareWord, CopyToken, ExportPath, ExportToken, double_quoted_word_refusal, is_shell_operand,
-    is_valid_tuned_profile, operand_refusal, operator_kargs, sanitize_shell_value,
-    shell_operand_refusal, single_quote,
+    is_valid_tuned_profile, operand_refusal, sanitize_shell_value, shell_operand_refusal,
+    single_quote,
 };
 use super::unit_plan::{
     is_package_installable, manual_follow_up_line, plan_units, unit_state_lines,
@@ -1913,9 +1913,9 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // outer header if there's actual content to show.
     let mut body = Vec::new();
 
-    // Kernel arguments
-    let safe_kargs = operator_kargs(&kb.cmdline);
-    if !safe_kargs.is_empty() {
+    // Kernel arguments, when the stager writes the kargs file: one it
+    // withholds is named in the config section's FIXME.
+    if is_staged(&staged_writes(snap), KARGS_PATH) {
         body.push("# Kernel Arguments (bootc-native kargs.d)".into());
         body.push(
             "# These are applied at install and honored across image upgrades. See bootc documentation:"

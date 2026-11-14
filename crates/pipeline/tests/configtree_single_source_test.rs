@@ -1094,3 +1094,92 @@ fn a_file_where_the_stager_needs_a_directory_fails_the_export() {
         "the error names the path: {err}"
     );
 }
+
+// --- The generated kargs file goes through the decision ------------------
+
+/// Where the export writes the kernel arguments inspectah migrates.
+const KARGS: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.toml";
+const KARGS_COPY: &str =
+    "COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/";
+
+/// `snap` with an operator kernel argument on the cmdline, so the export
+/// generates the kargs file.
+fn with_kargs(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    snap.kernel_boot = Some(KernelBootSection {
+        cmdline: "ro quiet hugepages=16".to_string(),
+        ..Default::default()
+    });
+    snap
+}
+
+/// The generated kargs file is an offer of the stager's decision: alone, it
+/// is a write whose `COPY` is rendered. Beside a collected file at its path
+/// with other content, or under one (the path needed as a directory), both
+/// are withheld as a `Conflict` and named, nothing lands at the path and
+/// no kargs `COPY` is rendered, where before the generated file silently
+/// replaced the collected one or the write failed late.
+#[test]
+fn the_kargs_file_is_staged_through_the_decision() {
+    let snap = with_kargs(staged_snapshot(vec![], vec![]));
+    let staged = staged_writes(&snap);
+    let write = staged
+        .writes
+        .get(&dest(KARGS))
+        .expect("the kargs file is a write");
+    assert_eq!(write.source, StagedFileKind::KargsFile);
+    assert!(
+        write.content.contains("append = [\"hugepages=16\"]"),
+        "{}",
+        write.content
+    );
+    let (dir, containerfile) = export(&snap);
+    assert!(dir.path().join("config").join(&KARGS[1..]).is_file());
+    assert!(containerfile.contains(KARGS_COPY), "{containerfile}");
+
+    for (label, collected) in [
+        ("a collected file at its path", KARGS.to_owned()),
+        ("a collected file under its path", format!("{KARGS}/extra")),
+    ] {
+        let snap = with_kargs(staged_snapshot(
+            vec![config_entry(
+                &collected,
+                "[kargs]\nappend = [\"other=1\"]\n",
+            )],
+            vec![],
+        ));
+        let staged = staged_writes(&snap);
+        assert!(
+            staged.writes.is_empty(),
+            "{label}: {:?}",
+            staged.writes.keys()
+        );
+        let mut withheld: Vec<_> = staged
+            .withheld
+            .iter()
+            .map(|(d, k, w)| (d.as_str().to_owned(), *k, w.name()))
+            .collect();
+        withheld.sort();
+        let mut expected = vec![
+            (KARGS.to_owned(), StagedFileKind::KargsFile, "Conflict"),
+            (collected.clone(), StagedFileKind::ConfigFile, "Conflict"),
+        ];
+        expected.sort();
+        assert_eq!(withheld, expected, "{label}");
+
+        let (dir, containerfile) = export(&snap);
+        assert!(
+            !dir.path().join("config").join(&KARGS[1..]).exists(),
+            "{label}: nothing lands at the path"
+        );
+        for path in [KARGS, collected.as_str()] {
+            assert!(
+                fixme_naming(&containerfile, path).is_some(),
+                "{label}: {path} is named:\n{containerfile}"
+            );
+        }
+        assert!(
+            !containerfile.contains(KARGS_COPY),
+            "{label}:\n{containerfile}"
+        );
+    }
+}

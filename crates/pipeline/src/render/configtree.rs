@@ -5,9 +5,10 @@
 //! - Repo files (snap.rpm.repo_files)
 //! - GPG keys (snap.rpm.gpg_keys)
 //! - Firewall zones (snap.network.firewall_zones)
-//! - Kernel/boot: the kargs.d file (the kernel config files themselves,
-//!   sysctl files included, are `snap.config.files` entries, written by
-//!   the config loop above on their own decision)
+//! - Kernel/boot: the kargs.d file, an offer of the stager's decision like
+//!   the others (the kernel config files themselves, sysctl files
+//!   included, are `snap.config.files` entries, written on their own
+//!   decision)
 //! - Systemd drop-ins (both config/ and drop-ins/)
 //! - Generated/local timer units
 //! - Quadlet units
@@ -33,6 +34,10 @@ pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// The provisioning service inspectah generates for flatpak applications.
 pub(crate) const FLATPAK_SERVICE: &str = "flatpak-provision.service";
+
+/// Where the export writes the kernel arguments it migrates from the
+/// host's cmdline (bootc's kargs.d).
+pub(crate) const KARGS_PATH: &str = "/usr/lib/bootc/kargs.d/inspectah-migrated.toml";
 
 /// Where a staged file lands in the image: a normalized absolute path.
 ///
@@ -370,6 +375,9 @@ pub enum StagedFileKind {
     GeneratedUnit,
     /// The flatpak provisioning service inspectah generates.
     FlatpakService,
+    /// The kernel arguments file inspectah generates from the host's
+    /// cmdline, at [`KARGS_PATH`].
+    KargsFile,
 }
 
 impl StagedFileKind {
@@ -384,6 +392,7 @@ impl StagedFileKind {
             Self::LocalTimerUnit => "local timer unit",
             Self::GeneratedUnit => "generated unit",
             Self::FlatpakService => "flatpak provisioning service",
+            Self::KargsFile => "kernel arguments file",
         }
     }
 
@@ -395,8 +404,11 @@ impl StagedFileKind {
         matches!(self, Self::RepoFile | Self::GpgKey | Self::FirewallZone)
     }
 
-    /// Whether inspectah generates the file rather than collecting it.
-    fn is_generated(self) -> bool {
+    /// Whether the file is a unit inspectah generates: the interim rule of
+    /// [`staged_writes`] writes it beside a collected file of its path
+    /// rather than calling the two a conflict. The generated kargs file is
+    /// not one: it is decided like a collected offer.
+    fn is_generated_unit(self) -> bool {
         matches!(self, Self::GeneratedUnit | Self::FlatpakService)
     }
 
@@ -451,7 +463,8 @@ impl<'a> Offer<'a> {
 /// Every file a section offers the export, in section order: the
 /// included config files, repo files, GPG keys, firewall zones and
 /// drop-ins at their own paths; the scheduled section's units under
-/// `/etc/systemd/system`; and the flatpak provisioning service.
+/// `/etc/systemd/system`; the kargs file at [`KARGS_PATH`]; and the
+/// flatpak provisioning service.
 ///
 /// Local timers are offered whatever their disposition, as the stager has
 /// always written them: the scheduled section does not own their files
@@ -533,6 +546,13 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
                 &t.service_content,
             ));
         }
+    }
+    if let Some(content) = snap.kernel_boot.as_ref().and_then(kargs_toml) {
+        out.push(Offer {
+            kind: StagedFileKind::KargsFile,
+            path: Cow::Borrowed(KARGS_PATH),
+            content: Cow::Owned(content),
+        });
     }
     if let Some(containers) = &snap.containers {
         let included: Vec<_> = containers
@@ -624,10 +644,9 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
             .any(|(kind, _)| *kind == StagedFileKind::LocalTimerUnit)
         {
             offered.retain(|(kind, _)| *kind != StagedFileKind::GeneratedUnit);
-            if offered
-                .iter()
-                .any(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit && !kind.is_generated())
-            {
+            if offered.iter().any(|(kind, _)| {
+                *kind != StagedFileKind::LocalTimerUnit && !kind.is_generated_unit()
+            }) {
                 offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
             }
         }
@@ -646,16 +665,18 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         // Collected offers with one content are one write.
         let first_collected = offered
             .iter()
-            .find(|(kind, _)| !kind.is_generated())
+            .find(|(kind, _)| !kind.is_generated_unit())
             .map(|(_, content)| content.clone());
         if let Some(first) = first_collected
             && offered
                 .iter()
-                .filter(|(kind, _)| !kind.is_generated())
+                .filter(|(kind, _)| !kind.is_generated_unit())
                 .all(|(_, content)| *content == first)
         {
             let mut kept = false;
-            offered.retain(|(kind, _)| kind.is_generated() || !std::mem::replace(&mut kept, true));
+            offered.retain(|(kind, _)| {
+                kind.is_generated_unit() || !std::mem::replace(&mut kept, true)
+            });
         }
     }
 
@@ -668,7 +689,7 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     for (dest, offered) in &by_dest {
         if offered
             .iter()
-            .filter(|(kind, _)| !kind.is_generated())
+            .filter(|(kind, _)| !kind.is_generated_unit())
             .count()
             > 1
         {
@@ -704,7 +725,7 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         // offer is. Any other generated offer is written beside it.
         let (mut generated, collected): (Vec<_>, Vec<_>) = offered
             .into_iter()
-            .partition(|(kind, _)| kind.is_generated());
+            .partition(|(kind, _)| kind.is_generated_unit());
         let primary = match collected.into_iter().next() {
             Some(offer) => offer,
             None if !generated.is_empty() => generated.remove(0),
@@ -919,6 +940,22 @@ fn flatpak_provision_service(apps: &[&inspectah_core::types::containers::Flatpak
     svc
 }
 
+/// The kargs.d file for the operator's kernel arguments on `kb`'s cmdline,
+/// or `None` when there are none.
+fn kargs_toml(kb: &inspectah_core::types::kernelboot::KernelBootSection) -> Option<String> {
+    let safe_kargs = operator_kargs(&kb.cmdline);
+    if safe_kargs.is_empty() {
+        return None;
+    }
+    let mut toml = String::new();
+    toml.push_str("[kargs]\n");
+    toml.push_str("# Migrated from kernel cmdline by inspectah\n");
+    for k in &safe_kargs {
+        toml.push_str(&format!("append = [\"{k}\"]\n"));
+    }
+    Some(toml)
+}
+
 /// Write all config files from snapshot to output_dir/config/ preserving
 /// paths. Writes all artifact categories listed in the module doc.
 ///
@@ -934,9 +971,9 @@ pub fn write_config_tree(
     std::fs::create_dir_all(&config_dir)?;
 
     // Every file `staged_writes` lists, and nothing else: config files,
-    // repo files, GPG keys, firewall zones, the scheduled section's units
-    // and the flatpak provisioning service under their kind's directory,
-    // drop-ins under `drop-ins/`. A file it withholds or refuses is not
+    // repo files, GPG keys, firewall zones, the scheduled section's units,
+    // the kargs file and the flatpak provisioning service under their
+    // kind's directory, drop-ins under `drop-ins/`. A file it withholds or refuses is not
     // written, and the Containerfile names it from `unstaged_files`. A
     // write that fails fails the export.
     let staged = staged_writes(snap);
@@ -948,26 +985,11 @@ pub fn write_config_tree(
         write_staged(&write.source.staged_path(output_dir, dest), &write.content)?;
     }
 
-    // Kernel boot files
-    if let Some(ref kb) = snap.kernel_boot {
-        // The modules-load.d, modprobe.d and dracut.conf.d files are
-        // `config.files` entries, copied through `config/etc/` by the
-        // config loop above on their own decision. Writing them here
-        // too would materialize an excluded file on a path rule.
-
-        // Kernel arguments drop-in
-        let safe_kargs = operator_kargs(&kb.cmdline);
-        if !safe_kargs.is_empty() {
-            let kargs_dir = config_dir.join("usr/lib/bootc/kargs.d");
-            let mut toml = String::new();
-            toml.push_str("[kargs]\n");
-            toml.push_str("# Migrated from kernel cmdline by inspectah\n");
-            for k in &safe_kargs {
-                toml.push_str(&format!("append = [\"{k}\"]\n"));
-            }
-            write_staged(&kargs_dir.join("inspectah-migrated.toml"), &toml)?;
-        }
-    }
+    // The kernel boot files: the kargs file is an offer of the decision
+    // above. The modules-load.d, modprobe.d and dracut.conf.d files are
+    // `config.files` entries, copied through `config/etc/` on their own
+    // decision. Writing them here too would materialize an excluded file
+    // on a path rule.
 
     if let Some(ref containers) = snap.containers {
         for u in &containers.quadlet_units {
