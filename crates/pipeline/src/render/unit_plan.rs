@@ -744,18 +744,14 @@ pub fn mount_advisory_lines(
 }
 
 // ---------------------------------------------------------------------------
-// config_tree_units — collect timer-associated units from scheduled_tasks
+// config_tree_units: the units the scheduled section generates from cron
 // ---------------------------------------------------------------------------
 
+/// The units the scheduled section generates from cron entries and enables
+/// itself. A local timer is not one: its state is its own unit row (§ 8).
 fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
     let mut units = std::collections::HashSet::new();
     if let Some(st) = &snap.scheduled_tasks {
-        for t in &st.systemd_timers {
-            if t.source == "local" && !t.name.is_empty() {
-                units.insert(format!("{}.timer", t.name));
-                units.insert(format!("{}.service", t.name));
-            }
-        }
         for u in &st.generated_timer_units {
             if u.disposition.is_included() && !u.name.is_empty() {
                 if !u.timer_content.is_empty() {

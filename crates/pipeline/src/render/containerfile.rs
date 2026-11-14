@@ -1361,10 +1361,12 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return Vec::new(),
     };
 
+    // A local timer is described here and controlled elsewhere (§ 8): its
+    // files are config entries and its enable is a unit row's.
     let local_timers: Vec<_> = st
         .systemd_timers
         .iter()
-        .filter(|t| t.source == "local" && t.disposition.is_included())
+        .filter(|t| t.source == "local")
         .collect();
 
     let included_timers: Vec<_> = st
@@ -1382,10 +1384,8 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut body = Vec::new();
     let staged = staged_writes(snap);
 
-    // Only when the stager writes something there: a local timer's file
-    // may be carried by a drop-in row under `drop-ins/` instead.
-    if (!local_timers.is_empty() || !included_timers.is_empty()) && stages_config_unit_dir(&staged)
-    {
+    // Only when the stager writes a generated unit there.
+    if !included_timers.is_empty() && stages_config_unit_dir(&staged) {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
@@ -1422,13 +1422,6 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     // file and the service file it activates: a file the stager withholds
     // is named in the config section's FIXME, and nothing here names it.
     let mut timer_names = Vec::new();
-    for t in &local_timers {
-        if let Some(unit) = enableable_unit(&t.name, "timer", &mut body)
-            && scheduled_files_staged(&staged, &t.name, "timer", !t.service_content.is_empty())
-        {
-            timer_names.push(unit);
-        }
-    }
     let mut reboot_service_names = Vec::new();
     for u in &included_timers {
         if !u.name.is_empty() {
@@ -4451,14 +4444,15 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_unsafe_timer_fixme() {
-        use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+        use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
         let mut snap = InspectionSnapshot::new();
         snap.scheduled_tasks = Some(ScheduledTaskSection {
-            systemd_timers: vec![SystemdTimer {
+            generated_timer_units: vec![GeneratedTimerUnit {
                 name: "evil$(whoami)".into(),
-                source: "local".into(),
+                cron_expr: "0 2 * * *".into(),
+                timer_content: "[Timer]".into(),
+                service_content: "[Service]".into(),
                 disposition: FindingKind::included(),
-                locked: false,
                 ..Default::default()
             }],
             ..Default::default()
@@ -6794,12 +6788,10 @@ RUN dnf install -y \
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
-        // With a body, so the stager writes the timer an enable names.
+        // A local timer is a description: its name reaches only a comment.
         let local = |name: &str| SystemdTimer {
             name: name.into(),
             source: "local".into(),
-            timer_content: "[Timer]".into(),
-            disposition: FindingKind::included(),
             ..Default::default()
         };
         let generated = |name: &str, cron_expr: &str| GeneratedTimerUnit {
@@ -6848,14 +6840,14 @@ RUN dnf install -y \
             "a carriage return reached the output: {output}"
         );
         assert!(
-            active.contains(&"RUN systemctl enable -- 'good.timer' 'backup.timer'"),
-            "the ordinary timers are not enabled: {active:#?}"
+            active.contains(&"RUN systemctl enable -- 'backup.timer'"),
+            "the generated timer is not enabled: {active:#?}"
         );
-        for refused in [
-            "/etc/abs",
-            "../../../../../victim/planted",
-            "../../victim/boot",
-        ] {
+        assert!(
+            !active.iter().any(|l| l.contains("good.timer")),
+            "a local timer's enable is its unit row's: {active:#?}"
+        );
+        for refused in ["../../../../../victim/planted", "../../victim/boot"] {
             assert!(
                 output.contains(&format!("# FIXME: timer {refused} not staged")),
                 "no FIXME for {refused}: {output}"

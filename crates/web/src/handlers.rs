@@ -946,17 +946,6 @@ pub async fn batch_toggle_group(
                         include: payload.include,
                     });
                 }
-                for timer in &sched.systemd_timers {
-                    if timer.disposition.is_advisory() || timer.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::SystemdTimer {
-                            name: timer.name.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
                 for at_job in &sched.at_jobs {
                     if at_job.disposition.is_advisory() || at_job.locked {
                         continue;

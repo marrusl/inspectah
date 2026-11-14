@@ -27,7 +27,7 @@ use inspectah_core::types::rpm::{
     EnabledModuleStream, InstalledGroup, PackageEntry, PackageState, RepoFile, RpmSection,
     VersionLockEntry,
 };
-use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
 use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
 use inspectah_core::types::units::{
     SystemdDropIn, UnitName, UnitNameError, UnitSection, UnitState, UnitStateChange,
@@ -835,21 +835,6 @@ const OPERAND_ROWS: &[OperandRow] = &[
         fixme: "# FIXME: port label",
     },
     OperandRow {
-        field: "local timer unit",
-        render: |v| {
-            scheduled(ScheduledTaskSection {
-                systemd_timers: vec![SystemdTimer {
-                    name: v.into(),
-                    source: "local".into(),
-                    disposition: FindingKind::included(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            })
-        },
-        fixme: "# FIXME: Timer unit name",
-    },
-    OperandRow {
         field: "cron-converted timer unit",
         render: |v| {
             scheduled(ScheduledTaskSection {
@@ -1464,16 +1449,6 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
             ..Default::default()
         })
     };
-    let local_timer = scheduled(ScheduledTaskSection {
-        systemd_timers: vec![SystemdTimer {
-            name: "report".into(),
-            source: "local".into(),
-            timer_content: "[Timer]\n".into(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
     let mut flatpak = InspectionSnapshot::new();
     flatpak.containers = Some(ContainerSection {
         flatpak_apps: vec![flatpak_app()],
@@ -1486,11 +1461,6 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         ..Default::default()
     });
     let cases = [
-        (
-            "local timer",
-            local_timer,
-            "RUN systemctl enable -- 'report.timer'",
-        ),
         (
             "cron timer",
             timer("0 3 * * *"),
@@ -1537,25 +1507,15 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
 
 /// The timer and `@reboot` sites enable only names that parse as a
 /// `UnitName`: a name with a control character or a space gets no
-/// instruction and the sites' refusal FIXME, at the local timer, cron
-/// timer and `@reboot` sites alike; a legal escaped name (`\x2d`) is
+/// instruction and the sites' refusal FIXME, at the cron timer and
+/// `@reboot` sites alike; a legal escaped name (`\x2d`) is
 /// enabled as a quoted operand. Each name has a file body, so whether the
 /// stager writes the file is not what decides.
 #[test]
 fn scheduled_sites_enable_only_proved_unit_names() {
     const ESCAPED: &str = r"backup\x2djob";
     type Section = fn(&str) -> ScheduledTaskSection;
-    let sites: [(&str, &str, Section); 3] = [
-        ("local timer", "timer", |name| ScheduledTaskSection {
-            systemd_timers: vec![SystemdTimer {
-                name: name.into(),
-                source: "local".into(),
-                timer_content: "[Timer]\n".into(),
-                disposition: FindingKind::included(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }),
+    let sites: [(&str, &str, Section); 2] = [
         ("cron timer", "timer", |name| ScheduledTaskSection {
             generated_timer_units: vec![GeneratedTimerUnit {
                 name: name.into(),

@@ -17,6 +17,10 @@ pub struct CronJob {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
+/// A systemd timer found on the host, as a description: when it fires and
+/// what it runs. It controls nothing. A local timer's file is a config
+/// entry with its own row, and the timer's state is a unit row in the
+/// units section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SystemdTimer {
     #[serde(default)]
@@ -31,14 +35,6 @@ pub struct SystemdTimer {
     pub source: String,
     #[serde(default)]
     pub path: String,
-    #[serde(default)]
-    pub timer_content: String,
-    #[serde(default)]
-    pub service_content: String,
-    #[serde(default)]
-    pub disposition: FindingKind,
-    #[serde(default, skip_serializing_if = "crate::is_false")]
-    pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregatePrevalence>,
 }

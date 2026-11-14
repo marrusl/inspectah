@@ -59,10 +59,8 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
         systemd_timers: vec![SystemdTimer {
             name: "logrotate".into(),
             source: "local".into(),
-            timer_content: "[Timer]\nOnCalendar=daily".into(),
-            service_content: "[Service]\nExecStart=/usr/sbin/logrotate".into(),
-            disposition: FindingKind::included(),
-            locked: false,
+            on_calendar: "daily".into(),
+            exec_start: "/usr/sbin/logrotate".into(),
             ..Default::default()
         }],
         generated_timer_units: vec![
@@ -704,9 +702,8 @@ fn configtree_vendor_timers_not_copied() {
             name: "fstrim".into(),
             source: "vendor".into(),
             path: "/usr/lib/systemd/system/fstrim.timer".into(),
-            timer_content: "[Timer]\nOnCalendar=weekly".into(),
-            service_content: "[Service]\nExecStart=/usr/sbin/fstrim -a".into(),
-            disposition: FindingKind::excluded(), // vendor timers excluded
+            on_calendar: "weekly".into(),
+            exec_start: "/usr/sbin/fstrim -a".into(),
             ..Default::default()
         }],
         ..Default::default()

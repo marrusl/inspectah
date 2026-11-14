@@ -471,9 +471,10 @@ impl AggregateMergeable for SystemdTimer {
         &mut self.aggregate
     }
 
-    fn set_include(&mut self, val: bool) {
-        self.disposition = self.disposition.with_include(val);
-    }
+    /// A timer is a description with no include flag (§ 8 of the units
+    /// spec): its state is a unit row and its file a config entry, each
+    /// merged with its own flag.
+    fn set_include(&mut self, _val: bool) {}
 }
 
 impl AggregateMergeable for AtJob {

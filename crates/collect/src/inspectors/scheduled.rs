@@ -768,7 +768,10 @@ fn parse_unit_field(text: &str, field: &str) -> String {
     String::new()
 }
 
-/// Scans a systemd unit directory for .timer files and their paired .service units.
+/// Scans a systemd unit directory for .timer files and their paired
+/// .service units, and describes each timer from the two files: its
+/// schedule, its command and its description. The files themselves are
+/// not copied: a local one is a config entry.
 fn scan_systemd_timers(
     exec: &dyn Executor,
     section: &mut ScheduledTaskSection,
@@ -817,9 +820,6 @@ fn scan_systemd_timers(
             description,
             source: source_label.to_string(),
             path: strip_leading_slash(&timer_path),
-            timer_content: timer_text,
-            service_content: service_text,
-            disposition: FindingKind::included(),
             ..Default::default()
         });
     }
@@ -1654,44 +1654,6 @@ mod tests {
                 assert!(
                     timer.disposition.is_included(),
                     "generated timer '{}' should have include: true",
-                    timer.name
-                );
-            }
-        } else {
-            panic!("expected ScheduledTasks section");
-        }
-    }
-
-    #[test]
-    fn collected_systemd_timers_have_include_true() {
-        let timer_content = "[Unit]\nDescription=Test timer\n\n\
-            [Timer]\nOnCalendar=daily\nPersistent=true\n\n\
-            [Install]\nWantedBy=timers.target\n";
-        let service_content = "[Unit]\nDescription=Test\n\n\
-            [Service]\nType=oneshot\nExecStart=/usr/bin/test\n";
-
-        let exec = MockExecutor::new()
-            .with_dir("/etc/systemd/system", vec!["test.timer", "test.service"])
-            .with_file("/etc/systemd/system/test.timer", timer_content)
-            .with_file("/etc/systemd/system/test.service", service_content);
-
-        let rpm_state = empty_rpm_state();
-        let source = test_source_system();
-        let inspector = ScheduledTasksInspector::new();
-        let ctx = InspectionContext {
-            source_system: &source,
-            executor: &exec,
-            rpm_state: Some(&rpm_state),
-            baseline_data: None,
-        };
-
-        let result = inspector.inspect(&ctx, &NullProgress);
-        let output = result.expect("should succeed");
-        if let SectionData::ScheduledTasks(ref section) = output.section {
-            for timer in &section.systemd_timers {
-                assert!(
-                    timer.disposition.is_included(),
-                    "collected SystemdTimer '{}' should have include: true",
                     timer.name
                 );
             }

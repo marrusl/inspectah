@@ -1690,11 +1690,11 @@ fn storage_unit_routes_by_owner_to_state_change_or_mount_finding() {
     assert!(warnings.is_empty(), "routed, not only warned: {warnings:?}");
 }
 
-/// A vendor timer enabled against its preset is a state change like any
-/// unit. A local timer stays with the scheduled section, which enables it
-/// today, so the units section gives it no second control.
+/// A timer is a unit like any other (§ 5, § 8): a vendor timer enabled
+/// against its preset is a state change, and so is a local one enabled,
+/// with a `Local` fragment. The scheduled section gives neither a control.
 #[test]
-fn local_timer_is_left_to_the_scheduled_section() {
+fn a_local_timer_is_a_state_change_like_any_unit() {
     let exec = kinds_mock(
         &[
             ("dnf-automatic.timer", "enabled"),
@@ -1706,24 +1706,67 @@ fn local_timer_is_left_to_the_scheduled_section() {
     .with_file("/etc/systemd/system/site-backup.timer", UNIT_FILE);
     let (section, _) = scan(&exec);
 
-    assert_eq!(state_change_names(&section), vec!["dnf-automatic.timer"]);
     assert_eq!(
-        inventory_names(&section),
+        state_change_names(&section),
         vec!["dnf-automatic.timer", "site-backup.timer"]
     );
-
-    // An `/etc` copy over a vendor timer is the scheduled section's too;
-    // its vendor-only twin above is a state change.
-    let shadowed = kinds_mock(&[("dnf-automatic.timer", "enabled")], "disable *\n")
-        .with_file("/usr/lib/systemd/system/dnf-automatic.timer", UNIT_FILE)
-        .with_file("/etc/systemd/system/dnf-automatic.timer", UNIT_FILE);
-    let (section, _) = scan(&shadowed);
+    let local = section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == "site-backup.timer")
+        .expect("the local timer's state change");
     assert!(
-        section.state_changes.is_empty(),
-        "{:?}",
-        section.state_changes
+        matches!(
+            local.unit(),
+            CarriedUnit::Ordinary(o) if matches!(o.fragment(), UnitFragment::Local { .. })
+        ),
+        "{local:?}"
     );
-    assert_eq!(inventory_names(&section), vec!["dnf-automatic.timer"]);
+    assert!(section.drop_ins.is_empty(), "{:?}", section.drop_ins);
+}
+
+/// An `/etc` copy over a vendor timer is a full shadow in `drop_ins`, as
+/// for every ordinary kind (§ 7.7), and the timer a `Shadowed` state
+/// change. Control: the same copy with no vendor file is no shadow row.
+#[test]
+fn a_timers_full_shadow_is_a_drop_in_row() {
+    let shadowed = with_etc_units(
+        kinds_mock(&[("dnf-automatic.timer", "enabled")], "disable *\n"),
+        vec!["dnf-automatic.timer"],
+    )
+    .with_file("/usr/lib/systemd/system/dnf-automatic.timer", UNIT_FILE)
+    .with_file("/etc/systemd/system/dnf-automatic.timer", UNIT_FILE);
+    let (section, _) = scan(&shadowed);
+    assert_eq!(state_change_names(&section), vec!["dnf-automatic.timer"]);
+    assert!(
+        matches!(
+            section.state_changes[0].unit(),
+            CarriedUnit::Ordinary(o) if matches!(o.fragment(), UnitFragment::Shadowed { .. })
+        ),
+        "{:?}",
+        section.state_changes[0]
+    );
+    let shadows: Vec<(&str, &str, Option<ShadowType>)> = section
+        .drop_ins
+        .iter()
+        .map(|d| (d.unit.as_str(), d.path.as_str(), d.shadow_type.clone()))
+        .collect();
+    assert_eq!(
+        shadows,
+        vec![(
+            "dnf-automatic.timer",
+            "/etc/systemd/system/dnf-automatic.timer",
+            Some(ShadowType::FullShadow)
+        )]
+    );
+
+    let local = with_etc_units(
+        kinds_mock(&[("dnf-automatic.timer", "enabled")], "disable *\n"),
+        vec!["dnf-automatic.timer"],
+    )
+    .with_file("/etc/systemd/system/dnf-automatic.timer", UNIT_FILE);
+    let (section, _) = scan(&local);
+    assert!(section.drop_ins.is_empty(), "{:?}", section.drop_ins);
 }
 
 /// § 7.4 stock state: `remote-cryptsetup.target`, `Disabled` against an
@@ -2053,10 +2096,8 @@ fn t11_storage_masks_route_by_owner() {
 
 /// § 7.7: a regular, non-empty file of a storage kind beside its vendor
 /// file is a config entry and a mount finding, never a full shadow. A
-/// socket in the same layout is a full shadow row (the positive control).
-/// A timer in the same layout stays with the scheduled section, which
-/// writes every timer file under `/etc`: no row here, or two sections
-/// would write one file.
+/// socket and a timer in the same layout are full shadow rows (the
+/// positive controls): a timer is an ordinary kind (§ 8).
 #[test]
 fn regular_storage_file_is_a_config_entry_and_a_mount_finding_never_a_shadow() {
     for unit in STORAGE_UNITS {
@@ -2114,8 +2155,11 @@ fn regular_storage_file_is_a_config_entry_and_a_mount_finding_never_a_shadow() {
 
         let timer_path = format!("{ETC_UNITS}/{timer}");
         assert!(
-            section.drop_ins.iter().all(|d| d.path != timer_path),
-            "{unit}: {:?}",
+            section
+                .drop_ins
+                .iter()
+                .any(|d| d.path == timer_path && d.shadow_type == Some(ShadowType::FullShadow)),
+            "{unit}: the timer shadow is a row: {:?}",
             section.drop_ins
         );
     }

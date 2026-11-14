@@ -891,14 +891,18 @@ fn test_fstab_entry_identity_is_mount_point() {
     assert_eq!(f.identity_key().as_ref(), "/data");
 }
 
+/// A timer is a description with no include flag: the merge's include
+/// step leaves it as it was.
 #[test]
-fn test_systemd_timer_set_include() {
-    let mut t = SystemdTimer::default();
-    // default_true: Default trait gives false, but serde default gives true
+fn test_systemd_timer_set_include_changes_nothing() {
+    let before = SystemdTimer {
+        name: "backup.timer".into(),
+        on_calendar: "daily".into(),
+        ..Default::default()
+    };
+    let mut t = before.clone();
     t.set_include(false);
-    assert!(!t.disposition.is_included());
-    t.set_include(true);
-    assert!(t.disposition.is_included());
+    assert_eq!(t, before);
 }
 
 #[test]

@@ -404,17 +404,15 @@ mod tests {
         } = GeneratedTimerUnit::default();
 
         // `scheduled_tasks.systemd_timers[]`.
+        // A description only (§ 8): the files are config entries, which
+        // the config pass scrubs.
         let SystemdTimer {
-            exec_start: _,      // scrubbed
-            service_content: _, // scrubbed
-            timer_content: _,   // scrubbed (Finding 9)
+            exec_start: _, // scrubbed
             name: _,
             on_calendar: _, // schedule expression
             description: _, // scrubbed: the one free-text line a .timer has
             source: _,
             path: _,
-            disposition: _,
-            locked: _,
             aggregate: _,
         } = SystemdTimer::default();
 
@@ -583,8 +581,6 @@ mod tests {
             "SENTINEL-GENTIMER-SERVICE",
             "SENTINEL-GENTIMER-TIMER",
             "SENTINEL-GENTIMER-COMMAND",
-            "SENTINEL-SYSTIMER-SERVICE",
-            "SENTINEL-SYSTIMER-TIMER",
             "SENTINEL-SYSTIMER-EXEC",
             "SENTINEL-SYSTIMER-DESC",
             "SENTINEL-ATJOB",
@@ -697,12 +693,6 @@ mod tests {
                 source: "local".into(),
                 path: "/etc/systemd/system/report.timer".into(),
                 exec_start: "/usr/bin/report --password=SENTINEL-SYSTIMER-EXEC".into(),
-                service_content: "[Service]\nEnvironment=API_TOKEN=SENTINEL-SYSTIMER-SERVICE\n"
-                    .into(),
-                timer_content:
-                    "[Timer]\nOnCalendar=daily\nDescription=sync api_key=SENTINEL-SYSTIMER-TIMER\n"
-                        .into(),
-                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             at_jobs: vec![AtJob {

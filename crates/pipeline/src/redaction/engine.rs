@@ -1310,40 +1310,6 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_findings.extend(findings);
             }
 
-            // SystemdTimer.service_content — raw service unit text that
-            // may contain secrets the exec_start parse didn't capture.
-            if !timer.service_content.is_empty() {
-                let svc_path = format!(
-                    "{}:{}.service",
-                    if timer.path.is_empty() {
-                        "timer"
-                    } else {
-                        &timer.path
-                    },
-                    timer.name
-                );
-                let findings = scan_content(&timer.service_content, &svc_path);
-                if !findings.is_empty() {
-                    let mut content = timer.service_content.clone();
-                    let mut all_matches: Vec<(usize, EligibleMatch)> = Vec::new();
-                    for (idx, pat) in PATTERNS.iter().enumerate() {
-                        for em in collect_eligible_matches(pat, &content, Some(&svc_path)) {
-                            all_matches.push((idx, em));
-                        }
-                    }
-                    dedup_overlapping_matches(&mut all_matches);
-                    all_matches.sort_by_key(|item| std::cmp::Reverse(item.1.start));
-                    for (pat_idx, em) in all_matches {
-                        let kind_label =
-                            format!("{:?}", PATTERNS[pat_idx].finding_kind).to_lowercase();
-                        let token = registry.token_for(&kind_label, &em.text);
-                        content.replace_range(em.start..em.end, &token);
-                    }
-                    timer.service_content = content;
-                    all_findings.extend(findings);
-                }
-            }
-
             // SystemdTimer.description — the unit's `Description=`,
             // parsed out into its own field. Classified exempt as
             // "prose, not a value" and measured otherwise: a `.timer`
@@ -1360,22 +1326,6 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 all_findings.extend(scan_and_redact_field(
                     &mut timer.description,
                     &desc_path,
-                    &mut registry,
-                ));
-            }
-
-            // SystemdTimer.timer_content — same sibling gap as on
-            // GeneratedTimerUnit, and `configtree` stages a local
-            // timer's text under config/etc/systemd/system/ as well.
-            if !timer.timer_content.is_empty() {
-                let timer_path = if timer.path.is_empty() {
-                    format!("timer:{}.timer", timer.name)
-                } else {
-                    timer.path.clone()
-                };
-                all_findings.extend(scan_and_redact_field(
-                    &mut timer.timer_content,
-                    &timer_path,
                     &mut registry,
                 ));
             }
@@ -1658,18 +1608,6 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 timer.path.clone()
             };
             post_redaction_content.insert(source_path, timer.exec_start.clone());
-            if !timer.service_content.is_empty() {
-                let svc_path = format!(
-                    "{}:{}.service",
-                    if timer.path.is_empty() {
-                        "timer"
-                    } else {
-                        &timer.path
-                    },
-                    timer.name
-                );
-                post_redaction_content.insert(svc_path, timer.service_content.clone());
-            }
         }
     }
     if let Some(ref nrs) = snapshot.non_rpm_software {

@@ -456,11 +456,6 @@ fn clamp_locked_items(snapshot: &mut InspectionSnapshot) {
                 cj.disposition = FindingKind::excluded();
             }
         }
-        for st in &mut sched.systemd_timers {
-            if st.locked {
-                st.disposition = FindingKind::excluded();
-            }
-        }
         for aj in &mut sched.at_jobs {
             if aj.locked {
                 aj.disposition = FindingKind::excluded();

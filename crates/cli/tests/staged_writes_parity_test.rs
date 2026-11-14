@@ -163,7 +163,6 @@ const FLATPAK_COPY: &str =
     "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
 const CRON_TIMER: &str = "/etc/systemd/system/cron-backup.timer";
 const CRON_SERVICE: &str = "/etc/systemd/system/cron-backup.service";
-const REPORT_TIMER: &str = "/etc/systemd/system/report.timer";
 
 /// A file under `path` as a directory, which conflicts with a file at it.
 fn child_of(path: &str) -> String {
@@ -209,22 +208,6 @@ fn with_cron(snap: &mut InspectionSnapshot, cron_expr: &str) {
             timer_content: timer.into(),
             service_content: "[Service]\nExecStart=/bin/true\n".into(),
             cron_expr: cron_expr.into(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-}
-
-/// The host's own `report.timer`, a local timer row with no service file.
-fn with_local_timer(snap: &mut InspectionSnapshot) {
-    use inspectah_core::types::scheduled::SystemdTimer;
-    snap.scheduled_tasks = Some(ScheduledTaskSection {
-        systemd_timers: vec![SystemdTimer {
-            name: "report".into(),
-            source: "local".into(),
-            path: REPORT_TIMER.into(),
-            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
             disposition: FindingKind::included(),
             ..Default::default()
         }],
@@ -288,12 +271,12 @@ type AddUnits = fn(&mut InspectionSnapshot);
 
 /// A scheduled unit whose file the stager withholds is not enabled: a
 /// generated timer withheld itself, a generated timer whose paired service
-/// is withheld, an `@reboot` service, and the host's own local timer. Each
-/// on both routes, with the withheld file named. Reversed control: with
-/// the conflict removed, the same unit is enabled.
+/// is withheld, and an `@reboot` service. Each on both routes, with the
+/// withheld file named. Reversed control: with the conflict removed, the
+/// same unit is enabled.
 #[test]
 fn a_withheld_scheduled_unit_is_not_enabled() {
-    let cases: [(&str, &str, &str, AddUnits); 4] = [
+    let cases: [(&str, &str, &str, AddUnits); 3] = [
         ("generated timer", CRON_TIMER, "cron-backup.timer", |s| {
             with_cron(s, "0 1 * * *")
         }),
@@ -308,12 +291,6 @@ fn a_withheld_scheduled_unit_is_not_enabled() {
             CRON_SERVICE,
             "cron-backup.service",
             |s| with_cron(s, "@reboot"),
-        ),
-        (
-            "local timer",
-            REPORT_TIMER,
-            "report.timer",
-            with_local_timer,
         ),
     ];
     for (label, withheld, unit, with) in cases {

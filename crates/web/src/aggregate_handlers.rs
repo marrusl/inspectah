@@ -1155,25 +1155,6 @@ fn build_reference_sections(
                 variant_payload: None,
             });
         }
-        for timer in &sched.systemd_timers {
-            let item_id = ItemId::SystemdTimer {
-                name: timer.name.clone(),
-            };
-            let fp = timer.aggregate.as_ref();
-            items.push(AggregateItem {
-                item_id,
-                include: timer.disposition.is_included(),
-                locked: timer.locked,
-                attention_reason: None,
-                triage: default_context_triage(fp, ctx),
-                prevalence: aggregate_prevalence_dto(fp, ctx),
-                variants: None,
-                source_repo: String::new(),
-                repo_conflict: None,
-                section_metadata: None,
-                variant_payload: None,
-            });
-        }
         if !items.is_empty() {
             sections.push(build_section(
                 "scheduled",

@@ -2910,7 +2910,6 @@ mod tests {
                 name: "logrotate.timer".into(),
                 on_calendar: "daily".into(),
                 description: "Rotate logs".into(),
-                disposition: FindingKind::included(),
                 ..Default::default()
             }],
             ..Default::default()

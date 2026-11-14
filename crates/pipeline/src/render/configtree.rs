@@ -10,7 +10,7 @@
 //!   included, are `snap.config.files` entries, written on their own
 //!   decision)
 //! - Systemd drop-ins (both config/ and drop-ins/)
-//! - Generated/local timer units
+//! - Generated timer units
 //! - Quadlet units
 //! - Flatpak manifests + provisioning service
 //! - Non-RPM env files
@@ -502,9 +502,6 @@ pub enum StagedFileKind {
     GpgKey,
     FirewallZone,
     DropIn,
-    /// A local timer's `.timer` or `.service` file, written from the
-    /// scheduled section where no other offer has its destination.
-    LocalTimerUnit,
     /// A `.timer` or `.service` the scheduled section generates from a
     /// cron entry.
     GeneratedUnit,
@@ -524,7 +521,6 @@ impl StagedFileKind {
             Self::GpgKey => "GPG key",
             Self::FirewallZone => "firewall zone",
             Self::DropIn => "unit drop-in",
-            Self::LocalTimerUnit => "local timer unit",
             Self::GeneratedUnit => "generated unit",
             Self::FlatpakService => "flatpak provisioning service",
             Self::KargsFile => "kernel arguments file",
@@ -598,14 +594,13 @@ impl<'a> Offer<'a> {
 
 /// Every file a section offers the export, in section order: the
 /// included config files, repo files, GPG keys, firewall zones and
-/// drop-ins at their own paths; the scheduled section's units under
-/// `/etc/systemd/system`; the kargs file at [`KARGS_PATH`]; and the
-/// flatpak provisioning service.
+/// drop-ins at their own paths; the units the scheduled section generates
+/// from cron entries, under `/etc/systemd/system`; the kargs file at
+/// [`KARGS_PATH`]; and the flatpak provisioning service.
 ///
-/// Local timers are offered whatever their disposition, as the stager has
-/// always written them: the scheduled section does not own their files
-/// (§ 8), a config entry or drop-in row records the same file, and the
-/// offer yields to theirs in [`staged_writes`].
+/// A local timer's files are not offered here: each is a config entry, or
+/// a drop-in row when it shadows a vendor timer, and its row is its one
+/// control (§ 8).
 fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
     let mut out = Vec::new();
     if let Some(config) = &snap.config {
@@ -649,7 +644,7 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
         );
     }
     if let Some(st) = &snap.scheduled_tasks {
-        use StagedFileKind::{GeneratedUnit, LocalTimerUnit};
+        use StagedFileKind::GeneratedUnit;
         for u in st
             .generated_timer_units
             .iter()
@@ -666,20 +661,6 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
                 &u.name,
                 "service",
                 &u.service_content,
-            ));
-        }
-        for t in st.systemd_timers.iter().filter(|t| t.source == "local") {
-            out.extend(Offer::scheduled_unit(
-                LocalTimerUnit,
-                &t.name,
-                "timer",
-                &t.timer_content,
-            ));
-            out.extend(Offer::scheduled_unit(
-                LocalTimerUnit,
-                &t.name,
-                "service",
-                &t.service_content,
             ));
         }
     }
@@ -716,10 +697,10 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 /// 2. A config entry at a destination another section carries
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
-/// 3. Interim: where a local timer offers a file, a generated unit at the
-///    same destination is not written, so the host's own timer is never
-///    replaced. The local timer's file yields to a collected offer (config
-///    entry or drop-in row) at its destination, never to a generated one.
+/// 3. Interim: where a config entry or a drop-in row with content is
+///    offered, a generated unit at the same destination is not written,
+///    so the host's own unit file is never replaced by a generated one. A
+///    zero-length file there is a mask, not a unit file (rule 6).
 /// 4. A file two sections record: the config walk and the repo, GPG key
 ///    or firewall inventory record one host file twice. Where a config
 ///    entry is offered at the destination, the repo file, GPG key or
@@ -771,23 +752,18 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     }
 
     for offered in by_dest.values_mut() {
-        // Interim, removed together with the scheduled section's
-        // local-timer writer (§ 8). Where the host has its own timer file,
-        // a generated unit of that name is not written: it would be
-        // written over the host's file, or, beside a drop-in row, copied
-        // over it later in the Containerfile. The local timer's file then
-        // yields to the config entry or drop-in row that records the same
-        // host file, and never to a generated offer.
-        if offered
-            .iter()
-            .any(|(kind, _)| *kind == StagedFileKind::LocalTimerUnit)
-        {
+        // Interim, replaced by the generated-name collision rule (§ 10.2).
+        // Where the host has its own unit file, recorded by a config entry
+        // or a drop-in row with content, a generated unit of that name is
+        // not written: it would be written over the host's file, or, beside
+        // a drop-in row, copied over it later in the Containerfile. The
+        // host's own timer kept this protection while the scheduled section
+        // offered it; its config entry or drop-in row now carries it.
+        if offered.iter().any(|(kind, content)| {
+            matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn)
+                && !content.is_empty()
+        }) {
             offered.retain(|(kind, _)| *kind != StagedFileKind::GeneratedUnit);
-            if offered.iter().any(|(kind, _)| {
-                *kind != StagedFileKind::LocalTimerUnit && !kind.is_generated_unit()
-            }) {
-                offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
-            }
         }
         // The rule for a file two sections record: the repo, GPG key and
         // firewall inventories keep one representative payload per path in
@@ -1561,13 +1537,6 @@ mod tests {
                     ..Default::default()
                 },
             ],
-            systemd_timers: vec![SystemdTimer {
-                name: "../../../../../victim/local".into(),
-                source: "local".into(),
-                timer_content: "PWNED".into(),
-                service_content: "PWNED".into(),
-                ..Default::default()
-            }],
             ..Default::default()
         });
         snap.containers = Some(ContainerSection {
@@ -1635,31 +1604,50 @@ mod tests {
         );
     }
 
+    /// A local timer's description writes nothing: its files are config
+    /// entries, written on their own rows (§ 8). Control: the same files as
+    /// included config entries are written.
     #[test]
-    fn test_config_tree_local_systemd_timers() {
+    fn a_local_timer_description_writes_no_file() {
+        let timer = SystemdTimer {
+            name: "myjob".to_string(),
+            source: "local".to_string(),
+            path: "etc/systemd/system/myjob.timer".to_string(),
+            on_calendar: "daily".to_string(),
+            exec_start: "/usr/local/bin/myjob".to_string(),
+            ..Default::default()
+        };
         let mut snap = InspectionSnapshot::new();
         snap.scheduled_tasks = Some(ScheduledTaskSection {
-            systemd_timers: vec![SystemdTimer {
-                name: "myjob".to_string(),
-                source: "local".to_string(),
-                timer_content: "[Timer]\nOnCalendar=daily".to_string(),
-                service_content: "[Service]\nExecStart=/usr/local/bin/myjob".to_string(),
-                ..Default::default()
-            }],
+            systemd_timers: vec![timer],
             ..Default::default()
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(
-            dir.path()
-                .join("config/etc/systemd/system/myjob.timer")
-                .exists()
-        );
-        assert!(
-            dir.path()
-                .join("config/etc/systemd/system/myjob.service")
-                .exists()
-        );
+        assert!(!dir.path().join("config/etc/systemd/system").exists());
+
+        snap.config = Some(ConfigSection {
+            files: ["myjob.timer", "myjob.service"]
+                .into_iter()
+                .map(|file| ConfigFileEntry {
+                    path: format!("/etc/systemd/system/{file}"),
+                    content: "[Unit]\n".to_string(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                })
+                .collect(),
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        for file in ["myjob.timer", "myjob.service"] {
+            assert!(
+                dir.path()
+                    .join("config/etc/systemd/system")
+                    .join(file)
+                    .is_file(),
+                "{file}"
+            );
+        }
     }
 
     #[test]

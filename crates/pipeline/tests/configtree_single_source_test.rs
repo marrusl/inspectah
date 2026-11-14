@@ -531,8 +531,8 @@ fn a_write_into_a_read_only_directory_fails_the_export() {
 /// A local timer whose file a drop-in row carries (an administrator's copy
 /// of a vendor timer): the file is staged under `drop-ins/` and nothing is
 /// written under `config/etc/systemd/system/`, so the scheduled section
-/// does not copy that directory. Reversed control: without the drop-in
-/// row the local timer's file is written there and the `COPY` is present.
+/// does not copy that directory. Reversed control: a generated unit is
+/// written there and the `COPY` is present.
 #[test]
 fn the_scheduled_copy_follows_what_the_export_writes() {
     use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
@@ -544,8 +544,7 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
                 name: "backup".into(),
                 source: "local".into(),
                 path: TIMER.into(),
-                timer_content: BODY.into(),
-                disposition: FindingKind::included(),
+                on_calendar: "daily".into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -565,9 +564,12 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
         "a COPY of a directory the export did not write:\n{containerfile}"
     );
 
-    let snap = with_timer(staged_snapshot(vec![], vec![]));
+    let snap = with_generated(
+        staged_snapshot(vec![], vec![drop_in("backup.timer", TIMER, BODY)]),
+        &[(GENERATED_TIMER, GENERATED_SERVICE)],
+    );
     let (dir, containerfile) = export(&snap);
-    assert!(dir.path().join("config").join(&TIMER[1..]).is_file());
+    assert!(dir.path().join("config").join(&CRON_TIMER[1..]).is_file());
     assert!(containerfile.contains(SCHEDULED_COPY), "{containerfile}");
 }
 
@@ -678,8 +680,9 @@ const GENERATED_SERVICE: &str = "[Service]\nExecStart=/bin/true\n";
 const HOST_TIMER: &str = "[Timer]\nOnCalendar=weekly\n";
 const HOST_SERVICE: &str = "[Service]\nExecStart=/usr/local/bin/backup\n";
 
-/// The `source: "local"` row the collector records for every timer in
-/// `/etc/systemd/system`, here the host's own `cron-backup` pair.
+/// The `source: "local"` description the collector records for every timer
+/// in `/etc/systemd/system`, here the host's own `cron-backup` timer. It
+/// controls nothing and writes nothing (§ 8).
 fn with_host_timer(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     use inspectah_core::types::scheduled::SystemdTimer;
     snap.scheduled_tasks
@@ -689,28 +692,26 @@ fn with_host_timer(mut snap: InspectionSnapshot) -> InspectionSnapshot {
             name: "cron-backup".into(),
             source: "local".into(),
             path: CRON_TIMER[1..].into(),
-            timer_content: HOST_TIMER.into(),
-            service_content: HOST_SERVICE.into(),
-            disposition: FindingKind::included(),
+            on_calendar: "weekly".into(),
+            exec_start: "/usr/local/bin/backup".into(),
             ..Default::default()
         });
     snap
 }
 
-/// A generated cron timer named like the host's own timer never replaces
-/// it: whatever records the host's file (the local row, with or without a
-/// config entry or a drop-in row), the host's content is what the export
-/// stages, nothing is withheld, and the enable names a file a `COPY`
-/// carries. A config entry with no local row (a scan records a local row
-/// for every timer file, so this is a hand-built case) keeps the earlier
-/// result: the generated file is written over it. Control: with no host
-/// file of that name, the generated content lands.
+/// A generated cron unit named like a file the host has never replaces it:
+/// where a config entry or a drop-in row records the host's file, the
+/// host's content is what the export stages, nothing is withheld, and the
+/// enable names a file a `COPY` carries. Each file is decided on its own:
+/// with only the timer's config entry, the generated service lands. The
+/// timer's description records no file, so with it alone the generated
+/// pair lands, as it does with no host file of that name (the control).
 #[test]
 fn a_generated_timer_never_replaces_the_hosts_own_timer() {
     let generated = &[(GENERATED_TIMER, GENERATED_SERVICE)];
     for (label, snap, timer_root, timer, service, copy) in [
         (
-            "config entries and the local row, as a scan records them",
+            "config entries and the description, as a scan records them",
             with_host_timer(with_generated(
                 staged_snapshot(
                     vec![
@@ -727,18 +728,10 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             SCHEDULED_COPY,
         ),
         (
-            "the local row alone",
-            with_host_timer(with_generated(staged_snapshot(vec![], vec![]), generated)),
-            "config",
-            HOST_TIMER,
-            HOST_SERVICE,
-            SCHEDULED_COPY,
-        ),
-        (
-            "a drop-in row and the local row",
+            "a drop-in row and the service's config entry",
             with_host_timer(with_generated(
                 staged_snapshot(
-                    vec![],
+                    vec![config_entry(CRON_SERVICE, HOST_SERVICE)],
                     vec![drop_in("cron-backup.timer", CRON_TIMER, HOST_TIMER)],
                 ),
                 generated,
@@ -749,11 +742,19 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             DROP_INS_COPY,
         ),
         (
-            "a config entry with no local row",
+            "the timer's config entry alone",
             with_generated(
                 staged_snapshot(vec![config_entry(CRON_TIMER, HOST_TIMER)], vec![]),
                 generated,
             ),
+            "config",
+            HOST_TIMER,
+            GENERATED_SERVICE,
+            SCHEDULED_COPY,
+        ),
+        (
+            "the description alone",
+            with_host_timer(with_generated(staged_snapshot(vec![], vec![]), generated)),
             "config",
             GENERATED_TIMER,
             GENERATED_SERVICE,
@@ -1018,12 +1019,13 @@ fn a_file_two_sections_record_with_one_content_is_written_once() {
     }
 }
 
-/// A local timer's file is also recorded by a config entry, or by a
-/// drop-in row when it shadows a vendor timer. The collected content is
-/// written and nothing is withheld, even where the scheduled section's
-/// copy differs. Control: the local timer alone is written.
+/// A local timer's file is written from the row that records it, a config
+/// entry or a drop-in row when it shadows a vendor timer, and from nothing
+/// else (§ 8): with that row excluded, or with the timer's description
+/// alone, nothing is written at its path. Control: the included row's
+/// content lands.
 #[test]
-fn a_local_timer_yields_to_the_collected_record_of_its_file() {
+fn a_local_timers_file_is_written_from_its_own_row_only() {
     use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
     const TIMER: &str = "/etc/systemd/system/report.timer";
     const COLLECTED: &str = "[Timer]\nOnCalendar=daily\n";
@@ -1033,12 +1035,24 @@ fn a_local_timer_yields_to_the_collected_record_of_its_file() {
                 name: "report".into(),
                 source: "local".into(),
                 path: TIMER.into(),
-                timer_content: "[Timer]\nOnCalendar=weekly\n".into(),
-                disposition: FindingKind::included(),
+                on_calendar: "daily".into(),
                 ..Default::default()
             }],
             ..Default::default()
         });
+        snap
+    };
+    let excluded = |mut snap: InspectionSnapshot| {
+        if let Some(config) = snap.config.as_mut() {
+            for f in &mut config.files {
+                f.disposition = FindingKind::excluded();
+            }
+        }
+        if let Some(units) = snap.units.as_mut() {
+            for d in &mut units.drop_ins {
+                d.disposition = FindingKind::excluded();
+            }
+        }
         snap
     };
 
@@ -1068,14 +1082,23 @@ fn a_local_timer_yields_to_the_collected_record_of_its_file() {
             COLLECTED,
             "{label}"
         );
+
+        let (dir, _) = export(&excluded(snap));
+        for tree in ["config", "drop-ins"] {
+            assert!(
+                !dir.path().join(tree).join(&TIMER[1..]).exists(),
+                "{label} excluded: written under {tree}/"
+            );
+        }
     }
 
-    let snap = with_timer(staged_snapshot(vec![], vec![]));
-    let (dir, _) = export(&snap);
-    assert_eq!(
-        std::fs::read_to_string(dir.path().join("config").join(&TIMER[1..])).unwrap(),
-        "[Timer]\nOnCalendar=weekly\n"
-    );
+    let (dir, _) = export(&with_timer(staged_snapshot(vec![], vec![])));
+    for tree in ["config", "drop-ins"] {
+        assert!(
+            !dir.path().join(tree).join(&TIMER[1..]).exists(),
+            "the description alone: written under {tree}/"
+        );
+    }
 }
 
 /// A write that does not land fails the export without needing

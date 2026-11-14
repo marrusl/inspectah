@@ -3,10 +3,10 @@
 //! A [`UnitHost`] describes a host's units as `systemctl list-unit-files`
 //! lists them, its preset rules, the unit files under `/etc/systemd/system`
 //! and the vendor directory, any other file under `/etc`, and who owns
-//! each vendor file. [`scan`] runs the real RPM, config and units
-//! inspectors over it through the scan command's own calls (`collect()`,
-//! `validate`, `redact`), and the remaining functions carry the snapshot to
-//! every later surface: a JSON reload, the rendered export, a refine
+//! each vendor file. [`scan`] runs the real RPM, config, units and
+//! scheduled-task inspectors over it through the scan command's own calls
+//! (`collect()`, `validate`, `redact`), and the remaining functions carry
+//! the snapshot to every later surface: a JSON reload, the rendered export, a refine
 //! session loaded from the scan tarball, and that session's export.
 //!
 //! Shared by `crates/cli/tests` and, through `#[path]`, by other test
@@ -24,6 +24,7 @@ use std::sync::atomic::AtomicBool;
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -402,7 +403,8 @@ fn pkg_source() -> SourceSystem {
 }
 
 /// `collect()` then `validate`: the scan command's first two calls, with
-/// the RPM, config and units inspectors. The snapshot is not redacted yet.
+/// the RPM, config, units and scheduled-task inspectors. The snapshot is
+/// not redacted yet.
 pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
     let baseline = (!host.base_packages.is_empty()).then(|| BaselineData {
         image_digest: "sha256:0000".into(),
@@ -429,6 +431,7 @@ pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
         Box::new(RpmInspector::new()),
         Box::new(ConfigInspector::new()),
         Box::new(UnitsInspector::new()),
+        Box::new(ScheduledTasksInspector::new()),
     ];
     let collected = collect(
         &pkg_source(),

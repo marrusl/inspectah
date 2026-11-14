@@ -1,11 +1,11 @@
 //! The units section through the scan path, on collector-built hosts.
 //!
-//! Every test here runs the real RPM, config and units inspectors over a
-//! [`UnitHost`] through the scan command's own calls (`collect()`, then
-//! `validate`, then `redact`), and follows the snapshot to the surface it
-//! asserts on: the rendered export, a refine session, or that session's
-//! export. A hand-built `UnitSection` would be free to encode a layout the
-//! collectors cannot produce.
+//! Every test here runs the real RPM, config, units and scheduled-task
+//! inspectors over a [`UnitHost`] through the scan command's own calls
+//! (`collect()`, then `validate`, then `redact`), and follows the snapshot
+//! to the surface it asserts on: the rendered export, a refine session, or
+//! that session's export. A hand-built `UnitSection` would be free to
+//! encode a layout the collectors cannot produce.
 
 #[path = "support/unit_hosts.rs"]
 mod unit_hosts;
@@ -4068,4 +4068,336 @@ fn an_aggregate_row_shows_the_merged_exports_reason() {
         "mask",
         UNIT
     ));
+}
+
+// ---------------------------------------------------------------------
+// § 8: one control per fact for a local timer (T19).
+// ---------------------------------------------------------------------
+
+const REPORT_TIMER: &str = "/etc/systemd/system/report.timer";
+const REPORT_SERVICE: &str = "/etc/systemd/system/report.service";
+const SCHEDULED_SECTION: &str = "# === Scheduled Tasks ===";
+
+/// A host with the administrator's own `report.timer` in `state` and the
+/// `report.service` it starts, both under `/etc/systemd/system` and owned
+/// by no package.
+fn t19_host(state: &str) -> UnitHost {
+    UnitHost::new()
+        .unit("report.timer", state)
+        .unit("report.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "report.timer",
+            "[Unit]\nDescription=Nightly report\n[Timer]\nOnCalendar=daily\n\
+             [Install]\nWantedBy=timers.target\n",
+        )
+        .etc_unit(
+            "report.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/report\n",
+        )
+}
+
+/// Every file under `dir` named `name`, in any tree of the export.
+fn files_named(dir: &std::path::Path, name: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(&path).expect("the export lists") {
+                pending.push(entry.expect("an entry").path());
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            found.push(path.display().to_string());
+        }
+    }
+    found
+}
+
+/// Whether any instruction of `containerfile`, comments aside, names
+/// `needle`: a `systemctl` line, a `COPY` of the one file or a heredoc
+/// that writes it.
+fn named_by_an_instruction(containerfile: &str, needle: &str) -> bool {
+    containerfile
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .any(|l| l.contains(needle))
+}
+
+/// The scheduled tasks section's lines, without its header.
+fn scheduled_lines(containerfile: &str) -> Vec<String> {
+    containerfile
+        .lines()
+        .skip_while(|l| *l != SCHEDULED_SECTION)
+        .skip(1)
+        .take_while(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// T19: a local timer, `disabled`, and its paired service. Presence first:
+/// the scheduled section describes the timer, each file is an included
+/// config entry, and the timer is in the inventory with no state change.
+/// No instruction names the timer. Excluding the timer's config row
+/// removes the timer file and leaves the service file, whose row is still
+/// included; excluding that row too leaves neither. Each file is found in
+/// no tree of the export once its row is excluded, so no other writer
+/// restores it.
+#[test]
+fn t19_a_disabled_local_timer_stays_disabled() {
+    let snap = scan(t19_host("disabled"));
+    let timers = &snap
+        .scheduled_tasks
+        .as_ref()
+        .expect("a scheduled section")
+        .systemd_timers;
+    assert!(
+        timers
+            .iter()
+            .any(|t| t.name == "report" && t.source == "local"),
+        "{timers:?}"
+    );
+    let config = &snap.config.as_ref().expect("a config section").files;
+    for path in [REPORT_TIMER, REPORT_SERVICE] {
+        assert!(
+            config
+                .iter()
+                .any(|f| f.path == path && f.disposition.is_included()),
+            "{path} is an included config entry"
+        );
+    }
+    let units = snap.units.as_ref().expect("a units section");
+    assert!(
+        units
+            .inventory
+            .iter()
+            .any(|e| e.unit.as_str() == "report.timer" && e.state == UnitState::Disabled),
+        "{:?}",
+        units.inventory
+    );
+    assert!(
+        units
+            .state_changes
+            .iter()
+            .all(|c| c.unit().name().as_str() != "report.timer"),
+        "{:?}",
+        units.state_changes
+    );
+
+    for (label, ops, timer_staged, service_staged) in [
+        ("no toggle", vec![], true, true),
+        (
+            "timer row excluded",
+            vec![(config_item(REPORT_TIMER), false)],
+            false,
+            true,
+        ),
+        (
+            "both rows excluded",
+            vec![
+                (config_item(REPORT_TIMER), false),
+                (config_item(REPORT_SERVICE), false),
+            ],
+            false,
+            false,
+        ),
+    ] {
+        let tree = exported_after(&snap, &ops);
+        let containerfile = containerfile_in(&tree);
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "report.timer"),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            scheduled_lines(&containerfile)
+                .iter()
+                .all(|l| !l.contains("systemctl")),
+            "{label}: the scheduled section writes no systemctl line:\n{containerfile}"
+        );
+        for (name, staged) in [
+            ("report.timer", timer_staged),
+            ("report.service", service_staged),
+        ] {
+            let found = files_named(tree.path(), name);
+            if staged {
+                assert_eq!(found.len(), 1, "{label}, {name}: {found:?}");
+                assert!(
+                    found[0].contains("/config/etc/systemd/system/"),
+                    "{found:?}"
+                );
+            } else {
+                assert!(found.is_empty(), "{label}, {name}: {found:?}");
+                assert!(
+                    !named_by_an_instruction(&containerfile, name),
+                    "{label}, {name}:\n{containerfile}"
+                );
+            }
+        }
+    }
+}
+
+/// T19's positive control: the same timer `enabled` is a state change, and
+/// its enable comes from the unit state section, not the scheduled one.
+/// With its file excluded, the enable is omitted with the stated reason
+/// (§ 8, the single-control rule) and nothing else enables it.
+#[test]
+fn t19_an_enabled_local_timer_is_enabled_from_the_unit_state_section() {
+    let snap = scan(t19_host("enabled"));
+    assert!(
+        matches!(
+            fragment_of(&snap, "report.timer"),
+            UnitFragment::Local { .. }
+        ),
+        "{:?}",
+        fragment_of(&snap, "report.timer")
+    );
+    let containerfile = containerfile_in(&render_export(&snap));
+    assert!(
+        acts(&containerfile, "enable", "report.timer"),
+        "{containerfile}"
+    );
+    assert!(
+        unit_lines(&containerfile)
+            .iter()
+            .any(|l| l.contains("'report.timer'")),
+        "{containerfile}"
+    );
+    assert!(
+        scheduled_lines(&containerfile)
+            .iter()
+            .all(|l| !l.contains("systemctl")),
+        "{containerfile}"
+    );
+
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(REPORT_TIMER), false)],
+    ));
+    assert!(
+        in_no_systemctl_instruction(&excluded, "report.timer"),
+        "{excluded}"
+    );
+    assert!(
+        omitted(&excluded, "report.timer").is_some_and(|l| l.ends_with(NOT_STAGED)),
+        "{excluded}"
+    );
+}
+
+/// A vendor timer with a full copy under `/etc`, in `state` against the
+/// opposite preset.
+fn shadowed_timer_host(state: &str, preset: &str) -> UnitHost {
+    UnitHost::new()
+        .unit("site.timer", state)
+        .preset(&format!("{preset} site.timer"))
+        .vendor_unit(
+            "site.timer",
+            "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
+            Some("sitepkg"),
+        )
+        .etc_unit(
+            "site.timer",
+            "[Timer]\nOnCalendar=hourly\n[Install]\nWantedBy=timers.target\n",
+        )
+}
+
+/// A timer's full shadow is a drop-in row like any ordinary unit's (§ 7.7),
+/// so excluding it declines the timer's command, `disable` as well as
+/// `enable`, where before the scheduled section staged the file whatever
+/// the row said. Presence first: the scan carries the command, the shadow
+/// row exists and the config entry at its path is inventory. Restoring
+/// the row restores the command.
+#[test]
+fn a_shadowed_timer_whose_shadow_is_excluded_gets_no_command() {
+    let path = etc_path("site.timer");
+    for (state, preset, verb) in [
+        ("enabled", "disable", "enable"),
+        ("disabled", "enable", "disable"),
+    ] {
+        let snap = scan(shadowed_timer_host(state, preset));
+        assert!(
+            matches!(
+                fragment_of(&snap, "site.timer"),
+                UnitFragment::Shadowed { .. }
+            ),
+            "{verb}: {:?}",
+            fragment_of(&snap, "site.timer")
+        );
+        let units = snap.units.as_ref().expect("a units section");
+        assert!(
+            units.drop_ins.iter().any(|d| d.path == path),
+            "{verb}: {:?}",
+            units.drop_ins
+        );
+        let entry = snap
+            .config
+            .as_ref()
+            .and_then(|c| c.files.iter().find(|f| f.path == path))
+            .expect("a config entry at the shadow's path");
+        assert!(entry.disposition.is_inventory(), "{verb}: {entry:?}");
+        let scanned = containerfile_in(&render_export(&snap));
+        assert!(acts(&scanned, verb, "site.timer"), "{verb}:\n{scanned}");
+
+        let shadow = ItemId::DropIn { path: path.clone() };
+        let excluded = exported_after(&snap, &[(shadow.clone(), false)]);
+        let containerfile = containerfile_in(&excluded);
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "site.timer"),
+            "{verb}:\n{containerfile}"
+        );
+        assert!(
+            omitted(&containerfile, "site.timer")
+                .is_some_and(|l| l.ends_with(&evidence_changed(&path))),
+            "{verb}:\n{containerfile}"
+        );
+        assert!(
+            files_named(excluded.path(), "site.timer").is_empty(),
+            "{verb}: no other writer stages the file"
+        );
+
+        let restored = containerfile_in(&exported_after(
+            &snap,
+            &[(shadow.clone(), false), (shadow, true)],
+        ));
+        assert!(acts(&restored, verb, "site.timer"), "{verb}:\n{restored}");
+    }
+}
+
+/// § 10.4 holds for a runtime updater timer under `/etc`, local or a full
+/// shadow of the vendor one: the row is excluded by default with the
+/// stated reason, and no instruction names it, where before the scheduled
+/// section enabled every local timer itself. Including the row yields the
+/// enable (the control).
+#[test]
+fn a_local_or_shadowed_updater_timer_keeps_the_updater_default() {
+    const UPDATER: &str = "dnf-automatic.timer";
+    const BODY: &str = "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n";
+    let local = UnitHost::new()
+        .unit(UPDATER, "enabled")
+        .preset("disable *")
+        .etc_unit(UPDATER, BODY);
+    let shadowed = UnitHost::new()
+        .unit(UPDATER, "enabled")
+        .preset("disable *")
+        .vendor_unit(UPDATER, BODY, Some("dnf-automatic"))
+        .etc_unit(
+            UPDATER,
+            "[Timer]\nOnCalendar=hourly\n[Install]\nWantedBy=timers.target\n",
+        );
+    for (label, host) in [("local", local), ("shadowed", shadowed)] {
+        let snap = scan(host);
+        let row = change(&snap, UPDATER);
+        assert!(!row.disposition.is_included(), "{label}: {row:?}");
+        let containerfile = containerfile_in(&render_export(&snap));
+        assert_eq!(
+            omitted(&containerfile, UPDATER),
+            Some(updater_omitted(UPDATER).as_str()),
+            "{label}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UPDATER),
+            "{label}:\n{containerfile}"
+        );
+
+        let included = containerfile_in(&exported_after(&snap, &[(unit_item(UPDATER), true)]));
+        assert!(acts(&included, "enable", UPDATER), "{label}:\n{included}");
+    }
 }
