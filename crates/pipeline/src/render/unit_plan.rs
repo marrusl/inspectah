@@ -615,7 +615,12 @@ fn normal_mount_point(mount_point: &str) -> String {
 ///   drop-in, or on a line continued with a trailing `\`, is not seen, and
 ///   such a unit still gets the line.
 /// - The `To carry it` line, for an enabled or masked unit, except a
-///   masked `tmp.mount` (§ 10.3).
+///   masked `tmp.mount` (§ 10.3), and except where the advisory itself
+///   rules the recipe out: an enabled unit given the `/var` rename line
+///   (the two cannot both be followed), and a masked unit whose file is
+///   staged at its name (`systemctl mask` fails on the occupied path,
+///   § 10.2 rule 4). These two exceptions go beyond § 10.6's table, which
+///   conditions the line on the state alone.
 pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_>) -> Vec<String> {
     let name = finding.unit.name();
     let unit = name.as_unit_name();
@@ -635,6 +640,7 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
         .as_deref()
         .filter(|_| !masked)
         .map(normal_mount_point);
+    let mut renamed = false;
     if let Some(path) = mount_point.as_deref() {
         if is_or_is_under(path, IMAGE_USR) {
             lines.push(format!(
@@ -655,6 +661,7 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
                  be renamed for the resolved path (for /srv: var-srv.mount with \
                  Where=/var/srv)."
             ));
+            renamed = true;
         }
         if let Some(top) = BASE_IMAGE_DIRECTORIES
             .iter()
@@ -680,10 +687,13 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
     if nofail_read && !masked && !finding.nofail {
         lines.push(MOUNT_NO_NOFAIL.to_owned());
     }
+    // A recipe that its own advisory rules out is not given: a unit told
+    // to be renamed is not enabled under its old name, and a mask cannot
+    // be made where the export stages a unit file of that name.
     let verb = match state {
-        Some(UnitState::Enabled) => Some(UnitAction::Enable),
-        Some(UnitState::Masked) if !is_tmp_mount => Some(UnitAction::Mask),
-        Some(UnitState::Masked | UnitState::Disabled) | None => None,
+        Some(UnitState::Enabled) if !renamed => Some(UnitAction::Enable),
+        Some(UnitState::Masked) if !is_tmp_mount && !file_staged => Some(UnitAction::Mask),
+        Some(UnitState::Enabled | UnitState::Masked | UnitState::Disabled) | None => None,
     };
     if let Some(verb) = verb {
         lines.push(format!(

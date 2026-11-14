@@ -2576,7 +2576,9 @@ fn shadowed(unit: &str) -> UnitFragment {
 /// without it. A masked finding gets no layout line and no `nofail` line, since a
 /// masked unit does not mount; a mount unit with no mount point (its file
 /// was not read) gets no `nofail` line. Layout lines match the mount point
-/// in its normal form.
+/// in its normal form. A finding told to rename its unit for `/var` gets
+/// no recipe under its old name, while one whose mount point needs no
+/// rename keeps it.
 #[test]
 fn mount_advisory_lines_follow_the_table() {
     use UnitState::{Disabled, Enabled, Masked};
@@ -2597,7 +2599,6 @@ fn mount_advisory_lines_follow_the_table() {
                 advisory_fact("srv.mount", "enabled"),
                 var_symlink_line("/srv"),
                 NOFAIL_LINE.into(),
-                carry_line("enable", "srv.mount"),
             ],
         ),
         (
@@ -2611,7 +2612,6 @@ fn mount_advisory_lines_follow_the_table() {
             vec![
                 advisory_fact("home-alice.mount", "enabled"),
                 var_symlink_line("/home"),
-                carry_line("enable", "home-alice.mount"),
             ],
         ),
         (
@@ -2723,7 +2723,6 @@ fn mount_advisory_lines_follow_the_table() {
             vec![
                 advisory_fact("srv-data.automount", "enabled"),
                 var_symlink_line("/srv"),
-                carry_line("enable", "srv-data.automount"),
             ],
         ),
         (
@@ -2781,7 +2780,6 @@ fn mount_advisory_lines_follow_the_table() {
                 advisory_fact("data.mount", "enabled"),
                 var_symlink_line("/srv"),
                 NOFAIL_LINE.into(),
-                carry_line("enable", "data.mount"),
             ],
         ),
         (
@@ -2885,7 +2883,6 @@ fn mount_advisory_lines_follow_the_table() {
             vec![
                 advisory_fact("srv-data.mount", "enabled"),
                 var_symlink_line("/srv"),
-                carry_line("enable", "srv-data.mount"),
             ],
         ),
         (
@@ -3017,7 +3014,6 @@ fn mount_advisory_lines_follow_the_table() {
             FILE_STAGED_LINE.into(),
             var_symlink_line("/srv"),
             NOFAIL_LINE.into(),
-            carry_line("enable", "srv.mount"),
         ]
     );
     assert_eq!(
@@ -3036,6 +3032,33 @@ fn mount_advisory_lines_follow_the_table() {
             NOFAIL_LINE.into(),
         ],
         "tmp.mount, file not staged"
+    );
+
+    // A masked finding beside a staged unit file of its name (a fleet
+    // aggregate: one host masked it, another wrote it): `systemctl mask`
+    // fails on the occupied path, so no mask recipe. The reversed control
+    // is the masked `data.mount` row above, with no file staged, which
+    // keeps its recipe.
+    let masked = mount_finding(
+        "data.mount",
+        unowned("data.mount"),
+        Some(Masked),
+        Some("/srv/data"),
+        false,
+    );
+    let data_staged = units_snapshot(
+        vec![],
+        vec![(
+            "/etc/systemd/system/data.mount",
+            "[Mount]\nWhere=/srv/data\n",
+        )],
+    );
+    assert_eq!(
+        mount_advisory_lines(&masked, &staged_writes(&data_staged)),
+        [
+            advisory_fact("data.mount", "masked"),
+            FILE_STAGED_LINE.into(),
+        ]
     );
 }
 
@@ -3105,7 +3128,6 @@ fn mount_advisories_render_in_the_unit_state_section_after_its_commands() {
         advisory_fact("srv.mount", "enabled"),
         FILE_STAGED_LINE.to_owned(),
         var_symlink_line("/srv"),
-        carry_line("enable", "srv.mount"),
         advisory_fact("old.mount", "disabled"),
     ];
     assert_eq!(render(&snap).lines, expected, "unit_state_lines");
@@ -3161,7 +3183,6 @@ fn an_advisory_alone_makes_a_comment_only_unit_state_section() {
         [
             advisory_fact("srv.mount", "enabled"),
             var_symlink_line("/srv"),
-            carry_line("enable", "srv.mount"),
         ]
     );
     assert!(plan_units(&snap, &staged_writes(&snap)).planned.is_empty());

@@ -2324,7 +2324,6 @@ fn the_readme_explains_carried_unit_states_when_there_are_any() {
             advisory_fact("srv.mount", "enabled"),
             FILE_STAGED_LINE.to_owned(),
             var_symlink_line("/srv"),
-            carry_line("enable", "srv.mount"),
         ],
         "{containerfile}"
     );
@@ -2471,7 +2470,6 @@ fn t9_the_mount_advisory_text_through_the_scan() {
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
                 NOFAIL_LINE.to_owned(),
-                carry_line("enable", "srv.mount"),
             ],
         ),
         (
@@ -2549,11 +2547,7 @@ fn t9_the_file_line_follows_the_config_row() {
             .unit(UNIT, "enabled")
             .etc_unit(UNIT, &mount_file("/srv", Some("nofail"))),
     );
-    let without_file = vec![
-        advisory_fact(UNIT, "enabled"),
-        var_symlink_line("/srv"),
-        carry_line("enable", UNIT),
-    ];
+    let without_file = vec![advisory_fact(UNIT, "enabled"), var_symlink_line("/srv")];
     let mut with_file = without_file.clone();
     with_file.insert(1, FILE_STAGED_LINE.to_owned());
 
@@ -2628,7 +2622,6 @@ fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
                 NOFAIL_LINE.to_owned(),
-                carry_line("enable", "srv-data.mount"),
             ],
         ),
         (
@@ -2637,7 +2630,6 @@ fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
                 advisory_fact("srv-data.automount", "enabled"),
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
-                carry_line("enable", "srv-data.automount"),
             ],
         ),
         (
@@ -2763,8 +2755,9 @@ fn t8_a_tmp_mount_copy_in_etc_gets_the_tmp_mount_line() {
 /// form is withheld, so no file line. A masked unit does not mount, so its
 /// advisory has no layout line and no `nofail` line, though the vendor
 /// file's `Where=` is under `/srv` and it has no `Options=`. A masked
-/// `tmp.mount` gets no `To carry it` line, since § 10.3 refuses that mask.
-/// Controls: the same mask over a package-owned file is a `mask` command
+/// `tmp.mount` gets no `To carry it` line, since § 10.3 refuses that mask,
+/// and an enabled unit under `/srv` none, since it is told to rename
+/// itself. Controls: the same mask over a package-owned file is a `mask` command
 /// and has no advisory; the same unowned unit enabled gets the layout line
 /// and, for a mount or swap, the `nofail` line.
 #[test]
@@ -2793,7 +2786,10 @@ fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
         if has_options {
             expected.push(NOFAIL_LINE.to_owned());
         }
-        expected.push(carry_line("enable", unit));
+        // A unit told to rename itself gets no recipe under its old name.
+        if !under_srv {
+            expected.push(carry_line("enable", unit));
+        }
         let containerfile = containerfile_in(&render_export(&enabled));
         assert_eq!(
             advisory_for(&containerfile, unit),
@@ -3299,6 +3295,61 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
     assert!(omitted(&freed, UNIT).is_none(), "{freed}");
 }
 
+/// A merged mask finding beside another host's administrator file for the
+/// same mount unit: one host masked `data.mount`, the other wrote it. The
+/// merged finding is the first host's mask. While the file's config row is
+/// included, the advisory gives no mask recipe, since `systemctl mask`
+/// fails on the occupied path; excluded (the default, as the file is on
+/// one host of two), the recipe is there. Through `merge_snapshots`, a
+/// refine session and its export.
+#[test]
+fn a_merged_mask_finding_beside_a_staged_file_gets_no_mask_recipe() {
+    const UNIT: &str = "data.mount";
+    let path = etc_path(UNIT);
+    let masked = named(UnitHost::new().unit(UNIT, "masked").mask(UNIT), "host-a");
+    let written = named(
+        UnitHost::new()
+            .unit(UNIT, "enabled")
+            .etc_unit(UNIT, &mount_file("/data", Some("nofail"))),
+        "host-b",
+    );
+    let merged = merged(masked, written);
+    let findings = &merged
+        .units
+        .as_ref()
+        .expect("a units section")
+        .mount_findings;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(
+        findings[0].state_change.map(|(state, _)| state),
+        Some(UnitState::Masked),
+        "the first host's mask"
+    );
+
+    let mut session = session(&merged);
+    let tree = export_session(&session);
+    let containerfile = containerfile_in(&tree);
+    assert!(!staged_at(&tree, &path), "the file starts excluded");
+    assert_eq!(
+        advisory_for(&containerfile, UNIT),
+        [advisory_fact(UNIT, "masked"), carry_line("mask", UNIT)],
+        "{containerfile}"
+    );
+
+    session
+        .apply(set_include(config_item(&path), true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    let containerfile = containerfile_in(&tree);
+    assert!(staged_at(&tree, &path), "the file is staged");
+    assert_eq!(
+        advisory_for(&containerfile, UNIT),
+        [advisory_fact(UNIT, "masked"), FILE_STAGED_LINE.to_owned()],
+        "{containerfile}"
+    );
+    assert!(only_comments_name(&containerfile, UNIT), "{containerfile}");
+}
+
 /// § 12: two hosts with the same administrator's mount unit merge to one
 /// finding counted on both, and the aggregate's Containerfile shows its
 /// advisory once, on the scan and the refine route. No instruction names
@@ -3332,7 +3383,6 @@ fn an_aggregate_shows_a_shared_mount_advisory_once() {
                 advisory_fact(UNIT, "enabled"),
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
-                carry_line("enable", UNIT),
             ],
             "{route}:\n{containerfile}"
         );
@@ -3420,7 +3470,6 @@ fn a_merged_mount_finding_describes_one_hosts_file_whatever_variant_is_staged() 
                 advisory_fact(UNIT, "enabled"),
                 FILE_STAGED_LINE.to_owned(),
                 var_symlink_line("/srv"),
-                carry_line("enable", UNIT),
             ],
             "{step}: no nofail line, whichever file is staged:\n{containerfile}"
         );

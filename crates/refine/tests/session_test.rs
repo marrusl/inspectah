@@ -3109,9 +3109,7 @@ mod unit_rows {
                      image ships.",
                     "#   /srv is a symlink into /var in the RHEL bootc base image. The unit must \
                      be renamed for the resolved path (for /srv: var-srv.mount with \
-                     Where=/var/srv).",
-                    "#   To carry it, add after the configuration COPY: RUN systemctl enable -- \
-                     'srv.mount'"
+                     Where=/var/srv)."
                 ]
             })
         );
