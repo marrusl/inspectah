@@ -387,6 +387,14 @@ impl StagedFileKind {
         }
     }
 
+    /// Whether the file is an inventory's record of a host file the config
+    /// walk also records: a repo file, a GPG key or a firewall zone. These
+    /// three are the kinds the config walk can record at the same path on a
+    /// host (it excludes none of their directories).
+    fn is_inventory_record(self) -> bool {
+        matches!(self, Self::RepoFile | Self::GpgKey | Self::FirewallZone)
+    }
+
     /// Whether inspectah generates the file rather than collecting it.
     fn is_generated(self) -> bool {
         matches!(self, Self::GeneratedUnit | Self::FlatpakService)
@@ -556,9 +564,13 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
 ///    same destination is not written, so the host's own timer is never
 ///    replaced. The local timer's file yields to a collected offer (config
 ///    entry or drop-in row) at its destination, never to a generated one.
-/// 4. Collected offers at one destination with the same content are one
-///    write: the config walk and the repo, GPG key or firewall inventory
-///    record one host file twice. Collected offers with different
+/// 4. A file two sections record: the config walk and the repo, GPG key
+///    or firewall inventory record one host file twice. Where a config
+///    entry is offered at the destination, the repo file, GPG key or
+///    firewall zone offer yields to it: the config entry's content, in a
+///    fleet aggregate the operator's selected variant, is the write.
+///    Collected offers at one destination with the same content are one
+///    write. Collected offers with different
 ///    contents at one destination, and a destination another offer needs
 ///    as a directory, are a `Conflict`: every file there is withheld, so
 ///    neither silently replaces or blocks the other.
@@ -618,6 +630,18 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
             {
                 offered.retain(|(kind, _)| *kind != StagedFileKind::LocalTimerUnit);
             }
+        }
+        // The rule for a file two sections record: the repo, GPG key and
+        // firewall inventories keep one representative payload per path in
+        // a fleet aggregate, while the config entry keeps the content
+        // variants the operator selects from. The inventory copy yields to
+        // an included config entry, so the selected variant is the write and
+        // the repo file, key or zone stays in the export.
+        if offered
+            .iter()
+            .any(|(kind, _)| *kind == StagedFileKind::ConfigFile)
+        {
+            offered.retain(|(kind, _)| !kind.is_inventory_record());
         }
         // Collected offers with one content are one write.
         let first_collected = offered

@@ -854,7 +854,11 @@ fn two_collected_files_at_a_generated_units_path_are_withheld() {
 
 /// The config walk records an unowned file under `/etc`, and the repo,
 /// GPG key or firewall inventory records the same file again. Same bytes:
-/// one write, nothing withheld. Different bytes: both withheld (control).
+/// one write, nothing withheld. Different bytes (a fleet aggregate keeps
+/// the config entry's variants and one representative inventory row): the
+/// config entry's content is the one write and nothing is withheld. With no
+/// config entry included, the inventory copy is written. Two included
+/// config entries with different content still conflict.
 #[test]
 fn a_file_two_sections_record_with_one_content_is_written_once() {
     use inspectah_core::types::network::{FirewallZone, NetworkSection};
@@ -939,8 +943,63 @@ fn a_file_two_sections_record_with_one_content_is_written_once() {
             );
         }
 
-        // Control: the two records disagree.
+        // The two records disagree: the config entry decides the content.
         let snap = offer(kind, path, body, "changed by hand\n");
+        let staged = staged_writes(&snap);
+        assert!(
+            staged.withheld.is_empty(),
+            "{kind:?}: {:?}",
+            staged.withheld
+        );
+        assert_eq!(
+            staged
+                .writes
+                .get(&dest(path))
+                .map(|w| (w.source, w.content.as_ref())),
+            Some((StagedFileKind::ConfigFile, "changed by hand\n")),
+            "{kind:?}"
+        );
+        let (dir, containerfile) = export(&snap);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config").join(&path[1..])).unwrap(),
+            "changed by hand\n",
+            "{kind:?}"
+        );
+        assert!(
+            fixme_naming(&containerfile, path).is_none(),
+            "{kind:?}:\n{containerfile}"
+        );
+        if kind == StagedFileKind::RepoFile {
+            assert!(
+                containerfile.contains("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/"),
+                "{containerfile}"
+            );
+        }
+
+        // With the config entry excluded, the inventory copy is written.
+        let mut snap = offer(kind, path, body, "changed by hand\n");
+        for f in &mut snap.config.as_mut().unwrap().files {
+            f.disposition = FindingKind::excluded();
+        }
+        let staged = staged_writes(&snap);
+        assert!(staged.withheld.is_empty(), "{kind:?}");
+        assert_eq!(
+            staged
+                .writes
+                .get(&dest(path))
+                .map(|w| (w.source, w.content.as_ref())),
+            Some((kind, body)),
+            "{kind:?}"
+        );
+
+        // Two included config entries that disagree still conflict. The
+        // inventory copy yields to them, so only they are withheld.
+        let mut snap = offer(kind, path, body, "changed by hand\n");
+        snap.config
+            .as_mut()
+            .unwrap()
+            .files
+            .push(config_entry(path, "changed again\n"));
         let staged = staged_writes(&snap);
         assert!(
             staged.writes.is_empty(),
@@ -948,10 +1007,13 @@ fn a_file_two_sections_record_with_one_content_is_written_once() {
             staged.writes.keys()
         );
         assert_eq!(staged.withheld.len(), 2, "{kind:?}: {:?}", staged.withheld);
-        let (dir, _) = export(&snap);
         assert!(
-            !dir.path().join("config").join(&path[1..]).exists(),
-            "{kind:?}"
+            staged
+                .withheld
+                .iter()
+                .all(|(_, k, _)| *k == StagedFileKind::ConfigFile),
+            "{kind:?}: {:?}",
+            staged.withheld
         );
     }
 }
