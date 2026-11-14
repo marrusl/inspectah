@@ -91,7 +91,7 @@ Inputs the spec implies and no T-test names, most likely first. Each has a test 
 
 ## Phase 1: the rename (size M; 7 tasks)
 
-Spec: § 6.1, § 6.4, § 9, § 9.1, § 11.3, § 12 (inventory). Tests T1, T3, T4. Scan behavior is unchanged except the section's name; the collector still asks for services only and a state change keeps `owning_package: Option<String>`.
+Spec: § 6.1, § 6.4, § 9, § 9.1, § 11.3, § 12 (inventory). Tests T1, T3, T4. Scan behavior is unchanged except the snapshot's unit section, and the scan export's Containerfile is unchanged; a refine export no longer writes the `systemctl` line for a unit with a full shadow and no state change of its own. The collector still asks for services only and a state change keeps `owning_package: Option<String>`.
 
 ### Task 1.1: Branch, `UnitName` and the kind enums (Rust lane, S)
 
@@ -200,7 +200,7 @@ Spec: § 6.1, § 6.4, § 9, § 9.1, § 11.3, § 12 (inventory). Tests T1, T3, T4
 - [ ] **CHANGELOG.md**, under `## [Unreleased]`, **Changed**: the snapshot section is `units`, schema 28, version 27 snapshots must be re-scanned; refine no longer shows a state row for a preset-matched unit whose only change is a full shadow.
 - [ ] Gate; commit `docs: record the units rename in the layout and coverage docs`.
 
-**Phase 1 ends:** a scan writes `units` at schema 28 and refuses 27; the Containerfile is unchanged; refine shows a full shadow on its drop-in row only.
+**Phase 1 ends:** a scan writes `units` at schema 28 and refuses 27; the scan export's Containerfile is unchanged, and a refine export no longer writes the `systemctl` line for a unit with a full shadow and no state change of its own; refine shows a full shadow on its drop-in row only.
 
 **Review gate 1:** implementation review of the phase before Task 2.1 starts. Focus: § 9.1 rows each migrated, no string consumer left reading an empty fallback, the T1 payload states why it is refused.
 

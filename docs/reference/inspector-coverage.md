@@ -98,7 +98,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 
 | | |
 |:---|:---|
-| **ID** | `Services` |
+| **ID** | `Units` |
 | **Applies to** | `PackageBased` systems |
 | **Snapshot field** | `units` (`UnitSection`) |
 | **Source** | `inspectors/services.rs` |
@@ -113,7 +113,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | `/etc/systemd/system/*.service.d/*.conf` | Drop-in overrides |
 | `/etc/systemd/system/*.service` against `/usr/lib/systemd/system/` | Full unit shadows |
 
-**What becomes a state change.** The inspector records operator intent only. A masked service is always recorded. An enabled or disabled service is recorded when it differs from its preset. Static, alias, indirect and generated units are dropped silently, and runtime-only or invalid states produce a warning. Template units (names containing `@`) are skipped. Units at their preset state are listed as preset-matched and produce no state change.
+**What becomes a state change.** The inspector records operator intent only. A masked service is always recorded. An enabled or disabled service is recorded when it differs from its preset. Static, alias, indirect and generated units are dropped silently, and runtime-only or invalid states produce a warning. Template units (names containing `@`) are skipped. Units at their preset state produce no state change; like every unit with a durable state, they are recorded in the section's `inventory` with their state and preset.
 
 #### Service shadows
 
@@ -126,7 +126,7 @@ A unit file under `/etc/systemd/system/` can change a service two ways, and the 
 
 Both are Service Drop-ins entries. A full shadow is found whether or not the unit also has a state change, so a unit enabled at its preset (for example `sshd.service`) is still reported. A masked unit is a link to `/dev/null` and matches the full-shadow test as well; it carries no replacement content.
 
-Full shadows that have no state change do not get a service row from the scan. When you open the snapshot in `refine`, the session adds a synthetic state change for each one whose enabled or disabled state is known, so the unit is a toggle target through classify, export and reload. A full shadow with no known state is not synthesized.
+A full shadow that has no state change gets no service row, in the scan or in `refine`. Its decision is its Service Drop-ins row, which carries the shadow badge and explanation and the include toggle for the file. Excluding that row leaves the file out of the export; the export writes no `systemctl` line for the unit.
 
 **One decision per file.** The same path can appear in Configuration Files (from the `/etc` walk) and in Service Drop-ins. The Service Drop-ins row owns the decision. The Configuration Files entry for that path is marked Inventory with the note "controlled in Service Drop-ins", and `refine` refuses to toggle it. This avoids two checkboxes over one file, where one could be on and the other off. Sysctl files need no such handling: the Kernel/Boot inspector records them for its explanation and offers no decision over them.
 

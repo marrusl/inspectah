@@ -414,7 +414,9 @@ cat inspectah-rhel9-refined/Containerfile
 
 The Containerfile is long, so this excerpt keeps the base image, the
 package list, the service steps, and the config copy. Each `...` stands for
-omitted lines; the lines shown are unchanged.
+omitted lines; the lines shown are unchanged. It was recorded with an
+earlier release, whose export also enabled `sshd.service`; Services below
+says what differs now.
 
 ```dockerfile
 FROM registry.redhat.io/rhel9/rhel-bootc:9.8
@@ -473,9 +475,11 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
 - Repositories: the scan tarball's Containerfile installs `epel-release`
   as a repo-enabling package. refine excludes it by default, so the export
   does not install it, and the EPEL repo files still ship.
-- Services: the export also enables `sshd.service`. refine adds an enable
-  for a unit file that fully shadows the vendor unit; you did not decide
-  it.
+- Services: the export enables and masks the same units as the scan
+  tarball's Containerfile. The recorded excerpt above also enables
+  `sshd.service`, because refine used to add an enable for a unit file
+  that fully shadows the vendor unit, although you did not decide it.
+  It no longer does. The export still copies the `sshd.service` unit file.
 
 The rest of the Containerfile covers the Python virtual environments, the npm application, the three
 Quadlet units, the Compose file as a reference, the

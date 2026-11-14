@@ -61,7 +61,7 @@ system did not have the relevant configuration.
 | `quadlet/` | `containers.quadlet_units` has included entries | Quadlet unit files for container workloads. One file per unit. |
 | `flatpak/flatpak-install.json` | `containers.flatpak_apps` has included entries | JSON manifest of Flatpak apps to install. |
 | `flatpak/flatpak-provision.service` | `containers.flatpak_apps` has included entries | Systemd service to provision Flatpak apps on first boot. |
-| `drop-ins/` | `services.drop_ins` has included entries | Systemd service drop-in overrides (e.g., `drop-ins/etc/systemd/system/<unit>.d/override.conf`). |
+| `drop-ins/` | `units.drop_ins` has included entries | Systemd service drop-in overrides (e.g., `drop-ins/etc/systemd/system/<unit>.d/override.conf`). |
 | `tuned/` | `kernel_boot.tuned_include` is true and custom profiles exist | Custom tuned performance profiles. |
 | `subscription/` | `--preserve subscription` used during scan | RHEL subscription material for non-RHEL builds. Contains `entitlement/` (cert/key pairs), `rhsm/ca/` (CA certs), `rhsm/rhsm.conf`, and `redhat.repo`. |
 | `inspectah-users.ks` | `users_groups` has included users or custom groups | Kickstart fragment for user/group provisioning. |

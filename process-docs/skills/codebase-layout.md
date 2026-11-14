@@ -54,7 +54,7 @@ no other workspace crate; `collect` on `core`; `pipeline` on `core` and
 Each module defines the data model for a snapshot section:
 - `rpm.rs` — RPM package types
 - `config.rs` — Modified config file types
-- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`); `UnitName` proves a unit name once and gives its kind, instance and template
+- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`); `UnitName` proves a unit name once and gives its kind, instance and template. `InstanceName::template` builds a `UnitName` without a re-parse, which is sound only because `InstanceName`'s fields are private; any type that feeds an unchecked `UnitName` constructor must have no public fields, so a caller cannot swap in text the parser never checked
 - `containers.rs` — Podman/Docker container types
 - `network.rs`, `storage.rs`, `kernelboot.rs`, `selinux.rs`, `scheduled.rs`, `nonrpm.rs`, `users.rs`
 - `sysctl/`: `KernelBootSection.sysctl`, the sysctl search path as collected (`SysctlSection`, `SysctlDir`, `SysctlKey`); records, decides nothing
@@ -107,7 +107,7 @@ only when the subscription is preserved), and the pipeline runs it through
 Artifact generators invoked after triage decisions finalized:
 - `containerfile.rs` — Containerfile generation
 - `kickstart.rs` — Kickstart file for traditional installs
-- `report.rs`, `report_data.rs` — HTML migration report; one template per section under `crates/pipeline/templates/report/` (`units.html` for the unit section)
+- `report.rs`, `report_data.rs`: HTML migration report; one template per section under `crates/pipeline/templates/report/` (`units.html` for the unit section)
 - `audit.rs` — Audit trail of decisions
 - `sysctl_report.rs`: the sysctl report model (`sysctl_report`) and its fixed copy; the audit, the HTML report and refine's sysctl panel all format it, so they cannot disagree
 - `md_literal.rs`: host values as literal Markdown text (`literal_text`, code spans, table-cell pipe escapes); the HTML report shares `literal_text`
