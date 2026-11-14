@@ -16,12 +16,16 @@ use std::path::Path;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use unit_hosts::{export_session, render_export, session};
 
 const WORKER_UNIT: &str = "/etc/systemd/system/worker.service";
 const WORKER_CHILD: &str = "/etc/systemd/system/worker.service/extra.conf";
 const ZERO_LENGTH_UNIT: &str = "/etc/systemd/system/kdump.service";
 const PLAIN_FILE: &str = "/etc/app/app.conf";
+const DROP_IN: &str = "/etc/systemd/system/sshd.service.d/override.conf";
 
 fn entry(path: &str, content: &str) -> ConfigFileEntry {
     ConfigFileEntry {
@@ -43,10 +47,43 @@ fn snapshot() -> InspectionSnapshot {
             entry(PLAIN_FILE, "a=1\n"),
         ],
     });
+    snap.units = Some(UnitSection {
+        drop_ins: vec![SystemdDropIn {
+            unit: "sshd.service".into(),
+            path: DROP_IN.into(),
+            content: "[Service]\nNice=5\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-backup".into(),
+            timer_content: "[Timer]\nOnCalendar=*-*-* 01:00:00\n".into(),
+            service_content: "[Service]\nExecStart=/bin/true\n".into(),
+            cron_expr: "0 1 * * *".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.example.App".into(),
+            remote: "flathub".into(),
+            remote_url: "https://dl.flathub.org/repo/".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
     snap
 }
 
-/// Every regular file under `config/` and `drop-ins/`, relative to `root`.
+/// Every regular file under `config/`, `drop-ins/` and `flatpak/`,
+/// relative to `root`.
 fn staged_files(root: &Path) -> BTreeSet<String> {
     fn walk(dir: &Path, root: &Path, out: &mut BTreeSet<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -63,20 +100,14 @@ fn staged_files(root: &Path) -> BTreeSet<String> {
         }
     }
     let mut out = BTreeSet::new();
-    for dir in ["config", "drop-ins"] {
+    for dir in ["config", "drop-ins", "flatpak"] {
         walk(&root.join(dir), root, &mut out);
     }
     out
 }
 
-/// The Containerfile's FIXME lines.
-fn fixmes(root: &Path) -> Vec<String> {
-    std::fs::read_to_string(root.join("Containerfile"))
-        .expect("the export has a Containerfile")
-        .lines()
-        .filter(|l| l.starts_with("# FIXME:"))
-        .map(str::to_owned)
-        .collect()
+fn containerfile(root: &Path) -> String {
+    std::fs::read_to_string(root.join("Containerfile")).expect("the export has a Containerfile")
 }
 
 #[test]
@@ -86,20 +117,40 @@ fn the_scan_export_and_the_refine_export_stage_the_same_files() {
     let refine_tree = export_session(&session(&snap));
 
     let staged = staged_files(scan_tree.path());
-    assert_eq!(
-        staged,
-        BTreeSet::from(["config/etc/app/app.conf".to_string()]),
-        "only the file with no conflict and content is staged"
-    );
-    let named = fixmes(scan_tree.path());
+    let expected: BTreeSet<String> = [
+        "config/etc/app/app.conf",
+        "config/etc/systemd/system/cron-backup.service",
+        "config/etc/systemd/system/cron-backup.timer",
+        "drop-ins/etc/systemd/system/sshd.service.d/override.conf",
+        "flatpak/flatpak-install.json",
+        "flatpak/flatpak-provision.service",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(staged, expected, "what the scan export stages");
+
+    let scan_cf = containerfile(scan_tree.path());
     for path in [WORKER_UNIT, WORKER_CHILD, ZERO_LENGTH_UNIT] {
         assert!(
-            named.iter().any(|l| l.contains(path)),
-            "the scan export names {path}: {named:?}"
+            scan_cf
+                .lines()
+                .any(|l| l.starts_with("# FIXME:") && l.contains(path)),
+            "the scan export names {path}:\n{scan_cf}"
         );
     }
-    assert!(!named.iter().any(|l| l.contains(PLAIN_FILE)), "{named:?}");
+    for line in [
+        "COPY drop-ins/etc/systemd/system/ /etc/systemd/system/",
+        "COPY config/etc/systemd/system/ /etc/systemd/system/",
+        "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service",
+    ] {
+        assert!(scan_cf.contains(line), "{line}:\n{scan_cf}");
+    }
 
     assert_eq!(staged_files(refine_tree.path()), staged, "same staged tree");
-    assert_eq!(fixmes(refine_tree.path()), named, "same FIXME lines");
+    assert_eq!(
+        containerfile(refine_tree.path()),
+        scan_cf,
+        "same Containerfile"
+    );
 }

@@ -756,3 +756,186 @@ fn two_collected_files_at_a_generated_units_path_are_withheld() {
         "{fixme}"
     );
 }
+
+// --- The identical-content and local-timer rules -------------------------
+
+/// The config walk records an unowned file under `/etc`, and the repo,
+/// GPG key or firewall inventory records the same file again. Same bytes:
+/// one write, nothing withheld. Different bytes: both withheld (control).
+#[test]
+fn a_file_two_sections_record_with_one_content_is_written_once() {
+    use inspectah_core::types::network::{FirewallZone, NetworkSection};
+    use inspectah_core::types::rpm::{RepoFile, RpmSection};
+    const REPO: &str = "/etc/yum.repos.d/custom.repo";
+    const KEY: &str = "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom";
+    const ZONE: &str = "/etc/firewalld/zones/public.xml";
+
+    let offer = |kind: StagedFileKind, path: &str, content: &str, config: &str| {
+        let mut snap = staged_snapshot(vec![config_entry(path, config)], vec![]);
+        match kind {
+            StagedFileKind::RepoFile | StagedFileKind::GpgKey => {
+                let file = RepoFile {
+                    path: path.into(),
+                    content: content.into(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                };
+                let mut rpm = RpmSection::default();
+                if kind == StagedFileKind::RepoFile {
+                    rpm.repo_files.push(file);
+                } else {
+                    rpm.gpg_keys.push(file);
+                }
+                snap.rpm = Some(rpm);
+            }
+            _ => {
+                snap.network = Some(NetworkSection {
+                    firewall_zones: vec![FirewallZone {
+                        path: path.into(),
+                        name: "public".into(),
+                        content: content.into(),
+                        disposition: FindingKind::included(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+            }
+        }
+        snap
+    };
+
+    for (kind, path, body) in [
+        (
+            StagedFileKind::RepoFile,
+            REPO,
+            "[custom]\nbaseurl=https://repo.example/\n",
+        ),
+        (
+            StagedFileKind::GpgKey,
+            KEY,
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
+        ),
+        (
+            StagedFileKind::FirewallZone,
+            ZONE,
+            "<zone><service name=\"ssh\"/></zone>\n",
+        ),
+    ] {
+        let snap = offer(kind, path, body, body);
+        let staged = staged_writes(&snap);
+        assert!(
+            staged.withheld.is_empty(),
+            "{kind:?}: {:?}",
+            staged.withheld
+        );
+        assert_eq!(staged.writes.len(), 1, "{kind:?}: one write");
+        let (dir, containerfile) = export(&snap);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config").join(&path[1..])).unwrap(),
+            body,
+            "{kind:?}"
+        );
+        assert!(
+            fixme_naming(&containerfile, path).is_none(),
+            "{kind:?}:\n{containerfile}"
+        );
+        if kind == StagedFileKind::RepoFile {
+            assert!(
+                containerfile.contains("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/"),
+                "{containerfile}"
+            );
+        }
+
+        // Control: the two records disagree.
+        let snap = offer(kind, path, body, "changed by hand\n");
+        let staged = staged_writes(&snap);
+        assert!(
+            staged.writes.is_empty(),
+            "{kind:?}: {:?}",
+            staged.writes.keys()
+        );
+        assert_eq!(staged.withheld.len(), 2, "{kind:?}: {:?}", staged.withheld);
+        let (dir, _) = export(&snap);
+        assert!(
+            !dir.path().join("config").join(&path[1..]).exists(),
+            "{kind:?}"
+        );
+    }
+}
+
+/// A local timer's file is also recorded by a config entry, or by a
+/// drop-in row when it shadows a vendor timer. The collected content is
+/// written and nothing is withheld, even where the scheduled section's
+/// copy differs. Control: the local timer alone is written.
+#[test]
+fn a_local_timer_yields_to_the_collected_record_of_its_file() {
+    use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+    const TIMER: &str = "/etc/systemd/system/report.timer";
+    const COLLECTED: &str = "[Timer]\nOnCalendar=daily\n";
+    let with_timer = |mut snap: InspectionSnapshot| {
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            systemd_timers: vec![SystemdTimer {
+                name: "report".into(),
+                source: "local".into(),
+                path: TIMER.into(),
+                timer_content: "[Timer]\nOnCalendar=weekly\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap
+    };
+
+    for (label, snap, root) in [
+        (
+            "config entry",
+            with_timer(staged_snapshot(
+                vec![config_entry(TIMER, COLLECTED)],
+                vec![],
+            )),
+            "config",
+        ),
+        (
+            "drop-in row",
+            with_timer(staged_snapshot(
+                vec![],
+                vec![drop_in("report.timer", TIMER, COLLECTED)],
+            )),
+            "drop-ins",
+        ),
+    ] {
+        let staged = staged_writes(&snap);
+        assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        let (dir, _) = export(&snap);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(root).join(&TIMER[1..])).unwrap(),
+            COLLECTED,
+            "{label}"
+        );
+    }
+
+    let snap = with_timer(staged_snapshot(vec![], vec![]));
+    let (dir, _) = export(&snap);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("config").join(&TIMER[1..])).unwrap(),
+        "[Timer]\nOnCalendar=weekly\n"
+    );
+}
+
+/// A write that does not land fails the export without needing
+/// permissions: a regular file sits where the stager needs a directory.
+#[test]
+fn a_file_where_the_stager_needs_a_directory_fails_the_export() {
+    let snap = staged_snapshot(vec![config_entry("/etc/app/app.conf", "a=1\n")], vec![]);
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("config/etc")).unwrap();
+    std::fs::write(dir.path().join("config/etc/app"), "in the way").unwrap();
+
+    let err = write_config_tree(&snap, dir.path())
+        .expect_err("a write whose parent is a file fails the export");
+    assert!(
+        err.to_string().contains("etc/app"),
+        "the error names the path: {err}"
+    );
+}
