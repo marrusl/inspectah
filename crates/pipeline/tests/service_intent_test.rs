@@ -132,10 +132,8 @@ fn test_service_render_plan_omits_proven_absent_service() {
             Some(PresetDefault::Enable),
             Some("sssd"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -185,10 +183,8 @@ fn test_service_render_plan_emits_package_unreachable_service() {
             Some(PresetDefault::Disable),
             Some("local-tool"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -224,10 +220,8 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
             Some(PresetDefault::Disable),
             None, // no owning package
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -264,10 +258,8 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
             Some(PresetDefault::Disable),
             Some("absent-pkg"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     // Make this unit also a config-tree timer unit
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
@@ -341,10 +333,8 @@ fn test_service_render_plan_proven_present_emits_clean() {
                 Some("httpd"),
             ),
         ],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -385,10 +375,8 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
             Some(PresetDefault::Disable),
             Some("unknown-pkg"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -426,10 +414,8 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
             Some(PresetDefault::Disable),
             Some("advisory-pkg"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
         systemd_timers: vec![inspectah_core::types::scheduled::SystemdTimer {
@@ -483,10 +469,8 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
             Some(PresetDefault::Disable),
             Some("timer-pkg"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
         systemd_timers: vec![inspectah_core::types::scheduled::SystemdTimer {
@@ -557,10 +541,8 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
             Some(PresetDefault::Disable),
             Some("httpd"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -610,10 +592,8 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
             Some(PresetDefault::Disable),
             Some("perl-libs"),
         )],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 
     let plan = render_service_intent(&snap);
@@ -671,10 +651,8 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
                 Some(PresetDefault::Disable),
                 Some("vendor-agent"),
             )],
-            enabled_units: vec![],
-            disabled_units: vec![],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
         snap
     };
@@ -935,10 +913,8 @@ fn test_service_presence_tiers_table() {
                     Some(preset),
                     case.owner,
                 )],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             });
 
             let plan = render_service_intent(&snap);
@@ -1020,10 +996,8 @@ fn leaf_snapshot(
     });
     snap.units = Some(UnitSection {
         state_changes: changes,
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap
 }
@@ -1414,10 +1388,8 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
         };
         let services = || UnitSection {
             state_changes: vec![change()],
-            enabled_units: vec![],
-            disabled_units: vec![],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         };
 
         let mut excluded = InspectionSnapshot::new();

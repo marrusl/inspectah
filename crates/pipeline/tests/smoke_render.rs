@@ -12,7 +12,9 @@ use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSecti
 use inspectah_core::types::kernelboot::KernelBootSection;
 // redaction types used indirectly via the redaction engine in test 8
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
-use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitInventoryEntry, UnitSection, UnitStateChange,
+};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, report, secrets};
 use tempfile::TempDir;
 
@@ -50,8 +52,24 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 shadow_rationale: None,
             },
         ],
-        enabled_units: vec!["httpd.service".into()],
-        disabled_units: vec!["cups.service".into()],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            },
+        ],
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: "etc/systemd/system/httpd.service.d/override.conf".into(),
@@ -60,7 +78,6 @@ fn snapshot_with_services() -> InspectionSnapshot {
             locked: false,
             ..Default::default()
         }],
-        preset_matched_units: Vec::new(),
     });
     snap
 }

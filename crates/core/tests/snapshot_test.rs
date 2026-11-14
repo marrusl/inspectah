@@ -102,11 +102,20 @@ const SCHEMA_27_SNAPSHOT: &str =
     include_str!("../../../testdata/fixtures/snapshot/schema-27-services-section.json");
 
 /// The schema-27 payload moved to the current version with its `services`
-/// section renamed to `units` and nothing else changed.
+/// section renamed to `units` and its three unit name lists replaced by
+/// the one inventory that holds the same unit. Nothing else changes.
 fn schema_27_payload_as_current() -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_str(SCHEMA_27_SNAPSHOT).unwrap();
     let object = value.as_object_mut().unwrap();
-    let section = object.remove("services").expect("fixture has `services`");
+    let mut section = object.remove("services").expect("fixture has `services`");
+    let lists = section.as_object_mut().unwrap();
+    for list in ["enabled_units", "disabled_units", "preset_matched_units"] {
+        lists.remove(list).expect("schema 27 has the list");
+    }
+    lists.insert(
+        "inventory".into(),
+        serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
+    );
     object.insert("units".into(), section);
     object.insert("schema_version".into(), SCHEMA_VERSION.into());
     value
@@ -307,13 +316,7 @@ const RPM_SECTION_KEYS: &[&str] = &[
 ];
 
 /// The serialized keys of a `UnitSection`.
-const UNIT_SECTION_KEYS: &[&str] = &[
-    "disabled_units",
-    "drop_ins",
-    "enabled_units",
-    "preset_matched_units",
-    "state_changes",
-];
+const UNIT_SECTION_KEYS: &[&str] = &["drop_ins", "inventory", "state_changes"];
 
 fn serialized_keys<T: serde::Serialize>(value: &T) -> BTreeSet<String> {
     serde_json::to_value(value)

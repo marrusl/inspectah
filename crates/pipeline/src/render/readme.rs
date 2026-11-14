@@ -2,6 +2,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::units::{OrdinaryKind, UnitKind, UnitState};
 
 use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
@@ -86,16 +87,17 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         })
         .unwrap_or(0);
 
-    let svc_enabled = snap
-        .units
-        .as_ref()
-        .map(|s| s.enabled_units.len())
-        .unwrap_or(0);
-    let svc_disabled = snap
-        .units
-        .as_ref()
-        .map(|s| s.disabled_units.len())
-        .unwrap_or(0);
+    let service_count = |state: UnitState| {
+        snap.units.as_ref().map_or(0, |s| {
+            s.inventory
+                .iter()
+                .filter(|e| e.unit.kind() == UnitKind::Ordinary(OrdinaryKind::Service))
+                .filter(|e| e.state == state)
+                .count()
+        })
+    };
+    let svc_enabled = service_count(UnitState::Enabled);
+    let svc_disabled = service_count(UnitState::Disabled);
 
     let warning_count = snap.warnings.len();
     let redaction_count = snap.redactions.len();
@@ -582,6 +584,52 @@ mod tests {
         assert!(
             !md.contains("Subscription certs"),
             "must not show expiry when none available"
+        );
+    }
+
+    /// Service counts read the inventory by kind and state. A masked
+    /// service and an enabled socket are in the inventory and are not
+    /// counted as enabled or disabled services.
+    #[test]
+    fn test_readme_service_counts_by_kind_and_state() {
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState,
+        };
+        let entry = |unit: &str, state, preset| UnitInventoryEntry {
+            unit: unit.to_owned().try_into().expect("valid unit name"),
+            state,
+            preset,
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.units = Some(UnitSection {
+            inventory: vec![
+                entry(
+                    "sshd.service",
+                    UnitState::Enabled,
+                    Some(PresetDefault::Enable),
+                ),
+                entry("httpd.service", UnitState::Enabled, None),
+                entry("cups.service", UnitState::Disabled, None),
+            ],
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("| Services (2 enabled, 1 disabled) | 3 |"),
+            "{md}"
+        );
+
+        let units = snap.units.as_mut().expect("units set above");
+        units
+            .inventory
+            .push(entry("gdm.service", UnitState::Masked, None));
+        units
+            .inventory
+            .push(entry("cockpit.socket", UnitState::Enabled, None));
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("| Services (2 enabled, 1 disabled) | 3 |"),
+            "{md}"
         );
     }
 }

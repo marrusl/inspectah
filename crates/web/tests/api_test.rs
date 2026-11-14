@@ -22,7 +22,7 @@ use inspectah_core::types::selinux::{
 };
 use inspectah_core::types::storage::{FstabEntry, StorageSection};
 use inspectah_core::types::units::{
-    PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
+    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
 };
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
@@ -368,7 +368,14 @@ fn not_carried_state() -> Arc<AppState> {
         ..Default::default()
     });
     snap.units = Some(UnitSection {
-        enabled_units: vec!["firewalld.service".into()],
+        inventory: vec![UnitInventoryEntry {
+            unit: "firewalld.service"
+                .to_owned()
+                .try_into()
+                .expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        }],
         ..Default::default()
     });
     Arc::new(AppState {
@@ -998,9 +1005,24 @@ fn rich_snapshot() -> InspectionSnapshot {
                 ..Default::default()
             },
         ],
-        enabled_units: vec!["sshd.service".into()],
-        disabled_units: vec!["cups.service".into()],
-        preset_matched_units: Vec::new(),
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            },
+        ],
     });
 
     snap.containers = Some(ContainerSection {
@@ -1716,11 +1738,11 @@ fn normalize_services_maps_state_changes_with_dropins() {
         .unwrap();
     assert_eq!(standalone.subtitle.as_deref(), Some("drop-in override"));
 
-    // enabled_units (legacy snapshot with empty preset_matched_units)
+    // enabled inventory entry with no preset
     let sshd = svc.items.iter().find(|i| i.id == "sshd.service").unwrap();
     assert_eq!(sshd.subtitle.as_deref(), Some("enabled (no preset rule)"));
 
-    // disabled_units (legacy snapshot with empty preset_matched_units)
+    // disabled inventory entry with no preset
     let cups = svc.items.iter().find(|i| i.id == "cups.service").unwrap();
     assert_eq!(cups.subtitle.as_deref(), Some("disabled (no preset rule)"));
 }
@@ -2101,10 +2123,8 @@ fn service_subsection_state() -> Arc<AppState> {
                 shadow_rationale: None,
             },
         ],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap.warnings.push(Warning {
         inspector: "units".into(),
@@ -2298,10 +2318,8 @@ fn locked_package_state() -> Arc<AppState> {
     });
     snap.units = Some(UnitSection {
         state_changes: vec![],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {

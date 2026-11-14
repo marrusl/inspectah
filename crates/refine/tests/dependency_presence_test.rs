@@ -74,10 +74,8 @@ fn snapshot() -> InspectionSnapshot {
             shadow_type: None,
             shadow_rationale: None,
         }],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     snap
 }

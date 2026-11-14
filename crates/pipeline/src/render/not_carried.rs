@@ -37,6 +37,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{PackageRoute, route_for};
@@ -261,7 +262,12 @@ fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&
     let Some(services) = snap.units.as_ref() else {
         return owners;
     };
-    let enabled: HashSet<&str> = services.enabled_units.iter().map(String::as_str).collect();
+    let enabled: HashSet<&str> = services
+        .inventory
+        .iter()
+        .filter(|e| e.state == UnitState::Enabled)
+        .map(|e| e.unit.as_str())
+        .collect();
 
     for change in &services.state_changes {
         if let Some(owner) = change.owning_package.as_deref()
@@ -367,7 +373,9 @@ mod tests {
     use super::*;
     use inspectah_core::types::aggregate::AggregateSnapshotMeta;
     use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, RpmSection};
-    use inspectah_core::types::units::{UnitSection, UnitState, UnitStateChange};
+    use inspectah_core::types::units::{
+        PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+    };
 
     fn pkg(name: &str, arch: &str, include: bool) -> PackageEntry {
         PackageEntry {
@@ -639,16 +647,49 @@ mod tests {
                 enabled_change("firewall-helper.service", "python3-firewall"),
                 enabled_change("httpd.service", "httpd"),
             ],
-            enabled_units: vec![
-                "cups.service".into(),
-                "firewall-helper.service".into(),
-                "firewalld.service".into(),
-                "httpd.service".into(),
-                "libs-local.service".into(),
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "cups.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "firewall-helper.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                },
+                UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "libs-local.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
-            disabled_units: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec!["firewalld.service".into()],
         });
         let rpm = snap.rpm.as_mut().expect("rpm section");
         rpm.file_ownership = vec![

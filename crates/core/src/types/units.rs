@@ -308,13 +308,35 @@ pub struct SystemdDropIn {
     pub shadow_rationale: Option<String>,
 }
 
+/// One unit's enablement on the source host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitInventoryEntry {
+    pub unit: UnitName,
+    pub state: UnitState,
+    /// The preset default for the unit, when a preset rule names it.
+    /// Resolved only for a unit that can carry a state change.
+    pub preset: Option<PresetDefault>,
+}
+
+impl UnitInventoryEntry {
+    /// True when the unit is enabled or disabled as its preset says, so
+    /// the image already has this state.
+    pub fn matches_preset(&self) -> bool {
+        matches!(
+            (self.state, self.preset),
+            (UnitState::Enabled, Some(PresetDefault::Enable))
+                | (UnitState::Disabled, Some(PresetDefault::Disable))
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnitSection {
+    /// Units whose state differs from what the image would have.
     pub state_changes: Vec<UnitStateChange>,
-    pub enabled_units: Vec<String>,
-    pub disabled_units: Vec<String>,
+    /// Every unit with a durable state, changed or not, once each.
+    pub inventory: Vec<UnitInventoryEntry>,
     pub drop_ins: Vec<SystemdDropIn>,
-    pub preset_matched_units: Vec<String>,
 }
 
 #[cfg(test)]
@@ -530,10 +552,12 @@ mod tests {
                     shadow_rationale: None,
                 },
             ],
-            enabled_units: vec!["firewalld.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: unit_name("firewalld.service"),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Disable),
+            }],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         };
 
         let json = serde_json::to_string(&section).unwrap();
@@ -633,30 +657,58 @@ mod tests {
     }
 
     #[test]
-    fn test_preset_matched_units_roundtrip() {
+    fn test_inventory_roundtrip_and_preset_match() {
         let section = UnitSection {
             state_changes: Vec::new(),
-            enabled_units: vec!["sshd.service".into()],
-            disabled_units: Vec::new(),
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: unit_name("sshd.service"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: unit_name("chronyd.service"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                },
+                UnitInventoryEntry {
+                    unit: unit_name("cups.service"),
+                    state: UnitState::Disabled,
+                    preset: Some(PresetDefault::Disable),
+                },
+                UnitInventoryEntry {
+                    unit: unit_name("gdm.service"),
+                    state: UnitState::Masked,
+                    preset: Some(PresetDefault::Disable),
+                },
+            ],
             drop_ins: Vec::new(),
-            preset_matched_units: vec!["chronyd.service".into(), "firewalld.service".into()],
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: UnitSection = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            parsed.preset_matched_units,
-            vec!["chronyd.service", "firewalld.service"]
-        );
+        assert_eq!(parsed, section);
+
+        let matched: Vec<&str> = parsed
+            .inventory
+            .iter()
+            .filter(|e| e.matches_preset())
+            .map(|e| e.unit.as_str())
+            .collect();
+        assert_eq!(matched, vec!["chronyd.service", "cups.service"]);
     }
 
     #[test]
     fn test_missing_field_fails_deserialization() {
-        // Missing preset_matched_units must fail, not silently backfill.
-        let json = r#"{"state_changes":[],"enabled_units":[],"disabled_units":[],"drop_ins":[]}"#;
+        // A missing inventory must fail, not silently backfill. The same
+        // payload with the field loads.
+        let with_field = r#"{"state_changes":[],"inventory":[],"drop_ins":[]}"#;
+        serde_json::from_str::<UnitSection>(with_field).expect("complete section loads");
+
+        let json = r#"{"state_changes":[],"drop_ins":[]}"#;
         let err = serde_json::from_str::<UnitSection>(json).unwrap_err();
         assert!(
-            err.to_string().contains("preset_matched_units"),
-            "expected missing-field error for preset_matched_units, got: {err}"
+            err.to_string().contains("inventory"),
+            "expected missing-field error for inventory, got: {err}"
         );
     }
 

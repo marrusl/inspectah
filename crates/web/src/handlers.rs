@@ -1791,9 +1791,7 @@ mod tests {
                 shadow_rationale: Some("Full unit override replaces vendor sshd.service".into()),
                 ..Default::default()
             }],
-            enabled_units: vec![],
-            disabled_units: vec![],
-            preset_matched_units: vec![],
+            inventory: vec![],
         });
 
         let session = RefineSession::new(snap);

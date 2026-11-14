@@ -22,7 +22,9 @@ use inspectah_core::types::selinux::{
     SelinuxSection,
 };
 use inspectah_core::types::storage::{FstabEntry, MountPoint, StorageSection};
-use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitState, UnitStateChange};
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_core::types::users::UserGroupSection;
 
 // ---------------------------------------------------------------------------
@@ -1221,17 +1223,20 @@ fn test_merge_service_sections_dedup_units() {
     };
     let s1 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
-        enabled_units: vec!["sshd.service".into(), "httpd.service".into()],
-        disabled_units: vec!["firewalld.service".into()],
+        inventory: vec![
+            inv("sshd.service", UnitState::Enabled, None),
+            inv("httpd.service", UnitState::Enabled, None),
+            inv("firewalld.service", UnitState::Disabled, None),
+        ],
         drop_ins: vec![],
-        preset_matched_units: vec!["chronyd.service".into()],
     };
     let s2 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
-        enabled_units: vec!["httpd.service".into(), "crond.service".into()],
-        disabled_units: vec![],
+        inventory: vec![
+            inv("httpd.service", UnitState::Enabled, None),
+            inv("crond.service", UnitState::Enabled, None),
+        ],
         drop_ins: vec![],
-        preset_matched_units: vec!["chronyd.service".into(), "sshd.service".into()],
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
@@ -1240,15 +1245,106 @@ fn test_merge_service_sections_dedup_units() {
     assert_eq!(result.state_changes.len(), 1);
     assert_eq!(result.state_changes[0].aggregate.as_ref().unwrap().count, 2);
 
-    // String lists deduped and sorted
+    // Inventory: one entry per unit, sorted by name
     assert_eq!(
-        result.enabled_units,
-        vec!["crond.service", "httpd.service", "sshd.service"]
+        inventory_summary(&result),
+        vec![
+            ("crond.service", UnitState::Enabled, None),
+            ("firewalld.service", UnitState::Disabled, None),
+            ("httpd.service", UnitState::Enabled, None),
+            ("sshd.service", UnitState::Enabled, None),
+        ]
     );
-    assert_eq!(result.disabled_units, vec!["firewalld.service"]);
+}
+
+fn inv(unit: &str, state: UnitState, preset: Option<PresetDefault>) -> UnitInventoryEntry {
+    UnitInventoryEntry {
+        unit: unit.to_owned().try_into().unwrap(),
+        state,
+        preset,
+    }
+}
+
+fn inventory_section(inventory: Vec<UnitInventoryEntry>) -> Option<UnitSection> {
+    Some(UnitSection {
+        inventory,
+        ..Default::default()
+    })
+}
+
+fn inventory_summary(section: &UnitSection) -> Vec<(&str, UnitState, Option<PresetDefault>)> {
+    section
+        .inventory
+        .iter()
+        .map(|e| (e.unit.as_str(), e.state, e.preset))
+        .collect()
+}
+
+/// The inventory keeps the state most hosts have, and a unit that only
+/// one host has is kept.
+#[test]
+fn test_merge_inventory_keeps_most_prevalent_state() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let sections = vec![
+        inventory_section(vec![
+            inv(
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Enable),
+            ),
+            inv("cups.service", UnitState::Disabled, None),
+        ]),
+        inventory_section(vec![inv(
+            "sshd.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Enable),
+        )]),
+        inventory_section(vec![inv(
+            "sshd.service",
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+        )]),
+    ];
+    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+
     assert_eq!(
-        result.preset_matched_units,
-        vec!["chronyd.service", "sshd.service"]
+        inventory_summary(&result),
+        vec![
+            ("cups.service", UnitState::Disabled, None),
+            (
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Enable)
+            ),
+        ]
+    );
+}
+
+/// A tie between states goes to the first host in hostname order, as
+/// the other most-prevalent merges break ties, and the preset comes from
+/// the first host that has the winning state.
+#[test]
+fn test_merge_inventory_tie_goes_to_first_host() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into(), "h4".into()];
+    let sections = vec![
+        inventory_section(vec![inv("a.service", UnitState::Disabled, None)]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Disabled,
+            Some(PresetDefault::Enable),
+        )]),
+        inventory_section(vec![inv("a.service", UnitState::Enabled, None)]),
+    ];
+    let result = merge_service_sections(sections, 4, &hostnames).unwrap();
+
+    assert_eq!(
+        inventory_summary(&result),
+        vec![("a.service", UnitState::Disabled, None)]
     );
 }
 

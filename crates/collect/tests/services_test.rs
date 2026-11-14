@@ -8,7 +8,7 @@ use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
-use inspectah_core::types::units::{PresetDefault, UnitAction, UnitState};
+use inspectah_core::types::units::{PresetDefault, UnitAction, UnitSection, UnitState};
 
 /// Standard fixture: `systemctl list-unit-files` output.
 const SYSTEMCTL_FIXTURE: &str =
@@ -146,15 +146,186 @@ fn happy_path_state_changes() {
         "cups should not appear in state_changes"
     );
 
-    // Verify enabled/disabled lists are populated
-    assert!(section.enabled_units.contains(&"sshd.service".to_string()));
+    // Verify the inventory holds every unit with its state
+    assert_eq!(
+        inventory_state(section, "sshd.service"),
+        Some(UnitState::Enabled)
+    );
+    assert_eq!(
+        inventory_state(section, "auditd.service"),
+        Some(UnitState::Enabled)
+    );
+    assert_eq!(
+        inventory_state(section, "cups.service"),
+        Some(UnitState::Disabled)
+    );
+    assert_eq!(
+        inventory_state(section, "gdm.service"),
+        Some(UnitState::Disabled)
+    );
+}
+
+/// The state the inventory records for `unit`, if it has an entry.
+fn inventory_state(section: &UnitSection, unit: &str) -> Option<UnitState> {
+    section
+        .inventory
+        .iter()
+        .find(|e| e.unit.as_str() == unit)
+        .map(|e| e.state)
+}
+
+/// Names of the inventory entries whose state is the one their preset gives.
+fn preset_matched(section: &UnitSection) -> Vec<&str> {
+    section
+        .inventory
+        .iter()
+        .filter(|e| e.matches_preset())
+        .map(|e| e.unit.as_str())
+        .collect()
+}
+
+// ── Inventory: one entry per unit, with its state and preset ───────
+
+#[test]
+fn inventory_has_one_entry_per_unit_with_state_and_preset() {
+    // sshd.service is listed twice: the inventory still holds it once.
+    // bad.unit-kind has no unit suffix: it is warned about and skipped.
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         bluetooth.service                          enabled         disabled\n\
+                         cups.service                               disabled        disabled\n\
+                         sshd.service                               enabled         enabled\n\
+                         sshd.service                               enabled         enabled\n\
+                         bad.unit-kind                              enabled         enabled\n\
+                         \n\
+                         5 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "disable bluetooth.service\nenable sshd.service\n",
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
+    let section = match &output.section {
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
+    };
+
+    let entries: Vec<(&str, UnitState, Option<PresetDefault>)> = section
+        .inventory
+        .iter()
+        .map(|e| (e.unit.as_str(), e.state, e.preset))
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            // Enabled against a disable preset: also a state change.
+            (
+                "bluetooth.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Disable)
+            ),
+            // Disabled with no preset rule.
+            ("cups.service", UnitState::Disabled, None),
+            // Enabled as its preset says.
+            (
+                "sshd.service",
+                UnitState::Enabled,
+                Some(PresetDefault::Enable)
+            ),
+        ],
+        "one entry per unit, in the order systemctl lists them"
+    );
+    assert_eq!(preset_matched(section), vec!["sshd.service"]);
+
+    let mut names: Vec<&str> = section.inventory.iter().map(|e| e.unit.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        section.inventory.len(),
+        "no unit appears twice"
+    );
+
+    // The name that does not parse is skipped, and the warning names it.
+    assert!(output.warnings.iter().any(|w| {
+        w.inspector == "units" && w.extra.get("unit") == Some(&serde_json::json!("bad.unit-kind"))
+    }));
+}
+
+#[test]
+fn inventory_records_masked_units() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         cups.service                               masked          enabled\n\
+                         sshd.service                               enabled         enabled\n\
+                         \n\
+                         2 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "enable cups.service\nenable sshd.service\n",
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .unwrap();
+    let section = match &output.section {
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
+    };
+
+    assert_eq!(
+        inventory_state(section, "sshd.service"),
+        Some(UnitState::Enabled)
+    );
+    assert_eq!(
+        inventory_state(section, "cups.service"),
+        Some(UnitState::Masked)
+    );
     assert!(
         section
-            .enabled_units
-            .contains(&"auditd.service".to_string())
+            .state_changes
+            .iter()
+            .any(|s| s.unit.as_str() == "cups.service"),
+        "a masked unit is a state change as well as an inventory entry"
     );
-    assert!(section.disabled_units.contains(&"cups.service".to_string()));
-    assert!(section.disabled_units.contains(&"gdm.service".to_string()));
 }
 
 // ── Test 3: Preset first-match-wins ────────────────────────────────
@@ -317,7 +488,7 @@ fn systemctl_missing_returns_degraded() {
             // Partial should have empty section
             if let SectionData::Units(s) = &partial.section {
                 assert!(s.state_changes.is_empty());
-                assert!(s.enabled_units.is_empty());
+                assert!(s.inventory.is_empty());
             } else {
                 panic!("partial should be Services section");
             }
@@ -356,11 +527,11 @@ fn unreadable_preset_returns_degraded_not_ok() {
                 reason.contains("system-preset"),
                 "reason should mention preset dirs, got: {reason}"
             );
-            // Partial should contain the systemctl data (enabled/disabled lists)
+            // Partial should contain the systemctl data (the inventory)
             if let SectionData::Units(s) = &partial.section {
                 assert!(
-                    !s.enabled_units.is_empty(),
-                    "partial should contain enabled_units from systemctl"
+                    !s.inventory.is_empty(),
+                    "partial should contain the inventory from systemctl"
                 );
             } else {
                 panic!("partial should be Services section");
@@ -406,8 +577,7 @@ fn empty_system_returns_empty_section() {
     };
 
     assert!(section.state_changes.is_empty());
-    assert!(section.enabled_units.is_empty());
-    assert!(section.disabled_units.is_empty());
+    assert!(section.inventory.is_empty());
     assert!(section.drop_ins.is_empty());
 }
 
@@ -487,10 +657,10 @@ fn services_snapshot() {
     insta::assert_json_snapshot!(section);
 }
 
-// ── Test 8: preset_matched_units population ────────────────────────
+// ── Test 8: preset-matched inventory entries ───────────────────────
 
 #[test]
-fn preset_matched_units_captures_matches() {
+fn preset_matched_entries_capture_matches() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -508,83 +678,83 @@ fn preset_matched_units_captures_matches() {
         other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
-    // Units where state matches preset should be in preset_matched_units
-    let matched = &section.preset_matched_units;
+    // Units where state matches preset are the preset-matched entries
+    let matched = preset_matched(section);
 
     // auditd: enabled=enabled → match
     assert!(
-        matched.contains(&"auditd.service".to_string()),
-        "auditd.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"auditd.service"),
+        "auditd.service should be preset-matched (enabled=enabled)"
     );
 
     // chronyd: enabled=enabled → match
     assert!(
-        matched.contains(&"chronyd.service".to_string()),
-        "chronyd.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"chronyd.service"),
+        "chronyd.service should be preset-matched (enabled=enabled)"
     );
 
     // firewalld: enabled=enabled → match
     assert!(
-        matched.contains(&"firewalld.service".to_string()),
-        "firewalld.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"firewalld.service"),
+        "firewalld.service should be preset-matched (enabled=enabled)"
     );
 
     // kdump: enabled=enabled → match
     assert!(
-        matched.contains(&"kdump.service".to_string()),
-        "kdump.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"kdump.service"),
+        "kdump.service should be preset-matched (enabled=enabled)"
     );
 
     // NetworkManager: enabled=enabled → match
     assert!(
-        matched.contains(&"NetworkManager.service".to_string()),
-        "NetworkManager.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"NetworkManager.service"),
+        "NetworkManager.service should be preset-matched (enabled=enabled)"
     );
 
     // sshd: enabled=enabled → match
     assert!(
-        matched.contains(&"sshd.service".to_string()),
-        "sshd.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"sshd.service"),
+        "sshd.service should be preset-matched (enabled=enabled)"
     );
 
     // tuned: enabled=enabled → match
     assert!(
-        matched.contains(&"tuned.service".to_string()),
-        "tuned.service should be in preset_matched_units (enabled=enabled)"
+        matched.contains(&"tuned.service"),
+        "tuned.service should be preset-matched (enabled=enabled)"
     );
 
-    // Units with divergence should NOT be in preset_matched_units
+    // Units with divergence should NOT be preset-matched
     assert!(
-        !matched.contains(&"bluetooth.service".to_string()),
-        "bluetooth.service should NOT be in preset_matched_units (enabled≠disabled)"
-    );
-
-    assert!(
-        !matched.contains(&"gdm.service".to_string()),
-        "gdm.service should NOT be in preset_matched_units (disabled≠enabled)"
-    );
-
-    // Units with no preset should NOT be in preset_matched_units
-    assert!(
-        !matched.contains(&"httpd.service".to_string()),
-        "httpd.service should NOT be in preset_matched_units (no preset rule)"
+        !matched.contains(&"bluetooth.service"),
+        "bluetooth.service should NOT be preset-matched (enabled≠disabled)"
     );
 
     assert!(
-        !matched.contains(&"libvirtd.service".to_string()),
-        "libvirtd.service should NOT be in preset_matched_units (no preset rule)"
+        !matched.contains(&"gdm.service"),
+        "gdm.service should NOT be preset-matched (disabled≠enabled)"
     );
 
-    // cups has no preset but is disabled - should NOT be in preset_matched_units
+    // Units with no preset should NOT be preset-matched
+    assert!(
+        !matched.contains(&"httpd.service"),
+        "httpd.service should NOT be preset-matched (no preset rule)"
+    );
+
+    assert!(
+        !matched.contains(&"libvirtd.service"),
+        "libvirtd.service should NOT be preset-matched (no preset rule)"
+    );
+
+    // cups has no preset but is disabled - should NOT be preset-matched
     // (we can only determine matches when a preset rule exists)
     assert!(
-        !matched.contains(&"cups.service".to_string()),
-        "cups.service should NOT be in preset_matched_units (no preset rule)"
+        !matched.contains(&"cups.service"),
+        "cups.service should NOT be preset-matched (no preset rule)"
     );
 }
 
 #[test]
-fn preset_matched_units_empty_when_no_preset_rules() {
+fn no_preset_matched_entries_without_preset_rules() {
     // Mock with systemctl output but no preset files (empty directory)
     let exec = MockExecutor::new()
         .with_command(
@@ -615,8 +785,12 @@ fn preset_matched_units_empty_when_no_preset_rules() {
 
     // With no preset rules, we cannot determine matches
     assert!(
-        section.preset_matched_units.is_empty(),
-        "preset_matched_units should be empty when no preset rules exist"
+        !section.inventory.is_empty(),
+        "the inventory holds the units systemctl listed"
+    );
+    assert!(
+        preset_matched(section).is_empty(),
+        "no entry is preset-matched when no preset rules exist"
     );
 
     // And we cannot determine divergences either

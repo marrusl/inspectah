@@ -46,7 +46,7 @@ const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
 const PLAIN_CONFIG: &str = "/etc/httpd/conf/httpd.conf";
 
 /// `httpd.service` sits **at** its preset, so the services inspector
-/// writes it to `preset_matched_units` and `state_changes` has no row
+/// writes it to the inventory as preset-matched and `state_changes` has no row
 /// for it. That is the common case on a real host and the one the
 /// drop-in guard used to read as "parent excluded", which made the
 /// drop-in toggle move only one way. `custom.service` diverges, so the
@@ -437,11 +437,11 @@ fn only_a_preset_diverging_unit_gets_a_state_change_row() {
     );
     assert!(
         services
-            .preset_matched_units
+            .inventory
             .iter()
-            .any(|u| u == PRESET_MATCHED_UNIT),
-        "the preset-matched unit goes to preset_matched_units, got {:?}",
-        services.preset_matched_units
+            .any(|e| e.unit.as_str() == PRESET_MATCHED_UNIT && e.matches_preset()),
+        "the preset-matched unit is a preset-matched inventory entry, got {:?}",
+        services.inventory
     );
 }
 

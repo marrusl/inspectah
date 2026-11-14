@@ -5,6 +5,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
+use inspectah_core::types::units::UnitState;
 use inspectah_pipeline::render::service_intent::render_service_intent;
 use inspectah_pipeline::render::var_dirs::effective_var_backing;
 
@@ -92,17 +93,28 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let render_plan = render_service_intent(snap);
 
     let matched_set: HashSet<&str> = svc
-        .preset_matched_units
+        .inventory
         .iter()
-        .map(|s| s.as_str())
+        .filter(|e| e.matches_preset())
+        .map(|e| e.unit.as_str())
         .collect();
     let divergent_set: HashSet<&str> = svc
         .state_changes
         .iter()
         .map(|sc| sc.unit.as_str())
         .collect();
-    let enabled_set: HashSet<&str> = svc.enabled_units.iter().map(|s| s.as_str()).collect();
-    let disabled_set: HashSet<&str> = svc.disabled_units.iter().map(|s| s.as_str()).collect();
+    let enabled = || {
+        svc.inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Enabled)
+    };
+    let disabled = || {
+        svc.inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Disabled)
+    };
+    let enabled_set: HashSet<&str> = enabled().map(|e| e.unit.as_str()).collect();
+    let disabled_set: HashSet<&str> = disabled().map(|e| e.unit.as_str()).collect();
 
     // Build drop-in lookup: units covered by any category get their drop-ins
     // folded in; everything else is standalone.
@@ -157,16 +169,11 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
 
     // 2. Preset-matched with drop-in (without drop-in are suppressed entirely)
     let mut preset_matched_with_dropins = Vec::new();
-    for unit_name in &svc.preset_matched_units {
-        if let Some(contents) = dropin_by_unit.get(unit_name.as_str()) {
-            let current_state = if enabled_set.contains(unit_name.as_str()) {
-                inspectah_core::types::units::UnitState::Enabled
-            } else {
-                inspectah_core::types::units::UnitState::Disabled
-            };
+    for entry in svc.inventory.iter().filter(|e| e.matches_preset()) {
+        if let Some(contents) = dropin_by_unit.get(entry.unit.as_str()) {
             preset_matched_with_dropins.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state,
+                unit: entry.unit.as_str().to_owned(),
+                current_state: entry.state,
                 default_state: None, // matched means current == default; no divergence to record
                 owning_package: None,
                 dropin_contents: contents.clone(),
@@ -178,18 +185,15 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
 
     // 3. Preset-unknown enabled units (not divergent, not matched)
     let mut preset_unknown_enabled = Vec::new();
-    for unit_name in &svc.enabled_units {
-        if !divergent_set.contains(unit_name.as_str()) && !matched_set.contains(unit_name.as_str())
-        {
+    for entry in enabled() {
+        let unit_name = entry.unit.as_str();
+        if !divergent_set.contains(unit_name) && !matched_set.contains(unit_name) {
             preset_unknown_enabled.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state: inspectah_core::types::units::UnitState::Enabled,
+                unit: unit_name.to_owned(),
+                current_state: UnitState::Enabled,
                 default_state: None,
                 owning_package: None,
-                dropin_contents: dropin_by_unit
-                    .get(unit_name.as_str())
-                    .cloned()
-                    .unwrap_or_default(),
+                dropin_contents: dropin_by_unit.get(unit_name).cloned().unwrap_or_default(),
                 shadow_type: None,
                 shadow_rationale: None,
             });
@@ -198,12 +202,12 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
 
     // 4. Preset-unknown disabled units (not divergent, not matched)
     let mut preset_unknown_disabled = Vec::new();
-    for unit_name in &svc.disabled_units {
-        if !divergent_set.contains(unit_name.as_str()) && !matched_set.contains(unit_name.as_str())
-        {
+    for entry in disabled() {
+        let unit_name = entry.unit.as_str();
+        if !divergent_set.contains(unit_name) && !matched_set.contains(unit_name) {
             preset_unknown_disabled.push(RefServiceItem {
-                unit: unit_name.clone(),
-                current_state: inspectah_core::types::units::UnitState::Disabled,
+                unit: unit_name.to_owned(),
+                current_state: UnitState::Disabled,
                 default_state: None,
                 owning_package: None,
                 dropin_contents: Vec::new(),
@@ -1048,7 +1052,7 @@ mod tests {
     // ── project_ref_services tests ──────────────────────────────────
 
     use inspectah_core::types::units::{
-        PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
     };
     use inspectah_core::types::warnings::Warning;
 
@@ -1087,10 +1091,15 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["firewalld.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1105,7 +1114,7 @@ mod tests {
             Some(PresetDefault::Disable)
         );
         assert_eq!(result.divergent[0].owning_package, Some("firewalld".into()));
-        // firewalld is in enabled_units AND divergent_set, so it should NOT
+        // firewalld is enabled in the inventory AND in divergent_set, so it should NOT
         // also appear in preset_unknown_enabled.
         assert!(result.preset_unknown_enabled.is_empty());
     }
@@ -1115,8 +1124,14 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["chronyd.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                }],
                 drop_ins: vec![SystemdDropIn {
                     unit: "chronyd.service".into(),
                     path: "/etc/systemd/system/chronyd.service.d/override.conf".into(),
@@ -1125,7 +1140,6 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: vec!["chronyd.service".into()],
             }),
             ..Default::default()
         };
@@ -1154,10 +1168,15 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["chronyd.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: Some(PresetDefault::Enable),
+                }],
                 drop_ins: Vec::new(),
-                preset_matched_units: vec!["chronyd.service".into()],
             }),
             ..Default::default()
         };
@@ -1175,10 +1194,25 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: vec!["custom-agent.service".into()],
-                disabled_units: vec!["unused.service".into()],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "custom-agent.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "unused.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Disabled,
+                        preset: None,
+                    },
+                ],
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1208,8 +1242,7 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+                inventory: Vec::new(),
                 drop_ins: vec![SystemdDropIn {
                     unit: "phantom.service".into(),
                     path: "/etc/systemd/system/phantom.service.d/10-custom.conf".into(),
@@ -1218,7 +1251,6 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1253,8 +1285,14 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: Vec::new(),
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![SystemdDropIn {
                     unit: "httpd.service".into(),
                     path: "/etc/systemd/system/httpd.service.d/override.conf".into(),
@@ -1263,7 +1301,6 @@ mod tests {
                     locked: false,
                     ..Default::default()
                 }],
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1296,10 +1333,33 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["firewalld.service".into(), "custom.service".into()],
-                disabled_units: vec!["unused.service".into()],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "firewalld.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "custom.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "unused.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Disabled,
+                        preset: None,
+                    },
+                ],
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };
@@ -1322,10 +1382,8 @@ mod tests {
         let snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: Vec::new(),
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+                inventory: Vec::new(),
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
             }),
             warnings: vec![
                 Warning {
@@ -1368,10 +1426,8 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: Vec::new(),
-                disabled_units: Vec::new(),
+                inventory: Vec::new(),
                 drop_ins: Vec::new(),
-                preset_matched_units: Vec::new(),
             }),
             ..Default::default()
         };

@@ -2126,7 +2126,7 @@ mod tests {
     /// as collected; the not-carried list stays empty until they are set.
     fn not_carried_host() -> InspectionSnapshot {
         use inspectah_core::types::rpm::FileOwnershipEntry;
-        use inspectah_core::types::units::UnitSection;
+        use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState};
         let auto = |name: &str, arch: &str, repo: &str| PackageEntry {
             name: name.into(),
             arch: arch.into(),
@@ -2175,10 +2175,31 @@ mod tests {
             ..Default::default()
         });
         snap.units = Some(UnitSection {
-            enabled_units: vec![
-                "firewalld.service".into(),
-                "crond.service".into(),
-                "crond-backup.timer".into(),
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond-backup.timer"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
             ..Default::default()
         });

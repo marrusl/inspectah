@@ -1,6 +1,6 @@
 use crate::types::FindingKind;
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::types::aggregate::{AggregatePrevalence, RepoSourceEntry, VariantSelection};
 
@@ -1085,7 +1085,7 @@ use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
 use crate::types::storage::StorageSection;
-use crate::types::units::UnitSection;
+use crate::types::units::{UnitInventoryEntry, UnitName, UnitSection, UnitState};
 use crate::types::users::UserGroupSection;
 
 /// Pick an optional scalar value from a specific host index.
@@ -1540,18 +1540,48 @@ pub fn merge_service_sections(
         total_hosts,
         hostnames,
     );
-    let enabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.enabled_units));
-    let disabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.disabled_units));
-    let preset_matched_units =
-        dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
+    let inventory = merge_unit_inventory(&sections);
 
     Some(UnitSection {
         state_changes,
-        enabled_units,
-        disabled_units,
+        inventory,
         drop_ins,
-        preset_matched_units,
     })
+}
+
+/// Merge the unit inventories of every host into one entry per unit name,
+/// sorted by name.
+///
+/// The entry keeps the state the most hosts have. A tie goes to the state
+/// seen first, which is the first host by hostname since sections are
+/// pre-sorted, as in [`most_prevalent_scalar`]. The preset is the one the
+/// first host with the winning state recorded.
+fn merge_unit_inventory(sections: &[Option<UnitSection>]) -> Vec<UnitInventoryEntry> {
+    let mut by_unit: BTreeMap<&UnitName, Vec<&UnitInventoryEntry>> = BTreeMap::new();
+    for entry in sections.iter().flatten().flat_map(|s| &s.inventory) {
+        by_unit.entry(&entry.unit).or_default().push(entry);
+    }
+
+    by_unit
+        .into_values()
+        .map(|entries| {
+            let mut counts: Vec<(UnitState, usize)> = Vec::new();
+            for entry in &entries {
+                match counts.iter_mut().find(|(state, _)| *state == entry.state) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((entry.state, 1)),
+                }
+            }
+            // Stable: highest count first; ties keep first-seen order.
+            counts.sort_by(|(_, a), (_, b)| b.cmp(a));
+            let winner = counts[0].0;
+            entries
+                .into_iter()
+                .find(|e| e.state == winner)
+                .expect("the winning state was counted from these entries")
+                .clone()
+        })
+        .collect()
 }
 
 /// Merge container sections from multiple hosts.

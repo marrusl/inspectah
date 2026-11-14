@@ -1664,6 +1664,7 @@ mod tests {
     use inspectah_core::types::rpm::{
         PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
     };
+    use inspectah_core::types::units::{PresetDefault, UnitInventoryEntry, UnitState};
 
     fn test_snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
@@ -2371,10 +2372,15 @@ mod tests {
                 shadow_type: None,
                 shadow_rationale: None,
             }],
-            enabled_units: vec!["firewalld.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: "firewalld.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            }],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2407,10 +2413,15 @@ mod tests {
                 shadow_type: None,
                 shadow_rationale: None,
             }],
-            enabled_units: vec![],
-            disabled_units: vec!["sshd.service".into()],
+            inventory: vec![UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            }],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2440,10 +2451,8 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![],
-            enabled_units: vec![],
-            disabled_units: vec![],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2486,10 +2495,15 @@ mod tests {
                     shadow_rationale: None,
                 },
             ],
-            enabled_units: vec!["firewalld.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: "firewalld.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            }],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -3644,8 +3658,14 @@ mod tests {
         let mut snap = test_snapshot();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![], // No state changes — sshd matches preset
-            enabled_units: vec!["sshd.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Enable),
+            }],
             drop_ins: vec![inspectah_core::types::units::SystemdDropIn {
                 unit: "sshd.service".into(),
                 path: "/etc/systemd/system/sshd.service".into(),
@@ -3654,7 +3674,6 @@ mod tests {
                 shadow_rationale: Some("Full shadow: overrides vendor unit".to_string()),
                 ..Default::default()
             }],
-            preset_matched_units: vec!["sshd.service".into()],
         });
         let html = render_report(&snap, &RenderContext { target: None });
 

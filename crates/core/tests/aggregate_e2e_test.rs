@@ -16,7 +16,9 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
+use inspectah_core::types::units::{
+    PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 
 // ===========================================================================
 // Helpers
@@ -96,10 +98,15 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
         .collect();
     snap.units = Some(UnitSection {
         state_changes: changes,
-        enabled_units: units.iter().map(|u| u.to_string()).collect(),
-        disabled_units: vec![],
+        inventory: units
+            .iter()
+            .map(|u| UnitInventoryEntry {
+                unit: u.to_string().try_into().expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            })
+            .collect(),
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
 }
 

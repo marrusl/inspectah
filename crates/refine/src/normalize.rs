@@ -2,6 +2,7 @@ use crate::types::{RefineError, RefinedConfig, RefinedPackage, TriageBucket, Tri
 use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 use inspectah_pipeline::render::language_packages::is_language_env;
 use inspectah_pipeline::render::repoless::{PackageRoute, route_for};
@@ -238,7 +239,8 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
 ///
 /// Walks `units.state_changes` and sets `include = false`, `locked = true`
 /// on units listed in `INCOMPATIBLE_SERVICES`. Also locks any drop-ins
-/// belonging to those units and removes the units from `units.enabled_units`.
+/// belonging to those units and removes their enabled entries from
+/// `units.inventory`.
 pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     let services = match snapshot.units.as_mut() {
         Some(s) => s,
@@ -265,9 +267,9 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
         }
     }
 
-    services
-        .enabled_units
-        .retain(|u| !incompatible_units.contains(&u.as_str()));
+    services.inventory.retain(|e| {
+        !(e.state == UnitState::Enabled && incompatible_units.contains(&e.unit.as_str()))
+    });
 }
 
 /// Exclude inspectah's own COPR repo file from the RPM repo files list.
@@ -399,22 +401,43 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
+    use inspectah_core::types::units::{
+        SystemdDropIn, UnitInventoryEntry, UnitSection, UnitStateChange,
+    };
 
-    /// Helper: build a snapshot with a UnitSection.
+    /// Helper: build a snapshot with a UnitSection whose inventory holds
+    /// `enabled_units`, each enabled.
     fn snap_with_services(
         state_changes: Vec<UnitStateChange>,
         enabled_units: Vec<String>,
     ) -> InspectionSnapshot {
+        let inventory = enabled_units
+            .into_iter()
+            .map(|unit| UnitInventoryEntry {
+                unit: unit.try_into().expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            })
+            .collect();
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             units: Some(UnitSection {
                 state_changes,
-                enabled_units,
+                inventory,
                 ..Default::default()
             }),
             ..Default::default()
         }
+    }
+
+    /// Names of the enabled inventory entries, in order.
+    fn enabled_names(section: &UnitSection) -> Vec<&str> {
+        section
+            .inventory
+            .iter()
+            .filter(|e| e.state == UnitState::Enabled)
+            .map(|e| e.unit.as_str())
+            .collect()
     }
 
     fn sc(unit: &str, include: bool) -> UnitStateChange {
@@ -484,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_service_removed_from_enabled_units() {
+    fn incompatible_service_removed_from_enabled_inventory() {
         let mut snap = snap_with_services(
             vec![],
             vec![
@@ -495,7 +518,7 @@ mod tests {
         );
         normalize_incompatible_services(&mut snap);
         let services = snap.units.as_ref().unwrap();
-        assert_eq!(services.enabled_units, vec!["httpd.service".to_string()]);
+        assert_eq!(enabled_names(services), vec!["httpd.service"]);
     }
 
     #[test]
@@ -529,10 +552,10 @@ mod tests {
         assert!(services.state_changes[4].disposition.is_included()); // httpd.service
         assert!(services.state_changes[5].disposition.is_included()); // sshd.service
 
-        // enabled_units: only compatible ones remain
+        // inventory: only compatible enabled entries remain
         assert_eq!(
-            services.enabled_units,
-            vec!["httpd.service".to_string(), "sshd.service".to_string()]
+            enabled_names(services),
+            vec!["httpd.service", "sshd.service"]
         );
     }
 

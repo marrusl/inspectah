@@ -254,7 +254,8 @@ fn schema_26_snapshot_is_refused() {
 /// A schema-27 snapshot holds services only, under `services`: every
 /// socket and timer state the host had is absent from it with nothing to
 /// say so. Refine refuses to open it. The same section under `units` at
-/// the current version opens, so the version gate is what refuses it.
+/// the current version, its three unit name lists replaced by the one
+/// inventory, opens, so the version gate is what refuses it.
 #[test]
 fn schema_27_snapshot_is_refused() {
     let schema_27 =
@@ -262,7 +263,15 @@ fn schema_27_snapshot_is_refused() {
 
     let mut current: serde_json::Value = serde_json::from_str(schema_27).unwrap();
     let object = current.as_object_mut().unwrap();
-    let section = object.remove("services").expect("fixture has `services`");
+    let mut section = object.remove("services").expect("fixture has `services`");
+    let lists = section.as_object_mut().unwrap();
+    for list in ["enabled_units", "disabled_units", "preset_matched_units"] {
+        lists.remove(list).expect("schema 27 has the list");
+    }
+    lists.insert(
+        "inventory".into(),
+        serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
+    );
     object.insert("units".into(), section);
     object.insert(
         "schema_version".into(),

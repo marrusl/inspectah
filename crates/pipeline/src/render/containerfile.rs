@@ -2711,10 +2711,8 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             });
             snap
         };
@@ -3315,10 +3313,8 @@ mod tests {
                 shadow_type: None,
                 shadow_rationale: None,
             }],
-            enabled_units: vec![],
-            disabled_units: vec![],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         });
 
         let output = render_containerfile(&snap, None, None);
@@ -4085,7 +4081,9 @@ RUN dnf install -y \
 
     #[test]
     fn test_containerfile_services() {
-        use inspectah_core::types::units::{PresetDefault, UnitState, UnitStateChange};
+        use inspectah_core::types::units::{
+            PresetDefault, UnitInventoryEntry, UnitState, UnitStateChange,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
@@ -4126,13 +4124,49 @@ RUN dnf install -y \
                     shadow_rationale: None,
                 },
             ],
-            // enabled_units/disabled_units are full inventory — not used by renderer
-            enabled_units: vec![
-                "httpd.service".into(),
-                "sshd.service".into(),
-                "chronyd.service".into(),
+            // The inventory holds every unit — not used by renderer
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "sshd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "chronyd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "cups.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Disabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "NetworkManager.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Disabled,
+                    preset: None,
+                },
             ],
-            disabled_units: vec!["cups.service".into(), "NetworkManager.service".into()],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None, None);
@@ -4144,7 +4178,7 @@ RUN dnf install -y \
             output.contains("systemctl disable \\\n    cups.service"),
             "disable must use multi-line continuation"
         );
-        // Preset-matching units from enabled_units/disabled_units must NOT appear
+        // Preset-matching units from the inventory must NOT appear
         assert!(
             !output.contains("chronyd"),
             "preset-matching enabled unit must not appear"
@@ -7168,7 +7202,7 @@ RUN dnf install -y \
     /// `glibc` are unneeded, so each prints as `name.arch`. Dispositions are
     /// as collected; the not-carried list stays empty until they are set.
     fn not_carried_host() -> InspectionSnapshot {
-        use inspectah_core::types::units::UnitSection;
+        use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState};
         let auto = |name: &str, arch: &str| PackageEntry {
             name: name.into(),
             arch: arch.into(),
@@ -7216,10 +7250,31 @@ RUN dnf install -y \
             ..Default::default()
         });
         snap.units = Some(UnitSection {
-            enabled_units: vec![
-                "firewalld.service".into(),
-                "crond.service".into(),
-                "crond-backup.timer".into(),
+            inventory: vec![
+                UnitInventoryEntry {
+                    unit: "firewalld.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
+                UnitInventoryEntry {
+                    unit: "crond-backup.timer"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                },
             ],
             ..Default::default()
         });
@@ -7345,6 +7400,8 @@ RUN dnf install -y \
     /// and no line outside a comment carries the payload.
     #[test]
     fn not_carried_block_keeps_hostile_fields_inside_the_comment() {
+        use inspectah_core::types::units::{UnitName, UnitNameError};
+
         const PAYLOAD: &str = "\nRUN touch /tmp/injected\n#";
 
         /// Add an auto package nothing needs, so it is in the class.
@@ -7376,25 +7433,13 @@ RUN dnf install -y \
                 add_unneeded(&mut snap, "twoarch", &format!("i686{PAYLOAD}"));
                 snap
             }),
-            ("enabled unit name", {
-                let mut snap = not_carried_host();
-                let unit = format!("evil{PAYLOAD}.service");
-                snap.rpm
-                    .as_mut()
-                    .expect("fixture has an rpm section")
-                    .file_ownership
-                    .push(owns(
-                        "firewalld",
-                        &[format!("/usr/lib/systemd/system/{unit}").as_str()],
-                    ));
-                snap.units
-                    .as_mut()
-                    .expect("fixture has a services section")
-                    .enabled_units
-                    .push(unit);
-                snap
-            }),
         ];
+
+        // An enabled unit name cannot carry the payload: the inventory holds
+        // parsed names only, and the parse refuses the newline.
+        let refused = UnitName::try_from(format!("evil{PAYLOAD}.service"))
+            .expect_err("a newline is not a unit name character");
+        assert_eq!(refused, UnitNameError::InvalidCharacter { ch: '\n' });
 
         for (field, mut snap) in cases {
             super::super::not_carried::apply_scan_package_defaults(&mut snap);

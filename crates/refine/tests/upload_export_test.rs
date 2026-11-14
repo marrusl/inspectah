@@ -1797,10 +1797,8 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
             shadow_type: None,
             shadow_rationale: None,
         }],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     let mut h = Harness::with_snapshot(snap);
     h.set_include("openh264", "x86_64", true);

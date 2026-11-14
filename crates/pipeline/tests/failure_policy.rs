@@ -32,7 +32,9 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::system::SourceSystem;
-use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render::{audit, containerfile, secrets};
@@ -85,8 +87,24 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
             shadow_type: None,
             shadow_rationale: None,
         }],
-        enabled_units: vec!["httpd.service".into()],
-        disabled_units: vec!["cups.service".into()],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "cups.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Disabled,
+                preset: None,
+            },
+        ],
         ..Default::default()
     });
     snap.completeness = Completeness::Partial {
@@ -113,7 +131,14 @@ fn snapshot_with_failed_services() -> InspectionSnapshot {
 fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.units = Some(UnitSection {
-        enabled_units: vec!["myapp.service".into()],
+        inventory: vec![UnitInventoryEntry {
+            unit: "myapp.service"
+                .to_owned()
+                .try_into()
+                .expect("valid unit name"),
+            state: UnitState::Enabled,
+            preset: None,
+        }],
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),
@@ -183,7 +208,14 @@ impl Inspector for DegradedServicesInspector {
         Err(InspectorError::Degraded {
             partial: Box::new(InspectorOutput {
                 section: SectionData::Units(UnitSection {
-                    enabled_units: vec!["httpd.service".into()],
+                    inventory: vec![UnitInventoryEntry {
+                        unit: "httpd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    }],
                     ..Default::default()
                 }),
                 warnings: vec![],
@@ -500,7 +532,14 @@ fn panicking_inspector_produces_failed_status() {
         Box::new(SuccessInspector {
             id: InspectorId::Units,
             section: SectionData::Units(UnitSection {
-                enabled_units: vec!["httpd.service".into()],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 ..Default::default()
             }),
         }),

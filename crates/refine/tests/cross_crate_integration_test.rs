@@ -12,7 +12,7 @@ use inspectah_core::baseline::{
 };
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::units::{UnitSection, UnitStateChange};
+use inspectah_core::types::units::{UnitInventoryEntry, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
@@ -224,7 +224,24 @@ fn service_surface_agreement() {
                 shadow_rationale: None,
             },
         ],
-        enabled_units: vec!["dnf-makecache.service".into(), "httpd.service".into()],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: "dnf-makecache.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+            UnitInventoryEntry {
+                unit: "httpd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            },
+        ],
         ..Default::default()
     });
 
@@ -256,20 +273,22 @@ fn service_surface_agreement() {
         "httpd.service must remain include=true"
     );
 
-    // dnf-makecache.service must NOT be in enabled_units
+    // httpd.service should remain an enabled inventory entry
+    let enabled = |unit: &str| {
+        services
+            .inventory
+            .iter()
+            .any(|e| e.unit.as_str() == unit && e.state == UnitState::Enabled)
+    };
     assert!(
-        !services
-            .enabled_units
-            .contains(&"dnf-makecache.service".to_string()),
-        "dnf-makecache.service must be removed from enabled_units"
+        enabled("httpd.service"),
+        "httpd.service must remain an enabled inventory entry"
     );
 
-    // httpd.service should remain in enabled_units
+    // dnf-makecache.service must NOT be an enabled inventory entry
     assert!(
-        services
-            .enabled_units
-            .contains(&"httpd.service".to_string()),
-        "httpd.service must remain in enabled_units"
+        !enabled("dnf-makecache.service"),
+        "dnf-makecache.service must be removed from the enabled inventory"
     );
 
     // Cross-crate: render_containerfile on the normalized snapshot

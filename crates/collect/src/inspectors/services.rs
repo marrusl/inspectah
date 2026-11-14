@@ -8,9 +8,11 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
+    PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+    UnitStateChange,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
@@ -278,17 +280,16 @@ impl Inspector for ServicesInspector {
             Ok(pair) => pair,
             Err(reason) => {
                 // Degrade: include systemctl data as partial
-                let (enabled_units, disabled_units) = partition_units(&units);
+                let mut warnings = Vec::new();
+                let inventory = partial_inventory(&units, &mut warnings);
                 return Err(InspectorError::Degraded {
                     partial: Box::new(InspectorOutput {
                         section: SectionData::Units(UnitSection {
                             state_changes: Vec::new(),
-                            enabled_units,
-                            disabled_units,
+                            inventory,
                             drop_ins: Vec::new(),
-                            preset_matched_units: Vec::new(),
                         }),
-                        warnings: Vec::new(),
+                        warnings,
                         redaction_hints: Vec::new(),
                     }),
                     reason,
@@ -305,9 +306,8 @@ impl Inspector for ServicesInspector {
         // (static, alias, indirect, generated) are silently dropped;
         // runtime/linked/bad/unknown states emit structured warnings.
         let mut state_changes = Vec::new();
-        let mut enabled_units = Vec::new();
-        let mut disabled_units = Vec::new();
-        let mut preset_matched_units = Vec::new();
+        let mut inventory = Vec::new();
+        let mut inventoried = HashSet::new();
         let mut warnings = Vec::new();
 
         for unit in &units {
@@ -326,30 +326,39 @@ impl Inspector for ServicesInspector {
                 }
             };
 
-            // Build full inventory lists (used by handlers, not by state_changes).
-            // Masked units are NOT added to disabled_units — they only enter
-            // state_changes via the masked bypass path below.
-            match current_state {
-                UnitState::Enabled => enabled_units.push(unit.unit.clone()),
-                UnitState::Disabled => disabled_units.push(unit.unit.clone()),
-                UnitState::Masked => {} // distinct from disabled
+            let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
+                continue;
+            };
+            let real_service = is_real_service(&unit.unit);
+            // Only a unit that can carry a state change has its preset
+            // resolved, so a preset-matched entry is always a real service.
+            let preset = if real_service {
+                resolve_preset_default(&unit.unit, &preset_rules)
+            } else {
+                None
+            };
+
+            // Every unit with a durable state is in the inventory, once:
+            // a name systemctl lists again keeps its first entry.
+            if inventoried.insert(name.clone()) {
+                inventory.push(UnitInventoryEntry {
+                    unit: name.clone(),
+                    state: current_state,
+                    preset,
+                });
             }
 
             // --- Operator-intent gate ---
             // Only real services can produce state_change entries.
             // D-Bus activation aliases and non-.service units are
             // structurally excluded here.
-            if !is_real_service(&unit.unit) {
+            if !real_service {
                 continue;
             }
 
             // Signal 1: Masked services — unambiguous operator intent.
             // Always capture regardless of preset state.
             if current_state == UnitState::Masked {
-                let preset = resolve_preset_default(&unit.unit, &preset_rules);
-                let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
-                    continue;
-                };
                 state_changes.push(UnitStateChange {
                     unit: name,
                     current_state,
@@ -369,8 +378,6 @@ impl Inspector for ServicesInspector {
             // service state from what the distro presets dictate. We need a
             // definitive preset to prove divergence; without one, there is no
             // evidence of operator action.
-            let preset = resolve_preset_default(&unit.unit, &preset_rules);
-
             let (default_state, diverges) = match preset {
                 Some(PresetDefault::Enable) if current_state == UnitState::Disabled => {
                     (Some(PresetDefault::Enable), true)
@@ -383,9 +390,6 @@ impl Inspector for ServicesInspector {
             };
 
             if diverges {
-                let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
-                    continue;
-                };
                 state_changes.push(UnitStateChange {
                     unit: name,
                     current_state,
@@ -398,11 +402,9 @@ impl Inspector for ServicesInspector {
                     shadow_type: None,
                     shadow_rationale: None,
                 });
-            } else if preset.is_some() {
-                // State matches preset — no operator action
-                preset_matched_units.push(unit.unit.clone());
             }
-            // No matching preset rule → no evidence of operator action
+            // State matches preset, or no matching preset rule → no
+            // evidence of operator action. The inventory entry records it.
         }
 
         // 4b. Resolve owning packages for state_changes entries.
@@ -460,8 +462,8 @@ impl Inspector for ServicesInspector {
 
         // 5c. Independent full-shadow scan of /etc/systemd/system/.
         // Step 5b only checks units in state_changes. Services that match
-        // their preset (e.g., sshd enabled with preset=enable) go into
-        // preset_matched_units, not state_changes, so a full shadow at
+        // their preset (e.g., sshd enabled with preset=enable) are only in
+        // the inventory, not state_changes, so a full shadow at
         // /etc/systemd/system/sshd.service would be invisible. This scan
         // catches those by listing /etc/systemd/system/ directly.
         {
@@ -513,10 +515,8 @@ impl Inspector for ServicesInspector {
         // 6. Build result
         let section = UnitSection {
             state_changes,
-            enabled_units,
-            disabled_units,
+            inventory,
             drop_ins,
-            preset_matched_units,
         };
 
         // Preset file read failures are correctness-bearing — a missing
@@ -713,21 +713,36 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     }
 }
 
-/// Partition units into (enabled, disabled) lists.
-fn partition_units(units: &[UnitFileEntry]) -> (Vec<String>, Vec<String>) {
-    let mut enabled = Vec::new();
-    let mut disabled = Vec::new();
+/// The inventory of enabled and disabled units when no preset rule could
+/// be read: every entry has no preset. A name that does not parse is
+/// reported through `warnings` and has no entry.
+fn partial_inventory(
+    units: &[UnitFileEntry],
+    warnings: &mut Vec<Warning>,
+) -> Vec<UnitInventoryEntry> {
+    let mut inventory = Vec::new();
+    let mut inventoried = HashSet::new();
     for u in units {
         if u.unit.contains('@') || u.state == "static" {
             continue;
         }
-        match u.state.as_str() {
-            "enabled" => enabled.push(u.unit.clone()),
-            "disabled" => disabled.push(u.unit.clone()),
-            _ => {}
+        let state = match u.state.as_str() {
+            "enabled" => UnitState::Enabled,
+            "disabled" => UnitState::Disabled,
+            _ => continue,
+        };
+        let Some(name) = proved_unit_name(&u.unit, &u.state, warnings) else {
+            continue;
+        };
+        if inventoried.insert(name.clone()) {
+            inventory.push(UnitInventoryEntry {
+                unit: name,
+                state,
+                preset: None,
+            });
         }
     }
-    (enabled, disabled)
+    inventory
 }
 
 /// Detect whether a unit has a full shadow or drop-in override.
@@ -969,7 +984,7 @@ mod tests {
                 // Partial data should still contain state_changes from systemctl
                 if let SectionData::Units(ref svc) = partial.section {
                     assert!(
-                        !svc.state_changes.is_empty() || !svc.enabled_units.is_empty(),
+                        !svc.state_changes.is_empty() || !svc.inventory.is_empty(),
                         "partial data must contain systemctl results"
                     );
                 }
@@ -1019,7 +1034,7 @@ mod tests {
                 // Partial data should still contain systemctl results
                 if let SectionData::Units(ref svc) = partial.section {
                     assert!(
-                        !svc.enabled_units.is_empty(),
+                        !svc.inventory.is_empty(),
                         "partial data must contain systemctl results"
                     );
                 }
@@ -1868,7 +1883,7 @@ mod tests {
 
     #[test]
     fn test_full_shadow_detected_for_preset_matched_service() {
-        // sshd is enabled with preset=enable → goes into preset_matched_units,
+        // sshd is enabled with preset=enable → a preset-matched inventory entry,
         // NOT state_changes. A full shadow at /etc/systemd/system/sshd.service
         // must still be detected by the independent scan (step 5c).
         let exec = MockExecutor::new()
@@ -1924,11 +1939,12 @@ mod tests {
                     .any(|sc| sc.unit.as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
-            // sshd must be in preset_matched_units
+            // sshd must be a preset-matched inventory entry
             assert!(
-                svc.preset_matched_units
-                    .contains(&"sshd.service".to_string()),
-                "sshd.service must be in preset_matched_units"
+                svc.inventory
+                    .iter()
+                    .any(|e| e.unit.as_str() == "sshd.service" && e.matches_preset()),
+                "sshd.service must be a preset-matched inventory entry"
             );
             // The full shadow must be detected via the independent scan
             let shadow = svc.drop_ins.iter().find(|d| {

@@ -541,8 +541,8 @@ pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
 /// services — units with `/etc/systemd/system/foo.service` shadowing a
 /// vendor unit but no corresponding state divergence entry.
 ///
-/// Only synthesizes when durable host state is known (`enabled_units` or
-/// `disabled_units`). Skips when state is unavailable — the current
+/// Only synthesizes when durable host state is known (an enabled or
+/// disabled `inventory` entry). Skips when state is unavailable — the current
 /// `UnitStateChange` contract requires a non-optional `current_state`.
 pub fn synthesize_orphan_shadows(services: &mut UnitSection) {
     let existing_units: std::collections::HashSet<&str> = services
@@ -559,13 +559,12 @@ pub fn synthesize_orphan_shadows(services: &mut UnitSection) {
             // Derive durable host state from the existing service inventory.
             // Only synthesize when the current UnitStateChange contract can
             // represent that state faithfully.
-            let current_state = if services.disabled_units.contains(&dropin.unit) {
-                Some(UnitState::Disabled)
-            } else if services.enabled_units.contains(&dropin.unit) {
-                Some(UnitState::Enabled)
-            } else {
-                None
-            };
+            let current_state = services
+                .inventory
+                .iter()
+                .find(|e| e.unit.as_str() == dropin.unit)
+                .map(|e| e.state)
+                .filter(|state| matches!(state, UnitState::Enabled | UnitState::Disabled));
 
             let Some(current_state) = current_state else {
                 // The current contract cannot encode "state unavailable" without
@@ -1697,10 +1696,8 @@ mod anaconda_classification {
     fn empty_service_section() -> UnitSection {
         UnitSection {
             state_changes: vec![],
-            enabled_units: vec![],
-            disabled_units: vec![],
+            inventory: vec![],
             drop_ins: vec![],
-            preset_matched_units: vec![],
         }
     }
 
@@ -1838,10 +1835,8 @@ mod anaconda_classification {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             Some(ConfigSection {
                 files: vec![ConfigFileEntry {
@@ -2168,10 +2163,8 @@ mod anaconda_classification {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {
@@ -2227,10 +2220,8 @@ mod anaconda_classification {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {
@@ -2685,17 +2676,22 @@ mod orphan_shadow_synthesis {
     use crate::session::RefineSession;
     use crate::types::{ItemId, RefinementOp};
     use inspectah_core::types::finding::ShadowType;
-    use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitState, UnitStateChange};
+    use inspectah_core::types::units::{
+        SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+    };
 
     /// Build a snapshot with an orphan full-shadow drop-in for the given unit.
-    /// The unit is placed in `enabled_units` so synthesis has durable state.
+    /// The unit is an enabled `inventory` entry so synthesis has durable state.
     fn test_snapshot_with_orphan_shadow(unit: &str) -> InspectionSnapshot {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             units: Some(UnitSection {
                 state_changes: vec![],
-                enabled_units: vec![unit.to_string()],
-                disabled_units: vec![],
+                inventory: vec![UnitInventoryEntry {
+                    unit: unit.to_owned().try_into().expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![SystemdDropIn {
                     unit: unit.to_string(),
                     path: format!("/etc/systemd/system/{unit}"),
@@ -2705,7 +2701,6 @@ mod orphan_shadow_synthesis {
                     ),
                     ..Default::default()
                 }],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         }
@@ -2717,8 +2712,14 @@ mod orphan_shadow_synthesis {
     fn orphan_full_shadow_gets_synthetic_state_change() {
         let mut services = UnitSection {
             state_changes: vec![],
-            enabled_units: vec!["sshd.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            }],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),
                 path: "/etc/systemd/system/sshd.service".into(),
@@ -2726,7 +2727,6 @@ mod orphan_shadow_synthesis {
                 shadow_rationale: Some("base image updates...".into()),
                 ..Default::default()
             }],
-            preset_matched_units: vec![],
         };
         synthesize_orphan_shadows(&mut services);
         assert_eq!(services.state_changes.len(), 1);
@@ -2753,14 +2753,19 @@ mod orphan_shadow_synthesis {
                 shadow_type: None,
                 shadow_rationale: None,
             }],
-            enabled_units: vec!["sshd.service".into()],
-            disabled_units: vec![],
+            inventory: vec![UnitInventoryEntry {
+                unit: "sshd.service"
+                    .to_owned()
+                    .try_into()
+                    .expect("valid unit name"),
+                state: UnitState::Enabled,
+                preset: None,
+            }],
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".into(),
                 shadow_type: Some(ShadowType::FullShadow),
                 ..Default::default()
             }],
-            preset_matched_units: vec![],
         };
         synthesize_orphan_shadows(&mut services);
         assert_eq!(services.state_changes.len(), 1, "should not duplicate");
@@ -2773,14 +2778,12 @@ mod orphan_shadow_synthesis {
         let mut snap = InspectionSnapshot {
             units: Some(UnitSection {
                 state_changes: vec![],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![SystemdDropIn {
                     unit: "sshd.service".into(),
                     shadow_type: Some(ShadowType::FullShadow),
                     ..Default::default()
                 }],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         };

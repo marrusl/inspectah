@@ -91,10 +91,10 @@ no list is emitted, when:
   `not_carried_packages` and the notice as `not_carried_notice`; see
   [Refine projection contract](#refine-projection-contract).
 
-Order on every surface: packages owning a unit in `services.enabled_units`
-first, then the rest; each part by name, then arch. The display name is
-`name`, or `name.arch` when the list holds more than one arch of that
-name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
+Order on every surface: packages owning an enabled unit in
+`units.inventory` first, then the rest; each part by name, then arch.
+The display name is `name`, or `name.arch` when the list holds more
+than one arch of that name. All reason wording comes from the one constant `NOT_CARRIED_REASON`.
 
 ## What it does not promise
 

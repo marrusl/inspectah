@@ -235,10 +235,8 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         // The dependency owns a unit too. dnf installs it with the leaf,
         // so its unit is enabled although refine excludes it by default.
         state_changes: vec![unit(UNIT, LEAF), unit(DEP_UNIT, "openh264")],
-        enabled_units: vec![],
-        disabled_units: vec![],
+        inventory: vec![],
         drop_ins: vec![],
-        preset_matched_units: vec![],
     });
     let about_the_packages = |containerfile: &str| -> Vec<String> {
         containerfile

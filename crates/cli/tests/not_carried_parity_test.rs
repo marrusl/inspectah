@@ -69,6 +69,7 @@ use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::units::UnitState;
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::export_warning::{ExportWarning, ExportWarningKind};
@@ -1188,8 +1189,8 @@ fn the_scan_prints_nothing_without_not_carried_unit_owners() {
         .units
         .as_mut()
         .expect("the services section")
-        .enabled_units
-        .clear();
+        .inventory
+        .retain(|e| e.state != UnitState::Enabled);
     let dir = tempfile::tempdir().expect("tempdir");
     let snapshot = scan_export(snapshot, dir.path());
     assert!(

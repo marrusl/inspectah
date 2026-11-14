@@ -159,7 +159,9 @@ mod tests {
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{RpmSection, VersionChangeDirection};
-    use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
+    use inspectah_core::types::units::{
+        PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
+    };
 
     /// Snapshot with one service state change.
     fn snapshot_with_service() -> InspectionSnapshot {
@@ -179,10 +181,15 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         }

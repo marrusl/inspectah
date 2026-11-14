@@ -27,21 +27,67 @@ expression: section
       "aggregate": null
     }
   ],
-  "enabled_units": [
-    "auditd.service",
-    "bluetooth.service",
-    "chronyd.service",
-    "firewalld.service",
-    "httpd.service",
-    "kdump.service",
-    "libvirtd.service",
-    "NetworkManager.service",
-    "sshd.service",
-    "tuned.service"
-  ],
-  "disabled_units": [
-    "cups.service",
-    "gdm.service"
+  "inventory": [
+    {
+      "unit": "auditd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "bluetooth.service",
+      "state": "enabled",
+      "preset": "disable"
+    },
+    {
+      "unit": "chronyd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "cups.service",
+      "state": "disabled",
+      "preset": null
+    },
+    {
+      "unit": "firewalld.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "gdm.service",
+      "state": "disabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "httpd.service",
+      "state": "enabled",
+      "preset": null
+    },
+    {
+      "unit": "kdump.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "libvirtd.service",
+      "state": "enabled",
+      "preset": null
+    },
+    {
+      "unit": "NetworkManager.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "sshd.service",
+      "state": "enabled",
+      "preset": "enable"
+    },
+    {
+      "unit": "tuned.service",
+      "state": "enabled",
+      "preset": "enable"
+    }
   ],
   "drop_ins": [
     {
@@ -55,14 +101,5 @@ expression: section
       "variant_selection": "Only",
       "aggregate": null
     }
-  ],
-  "preset_matched_units": [
-    "auditd.service",
-    "chronyd.service",
-    "firewalld.service",
-    "kdump.service",
-    "NetworkManager.service",
-    "sshd.service",
-    "tuned.service"
   ]
 }

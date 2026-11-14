@@ -2103,7 +2103,7 @@ impl RefineSession {
                         // absence from `state_changes`. The services inspector
                         // records a row only for a unit whose enable state
                         // diverges from its preset; a unit at its preset state
-                        // lands in `preset_matched_units` and has no row at
+                        // is a preset-matched `inventory` entry and has no row at
                         // all. Absence means "the operator took no decision
                         // here", not "excluded" -- reading it as exclusion made
                         // the common case (a drop-in over a preset-state unit)
@@ -5188,7 +5188,7 @@ mod tests {
     // --- Service refinement tests ---
 
     use inspectah_core::types::units::{
-        PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
+        PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
     };
 
     /// Build a snapshot with services and drop-ins for SetInclude tests.
@@ -5223,8 +5223,24 @@ mod tests {
                         shadow_rationale: None,
                     },
                 ],
-                enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
-                disabled_units: vec![],
+                inventory: vec![
+                    UnitInventoryEntry {
+                        unit: "httpd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                    UnitInventoryEntry {
+                        unit: "sshd.service"
+                            .to_owned()
+                            .try_into()
+                            .expect("valid unit name"),
+                        state: UnitState::Enabled,
+                        preset: None,
+                    },
+                ],
                 drop_ins: vec![
                     SystemdDropIn {
                         unit: "httpd.service".into(),
@@ -5243,7 +5259,6 @@ mod tests {
                         ..Default::default()
                     },
                 ],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         }
@@ -5852,7 +5867,7 @@ mod tests {
     #[test]
     fn session_exposes_decisions_and_reference() {
         use inspectah_core::types::units::{
-            PresetDefault, UnitSection, UnitState, UnitStateChange,
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
         };
 
         let snap = InspectionSnapshot {
@@ -5871,10 +5886,15 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         };
@@ -5894,7 +5914,7 @@ mod tests {
         use inspectah_core::types::rpm::VersionChange;
         use inspectah_core::types::rpm::VersionChangeDirection;
         use inspectah_core::types::units::{
-            PresetDefault, UnitSection, UnitState, UnitStateChange,
+            PresetDefault, UnitInventoryEntry, UnitSection, UnitState, UnitStateChange,
         };
 
         let snap = InspectionSnapshot {
@@ -5946,10 +5966,15 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 }],
-                enabled_units: vec!["httpd.service".into()],
-                disabled_units: vec![],
+                inventory: vec![UnitInventoryEntry {
+                    unit: "httpd.service"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state: UnitState::Enabled,
+                    preset: None,
+                }],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             ..Default::default()
         };
@@ -6367,10 +6392,8 @@ mod tests {
             }),
             units: Some(UnitSection {
                 state_changes: vec![],
-                enabled_units: vec![],
-                disabled_units: vec![],
+                inventory: vec![],
                 drop_ins: vec![],
-                preset_matched_units: vec![],
             }),
             config: Some(ConfigSection { files: vec![] }),
             ..Default::default()
