@@ -167,7 +167,7 @@ pub struct NotCarriedPackage {
     pub arch: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `units.enabled_units` this package owns.
+    /// Units enabled in `units.inventory` that this package owns.
     pub enabled_units: Vec<String>,
     /// Another arch of this name is in the same list.
     arch_qualified: bool,
@@ -184,7 +184,7 @@ impl NotCarriedPackage {
         }
     }
 
-    /// Whether this package owns a unit in `units.enabled_units`: the
+    /// Whether this package owns a unit enabled in `units.inventory`: the
     /// one test every surface uses to put a package first and to name it
     /// in [`not_carried_notice`].
     pub fn owns_enabled_unit(&self) -> bool {
@@ -198,7 +198,7 @@ const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 /// Every surface: the excluded [`AutoCarriage::Unneeded`] packages, in
 /// display order.
 ///
-/// Packages owning a unit in `units.enabled_units` come first, then
+/// Packages owning a unit enabled in `units.inventory` come first, then
 /// the rest; each part is sorted by name, then arch. Empty under the
 /// [`classify_auto_carriage`] fallback.
 ///

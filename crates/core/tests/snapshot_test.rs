@@ -96,8 +96,9 @@ fn schema_26_snapshot_is_refused() {
     }
 }
 
-/// A schema-27 snapshot, the last with the `services` section. Read by the
-/// schema 27 refusal test in every production loader.
+/// A schema-27 snapshot, the last with the `services` section. The other
+/// production loaders' refusal tests read the same fixture file with
+/// `include_str!`.
 const SCHEMA_27_SNAPSHOT: &str =
     include_str!("../../../testdata/fixtures/snapshot/schema-27-services-section.json");
 

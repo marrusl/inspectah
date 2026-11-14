@@ -4112,7 +4112,7 @@ RUN dnf install -y \
                     attention_reason: None,
                 },
             ],
-            // The inventory holds every unit — not used by renderer
+            // The inventory holds every unit: not used by renderer
             inventory: vec![
                 UnitInventoryEntry {
                     unit: "httpd.service"

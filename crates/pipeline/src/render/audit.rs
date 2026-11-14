@@ -976,11 +976,11 @@ fn render_fcontext_rules(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
 
 /// Render Services sections (services, scheduled_tasks).
 fn render_services_sections(snap: &InspectionSnapshot, lines: &mut Vec<String>) {
-    // Service State Changes
+    // Unit State Changes
     if let Some(services) = &snap.units
         && !services.state_changes.is_empty()
     {
-        lines.push("### Service State Changes".into());
+        lines.push("### Unit State Changes".into());
         lines.push(String::new());
         lines.push("| Unit | Current | Default | Action |".into());
         lines.push("|------|---------|---------|--------|".into());

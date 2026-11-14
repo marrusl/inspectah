@@ -3637,6 +3637,62 @@ mod tests {
         }
     }
 
+    /// The units table filter: the input's `data-section`, the table's
+    /// `data-filterable` and the filter data key `report.js` derives from
+    /// `data-section` must be one string, or typing in the box hides
+    /// nothing. The input renders from ten rows up.
+    #[test]
+    fn units_filter_keys_agree_across_input_table_and_data() {
+        const ROWS: usize = 10;
+        let mut snap = test_snapshot();
+        snap.units = Some(inspectah_core::types::units::UnitSection {
+            state_changes: (0..ROWS)
+                .map(|i| inspectah_core::types::units::UnitStateChange {
+                    unit: format!("unit{i}.service").try_into().unwrap(),
+                    current_state: UnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    disposition: FindingKind::included(),
+                    locked: false,
+                    owning_package: None,
+                    aggregate: None,
+                    attention_reason: None,
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let html = render_report(&snap, &RenderContext { target: None });
+
+        let attr = |marker: &str| -> String {
+            let rest = html
+                .split_once(marker)
+                .unwrap_or_else(|| panic!("{marker} must render"))
+                .1;
+            rest.split_once('"').unwrap().0.to_string()
+        };
+        let section = attr(r#"id="filter-units" data-section=""#);
+        assert_eq!(section, "units");
+        assert!(
+            html.contains(&format!(r#"data-filterable="{section}""#)),
+            "the units table must carry data-filterable=\"{section}\""
+        );
+        assert!(html.contains(r#"<label for="filter-units">Filter Units</label>"#));
+
+        // `report.js` maps `data-section` to its JSON key by replacing `-`
+        // with `_`; `units` has no special case.
+        let json_key = section.replace('-', "_");
+        let blob = html
+            .split_once(r#"id="report-filter-data">"#)
+            .and_then(|(_, rest)| rest.split_once("</script>"))
+            .map(|(json, _)| json)
+            .expect("filter data must render");
+        let filter: serde_json::Value = serde_json::from_str(blob).expect("filter data is JSON");
+        assert_eq!(
+            filter[&json_key].as_array().map(Vec::len),
+            Some(ROWS),
+            "filter data key {json_key:?} must hold one entry per row: {filter}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Structure snapshot test (T13 — spec proof #11)
     // -----------------------------------------------------------------------

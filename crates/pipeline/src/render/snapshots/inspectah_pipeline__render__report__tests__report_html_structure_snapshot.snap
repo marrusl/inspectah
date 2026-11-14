@@ -449,7 +449,7 @@ expression: stable
 
 
 
-<table class="report-table" data-filterable="services">
+<table class="report-table" data-filterable="units">
   <thead>
     <tr>
       <th>Unit</th>

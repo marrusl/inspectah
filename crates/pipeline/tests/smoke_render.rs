@@ -375,8 +375,8 @@ fn all_sections_in_audit_report() {
 
     // Services state changes appear
     assert!(
-        md.contains("Service State Changes"),
-        "audit report must contain Service State Changes heading"
+        md.contains("### Unit State Changes"),
+        "audit report must contain the Unit State Changes heading"
     );
     assert!(
         md.contains("httpd.service"),
