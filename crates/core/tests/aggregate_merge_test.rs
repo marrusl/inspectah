@@ -4,6 +4,8 @@ use inspectah_core::aggregate::merge::{
     merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
 };
+use inspectah_core::aggregate::merge_snapshots;
+use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::VariantSelection;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
@@ -11,6 +13,7 @@ use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakAp
 use inspectah_core::types::kernelboot::{AlternativeEntry, KernelBootSection, KernelModule};
 use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{
     EnabledModuleStream, PackageEntry, RepoFile, RpmSection, VersionChange, VersionLockEntry,
 };
@@ -1344,6 +1347,95 @@ fn test_merge_inventory_tie_goes_to_first_host() {
         inventory_summary(&result),
         vec![("a.service", UnitState::Disabled, None)]
     );
+}
+
+/// The preset comes from the first host with the winning state, not from
+/// the first host overall: h1's state loses, so its missing preset is not
+/// used, and of the two hosts with the winning state h2 comes first. The
+/// winning state is not the first entry's, so keeping the first entry
+/// would fail here.
+#[test]
+fn test_merge_inventory_preset_from_first_host_with_winning_state() {
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let sections = vec![
+        inventory_section(vec![inv("a.service", UnitState::Disabled, None)]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        )]),
+        inventory_section(vec![inv(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Enable),
+        )]),
+    ];
+    let result = merge_service_sections(sections, 3, &hostnames).unwrap();
+
+    assert_eq!(
+        inventory_summary(&result),
+        vec![(
+            "a.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable)
+        )]
+    );
+}
+
+/// A host snapshot whose only unit is `a.service` in `state`.
+fn inventory_host(
+    hostname: &str,
+    state: UnitState,
+    preset: Option<PresetDefault>,
+) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.meta.insert(
+        "hostname".to_string(),
+        serde_json::Value::String(hostname.into()),
+    );
+    snap.os_release = Some(OsRelease {
+        version_id: "9.4".into(),
+        ..Default::default()
+    });
+    snap.rpm = Some(RpmSection::default());
+    snap.units = inventory_section(vec![inv("a.service", state, preset)]);
+    snap
+}
+
+/// Through `merge_snapshots()`, a tie goes to the first host by hostname
+/// whatever order the snapshots are given in: `alpha` wins whether it is
+/// passed first or second. Giving `alpha` the other state flips the
+/// result, so the winner is the host, not a fixed state.
+#[test]
+fn test_merge_inventory_tie_follows_hostname_not_argument_order() {
+    let pairs = [
+        (
+            (UnitState::Disabled, Some(PresetDefault::Enable)),
+            (UnitState::Enabled, Some(PresetDefault::Disable)),
+        ),
+        (
+            (UnitState::Enabled, Some(PresetDefault::Disable)),
+            (UnitState::Disabled, Some(PresetDefault::Enable)),
+        ),
+    ];
+    for ((alpha_state, alpha_preset), (bravo_state, bravo_preset)) in pairs {
+        for alpha_first in [false, true] {
+            let alpha = inventory_host("alpha", alpha_state, alpha_preset);
+            let bravo = inventory_host("bravo", bravo_state, bravo_preset);
+            let snapshots = if alpha_first {
+                vec![alpha, bravo]
+            } else {
+                vec![bravo, alpha]
+            };
+            let (merged, _) = merge_snapshots(snapshots, None, None).unwrap();
+            let units = merged.units.expect("the merge keeps the units section");
+            assert_eq!(
+                inventory_summary(&units),
+                vec![("a.service", alpha_state, alpha_preset)],
+                "alpha passed first: {alpha_first}"
+            );
+        }
+    }
 }
 
 // ===========================================================================

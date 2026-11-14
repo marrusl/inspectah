@@ -2241,6 +2241,99 @@ fn a_full_shadow_at_its_preset_is_copied_with_no_systemctl_line() {
     );
 }
 
+/// The reversed condition of the test above, for the same unit and through
+/// the same route: given a real state change (enabled where its preset says
+/// disable), the shadowed unit keeps its `systemctl enable` line beside the
+/// copied shadow. At its preset, as `full_shadow_snapshot()` has it, the
+/// same unit gets none.
+#[test]
+fn a_full_shadow_with_a_real_state_change_keeps_its_systemctl_line() {
+    use inspectah_core::types::units::{PresetDefault, UnitName, UnitState, UnitStateChange};
+
+    let mut snap = full_shadow_snapshot();
+    let units = snap.units.as_mut().unwrap();
+    units.state_changes.push(UnitStateChange {
+        unit: UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
+        current_state: UnitState::Enabled,
+        default_state: Some(PresetDefault::Disable),
+        disposition: FindingKind::included(),
+        locked: false,
+        owning_package: Some("openssh-server".into()),
+        aggregate: None,
+        attention_reason: None,
+    });
+    units
+        .inventory
+        .iter_mut()
+        .find(|e| e.unit.as_str() == SHADOWED_UNIT)
+        .expect("the fixture inventories the shadowed unit")
+        .preset = Some(PresetDefault::Disable);
+
+    let diverging = RefineSession::new(snap);
+    let containerfile = &diverging.view().containerfile_preview;
+    let systemctl = systemctl_instructions(containerfile);
+    assert!(
+        systemctl
+            .iter()
+            .any(|i| i.starts_with("RUN systemctl enable") && i.contains(SHADOWED_UNIT)),
+        "a diverging shadowed unit must render `systemctl enable {SHADOWED_UNIT}`, got:\n{containerfile}"
+    );
+    assert!(
+        containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+        "the full shadow must still be copied, got:\n{containerfile}"
+    );
+
+    let at_preset = RefineSession::new(full_shadow_snapshot());
+    let systemctl = systemctl_instructions(&at_preset.view().containerfile_preview);
+    assert!(
+        !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+        "at its preset, no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
+    );
+}
+
+/// The retired synthesis gave a `systemctl` line to an enabled or disabled
+/// unit with a full shadow and no known preset (`preset: None`) too, not
+/// only to one at its preset. That line is gone as well: the shadow is
+/// copied and no `systemctl` line names the unit, in either state.
+#[test]
+fn a_full_shadow_with_no_known_preset_gets_no_systemctl_line() {
+    use inspectah_core::types::units::UnitState;
+
+    for state in [UnitState::Enabled, UnitState::Disabled] {
+        let mut snap = full_shadow_snapshot();
+        let entry = snap
+            .units
+            .as_mut()
+            .unwrap()
+            .inventory
+            .iter_mut()
+            .find(|e| e.unit.as_str() == SHADOWED_UNIT)
+            .expect("the fixture inventories the shadowed unit");
+        entry.state = state;
+        entry.preset = None;
+
+        let session = RefineSession::new(snap);
+        let containerfile = &session.view().containerfile_preview;
+        let systemctl = systemctl_instructions(containerfile);
+
+        // Positive control: the real state change renders its enable line.
+        assert!(
+            systemctl
+                .iter()
+                .any(|i| i.starts_with("RUN systemctl enable") && i.contains(CHANGED_UNIT)),
+            "{state}: the real state change must render, got:\n{containerfile}"
+        );
+        assert!(
+            containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+            "{state}: the full shadow must still be copied, got:\n{containerfile}"
+        );
+        assert!(
+            !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+            "{state}: no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
+        );
+    }
+}
+
 // ── The units view fields and operation ──────────────────────────────
 
 /// The decision view names its unit rows `unit_states` and `unit_dropins`;
