@@ -1344,7 +1344,7 @@ fn key_and_zone_counts_follow_what_the_export_stages() {
         snap
     };
     let zones_line =
-        |n: usize| format!("# {n} custom firewall zone(s) — included in COPY config/etc/ below");
+        |n: usize| format!("# {n} custom firewall zone(s): included in COPY config/etc/ below");
 
     let conflicts = vec![
         config_entry(&format!("{KEY_B}/x"), "x\n"),

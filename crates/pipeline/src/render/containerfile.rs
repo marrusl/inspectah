@@ -1311,7 +1311,7 @@ fn network_section_lines(snap: &InspectionSnapshot, firewall_only: bool) -> Vec<
             let mut fw_body: Vec<String> = Vec::new();
             if included_zones > 0 {
                 fw_body.push(format!(
-                    "# {} custom firewall zone(s) — included in COPY config/etc/ below",
+                    "# {} custom firewall zone(s): included in COPY config/etc/ below",
                     included_zones
                 ));
             }
@@ -1736,9 +1736,7 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             &format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}"),
         );
         if service_staged {
-            body.push(
-                "# Flatpak applications — installed on first boot via oneshot service".into(),
-            );
+            body.push("# Flatpak applications: installed on first boot via oneshot service".into());
         }
         body.push("# Manifest: flatpak/flatpak-install.json".into());
         body.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
