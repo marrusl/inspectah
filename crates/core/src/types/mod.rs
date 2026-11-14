@@ -22,6 +22,7 @@ pub mod subscription;
 pub mod symlink_allowlist;
 pub mod sysctl;
 pub mod system;
+pub mod units;
 pub mod users;
 pub mod verified_upload;
 pub mod warnings;
