@@ -1405,7 +1405,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     if !carried.is_empty() {
         let names: Vec<String> = carried.iter().map(shown).collect();
         body.push(format!(
-            "# Local timers carried with the configuration tree ({}): {}",
+            "# Local timers carried with their configuration or drop-in row ({}): {}",
             carried.len(),
             names.join(", ")
         ));

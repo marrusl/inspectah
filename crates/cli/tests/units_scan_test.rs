@@ -5008,13 +5008,15 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
 }
 
 /// The scheduled section's comment says which local timers the export
-/// carries: one line for the timers whose file is staged, one for those
+/// carries: one line for the timers whose file is staged (by its config
+/// row, or its drop-in row for a copy of a vendor timer), one for those
 /// whose file is not, with the plan's `UnitFileNotStaged` text. Control:
 /// with both config rows included, both timers are on the carried line
-/// and there is no not-carried line.
+/// and there is no not-carried line; with both excluded, only the
+/// not-carried line is written.
 #[test]
 fn the_local_timers_comment_says_which_are_carried() {
-    const CARRIED: &str = "# Local timers carried with the configuration tree";
+    const CARRIED: &str = "# Local timers carried with their configuration or drop-in row";
     const NOT_CARRIED: &str = "# Local timers not carried";
     let body = "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n";
     let snap = scan(
@@ -5046,7 +5048,7 @@ fn the_local_timers_comment_says_which_are_carried() {
     ));
     assert_eq!(
         line(&excluded, CARRIED).as_deref(),
-        Some("# Local timers carried with the configuration tree (1): report.timer"),
+        Some("# Local timers carried with their configuration or drop-in row (1): report.timer"),
         "{excluded}"
     );
     assert_eq!(
@@ -5055,4 +5057,25 @@ fn the_local_timers_comment_says_which_are_carried() {
         "{excluded}"
     );
     assert!(!excluded.contains("Existing local timers"), "{excluded}");
+
+    // Every timer's row excluded: no carried line, both not carried.
+    let all_excluded = containerfile_in(&exported_after(
+        &snap,
+        &[
+            (config_item(&etc_path("audit.timer")), false),
+            (config_item(&etc_path("report.timer")), false),
+        ],
+    ));
+    assert_eq!(line(&all_excluded, CARRIED), None, "{all_excluded}");
+    let not_carried = line(&all_excluded, NOT_CARRIED).expect("a not-carried line");
+    assert!(
+        not_carried.starts_with("# Local timers not carried (2): "),
+        "{not_carried}"
+    );
+    for timer in ["audit.timer", "report.timer"] {
+        assert!(
+            not_carried.contains(&format!("{timer} (its unit file is not in the export)")),
+            "{not_carried}"
+        );
+    }
 }
