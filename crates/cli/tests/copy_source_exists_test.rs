@@ -558,7 +558,7 @@ fn the_fixture_populates_the_optional_export_directories() {
     );
 
     let drop_ins: Vec<&str> = snapshot
-        .services
+        .units
         .as_ref()
         .expect("the services section")
         .drop_ins

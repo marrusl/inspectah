@@ -31,8 +31,8 @@ use inspectah_core::types::completeness::{
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render::{audit, containerfile, secrets};
@@ -70,12 +70,12 @@ fn minimal_mock() -> MockExecutor {
 /// Build a snapshot with services Degraded — partial data present.
 /// Includes a state_change entry to verify degraded data still renders.
 fn snapshot_with_degraded_services() -> InspectionSnapshot {
-    use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+    use inspectah_core::types::units::{PresetDefault, UnitState};
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: "httpd.service".to_owned().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,
@@ -90,7 +90,7 @@ fn snapshot_with_degraded_services() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.completeness = Completeness::Partial {
-        degraded_sections: vec![InspectorId::Services],
+        degraded_sections: vec![InspectorId::Units],
         reason: "services inspector returned partial data".into(),
     };
     snap
@@ -101,7 +101,7 @@ fn snapshot_with_failed_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     // services is None — failed inspector produced no data
     snap.completeness = Completeness::Incomplete {
-        failed_sections: vec![InspectorId::Services],
+        failed_sections: vec![InspectorId::Units],
         degraded_sections: vec![],
         reason: "services inspector failed: permission denied".into(),
     };
@@ -112,7 +112,7 @@ fn snapshot_with_failed_services() -> InspectionSnapshot {
 /// a secret value, to test that redaction still scans degraded content.
 fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         enabled_units: vec!["myapp.service".into()],
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
@@ -125,7 +125,7 @@ fn snapshot_with_degraded_services_and_secret() -> InspectionSnapshot {
         ..Default::default()
     });
     snap.completeness = Completeness::Partial {
-        degraded_sections: vec![InspectorId::Services],
+        degraded_sections: vec![InspectorId::Units],
         reason: "services inspector returned partial data".into(),
     };
     snap
@@ -168,7 +168,7 @@ struct DegradedServicesInspector;
 
 impl Inspector for DegradedServicesInspector {
     fn id(&self) -> InspectorId {
-        InspectorId::Services
+        InspectorId::Units
     }
 
     fn applicable_to(&self) -> &[SourceSystemKind] {
@@ -182,7 +182,7 @@ impl Inspector for DegradedServicesInspector {
     ) -> Result<InspectorOutput, InspectorError> {
         Err(InspectorError::Degraded {
             partial: Box::new(InspectorOutput {
-                section: SectionData::Services(ServiceSection {
+                section: SectionData::Units(UnitSection {
                     enabled_units: vec!["httpd.service".into()],
                     ..Default::default()
                 }),
@@ -199,7 +199,7 @@ struct FailedServicesInspector;
 
 impl Inspector for FailedServicesInspector {
     fn id(&self) -> InspectorId {
-        InspectorId::Services
+        InspectorId::Units
     }
 
     fn applicable_to(&self) -> &[SourceSystemKind] {
@@ -306,8 +306,8 @@ fn failed_section_appears_in_audit_with_explanation() {
         "audit report must distinguish failed sections with a Failed subheading"
     );
     assert!(
-        md.contains("services"),
-        "audit report must list the failed services section"
+        md.contains("- `units`"),
+        "audit report must list the failed units section"
     );
 
     // Must include the reason
@@ -373,8 +373,8 @@ fn all_success_produces_complete() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(SuccessInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(Default::default()),
+            id: InspectorId::Units,
+            section: SectionData::Units(Default::default()),
         }),
         Box::new(SuccessInspector {
             id: InspectorId::Storage,
@@ -430,7 +430,7 @@ fn one_degraded_produces_partial() {
             degraded_sections, ..
         } => {
             assert!(
-                degraded_sections.contains(&InspectorId::Services),
+                degraded_sections.contains(&InspectorId::Units),
                 "Services must be in degraded_sections"
             );
         }
@@ -439,7 +439,7 @@ fn one_degraded_produces_partial() {
 
     // Degraded partial data must be routed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "degraded services partial data must be routed to snapshot"
     );
 }
@@ -472,7 +472,7 @@ fn one_failed_produces_incomplete() {
             failed_sections, ..
         } => {
             assert!(
-                failed_sections.contains(&InspectorId::Services),
+                failed_sections.contains(&InspectorId::Units),
                 "Services must be in failed_sections"
             );
         }
@@ -481,7 +481,7 @@ fn one_failed_produces_incomplete() {
 
     // Failed inspector produces no data
     assert!(
-        pipeline.state.snapshot.services.is_none(),
+        pipeline.state.snapshot.units.is_none(),
         "failed services must not have data in snapshot"
     );
 }
@@ -498,8 +498,8 @@ fn panicking_inspector_produces_failed_status() {
 
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(SuccessInspector {
-            id: InspectorId::Services,
-            section: SectionData::Services(ServiceSection {
+            id: InspectorId::Units,
+            section: SectionData::Units(UnitSection {
                 enabled_units: vec!["httpd.service".into()],
                 ..Default::default()
             }),
@@ -522,7 +522,7 @@ fn panicking_inspector_produces_failed_status() {
 
     // Non-panicking inspectors must succeed
     assert!(
-        pipeline.state.snapshot.services.is_some(),
+        pipeline.state.snapshot.units.is_some(),
         "services must succeed despite another inspector panicking"
     );
     assert!(

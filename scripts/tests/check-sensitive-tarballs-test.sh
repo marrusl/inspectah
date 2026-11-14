@@ -66,10 +66,10 @@ expect() {
     ok "$desc"
 }
 
-CLEAN_SNAPSHOT='{"schema_version":27,"redaction_state":{"state":"fully_redacted","redacted_by":"t","config_hash":"h"}}'
-RETAINED_SNAPSHOT='{"schema_version":27,"redaction_state":{"state":"sensitive_retained","redacted_by":"t","config_hash":"h","unresolved_count":0}}'
+CLEAN_SNAPSHOT='{"schema_version":28,"redaction_state":{"state":"fully_redacted","redacted_by":"t","config_hash":"h"}}'
+RETAINED_SNAPSHOT='{"schema_version":28,"redaction_state":{"state":"sensitive_retained","redacted_by":"t","config_hash":"h","unresolved_count":0}}'
 # An aggregate snapshot: the merge drops redaction_state and keeps the flag.
-FLAGGED_SNAPSHOT='{"schema_version":27,"sensitive_snapshot":true,"preserved_subscription":true}'
+FLAGGED_SNAPSHOT='{"schema_version":28,"sensitive_snapshot":true,"preserved_subscription":true}'
 
 make_tarball retained host-a "$RETAINED_SNAPSHOT"
 make_tarball flagged fleet "$FLAGGED_SNAPSHOT"
@@ -77,7 +77,7 @@ make_tarball entitlement host-b "$CLEAN_SNAPSHOT" subscription/entitlement/123-k
 make_tarball entitlement-no-snapshot stray "" subscription/entitlement/123.pem
 make_tarball clean host-c "$CLEAN_SNAPSHOT" subscription/rhsm/rhsm.conf
 make_tarball unrelated not-inspectah "" docs/readme.txt
-make_tarball badjson host-d '{"schema_version": 27,'
+make_tarball badjson host-d '{"schema_version": 28,'
 printf 'this is not a gzip stream\n' > "$WORK/corrupt.tar.gz"
 tar -cf "$WORK/retained-bare.tar" -C "$WORK/src-retained" host-a
 tar -cf "$WORK/clean-bare.tar" -C "$WORK/src-clean" host-c

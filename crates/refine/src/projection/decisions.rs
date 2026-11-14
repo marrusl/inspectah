@@ -159,19 +159,17 @@ mod tests {
     use inspectah_core::snapshot::InspectionSnapshot;
     use inspectah_core::types::FindingKind;
     use inspectah_core::types::rpm::{RpmSection, VersionChangeDirection};
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-    };
+    use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 
     /// Snapshot with one service state change.
     fn snapshot_with_service() -> InspectionSnapshot {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
             rpm: Some(RpmSection::default()),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -196,7 +194,7 @@ mod tests {
         let proj = project_decisions(&session);
 
         assert_eq!(proj.service_states.len(), 1);
-        assert_eq!(proj.service_states[0].entry.unit, "httpd.service");
+        assert_eq!(proj.service_states[0].entry.unit.as_str(), "httpd.service");
     }
 
     #[test]
@@ -279,10 +277,10 @@ mod tests {
                 }],
                 ..Default::default()
             }),
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
                     locked: false,

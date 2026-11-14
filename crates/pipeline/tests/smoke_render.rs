@@ -11,8 +11,8 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::kernelboot::KernelBootSection;
 // redaction types used indirectly via the redaction engine in test 8
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, report, secrets};
 use tempfile::TempDir;
 
@@ -21,13 +21,13 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 fn snapshot_with_services() -> InspectionSnapshot {
-    use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
+    use inspectah_core::types::units::{PresetDefault, UnitState};
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
+            UnitStateChange {
+                unit: "httpd.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
@@ -37,9 +37,9 @@ fn snapshot_with_services() -> InspectionSnapshot {
                 shadow_type: None,
                 shadow_rationale: None,
             },
-            ServiceStateChange {
-                unit: "cups.service".into(),
-                current_state: ServiceUnitState::Disabled,
+            UnitStateChange {
+                unit: "cups.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
@@ -105,7 +105,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
 
 fn snapshot_all_sections() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = snapshot_with_services().services;
+    snap.units = snapshot_with_services().units;
     snap.storage = snapshot_with_storage().storage;
     snap.kernel_boot = snapshot_with_kernelboot().kernel_boot;
     snap.config = Some(ConfigSection {
@@ -450,7 +450,7 @@ fn credential_refs_in_secrets_review() {
 
     // Plant secrets that the redaction engine will detect:
     // 1. Drop-in with a password environment variable
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "etc/systemd/system/myapp.service.d/override.conf".into(),

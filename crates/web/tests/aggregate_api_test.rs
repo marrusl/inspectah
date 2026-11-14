@@ -8,7 +8,7 @@ use inspectah_core::types::aggregate::{
 };
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::ContentHash;
 use inspectah_web::handlers::AppState;
@@ -658,7 +658,7 @@ async fn aggregate_view_informational_variants_from_quadlets_and_dropins() {
     });
 
     // Service drop-in with 2 variants
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![
             SystemdDropIn {
                 unit: "httpd.service".into(),

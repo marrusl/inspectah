@@ -1,6 +1,6 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{ServiceAction, ServiceStateChange};
+use inspectah_core::types::units::{UnitAction, UnitStateChange};
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
@@ -357,7 +357,7 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
 /// 7. Package not found anywhere + baseline available → Omit with
 ///    `OmissionReason::NotInTargetImage`
 fn classify_service_presence(
-    sc: &ServiceStateChange,
+    sc: &UnitStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
@@ -450,7 +450,7 @@ fn classify_service_presence(
 /// [`OmissionReason::NotCarried`] when every entry of the name is listed,
 /// [`OmissionReason::PackageExcluded`] otherwise.
 fn excluded_owner(
-    sc: &ServiceStateChange,
+    sc: &UnitStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
@@ -483,7 +483,7 @@ fn excluded_owner(
 /// entry that is present, which leaf filtering cannot fake, so it applies
 /// here as it does to a single host; every other unit emits.
 fn aggregate_presence(
-    sc: &ServiceStateChange,
+    sc: &UnitStateChange,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
@@ -503,7 +503,7 @@ fn aggregate_presence(
 pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let ct_units = config_tree_units(snap);
 
-    let services = match &snap.services {
+    let services = match &snap.units {
         Some(s) => s,
         None => {
             return ServiceRenderPlan {
@@ -559,7 +559,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = &sc.unit;
+        let u = sc.unit.as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;
@@ -593,7 +593,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
                     reason.describe(&owning_package)
                 )));
                 omissions.push(ServiceOmission {
-                    unit: u.clone(),
+                    unit: u.to_owned(),
                     owning_package,
                     reason,
                 });
@@ -602,7 +602,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
             PresenceDecision::Emit { advisory_reasons } => {
                 if let Some((pkg, reasons)) = advisory_reasons {
                     advisories.push(ServiceAdvisory {
-                        unit: u.clone(),
+                        unit: u.to_owned(),
                         owning_package: pkg,
                         reasons,
                     });
@@ -613,18 +613,18 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         // Advisory services remain in the main action list — advisory is
         // supplemental context, not a reason to exclude.
         match sc.implied_action() {
-            ServiceAction::Enable => {
-                if ct_units.contains(u.as_str()) {
-                    deferred.push(u.clone());
+            UnitAction::Enable => {
+                if ct_units.contains(u) {
+                    deferred.push(u.to_owned());
                 } else {
-                    safe_enabled.push(u.clone());
+                    safe_enabled.push(u.to_owned());
                 }
             }
-            ServiceAction::Disable => {
-                safe_disabled.push(u.clone());
+            UnitAction::Disable => {
+                safe_disabled.push(u.to_owned());
             }
-            ServiceAction::Mask => {
-                safe_masked.push(u.clone());
+            UnitAction::Mask => {
+                safe_masked.push(u.to_owned());
             }
         }
     }
@@ -659,7 +659,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
 /// services without omission/advisory logic.
 fn render_without_rpm(
     _snap: &InspectionSnapshot,
-    services: &inspectah_core::types::services::ServiceSection,
+    services: &inspectah_core::types::units::UnitSection,
     ct_units: &std::collections::HashSet<String>,
 ) -> ServiceRenderPlan {
     let included_changes: Vec<_> = services
@@ -683,24 +683,24 @@ fn render_without_rpm(
     let mut refused = Vec::new();
 
     for sc in &included_changes {
-        let u = &sc.unit;
+        let u = sc.unit.as_str();
         if let Some(why) = shell_operand_refusal(u) {
             refused.push(refused_unit_fixme(u, why));
             continue;
         }
         match sc.implied_action() {
-            ServiceAction::Enable => {
-                if ct_units.contains(u.as_str()) {
-                    deferred.push(u.clone());
+            UnitAction::Enable => {
+                if ct_units.contains(u) {
+                    deferred.push(u.to_owned());
                 } else {
-                    safe_enabled.push(u.clone());
+                    safe_enabled.push(u.to_owned());
                 }
             }
-            ServiceAction::Disable => {
-                safe_disabled.push(u.clone());
+            UnitAction::Disable => {
+                safe_disabled.push(u.to_owned());
             }
-            ServiceAction::Mask => {
-                safe_masked.push(u.clone());
+            UnitAction::Mask => {
+                safe_masked.push(u.to_owned());
             }
         }
     }

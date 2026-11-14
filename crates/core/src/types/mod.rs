@@ -16,7 +16,6 @@ pub mod repo;
 pub mod rpm;
 pub mod scheduled;
 pub mod selinux;
-pub mod services;
 pub mod storage;
 pub mod subscription;
 pub mod symlink_allowlist;

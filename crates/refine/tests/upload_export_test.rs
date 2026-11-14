@@ -1763,9 +1763,7 @@ fn a_demoted_repo_enabling_package_takes_an_upload_until_its_repo_returns() {
 /// section left both of those to run against a package not yet there.
 #[test]
 fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-    };
+    use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
     const UNIT: &str = "openh264-agent.service";
 
     let cache_dir = tempfile::tempdir().unwrap();
@@ -1786,10 +1784,10 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
         rpm.leaf_packages = Some(vec!["vlc.x86_64".into()]);
         rpm.leaf_dep_tree = serde_json::json!({ "vlc.x86_64": ["openh264.x86_64"] });
     }
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: UNIT.into(),
-            current_state: ServiceUnitState::Enabled,
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: UNIT.to_owned().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,

@@ -26,10 +26,8 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
 use inspectah_core::types::storage::{FstabEntry, StorageSection, VarDirBacking, VarDirectory};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_refine::projection::project_reference;
 use inspectah_refine::session::RefineSession;
 use inspectah_web::adapter::{VAR_SUMMARY_ID, build_web_sections};
@@ -108,10 +106,10 @@ fn contract_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
 
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: "httpd.service".to_owned().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::excluded(),
             locked: false,

@@ -11,9 +11,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_refine::session::RefineSession;
@@ -221,9 +219,9 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         rpm.leaf_packages = Some(vec![format!("{LEAF}.x86_64")]);
         rpm.leaf_dep_tree = serde_json::json!({ "gst-openh264.x86_64": ["openh264.x86_64"] });
     }
-    let unit = |name: &str, owner: &str| ServiceStateChange {
-        unit: name.into(),
-        current_state: ServiceUnitState::Enabled,
+    let unit = |name: &str, owner: &str| UnitStateChange {
+        unit: name.to_owned().try_into().unwrap(),
+        current_state: UnitState::Enabled,
         default_state: Some(PresetDefault::Disable),
         disposition: FindingKind::included(),
         locked: false,
@@ -233,7 +231,7 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         shadow_type: None,
         shadow_rationale: None,
     };
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         // The dependency owns a unit too. dnf installs it with the leaf,
         // so its unit is enabled although refine excludes it by default.
         state_changes: vec![unit(UNIT, LEAF), unit(DEP_UNIT, "openh264")],

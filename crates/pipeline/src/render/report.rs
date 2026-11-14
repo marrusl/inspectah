@@ -180,7 +180,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             match id {
                 InspectorId::Rpm => ("Packages", "packages"),
                 InspectorId::Config => ("Configuration Files", "config-files"),
-                InspectorId::Services => ("Service State Changes", "services"),
+                InspectorId::Units => ("Service State Changes", "services"),
                 InspectorId::Storage => ("Storage", "storage"),
                 InspectorId::ScheduledTasks => ("Scheduled Tasks", "scheduled-tasks"),
                 InspectorId::KernelBoot => ("Kernel & Boot", "kernel-boot"),
@@ -228,7 +228,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             match id {
                 InspectorId::Rpm => ("Packages", "packages"),
                 InspectorId::Config => ("Configuration Files", "config-files"),
-                InspectorId::Services => ("Service State Changes", "services"),
+                InspectorId::Units => ("Service State Changes", "services"),
                 InspectorId::Storage => ("Storage", "storage"),
                 InspectorId::ScheduledTasks => ("Scheduled Tasks", "scheduled-tasks"),
                 InspectorId::KernelBoot => ("Kernel & Boot", "kernel-boot"),
@@ -250,7 +250,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             match id {
                 InspectorId::Rpm => snap.rpm.as_ref().map(|r| r.packages_added.len()),
                 InspectorId::Config => snap.config.as_ref().map(|c| c.files.len()),
-                InspectorId::Services => snap.services.as_ref().map(|s| s.state_changes.len()),
+                InspectorId::Units => snap.units.as_ref().map(|s| s.state_changes.len()),
                 InspectorId::Storage => snap.storage.as_ref().map(|s| s.fstab_entries.len()),
                 InspectorId::KernelBoot => snap
                     .kernel_boot
@@ -284,7 +284,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         let always_rendered = [
             InspectorId::Rpm,
             InspectorId::Config,
-            InspectorId::Services,
+            InspectorId::Units,
             InspectorId::Storage,
             InspectorId::KernelBoot,
             InspectorId::Selinux,
@@ -328,7 +328,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
             (InspectorId::Config, "System Configuration", true),
             (InspectorId::KernelBoot, "System Configuration", false),
             (InspectorId::Selinux, "System Configuration", false),
-            (InspectorId::Services, "Services & Scheduling", true),
+            (InspectorId::Units, "Services & Scheduling", true),
             (InspectorId::ScheduledTasks, "Services & Scheduling", false),
             (InspectorId::UsersGroups, "Users & Identity", true),
             (InspectorId::Storage, "Storage", true),
@@ -502,7 +502,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     // ── Services section data ────────────────────────────────────
     // Build shadow rationale lookup: unit name → rationale string
     let shadow_rationales: std::collections::HashMap<String, String> = snap
-        .services
+        .units
         .as_ref()
         .map(|svc| {
             svc.drop_ins
@@ -518,7 +518,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .unwrap_or_default();
 
     let mut services: Vec<Value> = snap
-        .services
+        .units
         .as_ref()
         .map(|svc| {
             svc.state_changes
@@ -543,7 +543,10 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                         }
                         _ => (String::new(), String::new()),
                     };
-                    let shadow_rat = shadow_rationales.get(&s.unit).cloned().unwrap_or_default();
+                    let shadow_rat = shadow_rationales
+                        .get(s.unit.as_str())
+                        .cloned()
+                        .unwrap_or_default();
                     Value::from_serialize(serde_json::json!({
                         "unit": s.unit,
                         "current_state": s.current_state.to_string(),
@@ -565,7 +568,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     // state change there is nothing to include or exclude, so they carry
     // advisory semantics, matching how the audit report lists full shadows.
     let mut orphan_shadow_advisories = 0usize;
-    if let Some(svc) = snap.services.as_ref() {
+    if let Some(svc) = snap.units.as_ref() {
         let state_change_units: std::collections::HashSet<&str> =
             svc.state_changes.iter().map(|s| s.unit.as_str()).collect();
         for d in &svc.drop_ins {
@@ -595,7 +598,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 
     let svc_count = services.len();
     let svc_advisory_count = snap
-        .services
+        .units
         .as_ref()
         .map(|svc| {
             svc.state_changes
@@ -605,7 +608,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         })
         .unwrap_or(0)
         + orphan_shadow_advisories;
-    let svc_state = section_state(InspectorId::Services, &snap.completeness);
+    let svc_state = section_state(InspectorId::Units, &snap.completeness);
     let svc_state_str = match svc_state {
         SectionState::Normal => "normal",
         SectionState::Degraded => "degraded",
@@ -614,19 +617,19 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 
     // Build extra badge with enabled/masked sub-counts
     let svc_extra_badge = snap
-        .services
+        .units
         .as_ref()
         .map(|svc| {
-            use inspectah_core::types::services::ServiceUnitState;
+            use inspectah_core::types::units::UnitState;
             let enabled = svc
                 .state_changes
                 .iter()
-                .filter(|s| s.current_state == ServiceUnitState::Enabled)
+                .filter(|s| s.current_state == UnitState::Enabled)
                 .count();
             let masked = svc
                 .state_changes
                 .iter()
-                .filter(|s| s.current_state == ServiceUnitState::Masked)
+                .filter(|s| s.current_state == UnitState::Masked)
                 .count();
             let mut parts = Vec::new();
             if enabled > 0 {
@@ -1685,13 +1688,13 @@ mod tests {
     /// has to reach the group advisory badge or the badge under-reports.
     #[test]
     fn orphan_full_shadow_renders_as_advisory_and_counts() {
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
         const ORPHAN_UNIT: &str = "sshd.service";
         const RATIONALE: &str = "Full shadow: base image updates are ignored";
 
         let mut snap = test_snapshot();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             state_changes: vec![],
             drop_ins: vec![SystemdDropIn {
                 unit: ORPHAN_UNIT.into(),
@@ -1876,7 +1879,7 @@ mod tests {
         use inspectah_core::types::completeness::{Completeness, InspectorId};
         let mut snap = test_snapshot();
         snap.completeness = Completeness::Partial {
-            degraded_sections: vec![InspectorId::Services],
+            degraded_sections: vec![InspectorId::Units],
             reason: "partial timeout".into(),
         };
         let html = render_report(&snap, &RenderContext { target: None });
@@ -1900,7 +1903,7 @@ mod tests {
         let mut snap = test_snapshot();
         snap.completeness = Completeness::Incomplete {
             failed_sections: vec![InspectorId::Config],
-            degraded_sections: vec![InspectorId::Services],
+            degraded_sections: vec![InspectorId::Units],
             reason: "permission denied reading shadow file".into(),
         };
         let html = render_report(&snap, &RenderContext { target: None });
@@ -2355,11 +2358,11 @@ mod tests {
     #[test]
     fn test_report_contains_services_section() {
         let mut snap = test_snapshot();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
-            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
-                unit: "firewalld.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+        snap.units = Some(inspectah_core::types::units::UnitSection {
+            state_changes: vec![inspectah_core::types::units::UnitStateChange {
+                unit: "firewalld.service".to_owned().try_into().unwrap(),
+                current_state: inspectah_core::types::units::UnitState::Enabled,
+                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
                 owning_package: Some("firewalld".into()),
@@ -2391,11 +2394,11 @@ mod tests {
     #[test]
     fn test_report_services_table_columns() {
         let mut snap = test_snapshot();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
-            state_changes: vec![inspectah_core::types::services::ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Disabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Enable),
+        snap.units = Some(inspectah_core::types::units::UnitSection {
+            state_changes: vec![inspectah_core::types::units::UnitStateChange {
+                unit: "sshd.service".to_owned().try_into().unwrap(),
+                current_state: inspectah_core::types::units::UnitState::Disabled,
+                default_state: Some(inspectah_core::types::units::PresetDefault::Enable),
                 disposition: FindingKind::excluded(),
                 locked: false,
                 owning_package: Some("openssh-server".into()),
@@ -2435,7 +2438,7 @@ mod tests {
     #[test]
     fn test_report_empty_services_shows_empty_state() {
         let mut snap = test_snapshot();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![],
             enabled_units: vec![],
             disabled_units: vec![],
@@ -2456,12 +2459,12 @@ mod tests {
     #[test]
     fn test_report_services_extra_badge() {
         let mut snap = test_snapshot();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![
-                inspectah_core::types::services::ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                    default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+                inspectah_core::types::units::UnitStateChange {
+                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    current_state: inspectah_core::types::units::UnitState::Enabled,
+                    default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
                     owning_package: None,
@@ -2470,9 +2473,9 @@ mod tests {
                     shadow_type: None,
                     shadow_rationale: None,
                 },
-                inspectah_core::types::services::ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: inspectah_core::types::services::ServiceUnitState::Masked,
+                inspectah_core::types::units::UnitStateChange {
+                    unit: "cups.service".to_owned().try_into().unwrap(),
+                    current_state: inspectah_core::types::units::UnitState::Masked,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
@@ -3405,7 +3408,7 @@ mod tests {
         let mut snap = test_snapshot();
         snap.completeness = Completeness::Incomplete {
             failed_sections: vec![InspectorId::Config],
-            degraded_sections: vec![InspectorId::Services],
+            degraded_sections: vec![InspectorId::Units],
             reason: "mixed failures".into(),
         };
         let html = render_report(&snap, &RenderContext { target: None });
@@ -3464,10 +3467,8 @@ mod tests {
         use inspectah_core::types::redaction::{DetectionMethod, RedactionFinding, RedactionKind};
         use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection};
         use inspectah_core::types::selinux::SelinuxSection;
-        use inspectah_core::types::services::{
-            ServiceSection, ServiceStateChange, ServiceUnitState,
-        };
         use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        use inspectah_core::types::units::{UnitSection, UnitState, UnitStateChange};
         use inspectah_core::types::warnings::Warning;
 
         let mut snap = InspectionSnapshot::new();
@@ -3495,10 +3496,10 @@ mod tests {
             }],
         });
 
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
+        snap.units = Some(UnitSection {
+            state_changes: vec![UnitStateChange {
+                unit: "httpd.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: None,
                 disposition: FindingKind::included(),
                 locked: false,
@@ -3641,11 +3642,11 @@ mod tests {
         // A preset-matched service with a full shadow has no state_changes
         // entry, only a drop_in. It must appear in the HTML advisory section.
         let mut snap = test_snapshot();
-        snap.services = Some(inspectah_core::types::services::ServiceSection {
+        snap.units = Some(inspectah_core::types::units::UnitSection {
             state_changes: vec![], // No state changes — sshd matches preset
             enabled_units: vec!["sshd.service".into()],
             disabled_units: vec![],
-            drop_ins: vec![inspectah_core::types::services::SystemdDropIn {
+            drop_ins: vec![inspectah_core::types::units::SystemdDropIn {
                 unit: "sshd.service".into(),
                 path: "/etc/systemd/system/sshd.service".into(),
                 content: "[Service]\nExecStart=/usr/sbin/sshd -D\n".into(),

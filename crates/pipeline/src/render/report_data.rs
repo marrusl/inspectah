@@ -160,13 +160,13 @@ pub fn build_filter_data(snap: &InspectionSnapshot) -> ReportFilterData {
         .unwrap_or_default();
 
     let services = snap
-        .services
+        .units
         .as_ref()
         .map(|svc| {
             svc.state_changes
                 .iter()
                 .map(|s| FilterableService {
-                    unit: s.unit.clone(),
+                    unit: s.unit.as_str().to_owned(),
                     state: enum_to_string(&s.current_state),
                 })
                 .collect()

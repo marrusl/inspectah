@@ -12,7 +12,7 @@ use inspectah_core::baseline::{
 };
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+use inspectah_core::types::units::{UnitSection, UnitStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
 use inspectah_refine::normalize::load_for_refine;
 use inspectah_refine::session::RefineSession;
@@ -197,12 +197,12 @@ fn old_schema_version_rejected() {
 fn service_surface_agreement() {
     // Build a snapshot JSON with dnf-makecache.service in services
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "dnf-makecache.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+            UnitStateChange {
+                unit: "dnf-makecache.service".to_owned().try_into().unwrap(),
+                current_state: inspectah_core::types::units::UnitState::Enabled,
+                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
@@ -211,10 +211,10 @@ fn service_surface_agreement() {
                 shadow_type: None,
                 shadow_rationale: None,
             },
-            ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+            UnitStateChange {
+                unit: "httpd.service".to_owned().try_into().unwrap(),
+                current_state: inspectah_core::types::units::UnitState::Enabled,
+                default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
                 owning_package: None,
@@ -232,13 +232,13 @@ fn service_surface_agreement() {
 
     // Cross-crate: load_for_refine calls normalize_incompatible_services
     let normalized = load_for_refine(&raw_json).unwrap();
-    let services = normalized.services.as_ref().unwrap();
+    let services = normalized.units.as_ref().unwrap();
 
     // dnf-makecache.service must have include: false in state_changes
     let dnf_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit == "dnf-makecache.service")
+        .find(|sc| sc.unit.as_str() == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
     assert!(
         !dnf_sc.disposition.is_included(),
@@ -249,7 +249,7 @@ fn service_surface_agreement() {
     let httpd_sc = services
         .state_changes
         .iter()
-        .find(|sc| sc.unit == "httpd.service")
+        .find(|sc| sc.unit.as_str() == "httpd.service")
         .expect("httpd.service must be in state_changes");
     assert!(
         httpd_sc.disposition.is_included(),

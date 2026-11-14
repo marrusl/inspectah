@@ -3,7 +3,7 @@ use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::{InstalledGroup, PackageEntry, RpmSection};
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_core::types::services::ServiceSection;
+use inspectah_core::types::units::{UnitNameError, UnitSection};
 use std::collections::BTreeSet;
 
 /// Keys that moved off `KernelBootSection` when the config walker took
@@ -94,6 +94,58 @@ fn schema_26_snapshot_is_refused() {
         Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 26),
         other => panic!("expected UnsupportedVersion(26), got {other:?}"),
     }
+}
+
+/// A schema-27 snapshot, the last with the `services` section. Read by the
+/// schema 27 refusal test in every production loader.
+const SCHEMA_27_SNAPSHOT: &str =
+    include_str!("../../../testdata/fixtures/snapshot/schema-27-services-section.json");
+
+/// The schema-27 payload moved to the current version with its `services`
+/// section renamed to `units` and nothing else changed.
+fn schema_27_payload_as_current() -> serde_json::Value {
+    let mut value: serde_json::Value = serde_json::from_str(SCHEMA_27_SNAPSHOT).unwrap();
+    let object = value.as_object_mut().unwrap();
+    let section = object.remove("services").expect("fixture has `services`");
+    object.insert("units".into(), section);
+    object.insert("schema_version".into(), SCHEMA_VERSION.into());
+    value
+}
+
+/// Schema 27 is the last version whose unit section was `services` and
+/// held services only. Its payload parses: serde drops the unknown key.
+/// It is refused because every socket and timer state the host had is
+/// absent from it with nothing to say so, and only a re-scan collects
+/// them. The same section under `units` at the current version loads, so
+/// the version gate is what refuses it.
+#[test]
+fn schema_27_snapshot_is_refused() {
+    let current = InspectionSnapshot::load(&schema_27_payload_as_current().to_string())
+        .expect("the same section under `units` loads at the current version");
+    let units = current.units.expect("the `units` section is present");
+    assert_eq!(units.state_changes.len(), 1);
+    assert_eq!(units.state_changes[0].unit.as_str(), "httpd.service");
+
+    match InspectionSnapshot::load(SCHEMA_27_SNAPSHOT) {
+        Err(SnapshotError::UnsupportedVersion(v)) => assert_eq!(v, 27),
+        other => panic!("expected UnsupportedVersion(27), got {other:?}"),
+    }
+}
+
+/// A unit name in a state change is parsed on load: a name with a byte
+/// outside the systemd unit name set fails the load, and the error names
+/// the rule. The same payload with a valid name loads.
+#[test]
+fn state_change_unit_name_is_parsed_on_load() {
+    let mut payload = schema_27_payload_as_current();
+    InspectionSnapshot::load(&payload.to_string()).expect("a valid unit name loads");
+
+    payload["units"]["state_changes"][0]["unit"] = "httpd daemon.service".into();
+    let err = InspectionSnapshot::load(&payload.to_string())
+        .expect_err("a unit name with a space must fail the load")
+        .to_string();
+    let rule = UnitNameError::InvalidCharacter { ch: ' ' }.to_string();
+    assert!(err.contains(&rule), "error must carry `{rule}`: {err}");
 }
 
 /// A snapshot JSON whose sysctl section holds `runtime` and
@@ -254,8 +306,8 @@ const RPM_SECTION_KEYS: &[&str] = &[
     "versionlock_command_output",
 ];
 
-/// The serialized keys of a `ServiceSection`.
-const SERVICE_SECTION_KEYS: &[&str] = &[
+/// The serialized keys of a `UnitSection`.
+const UNIT_SECTION_KEYS: &[&str] = &[
     "disabled_units",
     "drop_ins",
     "enabled_units",
@@ -277,15 +329,15 @@ fn expected_keys(keys: &[&str]) -> BTreeSet<String> {
     keys.iter().map(|k| (*k).to_string()).collect()
 }
 
-/// The snapshot format guard: schema 27 and the key sets of the package
-/// and service structs are pinned. Serde ignores unknown fields and
+/// The snapshot format guard: schema 28 and the key sets of the package
+/// and unit structs are pinned. Serde ignores unknown fields and
 /// defaults missing ones, so a field added, renamed or removed with
 /// `#[serde(default)]` passes every round-trip test; this one fails
 /// instead. Every `skip_serializing_if` field is set to a non-default
 /// value so it appears.
 #[test]
-fn schema_27_format_guard_pins_package_and_service_keys() {
-    assert_eq!(SCHEMA_VERSION, 27);
+fn schema_28_format_guard_pins_package_and_unit_keys() {
+    assert_eq!(SCHEMA_VERSION, 28);
 
     let package = PackageEntry {
         locked: true,
@@ -311,7 +363,7 @@ fn schema_27_format_guard_pins_package_and_service_keys() {
     assert_eq!(serialized_keys(&rpm), expected_keys(RPM_SECTION_KEYS));
 
     assert_eq!(
-        serialized_keys(&ServiceSection::default()),
-        expected_keys(SERVICE_SECTION_KEYS)
+        serialized_keys(&UnitSection::default()),
+        expected_keys(UNIT_SECTION_KEYS)
     );
 }

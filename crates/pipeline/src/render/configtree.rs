@@ -109,7 +109,7 @@ pub enum PathError {
 /// them via its own COPY/enable logic.
 fn service_owned_paths(snap: &InspectionSnapshot) -> HashSet<String> {
     let mut paths = HashSet::new();
-    if let Some(services) = &snap.services {
+    if let Some(services) = &snap.units {
         for dropin in &services.drop_ins {
             let rel = dropin.path.trim_start_matches('/');
             if !rel.is_empty() {
@@ -299,7 +299,7 @@ pub(crate) fn staged_sources(snap: &InspectionSnapshot) -> Vec<StagedSource<'_>>
                 }),
         );
     }
-    if let Some(services) = &snap.services {
+    if let Some(services) = &snap.units {
         out.extend(
             services
                 .drop_ins
@@ -743,7 +743,7 @@ mod tests {
     use inspectah_core::types::scheduled::{
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
-    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
     use tempfile::TempDir;
 
     fn snapshot_with_config(path: &str, content: &str) -> InspectionSnapshot {
@@ -905,7 +905,7 @@ mod tests {
         // Service drop-ins are written to drop-ins/ only — NOT config/.
         // The services renderer owns these paths.
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".to_string(),
                 path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
@@ -1273,7 +1273,7 @@ mod tests {
         // Service-owned drop-in paths must NOT be materialized under config/
         // — the services renderer owns these paths.
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "sshd.service".to_string(),
                 path: "etc/systemd/system/sshd.service.d/override.conf".to_string(),

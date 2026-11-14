@@ -10,8 +10,8 @@ use inspectah_core::types::ShadowType;
 use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
-use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::VarDirBacking;
+use inspectah_core::types::units::{PresetDefault, UnitState};
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_pipeline::render::service_intent::{AdvisoryReason, OmissionReason};
@@ -50,7 +50,7 @@ pub struct NotCarriedRow {
     pub display_name: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `services.enabled_units` the package owns, sorted.
+    /// Units in `units.enabled_units` the package owns, sorted.
     pub enabled_units: Vec<String>,
     /// The package owns an enabled unit. Exactly these rows are the
     /// packages `not_carried_notice` names, so a client reads this and
@@ -118,7 +118,7 @@ pub struct RefServices {
 #[derive(Debug, Clone)]
 pub struct RefServiceItem {
     pub unit: String,
-    pub current_state: ServiceUnitState,
+    pub current_state: UnitState,
     pub default_state: Option<PresetDefault>,
     pub owning_package: Option<String>,
     pub dropin_contents: Vec<String>,
@@ -271,7 +271,7 @@ pub struct RefConfigRef {
 /// Every surface that renders one reads this, so they cannot diverge.
 pub fn config_ref_summary(entry: &RefConfigRef) -> String {
     match entry.shadowed_by {
-        Some(ConfigShadow::Services) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
+        Some(ConfigShadow::Units) => CONTROLLED_IN_SERVICE_DROP_INS.to_string(),
         None => DECIDED_UNDER_CONFIG_FILES.to_string(),
     }
 }
@@ -280,7 +280,7 @@ pub fn config_ref_summary(entry: &RefConfigRef) -> String {
 /// where the file is actually decided.
 pub const DECIDED_UNDER_CONFIG_FILES: &str = "decided under Configuration Files";
 
-/// Summary on a row whose file is carried by a `services.drop_ins`
+/// Summary on a row whose file is carried by a `units.drop_ins`
 /// entry. The Service Drop-ins row keyed by the same path is the one
 /// decision, and the Configuration Files row is inventory.
 pub const CONTROLLED_IN_SERVICE_DROP_INS: &str = "controlled in Service Drop-ins";

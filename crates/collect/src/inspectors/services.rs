@@ -7,8 +7,8 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::path::Path;
@@ -37,8 +37,8 @@ fn is_real_service(unit: &str) -> bool {
 
 /// Result of parsing a raw systemd unit state string into the typed contract.
 enum ParsedUnitState {
-    /// Durable administrator intent — produces a `ServiceStateChange`.
-    Durable(ServiceUnitState),
+    /// Durable administrator intent: produces a `UnitStateChange`.
+    Durable(UnitState),
     /// Known-inert packaging artifact — silently dropped, no warning.
     SilentDrop,
     /// Runtime/linked/bad/unknown — emits a structured warning and drops.
@@ -48,9 +48,9 @@ enum ParsedUnitState {
 /// Classify a raw systemd unit-file state into the typed contract.
 fn parse_unit_state(unit: &str, raw_state: &str) -> ParsedUnitState {
     match raw_state {
-        "enabled" => ParsedUnitState::Durable(ServiceUnitState::Enabled),
-        "disabled" => ParsedUnitState::Durable(ServiceUnitState::Disabled),
-        "masked" => ParsedUnitState::Durable(ServiceUnitState::Masked),
+        "enabled" => ParsedUnitState::Durable(UnitState::Enabled),
+        "disabled" => ParsedUnitState::Durable(UnitState::Disabled),
+        "masked" => ParsedUnitState::Durable(UnitState::Masked),
         // Packaging/dependency artifacts — no migration relevance.
         "static" | "alias" | "indirect" | "generated" => ParsedUnitState::SilentDrop,
         // Runtime/volatile states — lost on reboot, cannot be migrated.
@@ -81,13 +81,25 @@ fn parse_unit_state(unit: &str, raw_state: &str) -> ParsedUnitState {
 /// Build a structured warning for a non-durable service state.
 fn service_warning(unit: &str, raw_state: &str, detail: &str) -> Warning {
     Warning {
-        inspector: "services".into(),
+        inspector: "units".into(),
         message: format!("unit {unit} has state '{raw_state}' - {detail}"),
         severity: Some(WarningSeverity::Warning),
         extra: std::collections::HashMap::from([
             ("unit".into(), serde_json::json!(unit)),
             ("raw_state".into(), serde_json::json!(raw_state)),
         ]),
+    }
+}
+
+/// Parse the name a state change will carry. A name that does not parse
+/// is reported through the inspector's warnings and yields no state change.
+fn proved_unit_name(unit: &str, raw_state: &str, warnings: &mut Vec<Warning>) -> Option<UnitName> {
+    match UnitName::try_from(unit.to_owned()) {
+        Ok(name) => Some(name),
+        Err(e) => {
+            warnings.push(service_warning(unit, raw_state, &e.to_string()));
+            None
+        }
     }
 }
 
@@ -107,17 +119,17 @@ fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefa
 
 const OWNING_PACKAGE_QUERY: &str = "%{NAME}\n";
 
-/// Populate `owning_package` on each `ServiceStateChange` via a batch
+/// Populate `owning_package` on each `UnitStateChange` via a batch
 /// `rpm -qf` lookup on `/usr/lib/systemd/system/<unit>`. Falls back to
 /// per-unit queries when the batch fails or line count mismatches.
-fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [ServiceStateChange]) {
+fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [UnitStateChange]) {
     if state_changes.is_empty() {
         return;
     }
 
     let batch_paths: Vec<String> = state_changes
         .iter()
-        .map(|sc| format!("/usr/lib/systemd/system/{}", sc.unit))
+        .map(|sc| format!("/usr/lib/systemd/system/{}", sc.unit.as_str()))
         .collect();
 
     let batch_args: Vec<&str> = std::iter::once("-qf")
@@ -141,7 +153,7 @@ fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [ServiceSta
 
     // Batch failed or line count mismatch — fall back to per-unit queries.
     for sc in state_changes.iter_mut() {
-        sc.owning_package = query_owning_package(exec, &sc.unit);
+        sc.owning_package = query_owning_package(exec, sc.unit.as_str());
     }
 }
 
@@ -206,7 +218,7 @@ struct PresetRule {
 
 impl Inspector for ServicesInspector {
     fn id(&self) -> InspectorId {
-        InspectorId::Services
+        InspectorId::Units
     }
 
     fn applicable_to(&self) -> &[SourceSystemKind] {
@@ -229,7 +241,7 @@ impl Inspector for ServicesInspector {
         if systemctl_result.exit_code == 127 {
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
-                    section: SectionData::Services(ServiceSection::default()),
+                    section: SectionData::Units(UnitSection::default()),
                     warnings: Vec::new(),
                     redaction_hints: Vec::new(),
                 }),
@@ -240,7 +252,7 @@ impl Inspector for ServicesInspector {
         if !systemctl_result.success() {
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
-                    section: SectionData::Services(ServiceSection::default()),
+                    section: SectionData::Units(UnitSection::default()),
                     warnings: Vec::new(),
                     redaction_hints: Vec::new(),
                 }),
@@ -255,7 +267,7 @@ impl Inspector for ServicesInspector {
         let units = parse_unit_files(&systemctl_result.stdout);
         if units.is_empty() {
             return Ok(InspectorOutput {
-                section: SectionData::Services(ServiceSection::default()),
+                section: SectionData::Units(UnitSection::default()),
                 warnings: Vec::new(),
                 redaction_hints: Vec::new(),
             });
@@ -269,7 +281,7 @@ impl Inspector for ServicesInspector {
                 let (enabled_units, disabled_units) = partition_units(&units);
                 return Err(InspectorError::Degraded {
                     partial: Box::new(InspectorOutput {
-                        section: SectionData::Services(ServiceSection {
+                        section: SectionData::Units(UnitSection {
                             state_changes: Vec::new(),
                             enabled_units,
                             disabled_units,
@@ -318,9 +330,9 @@ impl Inspector for ServicesInspector {
             // Masked units are NOT added to disabled_units — they only enter
             // state_changes via the masked bypass path below.
             match current_state {
-                ServiceUnitState::Enabled => enabled_units.push(unit.unit.clone()),
-                ServiceUnitState::Disabled => disabled_units.push(unit.unit.clone()),
-                ServiceUnitState::Masked => {} // distinct from disabled
+                UnitState::Enabled => enabled_units.push(unit.unit.clone()),
+                UnitState::Disabled => disabled_units.push(unit.unit.clone()),
+                UnitState::Masked => {} // distinct from disabled
             }
 
             // --- Operator-intent gate ---
@@ -333,10 +345,13 @@ impl Inspector for ServicesInspector {
 
             // Signal 1: Masked services — unambiguous operator intent.
             // Always capture regardless of preset state.
-            if current_state == ServiceUnitState::Masked {
+            if current_state == UnitState::Masked {
                 let preset = resolve_preset_default(&unit.unit, &preset_rules);
-                state_changes.push(ServiceStateChange {
-                    unit: unit.unit.clone(),
+                let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
+                    continue;
+                };
+                state_changes.push(UnitStateChange {
+                    unit: name,
                     current_state,
                     default_state: preset,
                     disposition: FindingKind::included(),
@@ -357,10 +372,10 @@ impl Inspector for ServicesInspector {
             let preset = resolve_preset_default(&unit.unit, &preset_rules);
 
             let (default_state, diverges) = match preset {
-                Some(PresetDefault::Enable) if current_state == ServiceUnitState::Disabled => {
+                Some(PresetDefault::Enable) if current_state == UnitState::Disabled => {
                     (Some(PresetDefault::Enable), true)
                 }
-                Some(PresetDefault::Disable) if current_state == ServiceUnitState::Enabled => {
+                Some(PresetDefault::Disable) if current_state == UnitState::Enabled => {
                     (Some(PresetDefault::Disable), true)
                 }
                 Some(p) => (Some(p), false),
@@ -368,8 +383,11 @@ impl Inspector for ServicesInspector {
             };
 
             if diverges {
-                state_changes.push(ServiceStateChange {
-                    unit: unit.unit.clone(),
+                let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
+                    continue;
+                };
+                state_changes.push(UnitStateChange {
+                    unit: name,
                     current_state,
                     default_state,
                     disposition: FindingKind::included(),
@@ -392,7 +410,7 @@ impl Inspector for ServicesInspector {
 
         // Emit metric for progress rendering
         progress.emit(inspectah_core::types::progress::ProgressEvent::Metric {
-            inspector: InspectorId::Services,
+            inspector: InspectorId::Units,
             kind: inspectah_core::types::progress::MetricKind::UnitsFound,
             value: state_changes.len(),
         });
@@ -412,8 +430,8 @@ impl Inspector for ServicesInspector {
                 if dropin_units.contains(sc.unit.as_str()) {
                     continue;
                 }
-                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, &sc.unit) {
-                    let etc_path = format!("/etc/systemd/system/{}", sc.unit);
+                if let Some(ShadowType::FullShadow) = detect_shadow_type(exec, sc.unit.as_str()) {
+                    let etc_path = format!("/etc/systemd/system/{}", sc.unit.as_str());
                     let content = match exec.read_file(Path::new(&etc_path)) {
                         Ok(c) => c,
                         Err(_) => {
@@ -422,7 +440,7 @@ impl Inspector for ServicesInspector {
                         }
                     };
                     shadow_entries.push(SystemdDropIn {
-                        unit: sc.unit.clone(),
+                        unit: sc.unit.as_str().to_owned(),
                         path: etc_path,
                         content,
                         disposition: FindingKind::included(),
@@ -493,7 +511,7 @@ impl Inspector for ServicesInspector {
         }
 
         // 6. Build result
-        let section = ServiceSection {
+        let section = UnitSection {
             state_changes,
             enabled_units,
             disabled_units,
@@ -511,7 +529,7 @@ impl Inspector for ServicesInspector {
             );
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
-                    section: SectionData::Services(section),
+                    section: SectionData::Units(section),
                     warnings,
                     redaction_hints,
                 }),
@@ -528,7 +546,7 @@ impl Inspector for ServicesInspector {
             );
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
-                    section: SectionData::Services(section),
+                    section: SectionData::Units(section),
                     warnings,
                     redaction_hints,
                 }),
@@ -537,7 +555,7 @@ impl Inspector for ServicesInspector {
         }
 
         Ok(InspectorOutput {
-            section: SectionData::Services(section),
+            section: SectionData::Units(section),
             warnings,
             redaction_hints,
         })
@@ -949,7 +967,7 @@ mod tests {
                     "degraded reason must mention the failed drop-in: {reason}"
                 );
                 // Partial data should still contain state_changes from systemctl
-                if let SectionData::Services(ref svc) = partial.section {
+                if let SectionData::Units(ref svc) = partial.section {
                     assert!(
                         !svc.state_changes.is_empty() || !svc.enabled_units.is_empty(),
                         "partial data must contain systemctl results"
@@ -999,7 +1017,7 @@ mod tests {
                     "degraded reason must mention the failed preset file: {reason}"
                 );
                 // Partial data should still contain systemctl results
-                if let SectionData::Services(ref svc) = partial.section {
+                if let SectionData::Units(ref svc) = partial.section {
                     assert!(
                         !svc.enabled_units.is_empty(),
                         "partial data must contain systemctl results"
@@ -1239,24 +1257,24 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             // httpd should be captured (operator enabled a preset-disabled service)
             assert!(
                 svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit == "httpd.service"),
+                    .any(|sc| sc.unit.as_str() == "httpd.service"),
                 "httpd.service must be in state_changes"
             );
             // D-Bus aliases must NOT appear — no operator evidence
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.starts_with("dbus-")),
+                    .any(|sc| sc.unit.as_str().starts_with("dbus-")),
                 "D-Bus aliases must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1295,17 +1313,19 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             // sshd matches preset — should not be in state_changes
             assert!(
-                !svc.state_changes.iter().any(|sc| sc.unit == "sshd.service"),
+                !svc.state_changes
+                    .iter()
+                    .any(|sc| sc.unit.as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // cups is masked — operator intent, must be captured
             let cups = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit == "cups.service");
+                .find(|sc| sc.unit.as_str() == "cups.service");
             assert!(
                 cups.is_some(),
                 "masked cups.service must be in state_changes"
@@ -1313,16 +1333,16 @@ mod tests {
             let cups = cups.unwrap();
             assert_eq!(
                 cups.implied_action(),
-                inspectah_core::types::services::ServiceAction::Mask,
+                inspectah_core::types::units::UnitAction::Mask,
                 "masked service action must be Mask"
             );
-            assert_eq!(cups.current_state, ServiceUnitState::Masked);
+            assert_eq!(cups.current_state, UnitState::Masked);
             assert!(
                 cups.disposition.is_included(),
                 "masked service must be included"
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1361,21 +1381,21 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             let fw = svc
                 .state_changes
                 .iter()
-                .find(|sc| sc.unit == "firewalld.service");
+                .find(|sc| sc.unit.as_str() == "firewalld.service");
             assert!(
                 fw.is_some(),
                 "operator-disabled firewalld must be in state_changes"
             );
             assert_eq!(
                 fw.unwrap().implied_action(),
-                inspectah_core::types::services::ServiceAction::Disable
+                inspectah_core::types::units::UnitAction::Disable
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1418,16 +1438,16 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.starts_with("sssd")),
+                    .any(|sc| sc.unit.as_str().starts_with("sssd")),
                 "untouched SSSD services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1471,16 +1491,16 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit.contains("sysupdate")),
+                    .any(|sc| sc.unit.as_str().contains("sysupdate")),
                 "sysupdate services must not be in state_changes (no operator evidence), got: {:?}",
                 svc.state_changes
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1523,7 +1543,7 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             // The wildcard "disable *" matches some-obscure.service with
             // default_state="disabled", and current state is also "disabled"
             // — no divergence. If they were different, the whitelist model
@@ -1535,11 +1555,11 @@ mod tests {
             assert!(
                 !svc.state_changes
                     .iter()
-                    .any(|sc| sc.unit == "some-obscure.service"),
+                    .any(|sc| sc.unit.as_str() == "some-obscure.service"),
                 "service matching preset via wildcard must not be in state_changes"
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1566,7 +1586,7 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             assert!(
                 !svc.drop_ins.is_empty(),
                 "drop-in overrides must be captured"
@@ -1577,7 +1597,7 @@ mod tests {
             assert!(dropin.content.contains("Restart=always"));
             assert!(dropin.disposition.is_included());
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1774,7 +1794,7 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             let dropin = svc.drop_ins.iter().find(|d| d.unit == "httpd.service");
             assert!(dropin.is_some(), "httpd.service drop-in must be captured");
             let dropin = dropin.unwrap();
@@ -1787,7 +1807,7 @@ mod tests {
                 )
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1835,14 +1855,14 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             let dropin = svc.drop_ins.iter().find(|d| d.unit == "httpd.service");
             assert!(dropin.is_some(), "httpd.service drop-in must be captured");
             let dropin = dropin.unwrap();
             assert_eq!(dropin.shadow_type, Some(ShadowType::DropIn));
             assert_eq!(dropin.shadow_rationale, None);
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 
@@ -1896,10 +1916,12 @@ mod tests {
         };
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
-        if let SectionData::Services(ref svc) = result.section {
+        if let SectionData::Units(ref svc) = result.section {
             // sshd matches preset — must NOT be in state_changes
             assert!(
-                !svc.state_changes.iter().any(|sc| sc.unit == "sshd.service"),
+                !svc.state_changes
+                    .iter()
+                    .any(|sc| sc.unit.as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
             // sshd must be in preset_matched_units
@@ -1927,7 +1949,7 @@ mod tests {
                 "shadow content must be read from /etc/systemd/system/sshd.service"
             );
         } else {
-            panic!("expected SectionData::Services");
+            panic!("expected SectionData::Units");
         }
     }
 

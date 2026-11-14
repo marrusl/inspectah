@@ -1185,7 +1185,7 @@ fn the_scan_prints_a_notice_for_not_carried_unit_owners() {
 fn the_scan_prints_nothing_without_not_carried_unit_owners() {
     let mut snapshot = collected(&host_mock());
     snapshot
-        .services
+        .units
         .as_mut()
         .expect("the services section")
         .enabled_units

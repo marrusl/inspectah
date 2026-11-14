@@ -8,8 +8,8 @@ use inspectah_core::types::FindingKind as SnapshotFindingKind;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::redaction::{FindingKind, RedactionState};
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 #[test]
 fn test_dropin_env_secret_redacted() {
     let mut snapshot = InspectionSnapshot::new();
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "myapp.service".into(),
             path: "/etc/systemd/system/myapp.service.d/override.conf".into(),
@@ -34,7 +34,7 @@ fn test_dropin_env_secret_redacted() {
     redact(&mut snapshot, &RedactOptions::default());
 
     // Secret value must be redacted inline
-    let services = snapshot.services.as_ref().unwrap();
+    let services = snapshot.units.as_ref().unwrap();
     assert!(
         !services.drop_ins[0].content.contains("secret123"),
         "secret value must be redacted from drop-in content"
@@ -290,7 +290,7 @@ fn test_secrets_review_reports_all_findings() {
     let mut snapshot = InspectionSnapshot::new();
 
     // Services: drop-in with password
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "db.service".into(),
             path: "/etc/systemd/system/db.service.d/env.conf".into(),
@@ -343,7 +343,7 @@ fn test_secrets_review_reports_all_findings() {
     );
 
     // Verify inline redaction happened
-    let services = snapshot.services.as_ref().unwrap();
+    let services = snapshot.units.as_ref().unwrap();
     assert!(
         !services.drop_ins[0].content.contains("pass1"),
         "services secret must be redacted"
@@ -364,7 +364,7 @@ fn test_secrets_review_reports_all_findings() {
 fn test_clean_surfaces_no_false_positives() {
     let mut snapshot = InspectionSnapshot::new();
 
-    snapshot.services = Some(ServiceSection {
+    snapshot.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),

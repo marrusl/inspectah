@@ -2,9 +2,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
@@ -20,12 +18,12 @@ use inspectah_pipeline::render::service_intent::{
 
 fn state_change(
     unit: &str,
-    current_state: ServiceUnitState,
+    current_state: UnitState,
     default_state: Option<PresetDefault>,
     owning_package: Option<&str>,
-) -> ServiceStateChange {
-    ServiceStateChange {
-        unit: unit.into(),
+) -> UnitStateChange {
+    UnitStateChange {
+        unit: unit.to_owned().try_into().unwrap(),
         current_state,
         default_state,
         disposition: FindingKind::included(),
@@ -127,10 +125,10 @@ fn test_service_render_plan_omits_proven_absent_service() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "sssd-kcm.service",
-            ServiceUnitState::Disabled,
+            UnitState::Disabled,
             Some(PresetDefault::Enable),
             Some("sssd"),
         )],
@@ -180,10 +178,10 @@ fn test_service_render_plan_emits_package_unreachable_service() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "local-tool.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("local-tool"),
         )],
@@ -219,10 +217,10 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "mystery.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             None, // no owning package
         )],
@@ -259,10 +257,10 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "absent-timer.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("absent-pkg"),
         )],
@@ -328,17 +326,17 @@ fn test_service_render_plan_proven_present_emits_clean() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
             state_change(
                 "firewalld.service",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("firewalld"),
             ),
             state_change(
                 "httpd.service",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("httpd"),
             ),
@@ -380,10 +378,10 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "unknown-pkg.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("unknown-pkg"),
         )],
@@ -421,10 +419,10 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "advisory-timer.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("advisory-pkg"),
         )],
@@ -478,10 +476,10 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "timer-pkg.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("timer-pkg"),
         )],
@@ -552,10 +550,10 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
 
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "httpd.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("httpd"),
         )],
@@ -605,10 +603,10 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         baseline_package_names: Some(vec!["systemd".into()]),
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![state_change(
             "perl-related.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("perl-libs"),
         )],
@@ -666,10 +664,10 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
             }],
             ..Default::default()
         });
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             state_changes: vec![state_change(
                 "vendor-agent.service",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("vendor-agent"),
             )],
@@ -887,8 +885,8 @@ fn test_service_presence_tiers_table() {
     ];
 
     for (action_state, preset) in [
-        (ServiceUnitState::Enabled, PresetDefault::Disable),
-        (ServiceUnitState::Disabled, PresetDefault::Enable),
+        (UnitState::Enabled, PresetDefault::Disable),
+        (UnitState::Disabled, PresetDefault::Enable),
     ] {
         for (case, aggregate) in cases
             .iter()
@@ -930,7 +928,7 @@ fn test_service_presence_tiers_table() {
                 leaf_dep_tree,
                 ..Default::default()
             });
-            snap.services = Some(ServiceSection {
+            snap.units = Some(UnitSection {
                 state_changes: vec![state_change(
                     "unit.service",
                     action_state,
@@ -1009,7 +1007,7 @@ fn leaf_snapshot(
     leaves: &[&str],
     autos: &[&str],
     tree: serde_json::Value,
-    changes: Vec<ServiceStateChange>,
+    changes: Vec<UnitStateChange>,
 ) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
@@ -1020,7 +1018,7 @@ fn leaf_snapshot(
         leaf_dep_tree: tree,
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: changes,
         enabled_units: vec![],
         disabled_units: vec![],
@@ -1046,21 +1044,16 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
         (
             "rhcd.service",
             "rhc",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
         ),
         (
             "firewalld.service",
             "firewalld",
-            ServiceUnitState::Disabled,
+            UnitState::Disabled,
             Some(PresetDefault::Enable),
         ),
-        (
-            "kdump.service",
-            "kexec-tools",
-            ServiceUnitState::Masked,
-            None,
-        ),
+        ("kdump.service", "kexec-tools", UnitState::Masked, None),
     ];
     for (unit, owner, state, preset) in cases {
         let mut snap = leaf_snapshot(
@@ -1106,7 +1099,7 @@ fn rhcd_renders_the_exact_not_carried_comment() {
         serde_json::json!({ "vim.x86_64": [] }),
         vec![state_change(
             "rhcd.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("rhc"),
         )],
@@ -1137,7 +1130,7 @@ fn a_not_carried_arch_does_not_omit_a_unit_another_arch_carries() {
         serde_json::json!({ "app.x86_64": ["foo.x86_64"] }),
         vec![state_change(
             "foo.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("foo"),
         )],
@@ -1175,13 +1168,13 @@ fn an_excluded_leaf_makes_its_dependency_not_carried_and_stays_excluded_itself()
         vec![
             state_change(
                 "cockpit.socket",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("cockpit-ws"),
             ),
             state_change(
                 "cockpit-leaf.service",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("cockpit"),
             ),
@@ -1226,7 +1219,7 @@ fn an_owner_with_an_entry_outside_the_list_stays_excluded() {
         serde_json::json!({ "vim.x86_64": [], "foo.i686": [] }),
         vec![state_change(
             "foo.service",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("foo"),
         )],
@@ -1252,7 +1245,7 @@ fn a_pulled_in_auto_package_keeps_its_unit() {
             serde_json::json!({ "cockpit.x86_64": ["cockpit-ws.x86_64"] }),
             vec![state_change(
                 "cockpit.socket",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some("cockpit-ws"),
             )],
@@ -1372,7 +1365,7 @@ fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
         serde_json::json!({ "epel-release.noarch": ["dnf-plugins-core.noarch"] }),
         vec![state_change(
             "dnf-plugins-core.timer",
-            ServiceUnitState::Enabled,
+            UnitState::Enabled,
             Some(PresetDefault::Disable),
             Some("dnf-plugins-core"),
         )],
@@ -1414,12 +1407,12 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
         let change = || {
             state_change(
                 "unit.service",
-                ServiceUnitState::Enabled,
+                UnitState::Enabled,
                 Some(PresetDefault::Disable),
                 Some(owner.as_str()),
             )
         };
-        let services = || ServiceSection {
+        let services = || UnitSection {
             state_changes: vec![change()],
             enabled_units: vec![],
             disabled_units: vec![],
@@ -1433,14 +1426,14 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             packages_added: vec![added(&owner, "x86_64", FindingKind::excluded())],
             ..Default::default()
         });
-        excluded.services = Some(services());
+        excluded.units = Some(services());
 
         let mut not_in_target = InspectionSnapshot::new();
         not_in_target.rpm = Some(RpmSection {
             baseline_package_names: Some(vec![]),
             ..Default::default()
         });
-        not_in_target.services = Some(services());
+        not_in_target.units = Some(services());
 
         let mut not_carried = leaf_snapshot(
             vec![

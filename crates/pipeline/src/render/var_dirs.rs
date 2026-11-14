@@ -134,7 +134,7 @@ struct Evidence<'a> {
     /// Not `config_files`, because a unit file the services inspector
     /// also records carries an `Inventory` `config.files` row whose
     /// `is_included()` is false while the operator's actual decision,
-    /// in `services.drop_ins`, may well be to carry it. Reading the
+    /// in `units.drop_ins`, may well be to carry it. Reading the
     /// config row alone would call every full shadow excluded.
     etc_unit_includes: HashMap<&'a str, bool>,
     /// Every path `rpm.file_ownership` names, to its owning package.
@@ -187,7 +187,7 @@ impl<'a> Evidence<'a> {
                 }
             }
         }
-        if let Some(services) = &snap.services {
+        if let Some(services) = &snap.units {
             for dropin in &services.drop_ins {
                 if parent_dir(&dropin.path) == Some(ETC_UNIT_DIR) {
                     etc_unit_includes

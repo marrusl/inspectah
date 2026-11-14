@@ -976,7 +976,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     }
 
     // Scan systemd drop-in contents in services section
-    if let Some(ref mut services) = snapshot.services {
+    if let Some(ref mut services) = snapshot.units {
         for drop_in in &mut services.drop_ins {
             let findings = scan_content(&drop_in.content, &drop_in.path);
             if !findings.is_empty() {
@@ -1109,7 +1109,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
 
         // Quadlet unit file content. This is raw systemd unit text, the
-        // same thing `services.drop_ins[].content` holds and is scanned
+        // same thing `units.drop_ins[].content` holds and is scanned
         // for above, and it travels further than any other field here:
         // `configtree` writes it to `quadlet/<name>` and the renderer
         // emits `COPY quadlet/ /etc/containers/systemd/`, so an
@@ -1617,7 +1617,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             post_redaction_content.insert(gpg_key.path.clone(), gpg_key.content.clone());
         }
     }
-    if let Some(ref services) = snapshot.services {
+    if let Some(ref services) = snapshot.units {
         for drop_in in &services.drop_ins {
             post_redaction_content.insert(drop_in.path.clone(), drop_in.content.clone());
         }

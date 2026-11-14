@@ -6,7 +6,7 @@ use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::containers::{FlatpakApp, QuadletUnit};
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::PackageEntry;
-use inspectah_core::types::services::{ServiceStateChange, SystemdDropIn};
+use inspectah_core::types::units::{SystemdDropIn, UnitStateChange};
 use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -446,7 +446,7 @@ pub struct RefinedConfig {
 /// A classified service state change with triage assignment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RefinedServiceState {
-    pub entry: ServiceStateChange,
+    pub entry: UnitStateChange,
     pub triage: TriageTag,
 }
 

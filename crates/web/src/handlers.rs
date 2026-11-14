@@ -881,14 +881,14 @@ pub async fn batch_toggle_group(
         }
         SectionGroup::Services => {
             // Service state changes
-            if let Some(ref svc) = snap.services {
+            if let Some(ref svc) = snap.units {
                 for sc in &svc.state_changes {
                     if sc.disposition.is_advisory() || sc.locked {
                         continue;
                     }
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {
                         item_id: inspectah_refine::types::ItemId::Service {
-                            unit: sc.unit.clone(),
+                            unit: sc.unit.as_str().to_owned(),
                         },
                         include: payload.include,
                     });
@@ -1763,16 +1763,15 @@ mod tests {
     #[test]
     fn view_response_includes_shadow_fields_for_services() {
         use inspectah_core::types::ShadowType;
-        use inspectah_core::types::services::{
-            PresetDefault, ServiceSection as SvcSection, ServiceStateChange, ServiceUnitState,
-            SystemdDropIn,
+        use inspectah_core::types::units::{
+            PresetDefault, SystemdDropIn, UnitSection as SvcSection, UnitState, UnitStateChange,
         };
 
         let mut snap = empty_snapshot();
-        snap.services = Some(SvcSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: ServiceUnitState::Enabled,
+        snap.units = Some(SvcSection {
+            state_changes: vec![UnitStateChange {
+                unit: "sshd.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,

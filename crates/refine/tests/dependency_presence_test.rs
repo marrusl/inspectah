@@ -11,9 +11,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-};
+use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 use inspectah_pipeline::render;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
@@ -63,10 +61,10 @@ fn snapshot() -> InspectionSnapshot {
         packages,
         extracted_at: "2026-11-08T00:00:00Z".into(),
     });
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: UNIT.into(),
-            current_state: ServiceUnitState::Enabled,
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: UNIT.to_owned().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::included(),
             locked: false,

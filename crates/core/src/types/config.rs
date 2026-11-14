@@ -48,14 +48,14 @@ pub enum ConfigCategory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigShadow {
-    /// The file's path appears in `services.drop_ins`, which materializes
+    /// The file's path appears in `units.drop_ins`, which materializes
     /// it under `drop-ins/` on that entry's own decision.
     ///
     /// Named for the owning set rather than for the field's name:
-    /// `services.drop_ins` carries full unit shadows under
+    /// `units.drop_ins` carries full unit shadows under
     /// `/etc/systemd/system/` as well as `*.service.d/*.conf`, so a
     /// `ServiceDropIn` spelling would promise less than the variant owns.
-    Services,
+    Units,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

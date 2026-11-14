@@ -87,12 +87,12 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         .unwrap_or(0);
 
     let svc_enabled = snap
-        .services
+        .units
         .as_ref()
         .map(|s| s.enabled_units.len())
         .unwrap_or(0);
     let svc_disabled = snap
-        .services
+        .units
         .as_ref()
         .map(|s| s.disabled_units.len())
         .unwrap_or(0);

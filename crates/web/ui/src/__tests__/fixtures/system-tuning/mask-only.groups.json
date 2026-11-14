@@ -43,7 +43,7 @@
     "label": "Services & Scheduling",
     "sections": [
       {
-        "id": "services",
+        "id": "units",
         "is_triage": true,
         "label": "Services"
       },

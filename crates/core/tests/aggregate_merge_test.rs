@@ -21,10 +21,8 @@ use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, FcontextSource, SelinuxContext, SelinuxPortLabel,
     SelinuxSection,
 };
-use inspectah_core::types::services::{
-    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
-};
 use inspectah_core::types::storage::{FstabEntry, MountPoint, StorageSection};
+use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitState, UnitStateChange};
 use inspectah_core::types::users::UserGroupSection;
 
 // ---------------------------------------------------------------------------
@@ -1209,9 +1207,9 @@ fn test_merge_service_sections_all_none() {
 
 #[test]
 fn test_merge_service_sections_dedup_units() {
-    let make_sc = |unit: &str| ServiceStateChange {
-        unit: unit.into(),
-        current_state: ServiceUnitState::Enabled,
+    let make_sc = |unit: &str| UnitStateChange {
+        unit: unit.to_owned().try_into().unwrap(),
+        current_state: UnitState::Enabled,
         default_state: None,
         disposition: FindingKind::excluded(),
         locked: false,
@@ -1221,14 +1219,14 @@ fn test_merge_service_sections_dedup_units() {
         shadow_type: None,
         shadow_rationale: None,
     };
-    let s1 = ServiceSection {
+    let s1 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
         enabled_units: vec!["sshd.service".into(), "httpd.service".into()],
         disabled_units: vec!["firewalld.service".into()],
         drop_ins: vec![],
         preset_matched_units: vec!["chronyd.service".into()],
     };
-    let s2 = ServiceSection {
+    let s2 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
         enabled_units: vec!["httpd.service".into(), "crond.service".into()],
         disabled_units: vec![],

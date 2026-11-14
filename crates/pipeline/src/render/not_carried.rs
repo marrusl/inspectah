@@ -166,7 +166,7 @@ pub struct NotCarriedPackage {
     pub arch: String,
     /// Repository the package was installed from.
     pub source_repo: String,
-    /// Units in `services.enabled_units` this package owns.
+    /// Units in `units.enabled_units` this package owns.
     pub enabled_units: Vec<String>,
     /// Another arch of this name is in the same list.
     arch_qualified: bool,
@@ -183,7 +183,7 @@ impl NotCarriedPackage {
         }
     }
 
-    /// Whether this package owns a unit in `services.enabled_units`: the
+    /// Whether this package owns a unit in `units.enabled_units`: the
     /// one test every surface uses to put a package first and to name it
     /// in [`not_carried_notice`].
     pub fn owns_enabled_unit(&self) -> bool {
@@ -197,7 +197,7 @@ const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
 /// Every surface: the excluded [`AutoCarriage::Unneeded`] packages, in
 /// display order.
 ///
-/// Packages owning a unit in `services.enabled_units` come first, then
+/// Packages owning a unit in `units.enabled_units` come first, then
 /// the rest; each part is sorted by name, then arch. Empty under the
 /// [`classify_auto_carriage`] fallback.
 ///
@@ -258,7 +258,7 @@ pub fn not_carried_packages(snap: &InspectionSnapshot) -> Vec<NotCarriedPackage>
 /// Map each owning package name to the enabled units it owns, sorted.
 fn enabled_units_by_owner(snap: &InspectionSnapshot) -> HashMap<&str, BTreeSet<&str>> {
     let mut owners: HashMap<&str, BTreeSet<&str>> = HashMap::new();
-    let Some(services) = snap.services.as_ref() else {
+    let Some(services) = snap.units.as_ref() else {
         return owners;
     };
     let enabled: HashSet<&str> = services.enabled_units.iter().map(String::as_str).collect();
@@ -367,7 +367,7 @@ mod tests {
     use super::*;
     use inspectah_core::types::aggregate::AggregateSnapshotMeta;
     use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, RpmSection};
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, ServiceUnitState};
+    use inspectah_core::types::units::{UnitSection, UnitState, UnitStateChange};
 
     fn pkg(name: &str, arch: &str, include: bool) -> PackageEntry {
         PackageEntry {
@@ -613,10 +613,10 @@ mod tests {
         format!("/usr/lib/systemd/system/{unit}")
     }
 
-    fn enabled_change(unit: &str, owner: &str) -> ServiceStateChange {
-        ServiceStateChange {
-            unit: unit.into(),
-            current_state: ServiceUnitState::Enabled,
+    fn enabled_change(unit: &str, owner: &str) -> UnitStateChange {
+        UnitStateChange {
+            unit: unit.to_owned().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: None,
             disposition: FindingKind::included(),
             locked: false,
@@ -634,7 +634,7 @@ mod tests {
     /// unit is one the not-carried packages must not be credited with.
     fn host() -> InspectionSnapshot {
         let mut snap = snapshot();
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             state_changes: vec![
                 enabled_change("firewall-helper.service", "python3-firewall"),
                 enabled_change("httpd.service", "httpd"),

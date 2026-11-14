@@ -236,11 +236,11 @@ pub fn normalize_merge_hostile_configs(snapshot: &mut InspectionSnapshot) {
 
 /// Exclude systemd services incompatible with immutable /usr.
 ///
-/// Walks `services.state_changes` and sets `include = false`, `locked = true`
+/// Walks `units.state_changes` and sets `include = false`, `locked = true`
 /// on units listed in `INCOMPATIBLE_SERVICES`. Also locks any drop-ins
-/// belonging to those units and removes the units from `services.enabled_units`.
+/// belonging to those units and removes the units from `units.enabled_units`.
 pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
-    let services = match snapshot.services.as_mut() {
+    let services = match snapshot.units.as_mut() {
         Some(s) => s,
         None => return,
     };
@@ -399,16 +399,16 @@ pub fn normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitStateChange};
 
-    /// Helper: build a snapshot with a ServiceSection.
+    /// Helper: build a snapshot with a UnitSection.
     fn snap_with_services(
-        state_changes: Vec<ServiceStateChange>,
+        state_changes: Vec<UnitStateChange>,
         enabled_units: Vec<String>,
     ) -> InspectionSnapshot {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes,
                 enabled_units,
                 ..Default::default()
@@ -417,11 +417,11 @@ mod tests {
         }
     }
 
-    fn sc(unit: &str, include: bool) -> ServiceStateChange {
-        use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
-        ServiceStateChange {
-            unit: unit.to_string(),
-            current_state: ServiceUnitState::Enabled,
+    fn sc(unit: &str, include: bool) -> UnitStateChange {
+        use inspectah_core::types::units::{PresetDefault, UnitState};
+        UnitStateChange {
+            unit: unit.to_string().try_into().unwrap(),
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             disposition: FindingKind::from_bool(include),
             locked: false,
@@ -471,7 +471,7 @@ mod tests {
     fn incompatible_service_flagged_include_false() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(!services.state_changes[0].disposition.is_included());
     }
 
@@ -479,7 +479,7 @@ mod tests {
     fn compatible_service_not_flagged() {
         let mut snap = snap_with_services(vec![sc("httpd.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(services.state_changes[0].disposition.is_included());
     }
 
@@ -494,7 +494,7 @@ mod tests {
             ],
         );
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert_eq!(services.enabled_units, vec!["httpd.service".to_string()]);
     }
 
@@ -519,7 +519,7 @@ mod tests {
             ],
         );
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
 
         // state_changes: incompatible ones excluded, compatible ones untouched
         assert!(!services.state_changes[0].disposition.is_included()); // dnf-makecache.service
@@ -544,14 +544,14 @@ mod tests {
         };
         // Should not panic.
         normalize_incompatible_services(&mut snap);
-        assert!(snap.services.is_none());
+        assert!(snap.units.is_none());
     }
 
     #[test]
     fn already_excluded_service_stays_excluded() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", false)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(!services.state_changes[0].disposition.is_included());
     }
 
@@ -559,7 +559,7 @@ mod tests {
     fn incompatible_service_is_locked() {
         let mut snap = snap_with_services(vec![sc("dnf-makecache.service", true)], vec![]);
         normalize_incompatible_services(&mut snap);
-        let svc = &snap.services.as_ref().unwrap().state_changes[0];
+        let svc = &snap.units.as_ref().unwrap().state_changes[0];
         assert!(!svc.disposition.is_included());
         assert!(svc.locked);
         assert_eq!(
@@ -572,7 +572,7 @@ mod tests {
     fn incompatible_service_dropin_is_locked() {
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![sc("dnf-makecache.service", true)],
                 drop_ins: vec![SystemdDropIn {
                     unit: "dnf-makecache.service".into(),
@@ -585,7 +585,7 @@ mod tests {
             ..Default::default()
         };
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         // Service itself locked
         assert!(!services.state_changes[0].disposition.is_included());
         assert!(services.state_changes[0].locked);
@@ -602,7 +602,7 @@ mod tests {
     fn unrelated_dropin_not_locked() {
         let mut snap = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![sc("httpd.service", true)],
                 drop_ins: vec![SystemdDropIn {
                     unit: "httpd.service".into(),
@@ -615,7 +615,7 @@ mod tests {
             ..Default::default()
         };
         normalize_incompatible_services(&mut snap);
-        let services = snap.services.as_ref().unwrap();
+        let services = snap.units.as_ref().unwrap();
         assert!(services.drop_ins[0].disposition.is_included());
         assert!(!services.drop_ins[0].locked);
         assert!(services.drop_ins[0].attention_reason.is_none());

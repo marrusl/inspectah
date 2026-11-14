@@ -165,18 +165,18 @@ fn test_services_inspector_correctness() {
         .expect("services inspector should succeed on full fixture set");
 
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // Verify output is valid JSON that round-trips through the concrete type
     let rust_json = serde_json::to_string_pretty(section).unwrap();
-    let roundtrip: inspectah_core::types::services::ServiceSection =
+    let roundtrip: inspectah_core::types::units::UnitSection =
         serde_json::from_str(&rust_json).expect("inspector output must be valid JSON");
     let roundtrip_json = serde_json::to_string_pretty(&roundtrip).unwrap();
     assert_eq!(
         rust_json, roundtrip_json,
-        "inspector output must round-trip faithfully through ServiceSection"
+        "inspector output must round-trip faithfully through UnitSection"
     );
 
     // Verify structural correctness
@@ -185,7 +185,10 @@ fn test_services_inspector_correctness() {
         "inspector must produce state_changes from fixture data"
     );
     for sc in &section.state_changes {
-        assert!(!sc.unit.is_empty(), "state_change unit must not be empty");
+        assert!(
+            !sc.unit.as_str().is_empty(),
+            "state_change unit must not be empty"
+        );
         // current_state is a typed enum — the fact that it deserialized proves
         // it is one of Enabled, Disabled, or Masked.
         // implied_action() derives from current_state and is exhaustive.

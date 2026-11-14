@@ -29,8 +29,8 @@ use inspectah_core::types::rpm::{
 };
 use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
 use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
-use inspectah_core::types::services::{
-    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+use inspectah_core::types::units::{
+    SystemdDropIn, UnitName, UnitNameError, UnitSection, UnitState, UnitStateChange,
 };
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
@@ -369,7 +369,7 @@ fn with_firewall_zone(path: &str) -> InspectionSnapshot {
 
 fn with_drop_in(path: &str) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "app.service".into(),
             path: path.into(),
@@ -719,11 +719,11 @@ fn selinux(boolean: (&str, &str), port: (&str, &str, &str)) -> String {
     render_containerfile(&snap, None, None)
 }
 
-fn service(unit: &str, state: ServiceUnitState) -> String {
+fn service(unit: &str, state: UnitState) -> String {
     let mut snap = InspectionSnapshot::new();
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: unit.into(),
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: unit.to_owned().try_into().unwrap(),
             current_state: state,
             default_state: None,
             disposition: FindingKind::included(),
@@ -840,17 +840,17 @@ const OPERAND_ROWS: &[OperandRow] = &[
     },
     OperandRow {
         field: "systemctl enable unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Enabled),
+        render: |v| service(&format!("{v}.service"), UnitState::Enabled),
         fixme: "# FIXME: unit",
     },
     OperandRow {
         field: "systemctl disable unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Disabled),
+        render: |v| service(&format!("{v}.service"), UnitState::Disabled),
         fixme: "# FIXME: unit",
     },
     OperandRow {
         field: "systemctl mask unit",
-        render: |v| service(&format!("{v}.service"), ServiceUnitState::Masked),
+        render: |v| service(&format!("{v}.service"), UnitState::Masked),
         fixme: "# FIXME: unit",
     },
     OperandRow {
@@ -905,6 +905,21 @@ fn operands_never_start_like_an_option_or_a_comment() {
     let mut failures = Vec::new();
     for row in OPERAND_ROWS {
         for value in OPERAND_VALUES {
+            // A state change carries a `UnitName`, which refuses a name
+            // outside the systemd character set (`#foo.service`) when the
+            // snapshot loads, so the renderer never sees one. The refusal
+            // is the type's, asserted here; the values that parse still
+            // go through the renderer below.
+            if row.field.starts_with("systemctl ")
+                && let Err(e) = UnitName::try_from(format!("{value}.service"))
+            {
+                assert!(
+                    matches!(e, UnitNameError::InvalidCharacter { .. }),
+                    "{} ({value:?}): expected a character refusal, got {e}",
+                    row.field
+                );
+                continue;
+            }
             let output = (row.render)(value);
             if let Some(why) = operand_failure(row, value, &output) {
                 failures.push(format!("{} ({value:?}): {why}\n{output}", row.field));
@@ -938,7 +953,7 @@ fn operands_render_benign_values() {
             "RUN semanage port -a -t http_port_t -p tcp 8080",
         ),
         (
-            service("httpd.service", ServiceUnitState::Enabled),
+            service("httpd.service", UnitState::Enabled),
             "    httpd.service",
         ),
     ];

@@ -142,11 +142,11 @@ impl AggregateMergeable for ConfigFileEntry {
 // Service types
 // ---------------------------------------------------------------------------
 
-use crate::types::services::{ServiceStateChange, SystemdDropIn};
+use crate::types::units::{SystemdDropIn, UnitStateChange};
 
-impl AggregateMergeable for ServiceStateChange {
+impl AggregateMergeable for UnitStateChange {
     fn identity_key(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.unit)
+        Cow::Borrowed(self.unit.as_str())
     }
 
     fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
@@ -1084,8 +1084,8 @@ use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
-use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
+use crate::types::units::UnitSection;
 use crate::types::users::UserGroupSection;
 
 /// Pick an optional scalar value from a specific host index.
@@ -1522,10 +1522,10 @@ pub fn merge_config_sections(
 
 /// Merge service sections from multiple hosts.
 pub fn merge_service_sections(
-    sections: Vec<Option<ServiceSection>>,
+    sections: Vec<Option<UnitSection>>,
     total_hosts: usize,
     hostnames: &[String],
-) -> Option<ServiceSection> {
+) -> Option<UnitSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
     }
@@ -1545,7 +1545,7 @@ pub fn merge_service_sections(
     let preset_matched_units =
         dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
 
-    Some(ServiceSection {
+    Some(UnitSection {
         state_changes,
         enabled_units,
         disabled_units,

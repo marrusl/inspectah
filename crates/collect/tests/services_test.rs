@@ -7,8 +7,8 @@ use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorE
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::services::{PresetDefault, ServiceAction, ServiceUnitState};
 use inspectah_core::types::system::SourceSystem;
+use inspectah_core::types::units::{PresetDefault, UnitAction, UnitState};
 
 /// Standard fixture: `systemctl list-unit-files` output.
 const SYSTEMCTL_FIXTURE: &str =
@@ -85,36 +85,36 @@ fn happy_path_state_changes() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // bluetooth: enabled on host, preset says "disable" → divergence
     let bluetooth = section
         .state_changes
         .iter()
-        .find(|s| s.unit == "bluetooth.service")
+        .find(|s| s.unit.as_str() == "bluetooth.service")
         .expect("bluetooth should have state change");
-    assert_eq!(bluetooth.current_state, ServiceUnitState::Enabled);
+    assert_eq!(bluetooth.current_state, UnitState::Enabled);
     assert_eq!(bluetooth.default_state, Some(PresetDefault::Disable));
-    assert_eq!(bluetooth.implied_action(), ServiceAction::Enable);
+    assert_eq!(bluetooth.implied_action(), UnitAction::Enable);
 
     // gdm: disabled on host, preset says "enable" → divergence
     let gdm = section
         .state_changes
         .iter()
-        .find(|s| s.unit == "gdm.service")
+        .find(|s| s.unit.as_str() == "gdm.service")
         .expect("gdm should have state change");
-    assert_eq!(gdm.current_state, ServiceUnitState::Disabled);
+    assert_eq!(gdm.current_state, UnitState::Disabled);
     assert_eq!(gdm.default_state, Some(PresetDefault::Enable));
-    assert_eq!(gdm.implied_action(), ServiceAction::Disable);
+    assert_eq!(gdm.implied_action(), UnitAction::Disable);
 
     // httpd: enabled on host, no preset entry → NO state change (cannot determine divergence)
     assert!(
         section
             .state_changes
             .iter()
-            .all(|s| s.unit != "httpd.service"),
+            .all(|s| s.unit.as_str() != "httpd.service"),
         "httpd has no preset rule, should not appear in state_changes"
     );
 
@@ -123,7 +123,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit != "libvirtd.service"),
+            .all(|s| s.unit.as_str() != "libvirtd.service"),
         "libvirtd has no preset rule, should not appear in state_changes"
     );
 
@@ -132,7 +132,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit != "auditd.service"),
+            .all(|s| s.unit.as_str() != "auditd.service"),
         "auditd state matches preset, should not appear in state_changes"
     );
 
@@ -142,7 +142,7 @@ fn happy_path_state_changes() {
         section
             .state_changes
             .iter()
-            .all(|s| s.unit != "cups.service"),
+            .all(|s| s.unit.as_str() != "cups.service"),
         "cups should not appear in state_changes"
     );
 
@@ -201,18 +201,18 @@ fn preset_first_match_wins() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // sshd is enabled but first-match preset says disabled → divergence
     let sshd = section
         .state_changes
         .iter()
-        .find(|s| s.unit == "sshd.service")
+        .find(|s| s.unit.as_str() == "sshd.service")
         .expect("sshd should diverge from first-match preset");
     assert_eq!(sshd.default_state, Some(PresetDefault::Disable));
-    assert_eq!(sshd.current_state, ServiceUnitState::Enabled);
+    assert_eq!(sshd.current_state, UnitState::Enabled);
 }
 
 // ── Test 4: Preset glob matching ───────────────────────────────────
@@ -250,18 +250,18 @@ fn preset_glob_matching() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // custom-app is disabled, but glob preset "enable *" says enabled → divergence
     let app = section
         .state_changes
         .iter()
-        .find(|s| s.unit == "custom-app.service")
+        .find(|s| s.unit.as_str() == "custom-app.service")
         .expect("custom-app should diverge from glob preset");
     assert_eq!(app.default_state, Some(PresetDefault::Enable));
-    assert_eq!(app.current_state, ServiceUnitState::Disabled);
+    assert_eq!(app.current_state, UnitState::Disabled);
 }
 
 // ── Test 5: Drop-in files collected ────────────────────────────────
@@ -281,8 +281,8 @@ fn dropin_files_collected() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     assert_eq!(section.drop_ins.len(), 1);
@@ -315,7 +315,7 @@ fn systemctl_missing_returns_degraded() {
                 "reason should mention not found, got: {reason}"
             );
             // Partial should have empty section
-            if let SectionData::Services(s) = &partial.section {
+            if let SectionData::Units(s) = &partial.section {
                 assert!(s.state_changes.is_empty());
                 assert!(s.enabled_units.is_empty());
             } else {
@@ -357,7 +357,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
                 "reason should mention preset dirs, got: {reason}"
             );
             // Partial should contain the systemctl data (enabled/disabled lists)
-            if let SectionData::Services(s) = &partial.section {
+            if let SectionData::Units(s) = &partial.section {
                 assert!(
                     !s.enabled_units.is_empty(),
                     "partial should contain enabled_units from systemctl"
@@ -401,8 +401,8 @@ fn empty_system_returns_empty_section() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     assert!(section.state_changes.is_empty());
@@ -480,8 +480,8 @@ fn services_snapshot() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     insta::assert_json_snapshot!(section);
@@ -504,8 +504,8 @@ fn preset_matched_units_captures_matches() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // Units where state matches preset should be in preset_matched_units
@@ -609,8 +609,8 @@ fn preset_matched_units_empty_when_no_preset_rules() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
-        other => panic!("expected SectionData::Services, got {:?}", other),
+        SectionData::Units(s) => s,
+        other => panic!("expected SectionData::Units, got {:?}", other),
     };
 
     // With no preset rules, we cannot determine matches
@@ -665,7 +665,7 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 
@@ -679,7 +679,7 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
         "each warning state should emit one warning"
     );
     assert!(output.warnings.iter().any(|w| {
-        w.inspector == "services"
+        w.inspector == "units"
             && w.extra.get("unit") == Some(&serde_json::json!("linked.service"))
             && w.extra.get("raw_state") == Some(&serde_json::json!("linked"))
     }));
@@ -724,7 +724,7 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 
@@ -783,7 +783,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 
@@ -844,7 +844,7 @@ fn test_owning_package_fallback_checks_etc_systemd_path() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 
@@ -913,7 +913,7 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 
@@ -974,7 +974,7 @@ fn test_unowned_unit_keeps_owning_package_none() {
         .inspect(&ctx, &NullProgress)
         .unwrap();
     let section = match &output.section {
-        SectionData::Services(s) => s,
+        SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
     };
 

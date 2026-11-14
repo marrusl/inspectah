@@ -15,8 +15,8 @@ use inspectah_core::types::network::IFCFG_DEPRECATION_NOTE;
 use inspectah_core::types::nonrpm::FileType;
 use inspectah_core::types::repo::RepoId;
 use inspectah_core::types::rpm::VersionChangeDirection;
-use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::storage::{VarDirBacking, declaring_unit_label};
+use inspectah_core::types::units::{PresetDefault, UnitState};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::advisory::config_advisories;
 use inspectah_pipeline::render::service_intent::AdvisoryReason;
@@ -132,7 +132,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         .service_states
         .iter()
         .map(|s| ServiceDecisionDto {
-            unit: s.entry.unit.clone(),
+            unit: s.entry.unit.as_str().to_owned(),
             triage: s.triage.clone(),
             include: s.entry.disposition.is_included(),
             locked: s.entry.locked,
@@ -557,34 +557,34 @@ fn context_decision(
 /// Map a (current_state, default_state) pair to a human-readable subtitle.
 ///
 /// Ported from `typed_service_subtitle` in handlers.rs.
-fn typed_service_subtitle(current: ServiceUnitState, default: Option<PresetDefault>) -> String {
+fn typed_service_subtitle(current: UnitState, default: Option<PresetDefault>) -> String {
     match (current, default) {
-        (ServiceUnitState::Enabled, Some(PresetDefault::Disable)) => {
+        (UnitState::Enabled, Some(PresetDefault::Disable)) => {
             "enabled (diverges from preset: disable)".to_string()
         }
-        (ServiceUnitState::Disabled, Some(PresetDefault::Enable)) => {
+        (UnitState::Disabled, Some(PresetDefault::Enable)) => {
             "disabled (diverges from preset: enable)".to_string()
         }
-        (ServiceUnitState::Masked, Some(PresetDefault::Enable)) => {
+        (UnitState::Masked, Some(PresetDefault::Enable)) => {
             "masked (preset default: enable)".to_string()
         }
-        (ServiceUnitState::Masked, Some(PresetDefault::Disable)) => {
+        (UnitState::Masked, Some(PresetDefault::Disable)) => {
             "masked (preset default: disable)".to_string()
         }
-        (ServiceUnitState::Masked, None) => "masked (no preset rule)".to_string(),
+        (UnitState::Masked, None) => "masked (no preset rule)".to_string(),
         (state, Some(d)) => format!("{} (diverges from preset: {})", state, d),
         (state, None) => format!("{} (no preset rule)", state),
     }
 }
 
-/// Derive the implied action string from a ServiceUnitState.
+/// Derive the implied action string from a UnitState.
 ///
-/// Mirrors `ServiceStateChange::implied_action().to_string()`.
-fn implied_action_str(state: ServiceUnitState) -> &'static str {
+/// Mirrors `UnitStateChange::implied_action().to_string()`.
+fn implied_action_str(state: UnitState) -> &'static str {
     match state {
-        ServiceUnitState::Enabled => "enable",
-        ServiceUnitState::Disabled => "disable",
-        ServiceUnitState::Masked => "mask",
+        UnitState::Enabled => "enable",
+        UnitState::Disabled => "disable",
+        UnitState::Masked => "mask",
     }
 }
 
@@ -2701,7 +2701,7 @@ mod tests {
 
         let item = RefServiceItem {
             unit: "httpd.service".into(),
-            current_state: ServiceUnitState::Enabled,
+            current_state: UnitState::Enabled,
             default_state: Some(PresetDefault::Disable),
             owning_package: Some("httpd".into()),
             dropin_contents: vec![],
@@ -2717,14 +2717,14 @@ mod tests {
 
     #[test]
     fn service_decision_dto_wires_shadow_fields() {
-        use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+        use inspectah_core::types::units::{UnitSection, UnitStateChange};
         use inspectah_core::types::{FindingKind, ShadowType};
 
         let mut snap = InspectionSnapshot::new();
-        snap.services = Some(ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: ServiceUnitState::Enabled,
+        snap.units = Some(UnitSection {
+            state_changes: vec![UnitStateChange {
+                unit: "httpd.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 owning_package: Some("httpd".into()),
                 disposition: FindingKind::included(),

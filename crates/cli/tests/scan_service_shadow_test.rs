@@ -1,4 +1,4 @@
-//! A path that `services.drop_ins` owns has exactly one include
+//! A path that `units.drop_ins` owns has exactly one include
 //! decision, and the export agrees with it.
 //!
 //! `render::configtree` subtracts every service-owned path from the
@@ -13,7 +13,7 @@
 //! These run the `scan` command's own path — `collect()` then `validate`
 //! then `redact`, the three calls `scan.rs` makes — against collector
 //! output, because the repository has no fixture with a non-empty
-//! `services.drop_ins` and a hand-built one would be free to encode a
+//! `units.drop_ins` and a hand-built one would be free to encode a
 //! layout the collectors cannot produce.
 
 use std::sync::atomic::AtomicBool;
@@ -38,7 +38,7 @@ use inspectah_refine::types::{ItemId, RefineError, RefinementOp};
 
 /// A `*.service.d/*.conf` drop-in: the field's namesake.
 const DROP_IN: &str = "/etc/systemd/system/httpd.service.d/limits.conf";
-/// A full unit shadow. `services.drop_ins` owns this too, which is why
+/// A full unit shadow. `units.drop_ins` owns this too, which is why
 /// the `ConfigShadow` variant is named `Services` and not `ServiceDropIn`.
 const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
 /// A config file no other section owns — the negative control that keeps
@@ -125,7 +125,7 @@ fn overlapping_paths_mock() -> MockExecutor {
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         // `custom.service` in /etc shadows the vendor unit in /usr/lib,
-        // so the full-shadow scan records it in `services.drop_ins`.
+        // so the full-shadow scan records it in `units.drop_ins`.
         .with_command("test -f /etc/systemd/system/custom.service", ok(""))
         .with_command("test -f /usr/lib/systemd/system/custom.service", ok(""))
         .with_command("test -d /etc/systemd/system/httpd.service.d", ok(""))
@@ -244,7 +244,7 @@ fn a_service_owned_config_entry_is_inventory_shadowed_by_services() {
     let snapshot = scan_like(&overlapping_paths_mock());
 
     let drop_in_paths: Vec<&str> = snapshot
-        .services
+        .units
         .as_ref()
         .expect("the services section")
         .drop_ins
@@ -254,15 +254,15 @@ fn a_service_owned_config_entry_is_inventory_shadowed_by_services() {
     assert!(
         drop_in_paths.contains(&DROP_IN) && drop_in_paths.contains(&FULL_SHADOW),
         "the collector must put both the drop-in and the full shadow in \
-         services.drop_ins, got {drop_in_paths:?}"
+         units.drop_ins, got {drop_in_paths:?}"
     );
 
     let written = written(&snapshot);
     for path in [DROP_IN, FULL_SHADOW] {
         let entry = config_entry(&written, path);
         assert_eq!(
-            entry["shadowed_by"], "services",
-            "{path} is carried by services.drop_ins, got {entry}"
+            entry["shadowed_by"], "units",
+            "{path} is carried by units.drop_ins, got {entry}"
         );
         assert_eq!(
             entry["disposition"]["kind"], "inventory",
@@ -299,7 +299,7 @@ fn the_view_response_names_the_owner_of_a_shadowed_config_row() {
         .find(|c| c["entry"]["path"] == DROP_IN)
         .unwrap_or_else(|| panic!("no config row for {DROP_IN}"));
     assert_eq!(
-        row["entry"]["shadowed_by"], "services",
+        row["entry"]["shadowed_by"], "units",
         "the config row must name its owner, got {row}"
     );
     assert_eq!(row["entry"]["disposition"]["kind"], "inventory");
@@ -423,7 +423,7 @@ fn an_unowned_config_file_still_decides_its_own_carriage() {
 #[test]
 fn only_a_preset_diverging_unit_gets_a_state_change_row() {
     let snapshot = scan_like(&overlapping_paths_mock());
-    let services = snapshot.services.as_ref().expect("the services section");
+    let services = snapshot.units.as_ref().expect("the services section");
 
     let changed: Vec<&str> = services
         .state_changes

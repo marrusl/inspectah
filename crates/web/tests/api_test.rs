@@ -20,10 +20,10 @@ use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTim
 use inspectah_core::types::selinux::{
     FcontextFileType, FcontextRule, SelinuxContext, SelinuxSection,
 };
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
-};
 use inspectah_core::types::storage::{FstabEntry, StorageSection};
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
+};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
@@ -367,7 +367,7 @@ fn not_carried_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         enabled_units: vec!["firewalld.service".into()],
         ..Default::default()
     });
@@ -971,11 +971,11 @@ fn rich_snapshot() -> InspectionSnapshot {
         ..Default::default()
     });
 
-    snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
-            default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+    snap.units = Some(UnitSection {
+        state_changes: vec![UnitStateChange {
+            unit: "httpd.service".to_owned().try_into().unwrap(),
+            current_state: inspectah_core::types::units::UnitState::Enabled,
+            default_state: Some(inspectah_core::types::units::PresetDefault::Disable),
             disposition: FindingKind::excluded(),
             locked: false,
             owning_package: None,
@@ -2074,11 +2074,11 @@ fn service_subsection_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![
-            ServiceStateChange {
-                unit: "custom-app.service".into(),
-                current_state: ServiceUnitState::Enabled,
+            UnitStateChange {
+                unit: "custom-app.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: Some(PresetDefault::Disable),
                 disposition: FindingKind::included(),
                 locked: false,
@@ -2088,9 +2088,9 @@ fn service_subsection_state() -> Arc<AppState> {
                 shadow_type: None,
                 shadow_rationale: None,
             },
-            ServiceStateChange {
-                unit: "sssd-kcm.service".into(),
-                current_state: ServiceUnitState::Disabled,
+            UnitStateChange {
+                unit: "sssd-kcm.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Disabled,
                 default_state: Some(PresetDefault::Enable),
                 disposition: FindingKind::included(),
                 locked: false,
@@ -2107,7 +2107,7 @@ fn service_subsection_state() -> Arc<AppState> {
         preset_matched_units: vec![],
     });
     snap.warnings.push(Warning {
-        inspector: "services".into(),
+        inspector: "units".into(),
         message: "unit linked.service has state 'linked'".into(),
         severity: Some(WarningSeverity::Warning),
         extra: std::collections::HashMap::from([
@@ -2296,7 +2296,7 @@ fn locked_package_state() -> Arc<AppState> {
         }],
         ..Default::default()
     });
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         state_changes: vec![],
         enabled_units: vec![],
         disabled_units: vec![],

@@ -11,8 +11,8 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{
     PackageEntry, PackageState, VersionChange, VersionChangeDirection,
 };
-use inspectah_core::types::services::{
-    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+use inspectah_core::types::units::{
+    PresetDefault, SystemdDropIn, UnitName, UnitSection, UnitState, UnitStateChange,
 };
 
 const SENSITIVE_PATHS: &[&str] = &[
@@ -124,7 +124,7 @@ fn is_config_only_promotable(name: &str) -> bool {
 fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &InspectionSnapshot) {
     let user_enabled_service_packages = build_user_enabled_service_set(snap);
     let modified_config_packages = build_modified_config_set(snap);
-    let has_services = snap.services.is_some();
+    let has_services = snap.units.is_some();
     let has_config = snap.config.is_some()
         && snap
             .rpm
@@ -137,7 +137,7 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
     // can't rule out that the package has a promotable service/config
     // we simply failed to attribute.
     let has_unattributed_services = snap
-        .services
+        .units
         .as_ref()
         .is_some_and(|svc| svc.state_changes.iter().any(|s| s.owning_package.is_none()));
     let has_orphaned_modified_configs = has_config
@@ -251,9 +251,9 @@ fn apply_anaconda_classification(packages: &mut [RefinedPackage], snap: &Inspect
 
 fn build_user_enabled_service_set(snap: &InspectionSnapshot) -> std::collections::HashSet<&str> {
     let mut set = std::collections::HashSet::new();
-    if let Some(services) = &snap.services {
+    if let Some(services) = &snap.units {
         for svc in &services.state_changes {
-            if svc.current_state == ServiceUnitState::Enabled
+            if svc.current_state == UnitState::Enabled
                 && svc.default_state != Some(PresetDefault::Enable)
                 && let Some(pkg) = &svc.owning_package
             {
@@ -537,14 +537,14 @@ pub fn classify_configs(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
     configs
 }
 
-/// Inject synthetic `ServiceStateChange` entries for orphan full-shadow
+/// Inject synthetic `UnitStateChange` entries for orphan full-shadow
 /// services — units with `/etc/systemd/system/foo.service` shadowing a
 /// vendor unit but no corresponding state divergence entry.
 ///
 /// Only synthesizes when durable host state is known (`enabled_units` or
 /// `disabled_units`). Skips when state is unavailable — the current
-/// `ServiceStateChange` contract requires a non-optional `current_state`.
-pub fn synthesize_orphan_shadows(services: &mut ServiceSection) {
+/// `UnitStateChange` contract requires a non-optional `current_state`.
+pub fn synthesize_orphan_shadows(services: &mut UnitSection) {
     let existing_units: std::collections::HashSet<&str> = services
         .state_changes
         .iter()
@@ -557,25 +557,31 @@ pub fn synthesize_orphan_shadows(services: &mut ServiceSection) {
             && !existing_units.contains(dropin.unit.as_str())
         {
             // Derive durable host state from the existing service inventory.
-            // Only synthesize when the current ServiceStateChange contract can
+            // Only synthesize when the current UnitStateChange contract can
             // represent that state faithfully.
             let current_state = if services.disabled_units.contains(&dropin.unit) {
-                Some(ServiceUnitState::Disabled)
+                Some(UnitState::Disabled)
             } else if services.enabled_units.contains(&dropin.unit) {
-                Some(ServiceUnitState::Enabled)
+                Some(UnitState::Enabled)
             } else {
                 None
             };
 
             let Some(current_state) = current_state else {
                 // The current contract cannot encode "state unavailable" without
-                // changing ServiceStateChange.current_state, so skip synthesis for
+                // changing UnitStateChange.current_state, so skip synthesis for
                 // orphan full-shadow units whose durable state is not known.
                 continue;
             };
+            // A drop-in's unit name is not proved. One that does not parse
+            // cannot name a state change, so it is skipped like an unknown
+            // state.
+            let Ok(unit) = UnitName::try_from(dropin.unit.clone()) else {
+                continue;
+            };
 
-            synthetics.push(ServiceStateChange {
-                unit: dropin.unit.clone(),
+            synthetics.push(UnitStateChange {
+                unit,
                 current_state,
                 default_state: None,
                 disposition: FindingKind::included(),
@@ -601,7 +607,7 @@ pub fn synthesize_orphan_shadows(services: &mut ServiceSection) {
 pub fn classify_services(
     snap: &InspectionSnapshot,
 ) -> (Vec<RefinedServiceState>, Vec<RefinedDropIn>) {
-    let services = match &snap.services {
+    let services = match &snap.units {
         Some(s) => s,
         None => return (Vec::new(), Vec::new()),
     };
@@ -624,7 +630,7 @@ pub fn classify_services(
     (states, dropins)
 }
 
-fn classify_service(change: &ServiceStateChange) -> TriageTag {
+fn classify_service(change: &UnitStateChange) -> TriageTag {
     if change.owning_package.is_none() {
         return TriageTag {
             triage: Triage::SingleHost(TriageBucket::Investigate),
@@ -1610,9 +1616,7 @@ mod anaconda_classification {
     use inspectah_core::types::rpm::{
         FileOwnershipEntry, RpmSection, VersionChange, VersionChangeDirection,
     };
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
-    };
+    use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
 
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
         match &tag.triage {
@@ -1624,7 +1628,7 @@ mod anaconda_classification {
     fn snap_with_anaconda(
         baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
-        services: Option<ServiceSection>,
+        services: Option<UnitSection>,
         config: Option<ConfigSection>,
         file_ownership: Vec<FileOwnershipEntry>,
     ) -> InspectionSnapshot {
@@ -1656,7 +1660,7 @@ mod anaconda_classification {
                 file_ownership,
                 ..Default::default()
             }),
-            services,
+            units: services,
             config,
             baseline,
             ..Default::default()
@@ -1667,7 +1671,7 @@ mod anaconda_classification {
         baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
         version_changes: Vec<VersionChange>,
-        services: Option<ServiceSection>,
+        services: Option<UnitSection>,
         config: Option<ConfigSection>,
         file_ownership: Vec<FileOwnershipEntry>,
     ) -> InspectionSnapshot {
@@ -1690,8 +1694,8 @@ mod anaconda_classification {
         }
     }
 
-    fn empty_service_section() -> ServiceSection {
-        ServiceSection {
+    fn empty_service_section() -> UnitSection {
+        UnitSection {
             state_changes: vec![],
             enabled_units: vec![],
             disabled_units: vec![],
@@ -1821,10 +1825,10 @@ mod anaconda_classification {
         let snap = snap_with_anaconda(
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("firewalld")],
-            Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     owning_package: Some("firewalld".into()),
@@ -2151,10 +2155,10 @@ mod anaconda_classification {
         let snap = snap_with_anaconda(
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("kernel-tools"), anaconda_pkg("cronie")],
-            Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "mystery.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "mystery.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     owning_package: None, // degraded — missing attribution
@@ -2210,10 +2214,10 @@ mod anaconda_classification {
         let snap = snap_with_anaconda(
             Some(vec!["glibc".into()]),
             vec![anaconda_pkg("kernel-tools")],
-            Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
                     owning_package: Some("openssh-server".into()),
@@ -2251,8 +2255,8 @@ mod anaconda_classification {
 #[cfg(test)]
 mod service_classification {
     use super::*;
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
     };
 
     fn assert_bucket(tag: &TriageTag, expected: TriageBucket) {
@@ -2265,10 +2269,10 @@ mod service_classification {
     #[test]
     fn service_matching_preset_default_is_site_until_baseline() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "sshd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "sshd.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Enable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -2296,10 +2300,10 @@ mod service_classification {
     #[test]
     fn service_differing_from_preset_is_site() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -2325,10 +2329,10 @@ mod service_classification {
     #[test]
     fn service_without_owning_package_is_investigate() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "mystery.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "mystery.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
@@ -2354,7 +2358,7 @@ mod service_classification {
     #[test]
     fn dropin_is_always_site() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 drop_ins: vec![SystemdDropIn {
                     unit: "sshd.service".into(),
                     path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
@@ -2681,16 +2685,14 @@ mod orphan_shadow_synthesis {
     use crate::session::RefineSession;
     use crate::types::{ItemId, RefinementOp};
     use inspectah_core::types::finding::ShadowType;
-    use inspectah_core::types::services::{
-        ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
-    };
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection, UnitState, UnitStateChange};
 
     /// Build a snapshot with an orphan full-shadow drop-in for the given unit.
     /// The unit is placed in `enabled_units` so synthesis has durable state.
     fn test_snapshot_with_orphan_shadow(unit: &str) -> InspectionSnapshot {
         InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![],
                 enabled_units: vec![unit.to_string()],
                 disabled_units: vec![],
@@ -2713,7 +2715,7 @@ mod orphan_shadow_synthesis {
 
     #[test]
     fn orphan_full_shadow_gets_synthetic_state_change() {
-        let mut services = ServiceSection {
+        let mut services = UnitSection {
             state_changes: vec![],
             enabled_units: vec!["sshd.service".into()],
             disabled_units: vec![],
@@ -2728,23 +2730,20 @@ mod orphan_shadow_synthesis {
         };
         synthesize_orphan_shadows(&mut services);
         assert_eq!(services.state_changes.len(), 1);
-        assert_eq!(services.state_changes[0].unit, "sshd.service");
+        assert_eq!(services.state_changes[0].unit.as_str(), "sshd.service");
         assert_eq!(
             services.state_changes[0].shadow_type,
             Some(ShadowType::FullShadow)
         );
-        assert_eq!(
-            services.state_changes[0].current_state,
-            ServiceUnitState::Enabled
-        );
+        assert_eq!(services.state_changes[0].current_state, UnitState::Enabled);
     }
 
     #[test]
     fn non_orphan_full_shadow_not_duplicated() {
-        let mut services = ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "sshd.service".into(),
-                current_state: ServiceUnitState::Enabled,
+        let mut services = UnitSection {
+            state_changes: vec![UnitStateChange {
+                unit: "sshd.service".to_owned().try_into().unwrap(),
+                current_state: UnitState::Enabled,
                 default_state: None,
                 disposition: FindingKind::included(),
                 locked: false,
@@ -2772,7 +2771,7 @@ mod orphan_shadow_synthesis {
     #[test]
     fn orphan_shadow_without_durable_state_is_not_synthesized() {
         let mut snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: vec![],
                 enabled_units: vec![],
                 disabled_units: vec![],
@@ -2791,8 +2790,8 @@ mod orphan_shadow_synthesis {
             "skip synthesis when durable state is unavailable"
         );
         // Also verify direct call leaves state_changes empty
-        synthesize_orphan_shadows(snap.services.as_mut().unwrap());
-        assert!(snap.services.unwrap().state_changes.is_empty());
+        synthesize_orphan_shadows(snap.units.as_mut().unwrap());
+        assert!(snap.units.unwrap().state_changes.is_empty());
     }
 
     // -- Step 5: Full lifecycle round-trip ----------------------------------------
@@ -2873,12 +2872,12 @@ mod orphan_shadow_synthesis {
         // Re-scan: shadow file is gone — no full-shadow drop-ins
         let snap2 = InspectionSnapshot {
             schema_version: inspectah_core::snapshot::SCHEMA_VERSION,
-            services: Some(ServiceSection::default()),
+            units: Some(UnitSection::default()),
             ..Default::default()
         };
 
         // Verify synthesis produces nothing when shadow is absent
-        let mut services = snap2.services.clone().unwrap();
+        let mut services = snap2.units.clone().unwrap();
         synthesize_orphan_shadows(&mut services);
         assert!(
             services.state_changes.is_empty(),
@@ -2890,7 +2889,7 @@ mod orphan_shadow_synthesis {
         let projected = session2.snapshot_projected();
         assert!(
             projected
-                .services
+                .units
                 .as_ref()
                 .map(|s| s.state_changes.is_empty())
                 .unwrap_or(true),

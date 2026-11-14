@@ -1981,7 +1981,7 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
 
 // ── A shadowed config file is not a second decision ──────────────────
 //
-// A config file that is also a `services.drop_ins` entry reaches the
+// A config file that is also a `units.drop_ins` entry reaches the
 // image only through its Service Drop-ins row. The file's own row is
 // inventory, so both directions of a toggle on it are refused and
 // neither extends the timeline.
@@ -1989,11 +1989,11 @@ fn excluding_the_serving_repo_annotates_the_package_in_the_projection() {
 const SHADOWED_DROP_IN: &str = "/etc/systemd/system/httpd.service.d/limits.conf";
 
 fn shadowed_drop_in_snapshot() -> InspectionSnapshot {
-    use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+    use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
-    snap.services = Some(ServiceSection {
+    snap.units = Some(UnitSection {
         drop_ins: vec![SystemdDropIn {
             unit: "httpd.service".into(),
             path: SHADOWED_DROP_IN.into(),
@@ -2013,7 +2013,7 @@ fn shadowed_drop_in_snapshot() -> InspectionSnapshot {
             // refusal's predicate is `is_inventory()` alone, but a
             // fixture that cannot occur is a worse guard than one that
             // can.
-            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Services),
+            shadowed_by: Some(inspectah_core::types::config::ConfigShadow::Units),
             ..Default::default()
         }],
     });

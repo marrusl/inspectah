@@ -82,9 +82,9 @@ pub fn project_ref_version_changes(snap: &InspectionSnapshot) -> RefVersionChang
 /// 5. **Standalone drop-ins** — drop-ins for units not covered by any of the above
 ///
 /// Omitted/advisory data comes from `render_service_intent` in the pipeline crate.
-/// Warnings are filtered from `snap.warnings` where `inspector == "services"`.
+/// Warnings are filtered from `snap.warnings` where `inspector == "units"`.
 pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
-    let svc = match &snap.services {
+    let svc = match &snap.units {
         Some(s) => s,
         None => return RefServices::default(),
     };
@@ -142,7 +142,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
             continue;
         }
         divergent.push(RefServiceItem {
-            unit: sc.unit.clone(),
+            unit: sc.unit.as_str().to_owned(),
             current_state: sc.current_state,
             default_state: sc.default_state,
             owning_package: sc.owning_package.clone(),
@@ -160,9 +160,9 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     for unit_name in &svc.preset_matched_units {
         if let Some(contents) = dropin_by_unit.get(unit_name.as_str()) {
             let current_state = if enabled_set.contains(unit_name.as_str()) {
-                inspectah_core::types::services::ServiceUnitState::Enabled
+                inspectah_core::types::units::UnitState::Enabled
             } else {
-                inspectah_core::types::services::ServiceUnitState::Disabled
+                inspectah_core::types::units::UnitState::Disabled
             };
             preset_matched_with_dropins.push(RefServiceItem {
                 unit: unit_name.clone(),
@@ -183,7 +183,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         {
             preset_unknown_enabled.push(RefServiceItem {
                 unit: unit_name.clone(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                current_state: inspectah_core::types::units::UnitState::Enabled,
                 default_state: None,
                 owning_package: None,
                 dropin_contents: dropin_by_unit
@@ -203,7 +203,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         {
             preset_unknown_disabled.push(RefServiceItem {
                 unit: unit_name.clone(),
-                current_state: inspectah_core::types::services::ServiceUnitState::Disabled,
+                current_state: inspectah_core::types::units::UnitState::Disabled,
                 default_state: None,
                 owning_package: None,
                 dropin_contents: Vec::new(),
@@ -239,7 +239,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let warnings: Vec<RefServiceWarning> = snap
         .warnings
         .iter()
-        .filter(|w| w.inspector == "services")
+        .filter(|w| w.inspector == "units")
         .map(|w| {
             let unit = w
                 .extra
@@ -927,7 +927,7 @@ pub fn project_reference(snap: &InspectionSnapshot) -> ReferenceProjection {
         non_rpm_software: project_ref_non_rpm(snap),
         selinux: project_ref_selinux(snap),
         collected: CollectedSections {
-            services: snap.services.is_some(),
+            services: snap.units.is_some(),
             containers: snap.containers.is_some(),
             network: snap.network.is_some(),
             storage: snap.storage.is_some(),
@@ -1047,15 +1047,15 @@ mod tests {
 
     // ── project_ref_services tests ──────────────────────────────────
 
-    use inspectah_core::types::services::{
-        PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+    use inspectah_core::types::units::{
+        PresetDefault, SystemdDropIn, UnitSection, UnitState, UnitStateChange,
     };
     use inspectah_core::types::warnings::Warning;
 
     #[test]
     fn test_no_services_returns_default() {
         let snap = InspectionSnapshot {
-            services: None,
+            units: None,
             ..Default::default()
         };
 
@@ -1074,10 +1074,10 @@ mod tests {
     #[test]
     fn test_divergent_service_categorized() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -1099,7 +1099,7 @@ mod tests {
 
         assert_eq!(result.divergent.len(), 1);
         assert_eq!(result.divergent[0].unit, "firewalld.service");
-        assert_eq!(result.divergent[0].current_state, ServiceUnitState::Enabled);
+        assert_eq!(result.divergent[0].current_state, UnitState::Enabled);
         assert_eq!(
             result.divergent[0].default_state,
             Some(PresetDefault::Disable)
@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn test_preset_matched_with_dropin_visible() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
                 enabled_units: vec!["chronyd.service".into()],
                 disabled_units: Vec::new(),
@@ -1139,7 +1139,7 @@ mod tests {
         );
         assert_eq!(
             result.preset_matched_with_dropins[0].current_state,
-            ServiceUnitState::Enabled
+            UnitState::Enabled
         );
         assert_eq!(
             result.preset_matched_with_dropins[0].dropin_contents.len(),
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn test_preset_matched_without_dropin_suppressed() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
                 enabled_units: vec!["chronyd.service".into()],
                 disabled_units: Vec::new(),
@@ -1173,7 +1173,7 @@ mod tests {
     #[test]
     fn test_unknown_enabled_and_disabled_categorized() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
                 enabled_units: vec!["custom-agent.service".into()],
                 disabled_units: vec!["unused.service".into()],
@@ -1192,21 +1192,21 @@ mod tests {
         );
         assert_eq!(
             result.preset_unknown_enabled[0].current_state,
-            ServiceUnitState::Enabled
+            UnitState::Enabled
         );
 
         assert_eq!(result.preset_unknown_disabled.len(), 1);
         assert_eq!(result.preset_unknown_disabled[0].unit, "unused.service");
         assert_eq!(
             result.preset_unknown_disabled[0].current_state,
-            ServiceUnitState::Disabled
+            UnitState::Disabled
         );
     }
 
     #[test]
     fn test_standalone_dropin_for_uncovered_unit() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
                 enabled_units: Vec::new(),
                 disabled_units: Vec::new(),
@@ -1240,10 +1240,10 @@ mod tests {
     #[test]
     fn test_dropin_folded_into_divergent_item() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "httpd.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "httpd.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -1283,10 +1283,10 @@ mod tests {
     #[test]
     fn test_three_way_split() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "firewalld.service".into(),
-                    current_state: ServiceUnitState::Enabled,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "firewalld.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Enabled,
                     default_state: Some(PresetDefault::Disable),
                     disposition: FindingKind::included(),
                     locked: false,
@@ -1320,7 +1320,7 @@ mod tests {
     #[test]
     fn test_service_warnings_extracted() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
+            units: Some(UnitSection {
                 state_changes: Vec::new(),
                 enabled_units: Vec::new(),
                 disabled_units: Vec::new(),
@@ -1329,7 +1329,7 @@ mod tests {
             }),
             warnings: vec![
                 Warning {
-                    inspector: "services".into(),
+                    inspector: "units".into(),
                     message: "unit file not found".into(),
                     extra: [("unit".to_string(), serde_json::json!("ghost.service"))]
                         .into_iter()
@@ -1355,10 +1355,10 @@ mod tests {
     #[test]
     fn test_masked_service_in_divergent() {
         let snap = InspectionSnapshot {
-            services: Some(ServiceSection {
-                state_changes: vec![ServiceStateChange {
-                    unit: "cups.service".into(),
-                    current_state: ServiceUnitState::Masked,
+            units: Some(UnitSection {
+                state_changes: vec![UnitStateChange {
+                    unit: "cups.service".to_owned().try_into().unwrap(),
+                    current_state: UnitState::Masked,
                     default_state: None,
                     disposition: FindingKind::included(),
                     locked: false,
@@ -1379,7 +1379,7 @@ mod tests {
         let result = project_ref_services(&snap);
 
         assert_eq!(result.divergent.len(), 1);
-        assert_eq!(result.divergent[0].current_state, ServiceUnitState::Masked);
+        assert_eq!(result.divergent[0].current_state, UnitState::Masked);
         assert_eq!(result.divergent[0].default_state, None);
     }
 

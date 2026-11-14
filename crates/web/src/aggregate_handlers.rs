@@ -691,7 +691,7 @@ fn build_aggregate_sections(
             .iter()
             .map(|s| {
                 let item_id = ItemId::Service {
-                    unit: s.entry.unit.clone(),
+                    unit: s.entry.unit.as_str().to_owned(),
                 };
                 let fp = s.entry.aggregate.as_ref();
                 AggregateItem {

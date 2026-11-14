@@ -307,8 +307,8 @@ mod tests {
         use inspectah_core::types::network::FirewallZone;
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
-        use inspectah_core::types::services::SystemdDropIn;
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
+        use inspectah_core::types::units::SystemdDropIn;
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -339,7 +339,7 @@ mod tests {
             shipped_by_base: _,   // identifier: an rpm package name
         } = RepoFile::default();
 
-        // `services.drop_ins[]`.
+        // `units.drop_ins[]`.
         let SystemdDropIn {
             content: _, // scrubbed: drop-in pass
             unit: _,
@@ -526,10 +526,10 @@ mod tests {
         use inspectah_core::types::scheduled::{
             AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
         };
-        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
         use inspectah_core::types::sysctl::{
             SysctlDir, SysctlFile, SysctlFileBody, SysctlKey, SysctlSection,
         };
+        use inspectah_core::types::units::{SystemdDropIn, UnitSection};
 
         // Each sentinel is planted behind a keyword the pattern set
         // recognises, so a visited field redacts it and an unvisited one
@@ -593,7 +593,7 @@ mod tests {
             }];
         }
 
-        snap.services = Some(ServiceSection {
+        snap.units = Some(UnitSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "app.service".into(),
                 path: "/etc/systemd/system/app.service.d/override.conf".into(),
