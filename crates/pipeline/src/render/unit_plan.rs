@@ -10,8 +10,8 @@ use inspectah_core::baseline::{
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, MountUnitFinding, StorageKind, UnitAction, UnitFragment,
-    UnitName, UnitState, UnitStateChange,
+    AdminStorageFragment, CarriedUnit, MountUnitFinding, StorageKind, SystemdDropIn, UnitAction,
+    UnitFragment, UnitName, UnitState, UnitStateChange,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -605,15 +605,16 @@ fn normal_mount_point(mount_point: &str) -> String {
 ///   mount point does not bear on it.
 /// - The `tmp.mount` line, when that unit's file is staged.
 /// - The `nofail` line, for a mount or swap whose `nofail` is false, when
-///   the unit is not masked and its file was read. A mask with no unit file
-///   has no `Options=` to read. A mount unit with no `mount_point` was not
-///   read (or has no absolute `Where=` in its `[Mount]` section; the
-///   finding cannot tell the two apart), so it gets no line. A swap has no
-///   `mount_point` either way, so an unreadable swap file still gets the
-///   line: telling it apart would need a field the finding does not have.
-///   The collector reads only the unit file itself: `nofail` set in a
-///   drop-in, or on a line continued with a trailing `\`, is not seen, and
-///   such a unit still gets the line.
+///   the unit is not masked, its file was read, and `drop_ins` holds no row
+///   for the unit. A mask with no unit file has no `Options=` to read. A
+///   mount unit with no `mount_point` was not read (or has no absolute
+///   `Where=` in its `[Mount]` section; the finding cannot tell the two
+///   apart), so it gets no line. A swap has no `mount_point` either way, so
+///   an unreadable swap file still gets the line: telling it apart would
+///   need a field the finding does not have. The collector reads
+///   `Options=` from the unit file alone, by logical line: a drop-in may
+///   set `nofail`, so a unit with any drop-in row whose `unit` is its
+///   name gets no line.
 /// - The `To carry it` line, for an enabled or masked unit, except a
 ///   masked `tmp.mount` (§ 10.3), and except where the advisory itself
 ///   rules the recipe out: an enabled unit given the `/var` rename line
@@ -621,7 +622,11 @@ fn normal_mount_point(mount_point: &str) -> String {
 ///   staged at its name (`systemctl mask` fails on the occupied path,
 ///   § 10.2 rule 4). These two exceptions go beyond § 10.6's table, which
 ///   conditions the line on the state alone.
-pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_>) -> Vec<String> {
+pub fn mount_advisory_lines(
+    finding: &MountUnitFinding,
+    staged: &StagedWrites<'_>,
+    drop_ins: &[SystemdDropIn],
+) -> Vec<String> {
     let name = finding.unit.name();
     let unit = name.as_unit_name();
     let state = finding.state_change.map(|(state, _)| state);
@@ -684,7 +689,11 @@ pub fn mount_advisory_lines(finding: &MountUnitFinding, staged: &StagedWrites<'_
         StorageKind::Swap => *finding.unit.fragment() != AdminStorageFragment::MaskOnly,
         StorageKind::Automount => false,
     };
-    if nofail_read && !masked && !finding.nofail {
+    // The collector reads `Options=` from the unit file alone. With a
+    // drop-in row for the unit, a drop-in may set `nofail`, so the finding's
+    // settings are not known to be the effective ones.
+    let has_drop_ins = drop_ins.iter().any(|d| d.unit == unit.as_str());
+    if nofail_read && !masked && !finding.nofail && !has_drop_ins {
         lines.push(MOUNT_NO_NOFAIL.to_owned());
     }
     // A recipe that its own advisory rules out is not given: a unit told
@@ -1211,7 +1220,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
     plan.mount_advisories = units
         .mount_findings
         .iter()
-        .map(|finding| mount_advisory_lines(finding, staged))
+        .map(|finding| mount_advisory_lines(finding, staged, &units.drop_ins))
         .collect();
     plan
 }

@@ -3295,6 +3295,57 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
     assert!(omitted(&freed, UNIT).is_none(), "{freed}");
 }
 
+/// A local mount unit whose file has no `nofail` but which has a drop-in:
+/// the collector reads `Options=` from the unit file alone and a drop-in
+/// may set `nofail`, so the advisory gives no `nofail` line, on the scan
+/// and the refine route. Reversed control: the same host without the
+/// drop-in has the line.
+#[test]
+fn a_mount_unit_with_drop_ins_gets_no_nofail_line() {
+    const UNIT: &str = "data.mount";
+    let host = |with_drop_in: bool| {
+        let host = UnitHost::new()
+            .unit(UNIT, "enabled")
+            .etc_unit(UNIT, &mount_file("/data", None));
+        if with_drop_in {
+            host.file(
+                &format!("{}.d/options.conf", etc_path(UNIT)),
+                "[Mount]\nOptions=nofail\n",
+            )
+        } else {
+            host
+        }
+    };
+    let with = scan(host(true));
+    assert!(
+        with.units
+            .as_ref()
+            .expect("a units section")
+            .drop_ins
+            .iter()
+            .any(|d| d.unit == UNIT),
+        "the drop-in row is recorded"
+    );
+    for (route, containerfile) in both_routes(&with) {
+        let advisory = advisory_for(&containerfile, UNIT);
+        assert_eq!(
+            advisory.first(),
+            Some(&advisory_fact(UNIT, "enabled")),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            !advisory.contains(&NOFAIL_LINE.to_owned()),
+            "{route}:\n{containerfile}"
+        );
+    }
+    for (route, containerfile) in both_routes(&scan(host(false))) {
+        assert!(
+            advisory_for(&containerfile, UNIT).contains(&NOFAIL_LINE.to_owned()),
+            "{route}, control:\n{containerfile}"
+        );
+    }
+}
+
 /// A merged mask finding beside another host's administrator file for the
 /// same mount unit: one host masked `data.mount`, the other wrote it. The
 /// merged finding is the first host's mask. While the file's config row is

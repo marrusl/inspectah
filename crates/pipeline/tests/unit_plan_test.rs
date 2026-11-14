@@ -4,8 +4,8 @@ use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    AdvisoryUnit, CarriedUnit, MountUnitFinding, PresetDefault, UnitAction, UnitFragment, UnitName,
-    UnitSection, UnitState, UnitStateChange, UnitSubject,
+    AdvisoryUnit, CarriedUnit, MountUnitFinding, PresetDefault, SystemdDropIn, UnitAction,
+    UnitFragment, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::staged_writes;
@@ -2983,7 +2983,7 @@ fn mount_advisory_lines_follow_the_table() {
     for (finding, expected) in &cases {
         let unit = finding.unit.name().as_unit_name().as_str();
         assert_eq!(
-            &mount_advisory_lines(finding, &nothing_staged),
+            &mount_advisory_lines(finding, &nothing_staged, &[]),
             expected,
             "{unit}, file not staged"
         );
@@ -3008,7 +3008,7 @@ fn mount_advisory_lines_follow_the_table() {
     );
     let staged = staged_writes(&staged_snap);
     assert_eq!(
-        mount_advisory_lines(srv, &staged),
+        mount_advisory_lines(srv, &staged, &[]),
         [
             advisory_fact("srv.mount", "enabled"),
             FILE_STAGED_LINE.into(),
@@ -3017,7 +3017,7 @@ fn mount_advisory_lines_follow_the_table() {
         ]
     );
     assert_eq!(
-        mount_advisory_lines(&tmp, &staged),
+        mount_advisory_lines(&tmp, &staged, &[]),
         [
             advisory_fact("tmp.mount", "not enabled"),
             FILE_STAGED_LINE.into(),
@@ -3026,7 +3026,7 @@ fn mount_advisory_lines_follow_the_table() {
         ]
     );
     assert_eq!(
-        mount_advisory_lines(&tmp, &nothing_staged),
+        mount_advisory_lines(&tmp, &nothing_staged, &[]),
         [
             advisory_fact("tmp.mount", "not enabled"),
             NOFAIL_LINE.into(),
@@ -3054,11 +3054,45 @@ fn mount_advisory_lines_follow_the_table() {
         )],
     );
     assert_eq!(
-        mount_advisory_lines(&masked, &staged_writes(&data_staged)),
+        mount_advisory_lines(&masked, &staged_writes(&data_staged), &[]),
         [
             advisory_fact("data.mount", "masked"),
             FILE_STAGED_LINE.into(),
         ]
+    );
+    // A mount unit with drop-ins: the collector reads `Options=` from the
+    // unit file alone, and a drop-in may set `nofail`, so no `nofail` line
+    // is given. The reversed control is the same finding with no drop-in
+    // row, the `data.mount` row of the table, which has the line.
+    let data = mount_finding(
+        "data.mount",
+        local("data.mount"),
+        Some(Enabled),
+        Some("/data"),
+        false,
+    );
+    let drop_in = SystemdDropIn {
+        unit: "data.mount".into(),
+        path: "/etc/systemd/system/data.mount.d/options.conf".into(),
+        content: "[Mount]\nOptions=nofail\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    assert_eq!(
+        mount_advisory_lines(&data, &nothing_staged, std::slice::from_ref(&drop_in)),
+        [
+            advisory_fact("data.mount", "enabled"),
+            carry_line("enable", "data.mount"),
+        ]
+    );
+    assert!(mount_advisory_lines(&data, &nothing_staged, &[]).contains(&NOFAIL_LINE.to_owned()));
+    // A drop-in row for another unit does not count.
+    let other = SystemdDropIn {
+        unit: "other.mount".into(),
+        ..drop_in.clone()
+    };
+    assert!(
+        mount_advisory_lines(&data, &nothing_staged, &[other]).contains(&NOFAIL_LINE.to_owned())
     );
 }
 
