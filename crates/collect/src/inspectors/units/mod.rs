@@ -888,27 +888,40 @@ fn partial_inventory(
     inventory
 }
 
-/// Detect whether a unit has a full shadow or drop-in override.
+/// Detect whether a drop-in's unit has a full shadow or a drop-in override.
 ///
-/// - FullShadow: `/etc/systemd/system/{unit}` exists AND `/usr/lib/systemd/system/{unit}` exists
-/// - DropIn: `/etc/systemd/system/{unit}.d/` exists
-/// - None: neither condition is met
-fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Option<ShadowType> {
-    let etc_path = format!("/etc/systemd/system/{}", unit_name);
-    let usr_path = format!("/usr/lib/systemd/system/{}", unit_name);
-    let dropin_dir = format!("/etc/systemd/system/{}.d", unit_name);
+/// The parent path's form is read with [`resolve::entry`], the test the
+/// resolver and [`full_shadow`] apply, so the three agree:
+///
+/// - FullShadow: `/etc/systemd/system/{unit}` is a regular, non-empty file
+///   and `/usr/lib/systemd/system/{unit}` exists;
+/// - None: `/etc/systemd/system/{unit}` is a regular, non-empty file and
+///   no vendor file exists, a local unit;
+/// - DropIn: anything else at `/etc/systemd/system/{unit}` (nothing, a
+///   zero-length file or a link, which includes both forms of a mask) and
+///   `/etc/systemd/system/{unit}.d/` exists. A drop-in beside a mask is an
+///   ordinary drop-in: § 7.7 of the units spec gives it no other label.
+///
+/// An `Err` names a path whose form could not be read.
+fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Result<Option<ShadowType>, String> {
+    let read_failure = |e: ResolveError| match e {
+        ResolveError::Read { path, error } => format!("{path}: {error}"),
+        ResolveError::Linked { path, target } => format!("{path}: link to {target}"),
+    };
+    let etc_path = format!("{ETC_UNIT_DIR}/{unit_name}");
+    let usr_path = format!("{VENDOR_UNIT_DIR}/{unit_name}");
+    let dropin_dir = format!("{ETC_UNIT_DIR}/{unit_name}.d");
 
-    let etc_exists = exec.run("test", &["-f", &etc_path]).exit_code == 0;
-    let usr_exists = exec.run("test", &["-f", &usr_path]).exit_code == 0;
-    let dropin_exists = exec.run("test", &["-d", &dropin_dir]).exit_code == 0;
-
-    if etc_exists && usr_exists {
-        Some(ShadowType::FullShadow)
-    } else if !etc_exists && dropin_exists {
-        Some(ShadowType::DropIn)
-    } else {
-        None
+    let replaced = matches!(
+        resolve::entry(exec, &etc_path).map_err(read_failure)?,
+        Entry::File { empty: false }
+    );
+    if replaced {
+        let vendor = resolve::entry(exec, &usr_path).map_err(read_failure)?;
+        return Ok((!matches!(vendor, Entry::Missing)).then_some(ShadowType::FullShadow));
     }
+    let dropin_exists = exec.run("test", &["-d", &dropin_dir]).exit_code == 0;
+    Ok(dropin_exists.then_some(ShadowType::DropIn))
 }
 
 /// Collect what the units section owns under `/etc/systemd/system` (§ 7.7
@@ -1006,7 +1019,13 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
             }
 
             // Detect shadow type and set rationale for full shadows
-            let shadow_type = detect_shadow_type(exec, unit);
+            let shadow_type = match detect_shadow_type(exec, unit) {
+                Ok(shadow_type) => shadow_type,
+                Err(failure) => {
+                    read_failures.push(failure);
+                    None
+                }
+            };
             let shadow_rationale = if shadow_type == Some(ShadowType::FullShadow) {
                 Some(
                     "Full unit shadow — base image updates to this unit will be silently ignored"
@@ -2448,20 +2467,8 @@ mod tests {
     fn test_detect_shadow_type_full_shadow() {
         // Both /etc and /usr/lib unit files exist → FullShadow
         let exec = MockExecutor::new()
-            .with_command(
-                "test -f /etc/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
+            .with_file("/etc/systemd/system/httpd.service", "[Unit]\n")
+            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
             .with_command(
                 "test -d /etc/systemd/system/httpd.service.d",
                 ExecResult {
@@ -2471,27 +2478,14 @@ mod tests {
             );
 
         let shadow_type = detect_shadow_type(&exec, "httpd.service");
-        assert_eq!(shadow_type, Some(ShadowType::FullShadow));
+        assert_eq!(shadow_type, Ok(Some(ShadowType::FullShadow)));
     }
 
     #[test]
     fn test_detect_shadow_type_drop_in() {
         // Only drop-in directory exists → DropIn
         let exec = MockExecutor::new()
-            .with_command(
-                "test -f /etc/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 1,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
+            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
             .with_command(
                 "test -d /etc/systemd/system/httpd.service.d",
                 ExecResult {
@@ -2501,37 +2495,22 @@ mod tests {
             );
 
         let shadow_type = detect_shadow_type(&exec, "httpd.service");
-        assert_eq!(shadow_type, Some(ShadowType::DropIn));
+        assert_eq!(shadow_type, Ok(Some(ShadowType::DropIn)));
     }
 
     #[test]
     fn test_detect_shadow_type_none() {
         // Neither full shadow nor drop-in exists → None
-        let exec = MockExecutor::new()
-            .with_command(
-                "test -f /etc/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 1,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 1,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -d /etc/systemd/system/httpd.service.d",
-                ExecResult {
-                    exit_code: 1,
-                    ..Default::default()
-                },
-            );
+        let exec = MockExecutor::new().with_command(
+            "test -d /etc/systemd/system/httpd.service.d",
+            ExecResult {
+                exit_code: 1,
+                ..Default::default()
+            },
+        );
 
         let shadow_type = detect_shadow_type(&exec, "httpd.service");
-        assert_eq!(shadow_type, None);
+        assert_eq!(shadow_type, Ok(None));
     }
 
     #[test]
@@ -2539,20 +2518,8 @@ mod tests {
         // A service defined only in /etc (not in /usr) is a custom service,
         // not a drop-in override, even if it has a .d/ directory
         let exec = MockExecutor::new()
-            .with_command(
-                "test -f /etc/systemd/system/custom.service",
-                ExecResult {
-                    exit_code: 0, // exists in /etc
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/custom.service",
-                ExecResult {
-                    exit_code: 1, // NOT in /usr
-                    ..Default::default()
-                },
-            )
+            // Exists in /etc, NOT in /usr.
+            .with_file("/etc/systemd/system/custom.service", "[Unit]\n")
             .with_command(
                 "test -d /etc/systemd/system/custom.service.d",
                 ExecResult {
@@ -2562,7 +2529,7 @@ mod tests {
             );
 
         let shadow_type = detect_shadow_type(&exec, "custom.service");
-        assert_eq!(shadow_type, None);
+        assert_eq!(shadow_type, Ok(None));
     }
 
     #[test]
@@ -2575,20 +2542,8 @@ mod tests {
                 "/etc/systemd/system/httpd.service.d/override.conf",
                 "[Service]\nRestart=always\n",
             )
-            .with_command(
-                "test -f /etc/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
+            .with_file("/etc/systemd/system/httpd.service", "[Unit]\n")
+            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
             .with_command(
                 "test -d /etc/systemd/system/httpd.service.d",
                 ExecResult {
@@ -2636,20 +2591,7 @@ mod tests {
                 "/etc/systemd/system/httpd.service.d/override.conf",
                 "[Service]\nRestart=always\n",
             )
-            .with_command(
-                "test -f /etc/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 1,
-                    ..Default::default()
-                },
-            )
-            .with_command(
-                "test -f /usr/lib/systemd/system/httpd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            )
+            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
             .with_command(
                 "test -d /etc/systemd/system/httpd.service.d",
                 ExecResult {
@@ -2678,6 +2620,97 @@ mod tests {
             assert_eq!(dropin.shadow_rationale, None);
         } else {
             panic!("expected SectionData::Units");
+        }
+    }
+
+    /// A drop-in's `shadow_type` follows the form of its parent's path, as
+    /// the resolver and the full shadow scan read it: a zero-length file
+    /// and a link to `/dev/null` are masks, so a drop-in beside either is an
+    /// ordinary drop-in with no full-shadow rationale. Control: a non-empty
+    /// file there, comment-only, replaces the vendor unit, and the drop-in
+    /// is labelled a full shadow as before.
+    #[test]
+    fn a_drop_in_under_a_mask_is_not_a_full_shadow() {
+        const UNIT: &str = "quiet.service";
+        let parent = format!("/etc/systemd/system/{UNIT}");
+        let cases: &[(&str, &str, Option<ShadowType>, bool)] = &[
+            (
+                "zero-length file",
+                "masked",
+                Some(ShadowType::DropIn),
+                false,
+            ),
+            (
+                "link to /dev/null",
+                "masked",
+                Some(ShadowType::DropIn),
+                false,
+            ),
+            (
+                "comment-only file",
+                "static",
+                Some(ShadowType::FullShadow),
+                true,
+            ),
+        ];
+        for (form, state, expected, rationale) in cases {
+            let exec = MockExecutor::new()
+                .with_command(
+                    "systemctl list-unit-files --no-pager",
+                    ExecResult {
+                        stdout: format!(
+                            "UNIT FILE                                  STATE           PRESET\n\
+                             {UNIT} {state} disabled\n\n1 unit files listed.\n"
+                        ),
+                        exit_code: 0,
+                        ..Default::default()
+                    },
+                )
+                .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+                .with_file(
+                    "/usr/lib/systemd/system-preset/90-default.preset",
+                    "disable *\n",
+                )
+                .with_dir("/etc/systemd/system", vec![UNIT, "quiet.service.d"])
+                .with_dir("/etc/systemd/system/quiet.service.d", vec!["override.conf"])
+                .with_file(
+                    "/etc/systemd/system/quiet.service.d/override.conf",
+                    "[Service]\nNice=5\n",
+                )
+                .with_file("/usr/lib/systemd/system/quiet.service", "[Service]\n")
+                .with_command(
+                    "test -d /etc/systemd/system/quiet.service.d",
+                    ExecResult::default(),
+                );
+            let exec = match *form {
+                "zero-length file" => exec.with_file(&parent, ""),
+                "link to /dev/null" => exec.with_link(&parent, "/dev/null"),
+                _ => exec.with_file(&parent, "# replaced by hand\n"),
+            };
+            let source = SourceSystem::PackageBased {
+                os_release: svc_test_os_release(),
+            };
+            let ctx = InspectionContext {
+                source_system: &source,
+                executor: &exec,
+                rpm_state: None,
+                baseline_data: None,
+            };
+
+            let output = UnitsInspector::new()
+                .inspect(&ctx, &NullProgress)
+                .unwrap_or_else(|e| panic!("{form}: {e:?}"));
+            let SectionData::Units(units) = output.section else {
+                panic!("{form}: expected SectionData::Units");
+            };
+            let rows: Vec<_> = units
+                .drop_ins
+                .iter()
+                .filter(|d| d.path.ends_with("/override.conf"))
+                .collect();
+            assert_eq!(rows.len(), 1, "{form}: {:?}", units.drop_ins);
+            assert_eq!(&rows[0].shadow_type, expected, "{form}");
+            assert_eq!(rows[0].shadow_rationale.is_some(), *rationale, "{form}");
         }
     }
 
@@ -2711,14 +2744,7 @@ mod tests {
                 "[Unit]\nDescription=Custom sshd\n[Service]\nExecStart=/usr/sbin/sshd -D\n",
             )
             // Vendor counterpart exists
-            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n")
-            .with_command(
-                "test -f /usr/lib/systemd/system/sshd.service",
-                ExecResult {
-                    exit_code: 0,
-                    ..Default::default()
-                },
-            );
+            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
