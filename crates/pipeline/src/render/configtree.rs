@@ -330,6 +330,122 @@ fn write_staged(path: &Path, content: &str) -> Result<(), RenderError> {
     std::fs::write(path, content).map_err(named)
 }
 
+/// Writes the stager's decision under the export, and never over or
+/// through an entry it did not create under that exact spelling.
+///
+/// Two destinations that differ only in a way the staging filesystem
+/// ignores (letter case on a default macOS volume, or Unicode
+/// normalization) are two files on Linux and one entry on disk. An
+/// ordinary write would put the second offer's bytes under the first
+/// offer's path with no conflict named. So below a kind's directory every
+/// directory is created by this stager or reused only when it created that
+/// exact path, and every file is created new. The one overwrite is the
+/// interim `beside` write, and only of a file this stager wrote at that
+/// exact path. A collision fails the export, naming both files.
+///
+/// The decision itself stays lexical: [`staged_writes`] is read by the
+/// Containerfile, the unit plan and refine's view without a staging
+/// directory, and a Linux path's case is part of its identity.
+#[derive(Default)]
+struct Stager {
+    /// Every directory and file this stager created, with the staged file
+    /// it was created for.
+    created: Vec<(PathBuf, PathBuf)>,
+    /// The paths in `created`, for lookup.
+    known: HashSet<PathBuf>,
+}
+
+impl Stager {
+    /// Write `content` at `root/rel`, creating `root` and the directories
+    /// below it. `replace` allows writing over a file this stager wrote at
+    /// exactly that path (a `beside` write).
+    fn write(
+        &mut self,
+        root: &Path,
+        rel: &Path,
+        content: &str,
+        replace: bool,
+    ) -> Result<(), RenderError> {
+        let path = root.join(rel);
+        let named = |e: std::io::Error| {
+            RenderError::Io(std::io::Error::new(
+                e.kind(),
+                format!("cannot stage {}: {e}", path.display()),
+            ))
+        };
+        std::fs::create_dir_all(root).map_err(named)?;
+        let mut dir = root.to_path_buf();
+        for component in rel.parent().into_iter().flat_map(Path::components) {
+            dir.push(component);
+            if self.known.contains(&dir) {
+                continue;
+            }
+            match std::fs::create_dir(&dir) {
+                Ok(()) => self.record(dir.clone(), &path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(self.collision(&path, &dir));
+                }
+                Err(e) => return Err(named(e)),
+            }
+        }
+        if replace && self.known.contains(&path) {
+            return std::fs::write(&path, content).map_err(named);
+        }
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(self.collision(&path, &path));
+            }
+            Err(e) => return Err(named(e)),
+        };
+        std::io::Write::write_all(&mut file, content.as_bytes()).map_err(named)?;
+        self.record(path.clone(), &path);
+        Ok(())
+    }
+
+    fn record(&mut self, entry: PathBuf, for_file: &Path) {
+        self.known.insert(entry.clone());
+        self.created.push((entry, for_file.to_path_buf()));
+    }
+
+    /// The error for staging `path` when `entry` (`path` or a directory on
+    /// the way to it) already exists: the staged file it is an alias of,
+    /// by device and inode, or an entry the stager did not create.
+    fn collision(&self, path: &Path, entry: &Path) -> RenderError {
+        use std::os::unix::fs::MetadataExt;
+        let same =
+            |a: &std::fs::Metadata, b: &std::fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let alias = std::fs::metadata(entry).ok().and_then(|meta| {
+            self.created
+                .iter()
+                .find(|(other, _)| std::fs::metadata(other).is_ok_and(|m| same(&m, &meta)))
+        });
+        let message = match alias {
+            Some((other, for_file)) => format!(
+                "cannot stage {}: the staging filesystem treats {} as {}, staged for {}; \
+                 the two are different files on the target, exclude one of the two",
+                path.display(),
+                entry.display(),
+                other.display(),
+                for_file.display()
+            ),
+            None => format!(
+                "cannot stage {}: {} already exists and the export did not create it",
+                path.display(),
+                entry.display()
+            ),
+        };
+        RenderError::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            message,
+        ))
+    }
+}
+
 /// Write `content` to `dir/name`, where `name` comes from the snapshot.
 /// `name` must be one ordinary component: an absolute name would replace
 /// `dir` in the join and `..` would leave it. A refused name is skipped
@@ -412,12 +528,13 @@ impl StagedFileKind {
         matches!(self, Self::GeneratedUnit | Self::FlatpakService)
     }
 
-    /// Where a file of this kind at `dest` is staged under `output_dir`.
-    fn staged_path(self, output_dir: &Path, dest: &Destination) -> PathBuf {
+    /// Where a file of this kind at `dest` is staged: the directory of the
+    /// export it goes under, and its path below that directory.
+    fn staged_at(self, output_dir: &Path, dest: &Destination) -> (PathBuf, PathBuf) {
         match self {
-            Self::DropIn => output_dir.join("drop-ins").join(dest.relative()),
-            Self::FlatpakService => output_dir.join("flatpak").join(FLATPAK_SERVICE),
-            _ => output_dir.join("config").join(dest.relative()),
+            Self::DropIn => (output_dir.join("drop-ins"), dest.relative().into()),
+            Self::FlatpakService => (output_dir.join("flatpak"), FLATPAK_SERVICE.into()),
+            _ => (output_dir.join("config"), dest.relative().into()),
         }
     }
 }
@@ -973,16 +1090,21 @@ pub fn write_config_tree(
     // Every file `staged_writes` lists, and nothing else: config files,
     // repo files, GPG keys, firewall zones, the scheduled section's units,
     // the kargs file and the flatpak provisioning service under their
-    // kind's directory, drop-ins under `drop-ins/`. A file it withholds or refuses is not
-    // written, and the Containerfile names it from `unstaged_files`. A
-    // write that fails fails the export.
+    // kind's directory, drop-ins under `drop-ins/`. A file it withholds or
+    // refuses is not written, and the Containerfile names it from
+    // `unstaged_files`. A write that fails fails the export, and so does
+    // a write the staging filesystem would put over another ([`Stager`]).
     let staged = staged_writes(snap);
-    for (dest, write) in staged
+    let mut stager = Stager::default();
+    let beside = staged.beside.iter().map(|(d, w)| (d, w, true));
+    for (dest, write, replace) in staged
         .writes
         .iter()
-        .chain(staged.beside.iter().map(|(d, w)| (d, w)))
+        .map(|(d, w)| (d, w, false))
+        .chain(beside)
     {
-        write_staged(&write.source.staged_path(output_dir, dest), &write.content)?;
+        let (root, rel) = write.source.staged_at(output_dir, dest);
+        stager.write(&root, &rel, &write.content, replace)?;
     }
 
     // The kernel boot files: the kargs file is an offer of the decision

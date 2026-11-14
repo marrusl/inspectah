@@ -1183,3 +1183,76 @@ fn the_kargs_file_is_staged_through_the_decision() {
         );
     }
 }
+
+// --- Two paths the staging filesystem treats as one ----------------------
+
+/// Whether the filesystem `dir` is on treats names that differ only in
+/// case as one name, as macOS does by default.
+fn case_insensitive(dir: &std::path::Path) -> bool {
+    std::fs::write(dir.join("case-probe"), "").expect("write the probe");
+    let insensitive = dir.join("CASE-PROBE").exists();
+    std::fs::remove_file(dir.join("case-probe")).expect("remove the probe");
+    insensitive
+}
+
+/// Two included config entries whose paths are different files on Linux
+/// and one file on a case-insensitive staging filesystem: once through a
+/// directory spelled two ways, once as two file names in one directory.
+/// The stager never writes one offer's bytes under the other's path. On a
+/// case-insensitive staging root the export fails with an error naming
+/// both staging paths; on a case-sensitive one both files land with their
+/// own bytes. The test reads which kind its temporary directory is and
+/// asserts that outcome, so it is meaningful on macOS and on Linux.
+#[test]
+fn two_paths_the_staging_filesystem_treats_as_one_never_overwrite() {
+    for (label, first, second) in [
+        (
+            "a directory spelled two ways",
+            "/etc/NetworkManager/conf.d/20-security.conf",
+            "/etc/networkmanager/conf.d/20-security.conf",
+        ),
+        (
+            "two file names in one directory",
+            "/etc/app/Settings.conf",
+            "/etc/app/settings.conf",
+        ),
+    ] {
+        let snap = staged_snapshot(
+            vec![
+                config_entry(first, "first=1\n"),
+                config_entry(second, "second=2\n"),
+            ],
+            vec![],
+        );
+        // Two destinations in the decision either way: Linux names differ.
+        let staged = staged_writes(&snap);
+        assert_eq!(staged.writes.len(), 2, "{label}");
+        assert!(staged.withheld.is_empty(), "{label}");
+
+        let dir = TempDir::new().unwrap();
+        let result = write_config_tree(&snap, dir.path());
+        if case_insensitive(dir.path()) {
+            let err = result.expect_err("an alias collision fails the export");
+            let message = err.to_string();
+            for path in [first, second] {
+                assert!(
+                    message.contains(&path[1..]),
+                    "{label}: the error names {path}: {message}"
+                );
+            }
+            // Whatever landed holds the first offer's bytes, never the
+            // second's under the first's name.
+            let landed = std::fs::read_to_string(dir.path().join("config").join(&first[1..]));
+            assert_ne!(landed.ok().as_deref(), Some("second=2\n"), "{label}");
+        } else {
+            result.expect("both files are written");
+            for (path, content) in [(first, "first=1\n"), (second, "second=2\n")] {
+                assert_eq!(
+                    std::fs::read_to_string(dir.path().join("config").join(&path[1..])).unwrap(),
+                    content,
+                    "{label}: {path}"
+                );
+            }
+        }
+    }
+}
