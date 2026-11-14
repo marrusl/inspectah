@@ -327,9 +327,11 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     }
 
     // Unit state: § 10.1's two measured facts about what a carried
-    // `systemctl` line means on the target, stated whenever the
-    // Containerfile has the section.
-    if !super::containerfile::unit_state_section_lines(snap).is_empty() {
+    // `systemctl` line means on the target, stated whenever the plan
+    // carries at least one command. A section holding only declined
+    // commands carries none.
+    let plan = super::unit_plan::plan_units(snap, &super::configtree::staged_writes(snap));
+    if !plan.planned.is_empty() {
         lines.push("## Unit state".into());
         lines.push(String::new());
         lines.push(UNIT_STATE_FIRST_BOOT.into());

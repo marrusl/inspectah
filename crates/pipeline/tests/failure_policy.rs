@@ -282,12 +282,57 @@ fn degraded_section_contributes_to_containerfile_with_fixme() {
         "degraded services content must appear in Containerfile"
     );
 
-    // FIXME annotation present for the degraded section
-    assert!(
-        output.contains("# FIXME: services data may be incomplete"),
-        "degraded section must have FIXME comment in Containerfile"
+    // The notice directly precedes the unit state section, so its reader
+    // sees it, and it is worded for units.
+    let lines: Vec<&str> = output.lines().collect();
+    let state = lines
+        .iter()
+        .position(|l| *l == "# === Systemd Unit State ===")
+        .unwrap_or_else(|| panic!("no unit state section:\n{output}"));
+    assert_eq!(
+        lines.get(state.wrapping_sub(1)),
+        Some(&UNITS_DEGRADED),
+        "{output}"
     );
+    assert!(!output.contains("services data"), "{output}");
+
+    // With a drop-in staged, the drop-ins section's reader sees it too.
+    let mut with_drop_in = snap.clone();
+    with_drop_in
+        .units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .push(inspectah_core::types::units::SystemdDropIn {
+            unit: "httpd.service".into(),
+            path: "/etc/systemd/system/httpd.service.d/limits.conf".into(),
+            content: "[Service]\nLimitNOFILE=65535\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        });
+    let output = containerfile::render_containerfile(&with_drop_in, None, None);
+    let lines: Vec<&str> = output.lines().collect();
+    for header in ["# === Service Drop-ins ===", "# === Systemd Unit State ==="] {
+        let at = lines
+            .iter()
+            .position(|l| *l == header)
+            .unwrap_or_else(|| panic!("no {header}:\n{output}"));
+        assert_eq!(
+            lines.get(at.wrapping_sub(1)),
+            Some(&UNITS_DEGRADED),
+            "{header}:\n{output}"
+        );
+    }
+
+    // Control: the same snapshot, not degraded, has no notice.
+    let mut complete = with_drop_in;
+    complete.completeness = Completeness::Complete;
+    let output = containerfile::render_containerfile(&complete, None, None);
+    assert!(!output.contains(UNITS_DEGRADED), "{output}");
 }
+
+/// The units-degraded notice, as the Containerfile writes it.
+const UNITS_DEGRADED: &str = "# FIXME: units data may be incomplete (inspector returned degraded)";
 
 /// 2. Failed section excluded from Containerfile — no services content.
 #[test]

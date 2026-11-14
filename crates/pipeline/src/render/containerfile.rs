@@ -178,9 +178,11 @@ fn render_containerfile_inner(
     }
 
     // 2. Unit drop-ins and full shadows. The unit state section follows
-    //    the Configuration Files section (§ 10.7).
-    if is_degraded(&snap.completeness, InspectorId::Units) {
-        lines.push("# FIXME: services data may be incomplete (inspector returned degraded)".into());
+    //    the Configuration Files section (§ 10.7), so the units notice is
+    //    written before each of the two.
+    let units_degraded = is_degraded(&snap.completeness, InspectorId::Units);
+    if units_degraded {
+        lines.push(UNITS_DEGRADED_FIXME.into());
     }
     lines.extend(drop_ins_section_lines(snap));
 
@@ -207,6 +209,9 @@ fn render_containerfile_inner(
     // 5b. Unit state: after every COPY that can stage a file for a
     //     collected unit (drop-ins and shadows, the config tree), so each
     //     command acts on the file the image loads (§ 10.7).
+    if units_degraded {
+        lines.push(UNITS_DEGRADED_FIXME.into());
+    }
     lines.extend(unit_state_section_lines(snap));
 
     // 5c. Mount, automount and swap advisories: comments only (§ 10.6),
@@ -1232,6 +1237,11 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
 }
 
 // --- Unit state section (delegated to the unit plan) ---
+
+/// The notice before each units section when the units inspector returned
+/// degraded data.
+const UNITS_DEGRADED_FIXME: &str =
+    "# FIXME: units data may be incomplete (inspector returned degraded)";
 
 /// The unit state section (§ 10.1): empty when the plan has no line to
 /// write, so a caller can ask whether the export has one.

@@ -2096,9 +2096,11 @@ const README_DISABLE: &str = "A `disable` removes the administrator's links and 
      a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
      `disabled` afterwards and is still wanted.";
 
-/// § 10.1: the README states both sentences when the export has a unit
-/// state section. Control: a host whose only unit is a vendor unit at its
-/// preset has no unit state section, and its README has neither sentence.
+/// § 10.1: the README states both sentences when the unit state section
+/// carries a command. Controls: a host whose only unit is a vendor unit at
+/// its preset has no unit state section, and a host whose only line there
+/// is a refused command has a section that carries nothing; neither README
+/// has either sentence.
 #[test]
 fn the_readme_explains_carried_unit_states_when_there_are_any() {
     let readme = |tree: &tempfile::TempDir| {
@@ -2125,6 +2127,33 @@ fn the_readme_explains_carried_unit_states_when_there_are_any() {
         assert!(
             !text.contains(sentence),
             "{sentence:?} without a section:\n{text}"
+        );
+    }
+
+    // A section that carries nothing: its only line is a protected unit's
+    // refused `disable`. The section exists, and neither sentence does.
+    const TIMER: &str = "bootc-fetch-apply-updates.timer";
+    let declined_only = render_export(&scan(
+        UnitHost::new()
+            .unit(TIMER, "disabled")
+            .preset(&format!("enable {TIMER}"))
+            .vendor_unit(
+                TIMER,
+                "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
+                Some("bootc"),
+            ),
+    ));
+    let containerfile = containerfile_in(&declined_only);
+    assert_eq!(
+        unit_lines(&containerfile),
+        [protected_fixme(TIMER, "disabled")],
+        "{containerfile}"
+    );
+    let text = readme(&declined_only);
+    for sentence in [README_FIRST_BOOT, README_DISABLE] {
+        assert!(
+            !text.contains(sentence),
+            "{sentence:?} with nothing carried:\n{text}"
         );
     }
 }
