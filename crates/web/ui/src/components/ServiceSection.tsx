@@ -92,6 +92,8 @@ function DropInRow({
   const diLocked = di.locked === true || parentLocked;
   const disabled = parentExcluded || isPending || diLocked;
   const isShadow = di.shadow_type === "full_shadow";
+  // The checkbox points at the rationale only when the rationale renders.
+  const hasRationale = isShadow && !!di.shadow_rationale;
 
   // Border-left priority: triage border wins if present, else shadow warning border
   let diBorder = LEVEL_BORDER[diBucket] ?? "none";
@@ -152,7 +154,7 @@ function DropInRow({
             }
             aria-disabled={parentExcluded}
             aria-describedby={
-              isShadow ? `shadow-rationale-dropin-${di.path}` : undefined
+              hasRationale ? `shadow-rationale-dropin-${di.path}` : undefined
             }
             style={{ minWidth: 20, minHeight: 20 }}
           />
@@ -199,7 +201,7 @@ function DropInRow({
         )}
       </div>
       {/* Full-shadow rationale below the drop-in toggle row */}
-      {isShadow && di.shadow_rationale && (
+      {hasRationale && (
         <div
           id={`shadow-rationale-dropin-${di.path}`}
           className="inspectah-decision-row__helper-text"

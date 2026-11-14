@@ -539,6 +539,33 @@ describe("ServiceSection full shadow on the drop-in row", () => {
     );
   });
 
+  it.each([
+    ["null", null],
+    ["absent", undefined],
+  ])(
+    "leaves the checkbox undescribed when a full shadow's rationale is %s",
+    (_label, rationale) => {
+      render(
+        <ServiceSection
+          {...defaultProps}
+          dropins={[shadowDropin({ shadow_rationale: rationale })]}
+        />,
+      );
+
+      const row = screen.getByTestId(`dropin-item-${SHADOW_PATH}`);
+      // Still a full shadow: the badge renders.
+      expect(
+        within(row).getByTestId(`shadow-badge-dropin-${SHADOW_PATH}`),
+      ).toHaveTextContent("Shadow override");
+      expect(
+        within(row).queryByTestId(`shadow-rationale-dropin-${SHADOW_PATH}`),
+      ).toBeNull();
+      expect(within(row).getByRole("checkbox")).not.toHaveAttribute(
+        "aria-describedby",
+      );
+    },
+  );
+
   it("badge order is triage then shadow when not locked", () => {
     render(
       <ServiceSection
