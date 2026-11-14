@@ -2,7 +2,7 @@
 source: crates/cli/src/progress/flat.rs
 expression: "e2e_full_output(&r, &buf, &scan)"
 ---
-[01/11] Services... ok (42 units)
+[01/11] Units... ok (42 units)
 [02/11] Storage... ok (done)
 [03/11] Network... ok (done)
 [04/11] RPM packages... ok (613 packages, 6 repos)

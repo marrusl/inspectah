@@ -1,7 +1,7 @@
 //! Integration tests for the Services inspector.
 
 use inspectah_collect::executor::mock::MockExecutor;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::traits::progress::NullProgress;
@@ -9,7 +9,8 @@ use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::units::{
-    CarriedUnit, PresetDefault, UnitAction, UnitFragment, UnitSection, UnitState,
+    AdminStorageFragment, CarriedUnit, OrdinaryKind, PresetDefault, UnitAction, UnitFragment,
+    UnitKind, UnitSection, UnitState,
 };
 
 /// Standard fixture: `systemctl list-unit-files` output.
@@ -62,7 +63,7 @@ fn pkg_source() -> SourceSystem {
 fn full_mock() -> MockExecutor {
     with_vendor_units(MockExecutor::new(), &listed_units(SYSTEMCTL_FIXTURE))
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: SYSTEMCTL_FIXTURE.into(),
                 exit_code: 0,
@@ -88,7 +89,7 @@ fn full_mock() -> MockExecutor {
 
 #[test]
 fn applicability_package_mode_only() {
-    let inspector = ServicesInspector::new();
+    let inspector = UnitsInspector::new();
     assert_eq!(inspector.applicable_to(), &[SourceSystemKind::PackageBased]);
 }
 
@@ -105,9 +106,7 @@ fn happy_path_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -216,7 +215,7 @@ fn inventory_has_one_entry_per_unit_with_state_and_preset() {
     // bad.unit-kind has no unit suffix: it is warned about and skipped.
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          bluetooth.service                          enabled         disabled\n\
@@ -246,9 +245,7 @@ fn inventory_has_one_entry_per_unit_with_state_and_preset() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -300,7 +297,7 @@ fn inventory_has_one_entry_per_unit_with_state_and_preset() {
 fn inventory_records_masked_units() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          cups.service                               masked          enabled\n\
@@ -329,9 +326,7 @@ fn inventory_records_masked_units() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -360,7 +355,7 @@ fn inventory_records_masked_units() {
 fn preset_first_match_wins() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          sshd.service                               enabled         enabled\n\
@@ -395,9 +390,7 @@ fn preset_first_match_wins() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -419,7 +412,7 @@ fn preset_first_match_wins() {
 fn preset_glob_matching() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          custom-app.service                         disabled        disabled\n\
@@ -445,9 +438,7 @@ fn preset_glob_matching() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -476,9 +467,7 @@ fn dropin_files_collected() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -506,7 +495,7 @@ fn systemctl_missing_returns_degraded() {
         baseline_data: None,
     };
 
-    let result = ServicesInspector::new().inspect(&ctx, &NullProgress);
+    let result = UnitsInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -532,7 +521,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
     // systemctl works, but no preset directories registered in mock. One
     // unit in each durable state: a missing preset does not undo any of them.
     let exec = MockExecutor::new().with_command(
-        "systemctl list-unit-files --type=service --no-pager",
+        "systemctl list-unit-files --no-pager",
         ExecResult {
             stdout: "UNIT FILE                                  STATE           PRESET\n\
                      sshd.service                               enabled         enabled\n\
@@ -555,7 +544,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
         baseline_data: None,
     };
 
-    let result = ServicesInspector::new().inspect(&ctx, &NullProgress);
+    let result = UnitsInspector::new().inspect(&ctx, &NullProgress);
     match result {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
@@ -591,7 +580,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
 fn empty_system_returns_empty_section() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          \n\
@@ -612,9 +601,7 @@ fn empty_system_returns_empty_section() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -631,7 +618,7 @@ fn empty_system_returns_empty_section() {
 fn dropin_with_secret_produces_redaction_hint() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          myapp.service                              enabled         enabled\n\
@@ -662,9 +649,7 @@ fn dropin_with_secret_produces_redaction_hint() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
 
     // Should produce a redaction hint for DB_PASSWORD but not APP_PORT
     assert_eq!(
@@ -690,9 +675,7 @@ fn services_snapshot() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -714,9 +697,7 @@ fn preset_matched_entries_capture_matches() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -802,7 +783,7 @@ fn no_preset_matched_entries_without_preset_rules() {
     // Mock with systemctl output but no preset files (empty directory)
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: SYSTEMCTL_FIXTURE.into(),
                 exit_code: 0,
@@ -819,9 +800,7 @@ fn no_preset_matched_entries_without_preset_rules() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected SectionData::Units, got {:?}", other),
@@ -850,7 +829,7 @@ fn no_preset_matched_entries_without_preset_rules() {
 fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          transient.service                          transient       disabled\n\
@@ -879,9 +858,7 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -907,7 +884,7 @@ fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
 fn test_clean_default_snapshot_produces_zero_state_changes() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          dbus.service                               alias           disabled\n\
@@ -929,6 +906,9 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
             "enable chronyd.service\nenable sshd.service\ndisable *\n",
         )
         .with_dir("/etc/systemd/system", vec![]);
+    // An enabled unit's file is resolved, since a local one is a state
+    // change whatever its preset; on this host both are the package's.
+    let exec = with_vendor_units(exec, &["chronyd.service", "sshd.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -938,9 +918,7 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -962,7 +940,7 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
 fn test_owning_package_batch_query_populates_state_changes() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          httpd.service                              enabled         disabled\n\
@@ -998,9 +976,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -1020,7 +996,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
 fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
     let exec = MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: "UNIT FILE                                  STATE           PRESET\n\
                          httpd.service                              enabled         disabled\n\
@@ -1072,9 +1048,7 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
-        .inspect(&ctx, &NullProgress)
-        .unwrap();
+    let output = UnitsInspector::new().inspect(&ctx, &NullProgress).unwrap();
     let section = match &output.section {
         SectionData::Units(s) => s,
         other => panic!("expected Services section, got {other:?}"),
@@ -1099,7 +1073,7 @@ fn scan(exec: &MockExecutor) -> (UnitSection, Vec<String>) {
         rpm_state: None,
         baseline_data: None,
     };
-    let output = ServicesInspector::new()
+    let output = UnitsInspector::new()
         .inspect(&ctx, &NullProgress)
         .expect("the scan succeeds");
     let SectionData::Units(section) = output.section else {
@@ -1120,7 +1094,7 @@ fn listing_mock(units: &[(&str, &str)]) -> MockExecutor {
     listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
     MockExecutor::new()
         .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
+            "systemctl list-unit-files --no-pager",
             ExecResult {
                 stdout: listing,
                 exit_code: 0,
@@ -1402,7 +1376,7 @@ fn unreadable_unit_file_degrades_the_inspector() {
         rpm_state: None,
         baseline_data: None,
     };
-    match ServicesInspector::new().inspect(&ctx, &NullProgress) {
+    match UnitsInspector::new().inspect(&ctx, &NullProgress) {
         Err(InspectorError::Degraded { reason, partial }) => {
             assert!(
                 reason.starts_with("unit file read failures: ")
@@ -1420,4 +1394,344 @@ fn unreadable_unit_file_degrades_the_inspector() {
         }
         other => panic!("expected Degraded for an unreadable unit file, got {other:?}"),
     }
+}
+
+// ── Every unit kind (§ 5, § 7.4 of the units spec) ─────────────────
+
+/// The listing command once every kind is listed: no `--type`.
+const LIST_EVERY_KIND: &str = "systemctl list-unit-files --no-pager";
+
+/// A mock listing `units` (name, state) under `preset` as the host's one
+/// preset file, with an empty `/etc/systemd/system` listing.
+fn kinds_mock(units: &[(&str, &str)], preset: &str) -> MockExecutor {
+    let mut listing =
+        String::from("UNIT FILE                                  STATE           PRESET\n");
+    for (unit, state) in units {
+        listing.push_str(&format!("{unit} {state} disabled\n"));
+    }
+    listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
+    let answer = ExecResult {
+        stdout: listing,
+        exit_code: 0,
+        ..Default::default()
+    };
+    MockExecutor::new()
+        .with_command(LIST_EVERY_KIND, answer.clone())
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", preset)
+        .with_dir("/etc/systemd/system", vec![])
+}
+
+/// The rpm answer for one vendor unit file's owner.
+fn owner_answer(exec: MockExecutor, unit: &str, owner: Option<&str>) -> MockExecutor {
+    let path = format!("/usr/lib/systemd/system/{unit}");
+    let answer = match owner {
+        Some(owner) => ExecResult {
+            stdout: format!("{owner}\n"),
+            exit_code: 0,
+            ..Default::default()
+        },
+        None => ExecResult {
+            stdout: format!("file {path} is not owned by any package\n"),
+            exit_code: 1,
+            ..Default::default()
+        },
+    };
+    exec.with_command(&format!("rpm -qf --queryformat %{{NAME}}\n {path}"), answer)
+}
+
+fn state_change_names(section: &UnitSection) -> Vec<&str> {
+    section
+        .state_changes
+        .iter()
+        .map(|s| s.unit().name().as_str())
+        .collect()
+}
+
+fn inventory_names(section: &UnitSection) -> Vec<&str> {
+    section.inventory.iter().map(|e| e.unit.as_str()).collect()
+}
+
+/// T5, collector: `cockpit.socket` enabled against a `disable` preset is one
+/// state change of kind `Socket`, with a `Vendor` fragment and the owner the
+/// rpm answer gives.
+#[test]
+fn enabled_socket_against_disable_preset_is_one_vendor_state_change() {
+    let exec = kinds_mock(&[("cockpit.socket", "enabled")], "disable cockpit.socket\n")
+        .with_file("/usr/lib/systemd/system/cockpit.socket", UNIT_FILE);
+    let exec = owner_answer(exec, "cockpit.socket", Some("cockpit-ws"));
+    let (section, warnings) = scan(&exec);
+
+    assert_eq!(
+        section.state_changes.len(),
+        1,
+        "{:?}",
+        section.state_changes
+    );
+    let change = &section.state_changes[0];
+    assert_eq!(change.unit().name().as_str(), "cockpit.socket");
+    assert_eq!(
+        change.unit().name().kind(),
+        UnitKind::Ordinary(OrdinaryKind::Socket)
+    );
+    assert_eq!(change.current_state(), UnitState::Enabled);
+    assert_eq!(change.default_state, Some(PresetDefault::Disable));
+    assert_eq!(
+        fragment_of(&section, "cockpit.socket"),
+        &UnitFragment::Vendor {
+            file: file("cockpit.socket"),
+            owning_package: Some("cockpit-ws".into()),
+        }
+    );
+    assert_eq!(inventory_names(&section), vec!["cockpit.socket"]);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+/// T7: `dbus-broker.service` is kept and a `dbus-org.` activation alias is
+/// dropped, from the state changes and from the inventory.
+#[test]
+fn dbus_broker_is_kept_and_a_dbus_org_alias_is_dropped() {
+    let alias = "dbus-org.freedesktop.network1.service";
+    let exec = kinds_mock(
+        &[("dbus-broker.service", "enabled"), (alias, "enabled")],
+        "disable *\n",
+    );
+    let exec = with_vendor_units(exec, &["dbus-broker.service", alias]);
+    let (section, _) = scan(&exec);
+
+    // Presence first: the broker is a state change and an inventory entry.
+    assert_eq!(state_change_names(&section), vec!["dbus-broker.service"]);
+    assert_eq!(inventory_names(&section), vec!["dbus-broker.service"]);
+    // The alias, in the same state with its own file, is in neither.
+    assert!(!state_change_names(&section).contains(&alias));
+    assert!(!inventory_names(&section).contains(&alias));
+}
+
+/// T7: a local unit enabled with no matching preset rule is a state change;
+/// the same local unit disabled is not, since a copied unit file is not
+/// enabled until something enables it.
+#[test]
+fn local_enabled_unit_without_preset_is_a_state_change_and_disabled_is_not() {
+    for kind in ["service", "socket", "path", "target"] {
+        let unit = format!("site-app.{kind}");
+        let unit_path = format!("/etc/systemd/system/{unit}");
+
+        let enabled = kinds_mock(&[(&unit, "enabled")], "disable other.service\n")
+            .with_file(&unit_path, UNIT_FILE);
+        let (section, _) = scan(&enabled);
+        assert_eq!(state_change_names(&section), vec![unit.as_str()], "{unit}");
+        assert_eq!(
+            fragment_of(&section, &unit),
+            &UnitFragment::Local { file: file(&unit) }
+        );
+        assert_eq!(section.state_changes[0].default_state, None, "{unit}");
+
+        let disabled = kinds_mock(&[(&unit, "disabled")], "disable other.service\n")
+            .with_file(&unit_path, UNIT_FILE);
+        let (section, _) = scan(&disabled);
+        assert!(
+            section.state_changes.is_empty(),
+            "{unit}: {:?}",
+            section.state_changes
+        );
+        assert_eq!(inventory_names(&section), vec![unit.as_str()], "{unit}");
+    }
+}
+
+/// T7: a `generated` unit and each runtime state give no state change, with
+/// today's handling (`generated` is dropped silently, a runtime state is
+/// warned about). The same unit `enabled` is a state change.
+#[test]
+fn generated_and_runtime_states_give_no_state_change() {
+    let unit = "cockpit.socket";
+    let control = kinds_mock(&[(unit, "enabled")], "disable *\n");
+    let (section, _) = scan(&with_vendor_units(control, &[unit]));
+    assert_eq!(state_change_names(&section), vec![unit]);
+
+    let generated = kinds_mock(&[(unit, "generated")], "disable *\n");
+    let (section, warnings) = scan(&with_vendor_units(generated, &[unit]));
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    assert!(section.inventory.is_empty());
+    assert!(
+        warnings.is_empty(),
+        "generated is dropped silently: {warnings:?}"
+    );
+
+    for state in [
+        "enabled-runtime",
+        "masked-runtime",
+        "transient",
+        "linked-runtime",
+    ] {
+        let exec = kinds_mock(&[(unit, state)], "disable *\n");
+        let (section, warnings) = scan(&with_vendor_units(exec, &[unit]));
+        assert!(section.state_changes.is_empty(), "{state}");
+        assert!(section.inventory.is_empty(), "{state}");
+        assert_eq!(
+            warnings,
+            vec![format!(
+                "unit {unit} has state '{state}' - transient state is not migrated"
+            )],
+            "{state}"
+        );
+    }
+}
+
+/// A masked template is a `Masked` state change on the template name; the
+/// same template unmasked is skipped, from the inventory too.
+#[test]
+fn masked_template_is_a_state_change_and_an_unmasked_one_is_skipped() {
+    let template = "worker@.service";
+    let masked = kinds_mock(&[(template, "masked")], "disable *\n")
+        .with_link(&format!("/etc/systemd/system/{template}"), "/dev/null");
+    let (section, _) = scan(&with_vendor_units(masked, &[template]));
+    assert_eq!(state_change_names(&section), vec![template]);
+    assert_eq!(section.state_changes[0].current_state(), UnitState::Masked);
+    assert_eq!(
+        fragment_of(&section, template),
+        &UnitFragment::Vendor {
+            file: file(template),
+            owning_package: None,
+        }
+    );
+    assert_eq!(inventory_names(&section), vec![template]);
+
+    for state in ["enabled", "disabled"] {
+        let exec = kinds_mock(&[(template, state)], "enable *\n");
+        let (section, warnings) = scan(&with_vendor_units(exec, &[template]));
+        assert!(section.state_changes.is_empty(), "{state}");
+        assert!(section.inventory.is_empty(), "{state}");
+        assert!(warnings.is_empty(), "{state}: {warnings:?}");
+    }
+}
+
+/// A mount finding's name, fragment and recorded state.
+type FindingRow<'a> = (
+    &'a str,
+    &'a AdminStorageFragment,
+    Option<(UnitState, Option<PresetDefault>)>,
+);
+
+/// A storage unit's owner is looked up before it is classified: a vendor
+/// `tmp.mount` with an owner is a carried `PackagedStorage` state change; a
+/// vendor mount with no owner, a local one, and a mask on a mount with no
+/// file are mount findings and never state changes.
+#[test]
+fn storage_unit_routes_by_owner_to_state_change_or_mount_finding() {
+    let exec = kinds_mock(
+        &[
+            ("tmp.mount", "enabled"),
+            ("opt-tools.mount", "enabled"),
+            ("srv-data.mount", "enabled"),
+            ("var-cache.swap", "masked"),
+        ],
+        "disable *\n",
+    )
+    .with_file("/usr/lib/systemd/system/tmp.mount", UNIT_FILE)
+    .with_file("/usr/lib/systemd/system/opt-tools.mount", UNIT_FILE)
+    .with_file("/etc/systemd/system/srv-data.mount", UNIT_FILE)
+    .with_link("/etc/systemd/system/var-cache.swap", "/dev/null");
+    let exec = owner_answer(exec, "tmp.mount", Some("systemd"));
+    let exec = owner_answer(exec, "opt-tools.mount", None);
+    let (section, warnings) = scan(&exec);
+
+    // Positive control: the owned unit is carried.
+    assert_eq!(state_change_names(&section), vec!["tmp.mount"]);
+    assert!(matches!(
+        section.state_changes[0].unit(),
+        CarriedUnit::PackagedStorage(_)
+    ));
+
+    let findings: Vec<FindingRow> = section
+        .mount_findings
+        .iter()
+        .map(|f| {
+            (
+                f.unit.name().as_unit_name().as_str(),
+                f.unit.fragment(),
+                f.state_change,
+            )
+        })
+        .collect();
+    assert_eq!(
+        findings,
+        vec![
+            (
+                "opt-tools.mount",
+                &AdminStorageFragment::UnownedVendor,
+                Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+            ),
+            (
+                "srv-data.mount",
+                &AdminStorageFragment::Local,
+                Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+            ),
+            (
+                "var-cache.swap",
+                &AdminStorageFragment::MaskOnly,
+                Some((UnitState::Masked, Some(PresetDefault::Disable)))
+            ),
+        ]
+    );
+    for finding in &section.mount_findings {
+        // Task 2.5 reads these from the unit file.
+        assert_eq!(finding.mount_point, None);
+        assert!(!finding.nofail);
+    }
+    assert!(warnings.is_empty(), "routed, not only warned: {warnings:?}");
+}
+
+/// A vendor timer enabled against its preset is a state change like any
+/// unit. A local timer stays with the scheduled section, which enables it
+/// today, so the units section gives it no second control.
+#[test]
+fn local_timer_is_left_to_the_scheduled_section() {
+    let exec = kinds_mock(
+        &[
+            ("dnf-automatic.timer", "enabled"),
+            ("site-backup.timer", "enabled"),
+        ],
+        "disable *\n",
+    )
+    .with_file("/usr/lib/systemd/system/dnf-automatic.timer", UNIT_FILE)
+    .with_file("/etc/systemd/system/site-backup.timer", UNIT_FILE);
+    let (section, _) = scan(&exec);
+
+    assert_eq!(state_change_names(&section), vec!["dnf-automatic.timer"]);
+    assert_eq!(
+        inventory_names(&section),
+        vec!["dnf-automatic.timer", "site-backup.timer"]
+    );
+}
+
+/// The shadow scan stays the services' own until the drop-in and shadow
+/// task: a shadowed service changed against its preset is recorded as a
+/// full shadow; a shadowed socket in the same state is not.
+#[test]
+fn shadow_scan_is_not_extended_to_other_kinds() {
+    let mut exec = kinds_mock(
+        &[("app.service", "enabled"), ("app.socket", "enabled")],
+        "disable *\n",
+    );
+    for unit in ["app.service", "app.socket"] {
+        let etc = format!("/etc/systemd/system/{unit}");
+        let usr = format!("/usr/lib/systemd/system/{unit}");
+        exec = exec
+            .with_file(&etc, UNIT_FILE)
+            .with_file(&usr, UNIT_FILE)
+            .with_command(&format!("test -f {etc}"), ExecResult::default())
+            .with_command(&format!("test -f {usr}"), ExecResult::default());
+    }
+    let (section, _) = scan(&exec);
+
+    assert_eq!(
+        state_change_names(&section),
+        vec!["app.service", "app.socket"]
+    );
+    let shadows: Vec<&str> = section.drop_ins.iter().map(|d| d.unit.as_str()).collect();
+    assert_eq!(shadows, vec!["app.service"]);
 }

@@ -31,7 +31,7 @@ use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -422,10 +422,7 @@ fn populated_host_mock(cache_dir: &Path) -> MockExecutor {
             ok("flathub\thttps://dl.flathub.org/repo/\n"),
         )
         // -- services --------------------------------------------------
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ok(SYSTEMCTL),
-        )
+        .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         .with_command("test -d /etc/systemd/system/httpd.service.d", ok(""))
@@ -444,7 +441,7 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ConfigInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
         Box::new(ContainersInspector),
         Box::new(NonRpmInspector::new()),
     ];

@@ -8,8 +8,8 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    Classified, PresetDefault, SystemdDropIn, UnitFragment, UnitInventoryEntry, UnitName,
-    UnitSection, UnitState, UnitStateChange, UnitSubject,
+    Classified, MountUnitFinding, OrdinaryKind, PresetDefault, SystemdDropIn, UnitFragment,
+    UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::HashSet;
@@ -22,23 +22,34 @@ use resolve::{ResolveError, Resolved, VENDOR_UNIT_DIR};
 /// Secret-like environment variable name fragments that trigger redaction hints.
 const SECRET_PATTERNS: &[&str] = &["PASSWORD", "SECRET", "TOKEN", "KEY", "CREDENTIAL"];
 
-/// Returns true if a unit name represents a real, operator-manageable service.
-///
-/// This is the whitelist gate for the operator-intent model: only real
-/// services can produce state_change entries. D-Bus activation aliases,
-/// abstract targets, and malformed entries are structurally excluded —
-/// no blocklist maintenance required.
-fn is_real_service(unit: &str) -> bool {
-    // D-Bus activation aliases (dbus-org.*) are symlinks managed by
-    // D-Bus activation, not operator intent.
-    if unit.starts_with("dbus-") {
-        return false;
+/// The prefix of a D-Bus activation alias (`dbus-org.freedesktop.*`): a
+/// link D-Bus activation manages, not a unit an administrator switched.
+const DBUS_ACTIVATION_ALIAS_PREFIX: &str = "dbus-org.";
+
+/// The name gate (§ 7.4 of the units spec): the name and state of a listed
+/// unit the section records, or `None` for one it does not. A state that is
+/// not durable is dropped or warned about by [`parse_unit_state`]. The name
+/// must parse as a [`UnitName`] and not be a D-Bus activation alias. A
+/// template is recorded only when masked, since its mask masks every
+/// instance; enabling a template means nothing without an instance. An
+/// instance is not recorded: reading its install state is a later step.
+fn gate(unit: &UnitFileEntry, warnings: &mut Vec<Warning>) -> Option<(UnitName, UnitState)> {
+    let state = match parse_unit_state(&unit.unit, &unit.state) {
+        ParsedUnitState::Durable(state) => state,
+        ParsedUnitState::SilentDrop => return None,
+        ParsedUnitState::Warn(warning) => {
+            warnings.push(warning);
+            return None;
+        }
+    };
+    let name = proved_unit_name(&unit.unit, &unit.state, warnings)?;
+    if name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX) || name.instance().is_some() {
+        return None;
     }
-    // Must be a .service unit (not .timer, .target, .socket, etc.)
-    if !unit.ends_with(".service") {
-        return false;
+    if name.is_template() && state != UnitState::Masked {
+        return None;
     }
-    true
+    Some((name, state))
 }
 
 /// Result of parsing a raw systemd unit state string into the typed contract.
@@ -198,8 +209,8 @@ fn query_owning_package(exec: &dyn Executor, path: &str) -> Option<String> {
     result.stdout.lines().next().and_then(package_name)
 }
 
-/// A unit the collector found evidence of administrator intent for, before
-/// its file is resolved.
+/// A unit that may be a state change, depending on where its file is: a
+/// mask, an enabled unit, or a unit disabled against an `enable` preset.
 struct Candidate {
     name: UnitName,
     /// The state word `systemctl` printed, for warnings.
@@ -208,16 +219,47 @@ struct Candidate {
     default_state: Option<PresetDefault>,
 }
 
-/// Resolve each candidate's unit file, look up the owners, then classify
-/// and build the state changes. A candidate that cannot become a state
-/// change is reported through `warnings`; a unit file that could not be
-/// read goes to `read_failures`.
+/// Whether a candidate whose unit file resolved to `fragment` is a state
+/// change (§ 7.4 of the units spec). A mask always is. A local unit is when
+/// enabled, whatever its preset: the image has the unit only if the export
+/// carries it, and a copied unit file is not enabled until something
+/// enables it. Any other unit is when its state differs from its preset.
+///
+/// A timer whose file is under `/etc` is left to the scheduled section,
+/// which enables every such timer today; a state change would give it a
+/// second control. That section stops enabling it in a later phase.
+fn is_state_change(candidate: &Candidate, fragment: &UnitFragment) -> bool {
+    if candidate.state == UnitState::Masked {
+        return true;
+    }
+    let file_under_etc = matches!(
+        fragment,
+        UnitFragment::Local { .. } | UnitFragment::Shadowed { .. }
+    );
+    if file_under_etc && candidate.name.kind() == UnitKind::Ordinary(OrdinaryKind::Timer) {
+        return false;
+    }
+    if matches!(fragment, UnitFragment::Local { .. }) {
+        return candidate.state == UnitState::Enabled;
+    }
+    matches!(
+        (candidate.state, candidate.default_state),
+        (UnitState::Enabled, Some(PresetDefault::Disable))
+            | (UnitState::Disabled, Some(PresetDefault::Enable))
+    )
+}
+
+/// Resolve each candidate's unit file, keep the state changes, look up the
+/// owners, then classify: a carried unit is a state change, an
+/// administrator's storage unit a mount finding. A candidate that cannot be
+/// resolved or classified is reported through `warnings`; a unit file that
+/// could not be read goes to `read_failures`.
 fn build_state_changes(
     exec: &dyn Executor,
     candidates: Vec<Candidate>,
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
-) -> Vec<UnitStateChange> {
+) -> (Vec<UnitStateChange>, Vec<MountUnitFinding>) {
     let mut found = Vec::new();
     let mut fragments = Vec::new();
     for candidate in candidates {
@@ -225,8 +267,10 @@ fn build_state_changes(
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         match resolve::resolve(exec, &candidate.name) {
             Ok(Resolved::File { fragment }) | Ok(Resolved::Masked { hidden: fragment }) => {
-                fragments.push(fragment);
-                found.push(candidate);
+                if is_state_change(&candidate, &fragment) {
+                    fragments.push(fragment);
+                    found.push(candidate);
+                }
             }
             Ok(Resolved::AliasOf(target)) => warnings.push(warn(&format!(
                 "unit is an alias of {}; its state is not carried on its own",
@@ -250,6 +294,7 @@ fn build_state_changes(
     populate_owning_packages(exec, &mut fragments);
 
     let mut state_changes = Vec::new();
+    let mut mount_findings = Vec::new();
     for (candidate, fragment) in found.into_iter().zip(fragments) {
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
@@ -262,12 +307,19 @@ fn build_state_changes(
         };
         let unit = match subject.classify() {
             Classified::Carried(unit) => unit,
-            // An administrator's storage unit is a mount finding, which a
-            // later step records; until then it is reported here.
-            Classified::Advisory(_) => {
-                warnings.push(warn(
-                    "an administrator's mount, automount or swap unit is not carried",
-                ));
+            // An administrator's storage unit is a mount finding, never a
+            // state change (§ 6.5). The finding records the state when the
+            // unit is enabled or masked; a disabled one is not a finding.
+            Classified::Advisory(unit) => {
+                if candidate.state != UnitState::Disabled {
+                    mount_findings.push(MountUnitFinding {
+                        unit,
+                        state_change: Some((candidate.state, candidate.default_state)),
+                        mount_point: None,
+                        nofail: false,
+                        aggregate: None,
+                    });
+                }
                 continue;
             }
         };
@@ -276,20 +328,22 @@ fn build_state_changes(
             Err(e) => warnings.push(warn(&e.to_string())),
         }
     }
-    state_changes
+    (state_changes, mount_findings)
 }
 
-/// Inspects systemd service state: enabled/disabled vs. preset defaults,
-/// drop-in overrides, and flags environment variables that may contain secrets.
-pub struct ServicesInspector;
+/// Inspects systemd unit state for every unit kind: enabled, disabled or
+/// masked against what the image would have, where each unit's file lives
+/// and which package owns it. Also collects service drop-in overrides and
+/// flags environment variables that may contain secrets.
+pub struct UnitsInspector;
 
-impl ServicesInspector {
+impl UnitsInspector {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for ServicesInspector {
+impl Default for UnitsInspector {
     fn default() -> Self {
         Self::new()
     }
@@ -312,7 +366,7 @@ struct PresetRule {
     pattern: String,
 }
 
-impl Inspector for ServicesInspector {
+impl Inspector for UnitsInspector {
     fn id(&self) -> InspectorId {
         InspectorId::Units
     }
@@ -329,10 +383,7 @@ impl Inspector for ServicesInspector {
         let exec = ctx.executor;
 
         // 1. Run systemctl list-unit-files
-        let systemctl_result = exec.run(
-            "systemctl",
-            &["list-unit-files", "--type=service", "--no-pager"],
-        );
+        let systemctl_result = exec.run("systemctl", &["list-unit-files", "--no-pager"]);
 
         if systemctl_result.exit_code == 127 {
             return Err(InspectorError::Degraded {
@@ -392,49 +443,22 @@ impl Inspector for ServicesInspector {
             }
         };
 
-        // 4. Build state_changes using operator-intent whitelist model
-        //    with typed parse gate.
-        //
-        // Instead of diffing all services and subtracting noise, we start
-        // from an empty list and only add entries where there is clear
-        // evidence the operator explicitly acted. Non-durable states
-        // (static, alias, indirect, generated) are silently dropped;
-        // runtime/linked/bad/unknown states emit structured warnings.
+        // 4. Every unit past the name gate is in the inventory once, with its
+        //    preset. A unit that may be a state change, depending on where
+        //    its file is, is a candidate; the rest have no evidence of an
+        //    administrator's change and only the inventory records them.
         let mut candidates = Vec::new();
         let mut inventory = Vec::new();
         let mut inventoried = HashSet::new();
         let mut warnings = Vec::new();
 
         for unit in &units {
-            // Skip template units — no operator intent
-            if unit.unit.contains('@') {
-                continue;
-            }
-
-            // Parse-time intent gate: classify the raw state string.
-            let current_state = match parse_unit_state(&unit.unit, &unit.state) {
-                ParsedUnitState::Durable(state) => state,
-                ParsedUnitState::SilentDrop => continue,
-                ParsedUnitState::Warn(warning) => {
-                    warnings.push(warning);
-                    continue;
-                }
-            };
-
-            let Some(name) = proved_unit_name(&unit.unit, &unit.state, &mut warnings) else {
+            let Some((name, current_state)) = gate(unit, &mut warnings) else {
                 continue;
             };
-            let real_service = is_real_service(&unit.unit);
-            // Only a unit that can carry a state change has its preset
-            // resolved, so a preset-matched entry is always a real service.
-            let preset = if real_service {
-                resolve_preset_default(&unit.unit, &preset_rules)
-            } else {
-                None
-            };
+            let preset = resolve_preset_default(&unit.unit, &preset_rules);
 
-            // Every unit with a durable state is in the inventory, once:
-            // a name systemctl lists again keeps its first entry.
+            // A name systemctl lists again keeps its first entry.
             if inventoried.insert(name.clone()) {
                 inventory.push(UnitInventoryEntry {
                     unit: name.clone(),
@@ -443,57 +467,24 @@ impl Inspector for ServicesInspector {
                 });
             }
 
-            // --- Operator-intent gate ---
-            // Only real services can produce state_change entries.
-            // D-Bus activation aliases and non-.service units are
-            // structurally excluded here.
-            if !real_service {
-                continue;
-            }
-
-            // Signal 1: Masked services — unambiguous operator intent.
-            // Always capture regardless of preset state.
-            if current_state == UnitState::Masked {
+            let candidate = match current_state {
+                UnitState::Masked | UnitState::Enabled => true,
+                UnitState::Disabled => preset == Some(PresetDefault::Enable),
+            };
+            if candidate {
                 candidates.push(Candidate {
                     name,
                     raw_state: unit.state.clone(),
                     state: current_state,
                     default_state: preset,
                 });
-                continue;
             }
-
-            // Signal 2: Operator enabled/disabled — the operator changed the
-            // service state from what the distro presets dictate. We need a
-            // definitive preset to prove divergence; without one, there is no
-            // evidence of operator action.
-            let (default_state, diverges) = match preset {
-                Some(PresetDefault::Enable) if current_state == UnitState::Disabled => {
-                    (Some(PresetDefault::Enable), true)
-                }
-                Some(PresetDefault::Disable) if current_state == UnitState::Enabled => {
-                    (Some(PresetDefault::Disable), true)
-                }
-                Some(p) => (Some(p), false),
-                None => (None, false),
-            };
-
-            if diverges {
-                candidates.push(Candidate {
-                    name,
-                    raw_state: unit.state.clone(),
-                    state: current_state,
-                    default_state,
-                });
-            }
-            // State matches preset, or no matching preset rule → no
-            // evidence of operator action. The inventory entry records it.
         }
 
         // 4b. Resolve each candidate's unit file and owning package, then
         //     build the state changes.
         let mut unit_file_read_failures = Vec::new();
-        let state_changes = build_state_changes(
+        let (state_changes, mount_findings) = build_state_changes(
             exec,
             candidates,
             &mut warnings,
@@ -519,6 +510,11 @@ impl Inspector for ServicesInspector {
                 drop_ins.iter().map(|d| d.unit.as_str()).collect();
             let mut shadow_entries = Vec::new();
             for sc in &state_changes {
+                // Services only: masks, drop-ins and shadows of the other
+                // kinds are collected by a later step.
+                if sc.unit().name().kind() != UnitKind::Ordinary(OrdinaryKind::Service) {
+                    continue;
+                }
                 let unit = sc.unit().name().as_str();
                 if dropin_units.contains(unit) {
                     continue;
@@ -608,7 +604,7 @@ impl Inspector for ServicesInspector {
             state_changes,
             inventory,
             drop_ins,
-            mount_findings: Vec::new(),
+            mount_findings,
         };
 
         // Preset file read failures are correctness-bearing — a missing
@@ -671,7 +667,7 @@ impl Inspector for ServicesInspector {
     }
 }
 
-/// Parse `systemctl list-unit-files --type=service` output.
+/// Parse `systemctl list-unit-files` output.
 /// Expects header line, data lines with UNIT/STATE/PRESET columns,
 /// and a trailing summary line ("N unit files listed.").
 fn parse_unit_files(stdout: &str) -> Vec<UnitFileEntry> {
@@ -832,16 +828,7 @@ fn partial_inventory(
     let mut inventory = Vec::new();
     let mut inventoried = HashSet::new();
     for u in units {
-        if u.unit.contains('@') || u.state == "static" {
-            continue;
-        }
-        let state = match u.state.as_str() {
-            "enabled" => UnitState::Enabled,
-            "disabled" => UnitState::Disabled,
-            "masked" => UnitState::Masked,
-            _ => continue,
-        };
-        let Some(name) = proved_unit_name(&u.unit, &u.state, warnings) else {
+        let Some((name, state)) = gate(u, warnings) else {
             continue;
         };
         if inventoried.insert(name.clone()) {
@@ -1046,7 +1033,7 @@ mod tests {
     fn svc_base_mock() -> MockExecutor {
         MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -1076,7 +1063,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1108,7 +1095,7 @@ mod tests {
         // Directory is readable and lists a preset file, but file read fails
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -1126,7 +1113,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1162,7 +1149,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1188,7 +1175,7 @@ mod tests {
         // Admin-priority presets may be hidden — must degrade.
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -1212,7 +1199,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1240,7 +1227,7 @@ mod tests {
         // normal on systems without admin presets. NOT degraded.
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -1261,7 +1248,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1286,7 +1273,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1310,35 +1297,45 @@ mod tests {
 
     // --- Operator-intent whitelist tests ---
 
+    /// The name gate keeps every kind and `dbus-broker.service`, and drops a
+    /// `dbus-org.` activation alias, an instance, and a template that is not
+    /// masked.
     #[test]
-    fn test_is_real_service_accepts_real_services() {
-        assert!(is_real_service("sshd.service"));
-        assert!(is_real_service("httpd.service"));
-        assert!(is_real_service("firewalld.service"));
-        assert!(is_real_service("systemd-resolved.service"));
-        assert!(is_real_service("systemd-sysupdate.service"));
-        // dbus.service is the actual daemon, not a D-Bus alias
-        assert!(is_real_service("dbus.service"));
-    }
-
-    #[test]
-    fn test_is_real_service_rejects_dbus_aliases() {
-        assert!(!is_real_service(
-            "dbus-org.freedesktop.NetworkManager.service"
-        ));
-        assert!(!is_real_service("dbus-org.freedesktop.timedate1.service"));
-        assert!(!is_real_service(
-            "dbus-org.fedoraproject.FirewallD1.service"
-        ));
-        assert!(!is_real_service("dbus-org.bluez.service"));
-        assert!(!is_real_service("dbus-:1.2-org.something.service"));
-    }
-
-    #[test]
-    fn test_is_real_service_rejects_non_service_units() {
-        assert!(!is_real_service("systemd-sysupdate.timer"));
-        assert!(!is_real_service("multi-user.target"));
-        assert!(!is_real_service("dbus.socket"));
+    fn name_gate_table() {
+        let cases: &[(&str, &str, bool)] = &[
+            ("sshd.service", "enabled", true),
+            ("dbus.service", "enabled", true),
+            ("dbus-broker.service", "enabled", true),
+            // Not the activation-alias prefix.
+            ("dbus-:1.2-org.something.service", "enabled", true),
+            ("systemd-sysupdate.timer", "enabled", true),
+            ("multi-user.target", "enabled", true),
+            ("dbus.socket", "enabled", true),
+            ("tmp.mount", "masked", true),
+            ("getty@.service", "masked", true),
+            (
+                "dbus-org.freedesktop.NetworkManager.service",
+                "enabled",
+                false,
+            ),
+            ("dbus-org.freedesktop.timedate1.service", "disabled", false),
+            ("dbus-org.bluez.service", "masked", false),
+            ("getty@.service", "enabled", false),
+            ("getty@.service", "disabled", false),
+            ("getty@tty1.service", "enabled", false),
+            ("getty@tty1.service", "masked", false),
+        ];
+        for &(unit, state, kept) in cases {
+            let entry = UnitFileEntry {
+                unit: unit.into(),
+                state: state.into(),
+                _preset: String::new(),
+            };
+            let mut warnings = Vec::new();
+            let gated = gate(&entry, &mut warnings);
+            assert_eq!(gated.is_some(), kept, "{unit} {state}");
+            assert!(warnings.is_empty(), "{unit} {state}: {warnings:?}");
+        }
     }
 
     #[test]
@@ -1348,7 +1345,7 @@ mod tests {
         // because they are not real services.
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              httpd.service                              enabled         disabled\n\
@@ -1374,7 +1371,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1408,7 +1405,7 @@ mod tests {
     fn test_masked_service_captured_as_operator_intent() {
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -1432,7 +1429,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1479,7 +1476,7 @@ mod tests {
         // A service that is enabled by preset but disabled by operator
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              firewalld.service                          disabled        enabled\n\
@@ -1501,7 +1498,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1535,7 +1532,7 @@ mod tests {
         // operator evidence. Must NOT appear in state_changes.
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sssd.service                               disabled        disabled\n\
@@ -1558,7 +1555,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1588,7 +1585,7 @@ mod tests {
         // or no preset match at all).
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              systemd-sysupdate.service                  disabled        disabled\n\
@@ -1611,7 +1608,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1640,7 +1637,7 @@ mod tests {
         // the operator ran systemctl. With no preset match, it's excluded.
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              some-obscure.service                       disabled        enabled\n\
@@ -1663,7 +1660,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1706,7 +1703,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1743,7 +1740,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1914,7 +1911,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -1975,7 +1972,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -2002,7 +1999,7 @@ mod tests {
         // must still be detected by the independent scan (step 5c).
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
                              sshd.service                               enabled         enabled\n\
@@ -2025,6 +2022,7 @@ mod tests {
                 "[Unit]\nDescription=Custom sshd\n[Service]\nExecStart=/usr/sbin/sshd -D\n",
             )
             // Vendor counterpart exists
+            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n")
             .with_command(
                 "test -f /usr/lib/systemd/system/sshd.service",
                 ExecResult {
@@ -2036,7 +2034,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -2086,13 +2084,16 @@ mod tests {
     #[test]
     fn test_unreadable_shadow_file_degrades_inspector() {
         // A full shadow file that cannot be read should degrade the inspector,
-        // not silently produce an empty content entry.
+        // not silently produce an empty content entry. The unit is disabled
+        // as its preset says, so it is no candidate and the shadow scan is
+        // the first to read its file (an enabled unit's file is read when it
+        // is resolved, which degrades the scan with its own reason).
         let exec = MockExecutor::new()
             .with_command(
-                "systemctl list-unit-files --type=service --no-pager",
+                "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
-                             sshd.service                               enabled         enabled\n\
+                             sshd.service                               disabled        disabled\n\
                              \n\
                              1 unit files listed.\n"
                         .into(),
@@ -2103,7 +2104,7 @@ mod tests {
             .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
             .with_file(
                 "/usr/lib/systemd/system-preset/90-default.preset",
-                "enable sshd.service\ndisable *\n",
+                "disable sshd.service\ndisable *\n",
             )
             .with_dir("/etc/systemd/system", vec!["sshd.service"])
             // Shadow file exists but is unreadable
@@ -2123,7 +2124,7 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
         };
-        let inspector = ServicesInspector::new();
+        let inspector = UnitsInspector::new();
         let ctx = InspectionContext {
             source_system: &source,
             executor: &exec,
@@ -2157,7 +2158,7 @@ mod tests {
     /// § 7.8: a storage unit's owner is looked up before it is classified.
     /// A vendor `tmp.mount` whose owner is found is a carried state change;
     /// the same unit whose lookup fails, or answers with an empty line, is
-    /// the administrator's and becomes no state change, with a warning.
+    /// the administrator's: a mount finding and no state change.
     #[test]
     fn storage_unit_owner_is_looked_up_before_classification() {
         let rpm = |stdout: &str, exit_code: i32| ExecResult {
@@ -2171,7 +2172,7 @@ mod tests {
 
         let owned = vendor().with_command(query, rpm("systemd\n", 0));
         let (mut warnings, mut failures) = (Vec::new(), Vec::new());
-        let changes = build_state_changes(
+        let (changes, findings) = build_state_changes(
             &owned,
             vec![storage_candidate("tmp.mount")],
             &mut warnings,
@@ -2182,6 +2183,7 @@ mod tests {
             "{warnings:?} {failures:?}"
         );
         assert_eq!(changes.len(), 1);
+        assert!(findings.is_empty(), "{findings:?}");
         assert!(
             matches!(changes[0].unit(), inspectah_core::types::units::CarriedUnit::PackagedStorage(u)
                 if u.owning_package() == "systemd"),
@@ -2192,19 +2194,16 @@ mod tests {
         for answer in [rpm("file is not owned by any package\n", 1), rpm("\n", 0)] {
             let unowned = vendor().with_command(query, answer);
             let mut warnings = Vec::new();
-            let changes = build_state_changes(
+            let (changes, findings) = build_state_changes(
                 &unowned,
                 vec![storage_candidate("tmp.mount")],
                 &mut warnings,
                 &mut failures,
             );
             assert!(changes.is_empty(), "{changes:?}");
-            assert!(
-                warnings
-                    .iter()
-                    .any(|w| w.message.contains("tmp.mount") && w.message.contains("not carried")),
-                "{warnings:?}"
-            );
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert_eq!(findings[0].unit.name().as_unit_name().as_str(), "tmp.mount");
         }
     }
 }

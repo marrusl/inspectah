@@ -966,8 +966,8 @@ mod tests {
 
         // Arrival order: Services → Network → RPM.
         assert!(
-            lines[0].contains("[01/11]") && lines[0].contains("Services"),
-            "first should be Services [01/11]: {}",
+            lines[0].contains("[01/11]") && lines[0].contains("Units"),
+            "first should be Units [01/11]: {}",
             lines[0]
         );
         assert!(
@@ -1019,8 +1019,8 @@ mod tests {
 
         // Services is [01/11] despite being position 2 in display order.
         assert!(
-            lines[0].contains("[01/11]") && lines[0].contains("Services"),
-            "Services should be [01/11]: {}",
+            lines[0].contains("[01/11]") && lines[0].contains("Units"),
+            "Units should be [01/11]: {}",
             lines[0]
         );
         // Selinux is [02/11] despite being position 10.

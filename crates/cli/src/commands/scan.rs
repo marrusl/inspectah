@@ -29,7 +29,7 @@ use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::subscription::SubscriptionInspector;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_collect::inspectors::users::{
     NON_SYSTEM_UID_MAX, NON_SYSTEM_UID_MIN, UserGroupOptions, UsersGroupsInspector,
 };
@@ -607,7 +607,7 @@ pub fn run_scan(args: &ScanArgs, assume_yes: bool) -> Result<ScanOutcome> {
 
     let mut inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
         Box::new(StorageInspector::new()),
         Box::new(KernelbootInspector::new()),
         Box::new(NetworkInspector::new()),
@@ -1232,7 +1232,7 @@ VARIANT_ID="workstation"
         // Verify all 11 inspectors are registered
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(RpmInspector::new()),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
             Box::new(StorageInspector::new()),
             Box::new(KernelbootInspector::new()),
             Box::new(NetworkInspector::new()),
@@ -1253,7 +1253,7 @@ VARIANT_ID="workstation"
         // Verify Wave 2 inspector IDs are present
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(RpmInspector::new()),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
             Box::new(StorageInspector::new()),
             Box::new(KernelbootInspector::new()),
             Box::new(NetworkInspector::new()),

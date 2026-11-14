@@ -7,7 +7,7 @@
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector};
 use inspectah_core::traits::progress::NullProgress;
@@ -67,7 +67,7 @@ fn services_mock() -> MockExecutor {
         exec = exec.with_file(&format!("/usr/lib/systemd/system/{unit}"), "[Unit]\n");
     }
     exec.with_command(
-        "systemctl list-unit-files --type=service --no-pager",
+        "systemctl list-unit-files --no-pager",
         ExecResult {
             stdout: SYSTEMCTL_FIXTURE.into(),
             exit_code: 0,
@@ -155,7 +155,7 @@ fn kernelboot_mock() -> MockExecutor {
 
 // ── Services inspector correctness ──────────────────────────────────
 
-/// Runs ServicesInspector on fixture data and verifies the output is
+/// Runs UnitsInspector on fixture data and verifies the output is
 /// structurally valid and self-consistent.
 #[test]
 fn test_services_inspector_correctness() {
@@ -168,7 +168,7 @@ fn test_services_inspector_correctness() {
         baseline_data: None,
     };
 
-    let output = ServicesInspector::new()
+    let output = UnitsInspector::new()
         .inspect(&ctx, &NullProgress)
         .expect("services inspector should succeed on full fixture set");
 

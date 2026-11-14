@@ -1825,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_collect_skips_wave2_when_cancelled_between_waves() {
-        use inspectah_collect::inspectors::units::ServicesInspector;
+        use inspectah_collect::inspectors::units::UnitsInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {
@@ -1836,7 +1836,7 @@ mod tests {
 
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(CancellingRpmInspector::new(cancelled.clone())),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
         ];
         let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
 
@@ -1866,7 +1866,7 @@ mod tests {
 
     #[test]
     fn test_collect_no_cancellation_runs_normally() {
-        use inspectah_collect::inspectors::units::ServicesInspector;
+        use inspectah_collect::inspectors::units::UnitsInspector;
 
         let exec = build_test_mock();
         let source = SourceSystem::PackageBased {
@@ -1877,7 +1877,7 @@ mod tests {
 
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(RpmInspector::new()),
-            Box::new(ServicesInspector::new()),
+            Box::new(UnitsInspector::new()),
         ];
         let pipeline = collect(&source, &exec, &inspectors, None, &progress, &cancelled);
 

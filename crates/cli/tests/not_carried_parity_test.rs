@@ -58,7 +58,7 @@ use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::rpm::repoless::scan_dnf_cache_for_repoless;
 use inspectah_collect::inspectors::storage::StorageInspector;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION};
 use inspectah_core::traits::executor::ExecResult;
@@ -270,10 +270,7 @@ fn host_mock() -> MockExecutor {
         .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
         .with_file(MODIFIED_CONFIG, "Listen 8080\n")
         // -- services --------------------------------------------------
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ok(SYSTEMCTL),
-        )
+        .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
@@ -320,7 +317,7 @@ fn host_mock() -> MockExecutor {
 fn collected(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
         Box::new(StorageInspector::new()),
         Box::new(ConfigInspector::new()),
     ];

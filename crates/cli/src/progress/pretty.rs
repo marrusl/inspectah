@@ -1064,8 +1064,8 @@ mod tests {
             lines[0]
         );
         assert!(
-            lines[1].contains("Services"),
-            "second line should be Services: {}",
+            lines[1].contains("Units"),
+            "second line should be Units: {}",
             lines[1]
         );
         assert!(
@@ -1134,17 +1134,17 @@ mod tests {
 
         // Services parent line should be first.
         assert!(
-            lines[0].contains("Services"),
-            "expected Services parent first: {}",
+            lines[0].contains("Units"),
+            "expected Units parent first: {}",
             lines[0]
         );
         // Child lines should be indented and appear between Services and Network.
-        let services_idx = lines.iter().position(|l| l.contains("Services")).unwrap();
+        let services_idx = lines.iter().position(|l| l.contains("Units")).unwrap();
         let network_idx = lines.iter().position(|l| l.contains("Network")).unwrap();
         // Children between parent and next inspector.
         assert!(
             network_idx > services_idx + 1,
-            "expected child lines between Services and Network"
+            "expected child lines between Units and Network"
         );
         // Child lines should be indented with 6 spaces.
         for line in &lines[(services_idx + 1)..network_idx] {
@@ -1530,7 +1530,7 @@ mod tests {
         // (In handle(), the clear only happens when spinner_active == id.)
         let finishing_id = InspectorId::Units;
         let owns_spinner = state.spinner_active == Some(finishing_id);
-        assert!(!owns_spinner, "Services should not own the spinner");
+        assert!(!owns_spinner, "Units should not own the spinner");
 
         // Spinner stays on RPM.
         assert_eq!(
@@ -1546,7 +1546,7 @@ mod tests {
         assert_eq!(
             state.spinner_active,
             Some(InspectorId::Rpm),
-            "spinner should still be on RPM after Services finishes"
+            "spinner should still be on RPM after Units finishes"
         );
     }
 

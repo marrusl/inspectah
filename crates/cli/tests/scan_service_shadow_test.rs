@@ -21,7 +21,7 @@ use std::sync::atomic::AtomicBool;
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
-use inspectah_collect::inspectors::units::ServicesInspector;
+use inspectah_collect::inspectors::units::UnitsInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::Inspector;
@@ -118,10 +118,7 @@ fn overlapping_paths_mock() -> MockExecutor {
         .with_dir("/etc/httpd/conf", vec!["httpd.conf"])
         .with_file(PLAIN_CONFIG, PLAIN_CONFIG_CONTENT)
         // -- services --------------------------------------------------
-        .with_command(
-            "systemctl list-unit-files --type=service --no-pager",
-            ok(SYSTEMCTL),
-        )
+        .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
         // `custom.service` in /etc shadows the vendor unit in /usr/lib,
@@ -137,7 +134,7 @@ fn scan_like(exec: &MockExecutor) -> InspectionSnapshot {
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ConfigInspector::new()),
-        Box::new(ServicesInspector::new()),
+        Box::new(UnitsInspector::new()),
     ];
     let collected = collect(
         &pkg_source(),

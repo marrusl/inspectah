@@ -2,7 +2,7 @@
 source: crates/cli/src/progress/pretty.rs
 expression: "e2e_full_output(&r, &buf, &scan)"
 ---
-  ✓ Services                     27 units
+  ✓ Units                        27 units
   ✓ Storage                      done
   ✓ Kernel & boot                done
   ✓ Network                      done
