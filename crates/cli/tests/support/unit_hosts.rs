@@ -57,6 +57,13 @@ const RPM_FILE_OWNERSHIP: &str = "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES
 const RPM_QF: &str = "rpm -qf --queryformat %{NAME}\n";
 /// The listing the units inspector reads unit states from.
 const LIST_UNIT_FILES: &str = "systemctl list-unit-files --no-pager";
+/// The `list-unit-files` header systemd 252 (RHEL 9) prints. Newer
+/// releases name the third column `PRESET`; the parser reads neither name.
+const LIST_UNIT_FILES_HEADER: &str =
+    "UNIT FILE                                  STATE           VENDOR PRESET";
+/// Unit file states `systemctl list-unit-files` prints no preset for,
+/// writing `-` in the column instead.
+const STATES_WITHOUT_PRESET: &[&str] = &["alias", "static", "generated", "transient"];
 /// The path a `/dev/null` mask resolves to.
 const DEV_NULL: &str = "/dev/null";
 /// The hostname the scan tarball is packed under.
@@ -179,9 +186,14 @@ impl UnitHost {
             }
         }
 
-        let mut listing = String::from("UNIT FILE                                  STATE\n");
+        let mut listing = format!("{LIST_UNIT_FILES_HEADER}\n");
         for (name, state) in &self.units {
-            listing.push_str(&format!("{name} {state}\n"));
+            let preset = if STATES_WITHOUT_PRESET.contains(&state.as_str()) {
+                "-"
+            } else {
+                self.preset_for(name)
+            };
+            listing.push_str(&format!("{name} {state} {preset}\n"));
         }
         listing.push_str(&format!("\n{} unit files listed.\n", self.units.len()));
 
@@ -243,6 +255,20 @@ impl UnitHost {
         mock
     }
 
+    /// The preset column systemd prints for `name`: the first matching
+    /// rule's action, `enabled` when no rule matches (systemd's default).
+    fn preset_for(&self, name: &str) -> &'static str {
+        let action = self.presets.iter().find_map(|rule| {
+            let (action, pattern) = rule.split_once(char::is_whitespace)?;
+            glob_matches(pattern.trim(), name).then_some(action)
+        });
+        match action {
+            Some("disable") => "disabled",
+            Some("ignore") => "ignored",
+            _ => "enabled",
+        }
+    }
+
     /// List `path` in its parent directory, and each ancestor in its own,
     /// up to a top-level directory.
     fn list(&mut self, path: &str) {
@@ -260,6 +286,29 @@ impl UnitHost {
                 .or_default()
                 .insert(name.to_string());
             child = parent;
+        }
+    }
+}
+
+/// Whether `name` matches a preset pattern, with `*` and `?` as
+/// `fnmatch` reads them.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let mut rest_of_pattern = pattern.chars();
+    match rest_of_pattern.next() {
+        None => name.is_empty(),
+        Some('*') => name
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain([name.len()])
+            .any(|i| glob_matches(rest_of_pattern.as_str(), &name[i..])),
+        Some(wanted) => {
+            let mut rest_of_name = name.chars();
+            match rest_of_name.next() {
+                Some(c) if wanted == '?' || wanted == c => {
+                    glob_matches(rest_of_pattern.as_str(), rest_of_name.as_str())
+                }
+                _ => false,
+            }
         }
     }
 }

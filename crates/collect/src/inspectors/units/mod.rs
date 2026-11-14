@@ -1081,7 +1081,8 @@ fn full_shadow(exec: &dyn Executor, entry: &str) -> Result<Option<SystemdDropIn>
 struct MountSettings {
     /// `Where=`, when it is an absolute path. A swap unit has none.
     mount_point: Option<String>,
-    /// Whether `Options=` holds `nofail`. An automount has no `Options=`.
+    /// Whether `Options=` holds `nofail` with no `fail` after it. An
+    /// automount has no `Options=`.
     nofail: bool,
 }
 
@@ -1100,8 +1101,13 @@ fn storage_section(kind: StorageKind) -> &'static str {
 /// value trimmed, which drops a CRLF line end and trailing whitespace.
 /// `Where=` belongs to mounts and automounts, `Options=` to mounts and
 /// swaps. `What=` is never read: it can hold a credential, and the finding
-/// has no field for it. A line continued with a trailing `\` is read as
-/// it stands.
+/// has no field for it. `nofail` is decided as systemd decides it, by
+/// whichever of `nofail` and `fail` comes last in `Options=`.
+///
+/// Only the unit file itself is read. Drop-ins
+/// (`<name>.mount.d/*.conf`) that set `Where=` or `Options=` are not read,
+/// and a line continued with a trailing `\` is not joined to the next, so
+/// either can leave `mount_point` and `nofail` short of what systemd uses.
 fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
     let own_section = storage_section(kind);
     let mut section = None;
@@ -1134,7 +1140,12 @@ fn mount_settings(kind: StorageKind, content: &str) -> MountSettings {
         mount_point: where_value
             .filter(|path| path.starts_with('/'))
             .map(str::to_owned),
-        nofail: options.is_some_and(|o| o.split(',').any(|option| option.trim() == "nofail")),
+        nofail: options.is_some_and(|o| {
+            o.split(',')
+                .map(str::trim)
+                .rfind(|option| matches!(*option, "nofail" | "fail"))
+                == Some("nofail")
+        }),
     }
 }
 
@@ -1268,6 +1279,18 @@ mod tests {
                 "later Options overrides",
                 Mount,
                 "[Mount]\nOptions=defaults\nOptions=nofail\n",
+                settings(None, true),
+            ),
+            (
+                "fail after nofail",
+                Mount,
+                "[Mount]\nOptions=nofail,fail\n",
+                settings(None, false),
+            ),
+            (
+                "nofail after fail",
+                Mount,
+                "[Mount]\nOptions=fail, nofail\n",
                 settings(None, true),
             ),
             (

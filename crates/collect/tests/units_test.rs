@@ -2432,7 +2432,9 @@ fn mount_unit(section: &str, lines: &str) -> String {
 /// `nofail` read from the file systemd loads.
 ///
 /// - Regular, non-empty storage files under `/etc/systemd/system`, whatever
-///   their state: static (not listed), disabled, a full copy over a vendor
+///   their state: static (not listed), disabled, disabled against an
+///   `enable` preset (skipped by the candidate pass, recorded by the
+///   directory pass, no state change), a full copy over a vendor
 ///   file, an enabled copy over a vendor file whose preset enables it, an
 ///   automount, a relative `Where=`, and a file that is not text.
 /// - An unowned vendor unit only when enabled or masked: enabled at its
@@ -2443,10 +2445,12 @@ fn mount_unit(section: &str, lines: &str) -> String {
 /// nor a state change. `What=` is in no finding.
 #[test]
 fn mount_findings_come_from_every_source_section_6_5_names() {
-    let preset = "enable opt-on.mount\nenable srv-shadow.mount\nenable tmp.mount\ndisable *\n";
+    let preset = "enable opt-on.mount\nenable srv-shadow.mount\nenable tmp.mount\n\
+                  enable srv-pre.mount\ndisable *\n";
     let exec = kinds_mock(
         &[
             ("srv-off.mount", "disabled"),
+            ("srv-pre.mount", "disabled"),
             ("data.swap", "disabled"),
             ("srv-shadow.mount", "enabled"),
             ("opt-on.mount", "enabled"),
@@ -2463,6 +2467,7 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             mount_unit("Mount", "Where=/srv/static\nOptions=defaults,nofail\n"),
         ),
         ("srv-off.mount", mount_unit("Mount", "Where=/srv/off\n")),
+        ("srv-pre.mount", mount_unit("Mount", "Where=/srv/pre\n")),
         (
             "data.swap",
             mount_unit("Swap", "Options=defaults,nofail\r\n"),
@@ -2581,6 +2586,16 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             AdminStorageFragment::Local,
             None,
             path("/srv/off"),
+            false,
+        ),
+        // Disabled against an `enable` preset: the candidate pass skips an
+        // advisory unit, so the directory pass records it, and a disabled
+        // unit has no state change on its finding.
+        (
+            "srv-pre.mount".into(),
+            AdminStorageFragment::Local,
+            None,
+            path("/srv/pre"),
             false,
         ),
         (
