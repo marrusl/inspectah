@@ -709,8 +709,8 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
     }
 }
 
-/// The inventory of enabled and disabled units when no preset rule could
-/// be read: every entry has no preset. A name that does not parse is
+/// The inventory of enabled, disabled and masked units when no preset rule
+/// could be read: every entry has no preset. A name that does not parse is
 /// reported through `warnings` and has no entry.
 fn partial_inventory(
     units: &[UnitFileEntry],
@@ -725,6 +725,7 @@ fn partial_inventory(
         let state = match u.state.as_str() {
             "enabled" => UnitState::Enabled,
             "disabled" => UnitState::Disabled,
+            "masked" => UnitState::Masked,
             _ => continue,
         };
         let Some(name) = proved_unit_name(&u.unit, &u.state, warnings) else {

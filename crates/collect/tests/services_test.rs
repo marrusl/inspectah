@@ -501,11 +501,18 @@ fn systemctl_missing_returns_degraded() {
 
 #[test]
 fn unreadable_preset_returns_degraded_not_ok() {
-    // systemctl works, but no preset directories registered in mock
+    // systemctl works, but no preset directories registered in mock. One
+    // unit in each durable state: a missing preset does not undo any of them.
     let exec = MockExecutor::new().with_command(
         "systemctl list-unit-files --type=service --no-pager",
         ExecResult {
-            stdout: SYSTEMCTL_FIXTURE.into(),
+            stdout: "UNIT FILE                                  STATE           PRESET\n\
+                     sshd.service                               enabled         enabled\n\
+                     cups.service                               disabled        enabled\n\
+                     debug-shell.service                        masked          disabled\n\
+                     \n\
+                     3 unit files listed.\n"
+                .into(),
             exit_code: 0,
             ..Default::default()
         },
@@ -527,15 +534,24 @@ fn unreadable_preset_returns_degraded_not_ok() {
                 reason.contains("system-preset"),
                 "reason should mention preset dirs, got: {reason}"
             );
-            // Partial should contain the systemctl data (the inventory)
-            if let SectionData::Units(s) = &partial.section {
-                assert!(
-                    !s.inventory.is_empty(),
-                    "partial should contain the inventory from systemctl"
-                );
-            } else {
-                panic!("partial should be Services section");
-            }
+            // Partial keeps every unit with a durable state, with no preset.
+            let SectionData::Units(s) = &partial.section else {
+                panic!("partial should be the units section");
+            };
+            let inventory: Vec<(&str, UnitState, Option<PresetDefault>)> = s
+                .inventory
+                .iter()
+                .map(|e| (e.unit.as_str(), e.state, e.preset))
+                .collect();
+            assert_eq!(
+                inventory,
+                [
+                    ("sshd.service", UnitState::Enabled, None),
+                    ("cups.service", UnitState::Disabled, None),
+                    ("debug-shell.service", UnitState::Masked, None),
+                ],
+                "the degraded inventory must keep enabled, disabled and masked units"
+            );
         }
         other => panic!("expected Degraded, got {:?}", other),
     }
