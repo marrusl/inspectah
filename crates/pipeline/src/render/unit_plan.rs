@@ -500,7 +500,7 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     lines.extend(
         plan.excluded_updaters
             .iter()
-            .map(|name| excluded_updater_line(name).comment()),
+            .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
     lines.extend(systemctl_lines(&plan.planned));
     if !plan.deferred.is_empty() {
