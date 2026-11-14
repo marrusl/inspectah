@@ -1,3 +1,4 @@
+use inspectah_core::baseline::STOCK_STATE;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
@@ -225,10 +226,19 @@ struct Candidate {
 /// carries it, and a copied unit file is not enabled until something
 /// enables it. Any other unit is when its state differs from its preset.
 ///
+/// A unit in the state a stock install leaves it in ([`STOCK_STATE`]) is
+/// not a state change: nobody chose it.
+///
 /// A timer whose file is under `/etc` is left to the scheduled section,
 /// which enables every such timer today; a state change would give it a
 /// second control. That section stops enabling it in a later phase.
 fn is_state_change(candidate: &Candidate, fragment: &UnitFragment) -> bool {
+    if STOCK_STATE
+        .iter()
+        .any(|stock| stock.unit == candidate.name.as_str() && stock.state == candidate.state)
+    {
+        return false;
+    }
     if candidate.state == UnitState::Masked {
         return true;
     }

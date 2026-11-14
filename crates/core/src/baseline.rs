@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::types::os::OsRelease;
+use crate::types::units::UnitState;
 
 /// Strategy used to resolve the base image reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,6 +141,26 @@ pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
     IncompatibleServiceEntry {
         unit: "packagekit-offline-update.service",
         reason: "package-manager service incompatible with immutable /usr",
+    },
+];
+
+/// A unit a stock install leaves away from its preset with no administrator
+/// involved, and the state it is left in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StockStateEntry {
+    pub unit: &'static str,
+    pub state: UnitState,
+}
+
+/// Units a stock install leaves away from their preset, each in the state
+/// it is left in (§ 7.4 of the units spec). A unit on the list, in the
+/// listed state, gets an inventory entry and no state change, so the scan
+/// does not carry a `disable` nobody chose.
+pub const STOCK_STATE: &[StockStateEntry] = &[
+    // Disabled against an `enable` preset on a stock RHEL 9 host (measured).
+    StockStateEntry {
+        unit: "remote-cryptsetup.target",
+        state: UnitState::Disabled,
     },
 ];
 

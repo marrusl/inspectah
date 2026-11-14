@@ -1706,6 +1706,59 @@ fn local_timer_is_left_to_the_scheduled_section() {
         inventory_names(&section),
         vec!["dnf-automatic.timer", "site-backup.timer"]
     );
+
+    // An `/etc` copy over a vendor timer is the scheduled section's too;
+    // its vendor-only twin above is a state change.
+    let shadowed = kinds_mock(&[("dnf-automatic.timer", "enabled")], "disable *\n")
+        .with_file("/usr/lib/systemd/system/dnf-automatic.timer", UNIT_FILE)
+        .with_file("/etc/systemd/system/dnf-automatic.timer", UNIT_FILE);
+    let (section, _) = scan(&shadowed);
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    assert_eq!(inventory_names(&section), vec!["dnf-automatic.timer"]);
+}
+
+/// § 7.4 stock state: `remote-cryptsetup.target`, `Disabled` against an
+/// `enable` preset as a stock RHEL 9 install leaves it, keeps its inventory
+/// entry and is no state change, so no `disable` nobody chose is carried.
+/// The same unit in another state is a state change, and so is another
+/// target disabled against `enable`: the list decides, not the kind.
+#[test]
+fn stock_state_away_from_preset_is_not_a_state_change() {
+    let unit = "remote-cryptsetup.target";
+    let stock = kinds_mock(&[(unit, "disabled")], "enable remote-cryptsetup.target\n");
+    let (section, warnings) = scan(&with_vendor_units(stock, &[unit]));
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    let entry = &section.inventory[0];
+    assert_eq!(
+        (entry.unit.as_str(), entry.state, entry.preset),
+        (unit, UnitState::Disabled, Some(PresetDefault::Enable))
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // Reversed: the same unit, not in the listed state.
+    let enabled = kinds_mock(&[(unit, "enabled")], "disable *\n");
+    let (section, _) = scan(&with_vendor_units(enabled, &[unit]));
+    assert_eq!(state_change_names(&section), vec![unit]);
+
+    let masked = kinds_mock(&[(unit, "masked")], "enable remote-cryptsetup.target\n")
+        .with_link(&format!("/etc/systemd/system/{unit}"), "/dev/null");
+    let (section, _) = scan(&with_vendor_units(masked, &[unit]));
+    assert_eq!(state_change_names(&section), vec![unit]);
+    assert_eq!(section.state_changes[0].current_state(), UnitState::Masked);
+
+    // Another target in the listed state is not on the list.
+    let other = "remote-fs.target";
+    let exec = kinds_mock(&[(other, "disabled")], "enable remote-fs.target\n");
+    let (section, _) = scan(&with_vendor_units(exec, &[other]));
+    assert_eq!(state_change_names(&section), vec![other]);
 }
 
 /// The shadow scan stays the services' own until the drop-in and shadow

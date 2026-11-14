@@ -837,6 +837,41 @@ mod tests {
         }
     }
 
+    /// The inventory holds every unit kind, so an enabled vendor socket
+    /// credits its not-carried owner like a service does; the same socket
+    /// disabled credits nothing.
+    #[test]
+    fn an_enabled_socket_names_its_not_carried_owner() {
+        for (state, named) in [(UnitState::Enabled, true), (UnitState::Disabled, false)] {
+            let mut snap = scanned_host();
+            snap.units
+                .as_mut()
+                .expect("units section")
+                .inventory
+                .push(UnitInventoryEntry {
+                    unit: "cups-lpd.socket"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid unit name"),
+                    state,
+                    preset: Some(PresetDefault::Disable),
+                });
+            let list = not_carried_packages(&snap);
+            let cups_libs = list
+                .iter()
+                .find(|p| p.name == "cups-libs")
+                .expect("cups-libs is not carried");
+            let notice = not_carried_notice(&snap).expect("other owners give a notice");
+            if named {
+                assert_eq!(cups_libs.enabled_units, ["cups-lpd.socket"], "{state:?}");
+                assert!(notice.text().contains("cups-libs"), "{}", notice.text());
+            } else {
+                assert!(cups_libs.enabled_units.is_empty(), "{state:?}");
+                assert!(!notice.text().contains("cups-libs"), "{}", notice.text());
+            }
+        }
+    }
+
     #[test]
     fn display_name_adds_the_arch_only_when_the_name_is_listed_twice() {
         let single = not_carried_packages(&scanned_host());
