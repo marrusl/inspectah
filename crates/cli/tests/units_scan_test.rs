@@ -2955,23 +2955,27 @@ fn package_item(name: &str) -> ItemId {
 }
 
 /// T18 (a): one host with a package-owned enabled mount unit, one with an
-/// administrator's full copy of it in `/etc`, merged and taken through
-/// `RefineSession`. Both rows are kept: the state change from the first
-/// host, the finding and the config entry from the second. While the
-/// file's config row is included, the file is staged, no instruction
-/// names the unit and the advisory is present, whichever way the unit row
-/// is toggled (its toggle cascades to the unit's drop-ins). Excluding the
-/// file, with the unit row included, yields the enable.
+/// administrator's full copy of it in `/etc` and a drop-in for it, merged
+/// and taken through `RefineSession`. Both rows are kept: the state change
+/// from the first host, the finding, the config entry and the drop-in from
+/// the second. While the file's config row is included, the file is
+/// staged, no instruction names the unit and the advisory is present,
+/// whichever way the unit row is toggled: its toggle cascades to the
+/// drop-in, which leaves and rejoins the export, and does not move the
+/// file decision. Excluding the file, with the unit row included, yields
+/// the enable.
 #[test]
 fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
     const UNIT: &str = "var-lib-pkg.mount";
     const PACKAGE: &str = "pkgmount";
     let path = etc_path(UNIT);
+    let drop_in = format!("{path}.d/x.conf");
     let vendor = mount_file("/var/lib/pkg", None);
     let package_host = named(owned_unit_host(UNIT, PACKAGE, "enabled", &vendor), "host-a");
     let copy_host = named(
         owned_unit_host(UNIT, PACKAGE, "enabled", &vendor)
-            .etc_unit(UNIT, &mount_file("/var/lib/pkg", Some("nofail"))),
+            .etc_unit(UNIT, &mount_file("/var/lib/pkg", Some("nofail")))
+            .file(&drop_in, "[Mount]\nTimeoutSec=30\n"),
         "host-b",
     );
     assert!(
@@ -3027,6 +3031,11 @@ fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
         let containerfile = containerfile_in(&tree);
         let step = format!("file included, unit row included {unit_included}");
         assert!(staged_at(&tree, &path), "{step}: the file is staged");
+        assert_eq!(
+            carriage_of(&session.snapshot_projected(), &drop_in).reaches_image(),
+            unit_included,
+            "{step}: the unit row's toggle cascades to its drop-in"
+        );
         assert!(
             in_no_systemctl_instruction(&containerfile, UNIT),
             "{step}:\n{containerfile}"
@@ -3064,6 +3073,19 @@ fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
     assert!(!staged_at(&tree, &path), "the file is excluded");
     assert!(acts(&containerfile, "enable", UNIT), "{containerfile}");
     assert!(omitted(&containerfile, UNIT).is_none(), "{containerfile}");
+    // Current behavior, recorded for the project owner, not a requirement:
+    // the merged finding's advisory still renders beside the enable the
+    // plan now writes. Only its unit-file line follows the excluded file.
+    let advisory = advisory_for(&containerfile, UNIT);
+    assert_eq!(
+        advisory,
+        [advisory_fact(UNIT, "enabled"), carry_line("enable", UNIT)],
+        "{containerfile}"
+    );
+    assert!(
+        !advisory.contains(&FILE_STAGED_LINE.to_owned()),
+        "{containerfile}"
+    );
 }
 
 /// T18 (c): a mask on one host and a local unit file of the same name on
@@ -3175,6 +3197,95 @@ fn an_aggregate_shows_a_shared_mount_advisory_once() {
             "{route}:\n{containerfile}"
         );
     }
+}
+
+/// A known aggregate limit, pinned as current behavior for the project
+/// owner, not a requirement: two hosts whose administrator's files for one
+/// mount unit differ (`host-a`'s has `nofail`, `host-b`'s has none) merge
+/// to one finding, `host-a`'s whole finding (the two tie, and the tie goes
+/// to the first host by hostname). The advisory describes that finding
+/// whichever config variant is staged, so with `host-b`'s file staged it
+/// still has no line warning that the file lacks `nofail`. Control: with
+/// the hostnames swapped, the finding is the host without `nofail` and the
+/// line is there.
+#[test]
+fn a_merged_mount_finding_describes_one_hosts_file_whatever_variant_is_staged() {
+    const UNIT: &str = "srv.mount";
+    let path = etc_path(UNIT);
+    let host = |hostname, options| {
+        named(
+            UnitHost::new()
+                .unit(UNIT, "enabled")
+                .etc_unit(UNIT, &mount_file("/srv", options)),
+            hostname,
+        )
+    };
+    let with_nofail = mount_file("/srv", Some("nofail"));
+    let without = mount_file("/srv", None);
+    let fleet = merged(host("host-a", Some("nofail")), host("host-b", None));
+    let findings = &fleet
+        .units
+        .as_ref()
+        .expect("a units section")
+        .mount_findings;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].nofail, "host-a's finding: {findings:?}");
+    let variants: Vec<String> = fleet
+        .config
+        .as_ref()
+        .expect("a config section")
+        .files
+        .iter()
+        .filter(|f| f.path == path)
+        .map(|f| f.content.clone())
+        .collect();
+    assert_eq!(variants.len(), 2, "one config variant per host");
+
+    for (selected, has_nofail) in [(&with_nofail, true), (&without, false)] {
+        let mut snap = fleet.clone();
+        for file in snap
+            .config
+            .as_mut()
+            .expect("a config section")
+            .files
+            .iter_mut()
+            .filter(|f| f.path == path)
+        {
+            file.disposition = FindingKind::from_bool(file.content == *selected);
+        }
+        let tree = render_export(&snap);
+        let step = format!("variant with nofail {has_nofail}");
+        assert_eq!(
+            std::fs::read_to_string(tree.path().join("config").join(&path[1..])).ok(),
+            Some(selected.clone()),
+            "{step}: the selected variant is staged"
+        );
+        let containerfile = containerfile_in(&tree);
+        assert_eq!(
+            advisory_for(&containerfile, UNIT),
+            [
+                advisory_fact(UNIT, "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                var_symlink_line("/srv"),
+                carry_line("enable", UNIT),
+            ],
+            "{step}: no nofail line, whichever file is staged:\n{containerfile}"
+        );
+        assert!(
+            !containerfile.contains(NOFAIL_LINE),
+            "{step}:\n{containerfile}"
+        );
+    }
+
+    // Control: the same two files with the hostnames swapped. The finding
+    // is again the first host's, now the one without `nofail`, and the
+    // advisory has the line.
+    let swapped = merged(host("host-a", None), host("host-b", Some("nofail")));
+    let containerfile = containerfile_in(&render_export(&swapped));
+    assert!(
+        advisory_for(&containerfile, UNIT).contains(&NOFAIL_LINE.to_owned()),
+        "{containerfile}"
+    );
 }
 
 // ---------------------------------------------------------------------

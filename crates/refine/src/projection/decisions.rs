@@ -266,6 +266,12 @@ fn mount_finding_views(snap: &InspectionSnapshot, plan: &UnitPlan) -> Vec<MountF
         .flat_map(|config| &config.files)
         .filter_map(|file| Some((Destination::new(&file.path).ok()?, file.path.as_str())))
         .collect();
+    debug_assert_eq!(
+        units.mount_findings.len(),
+        plan.mount_advisories.len(),
+        "plan_units builds one advisory block per mount finding, in order, so the two zip \
+         positionally"
+    );
     units
         .mount_findings
         .iter()
