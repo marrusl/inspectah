@@ -835,21 +835,6 @@ const OPERAND_ROWS: &[OperandRow] = &[
         fixme: "# FIXME: port label",
     },
     OperandRow {
-        field: "systemctl enable unit",
-        render: |v| service(&format!("{v}.service"), UnitState::Enabled),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
-        field: "systemctl disable unit",
-        render: |v| service(&format!("{v}.service"), UnitState::Disabled),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
-        field: "systemctl mask unit",
-        render: |v| service(&format!("{v}.service"), UnitState::Masked),
-        fixme: "# FIXME: unit",
-    },
-    OperandRow {
         field: "local timer unit",
         render: |v| {
             scheduled(ScheduledTaskSection {
@@ -901,21 +886,6 @@ fn operands_never_start_like_an_option_or_a_comment() {
     let mut failures = Vec::new();
     for row in OPERAND_ROWS {
         for value in OPERAND_VALUES {
-            // A state change carries a `UnitName`, which refuses a name
-            // outside the systemd character set (`#foo.service`) when the
-            // snapshot loads, so the renderer never sees one. The refusal
-            // is the type's, asserted here; the values that parse still
-            // go through the renderer below.
-            if row.field.starts_with("systemctl ")
-                && let Err(e) = UnitName::try_from(format!("{value}.service"))
-            {
-                assert!(
-                    matches!(e, UnitNameError::InvalidCharacter { .. }),
-                    "{} ({value:?}): expected a character refusal, got {e}",
-                    row.field
-                );
-                continue;
-            }
             let output = (row.render)(value);
             if let Some(why) = operand_failure(row, value, &output) {
                 failures.push(format!("{} ({value:?}): {why}\n{output}", row.field));
@@ -923,6 +893,48 @@ fn operands_never_start_like_an_option_or_a_comment() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// A unit-state operand is not refused, it is quoted (§ 10.1): a value a
+/// [`UnitName`] admits, `-` first included, renders as one single-quoted
+/// operand after `--`, for each verb. A value outside the systemd
+/// character set (`#foo.service`) is refused by the type when the snapshot
+/// loads, so the renderer never sees it.
+#[test]
+fn unit_state_operands_are_quoted_after_the_end_of_options() {
+    for value in OPERAND_VALUES {
+        let unit = format!("{value}.service");
+        if let Err(e) = UnitName::try_from(unit.clone()) {
+            assert!(
+                matches!(e, UnitNameError::InvalidCharacter { .. }),
+                "{unit:?}: expected a character refusal, got {e}"
+            );
+            continue;
+        }
+        for (state, verb) in [
+            (UnitState::Enabled, "enable"),
+            (UnitState::Disabled, "disable"),
+            (UnitState::Masked, "mask"),
+        ] {
+            let output = service(&unit, state);
+            let lines: Vec<&str> = output.split(LINE_TERMINATORS).collect();
+            let at = lines
+                .iter()
+                .position(|l| *l == format!("RUN systemctl {verb} -- \\"))
+                .unwrap_or_else(|| panic!("{unit} {verb}: no RUN line\n{output}"));
+            assert_eq!(
+                lines[at + 1],
+                format!("    '{unit}'"),
+                "{unit} {verb}\n{output}"
+            );
+            for line in lines.iter().filter(|l| !l.starts_with('#')) {
+                assert!(
+                    line.split_whitespace().all(|w| w != unit),
+                    "{unit} {verb}: the name reached a command line unquoted: {line:?}"
+                );
+            }
+        }
+    }
 }
 
 /// The benign value of each operand row still renders its command.
@@ -950,7 +962,7 @@ fn operands_render_benign_values() {
         ),
         (
             service("httpd.service", UnitState::Enabled),
-            "    httpd.service",
+            "    'httpd.service'",
         ),
     ];
     for (out, line) in cases {

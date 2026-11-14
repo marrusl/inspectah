@@ -60,7 +60,9 @@ pub const UNIT_TYPE_SUFFIXES: &[&str] = &[
 /// The kind of a unit, read from its name's suffix.
 ///
 /// `.device` and `.scope` have no variant: they never exist as unit files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The order (ordinary kinds, then storage kinds, each in declaration
+/// order) is the order units are listed in a `systemctl` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum UnitKind {
     Ordinary(OrdinaryKind),
     Storage(StorageKind),

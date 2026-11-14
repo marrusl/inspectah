@@ -29,7 +29,7 @@ const QUADLET_PREFIX: &str = "/etc/containers/systemd/";
 
 /// The directory systemd reads the administrator's unit files from. A
 /// zero-length unit file directly in it is a mask.
-const ETC_UNIT_DIR: &str = "/etc/systemd/system";
+pub(crate) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// The provisioning service inspectah generates for flatpak applications.
 const FLATPAK_SERVICE: &str = "flatpak-provision.service";

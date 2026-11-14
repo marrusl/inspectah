@@ -19,7 +19,7 @@ use inspectah_core::types::storage::{VarDirBacking, declaring_unit_label};
 use inspectah_core::types::units::{PresetDefault, UnitState};
 use inspectah_core::types::{AdvisoryType, FindingKind};
 use inspectah_pipeline::render::advisory::config_advisories;
-use inspectah_pipeline::render::service_intent::AdvisoryReason;
+use inspectah_pipeline::render::unit_plan::AdvisoryReason;
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
@@ -683,7 +683,7 @@ pub fn web_services_section(data: &RefServices) -> ReferenceSection {
             .map(|o| ContextItem {
                 id: format!("omitted-{}", o.unit),
                 title: o.unit.clone(),
-                subtitle: Some(o.reason.describe(&o.package)),
+                subtitle: Some(o.reason.describe()),
                 detail: None,
                 searchable_text: format!("{} omitted {}", o.unit, o.package),
                 ..Default::default()

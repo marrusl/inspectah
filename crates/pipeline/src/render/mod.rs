@@ -34,7 +34,7 @@ pub mod report_data;
 
 pub mod language_packages;
 pub mod not_carried;
-pub mod service_intent;
+pub mod unit_plan;
 
 pub mod repo_enabling;
 pub mod repoless;

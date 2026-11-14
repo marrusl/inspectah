@@ -2245,18 +2245,27 @@ fn a_full_shadow_at_its_preset_is_copied_with_no_systemctl_line() {
 /// disable), the shadowed unit keeps its `systemctl enable` line beside the
 /// copied shadow. At its preset, as `full_shadow_snapshot()` has it, the
 /// same unit gets none.
+///
+/// The row is recorded `Shadowed`, as the collector records a unit with a
+/// full copy under `/etc`: the unit plan carries its enable only while the
+/// export stages that copy (§ 10.2 rule 5).
 #[test]
 fn a_full_shadow_with_a_real_state_change_keeps_its_systemctl_line() {
-    use inspectah_core::types::units::{PresetDefault, UnitName, UnitState, UnitStateChange};
+    use inspectah_core::types::units::{
+        CarriedUnit, PresetDefault, UnitFragment, UnitName, UnitState, UnitStateChange, UnitSubject,
+    };
 
     let mut snap = full_shadow_snapshot();
     let units = snap.units.as_mut().unwrap();
+    let name = UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap();
+    let shadowed = UnitFragment::Shadowed {
+        file: name.clone(),
+        owning_package: Some("openssh-server".into()),
+    };
     units.state_changes.push(
         UnitStateChange::new(
-            test_carried_unit(
-                UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
-                Some("openssh-server".into()),
-            ),
+            CarriedUnit::try_from(UnitSubject::new(name, shadowed).expect("file is the unit"))
+                .expect("a shadowed service is carried"),
             UnitState::Enabled,
             Some(PresetDefault::Disable),
         )

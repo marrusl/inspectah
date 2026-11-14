@@ -25,6 +25,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::units::UnitsInspector;
+use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::{ExecResult, Executor};
 use inspectah_core::traits::inspector::Inspector;
@@ -55,6 +56,11 @@ const RPM_FILE_OWNERSHIP: &str = "rpm -qa --queryformat @@%{NAME}\\n[%{FILENAMES
 /// The query the units inspector asks a vendor unit file's owner with,
 /// before the path.
 const RPM_QF: &str = "rpm -qf --queryformat %{NAME}\n";
+/// The query the RPM inspector reads each package's source repo with,
+/// before the package names.
+const DNF_SOURCE_REPO: &str = "dnf repoquery --installed --queryformat";
+/// The repo every [`UnitHost::package`] is installed from.
+const PACKAGE_REPO: &str = "appstream";
 /// The listing the units inspector reads unit states from.
 const LIST_UNIT_FILES: &str = "systemctl list-unit-files --no-pager";
 /// The `list-unit-files` header systemd 252 (RHEL 9) prints. Newer
@@ -97,6 +103,10 @@ pub struct UnitHost {
     rpm_owned: BTreeMap<String, Vec<String>>,
     /// Every vendor unit file, for the `rpm -qf` answers.
     vendor_units: BTreeSet<String>,
+    /// Installed packages besides `bash`, as `rpm -qa` lists them.
+    packages: Vec<String>,
+    /// The base image's packages, when the scan has a baseline.
+    base_packages: Vec<String>,
 }
 
 impl UnitHost {
@@ -113,6 +123,22 @@ impl UnitHost {
     pub fn unit(mut self, name: &str, state: &str) -> Self {
         self.units.push((name.into(), state.into()));
         self
+    }
+
+    /// An installed `x86_64` package named `name`, listed by `rpm -qa`
+    /// and installed from the `appstream` repo, so it is not repo-less.
+    pub fn package(mut self, name: &str) -> Self {
+        self.packages.push(name.into());
+        self
+    }
+
+    /// A package the base image ships, installed on the host as
+    /// [`package`](UnitHost::package) installs it. The scan then records a
+    /// baseline, so refine sorts the host's other added packages into its
+    /// Site tier rather than Investigate.
+    pub fn base_package(mut self, name: &str) -> Self {
+        self.base_packages.push(name.into());
+        self.package(name)
     }
 
     /// A preset rule (`enable foo.service`, `disable *`), after the
@@ -198,13 +224,27 @@ impl UnitHost {
         listing.push_str(&format!("\n{} unit files listed.\n", self.units.len()));
 
         let presets: String = self.presets.iter().map(|r| format!("{r}\n")).collect();
+        let installed: String = std::iter::once("0:bash-5.2.26-3.el9.x86_64".to_owned())
+            .chain(
+                self.packages
+                    .iter()
+                    .map(|name| format!("0:{name}-1.0-1.el9.x86_64")),
+            )
+            .map(|nevra| format!("{nevra}\n"))
+            .collect();
+        let source_repos: String = self
+            .packages
+            .iter()
+            .map(|name| format!("{name} {PACKAGE_REPO}\n"))
+            .collect();
         let this = self.file(PRESET_FILE, &presets);
 
         let mut mock = MockExecutor::new()
-            .with_command(RPM_QA, ok("0:bash-5.2.26-3.el9.x86_64\n"))
+            .with_command(RPM_QA, ok(&installed))
             .with_command("rpm -Va", ok(""))
             .with_command(RPM_FILE_OWNERSHIP, ok(&ownership))
-            .with_command(LIST_UNIT_FILES, ok(&listing));
+            .with_command(LIST_UNIT_FILES, ok(&listing))
+            .with_command_prefix(DNF_SOURCE_REPO, ok(&source_repos));
         // One answer per vendor file: a batch query over several files is
         // unregistered, so the inspector falls back to these.
         for path in &this.vendor_units {
@@ -335,6 +375,26 @@ fn pkg_source() -> SourceSystem {
 /// `collect()` then `validate`: the scan command's first two calls, with
 /// the RPM, config and units inspectors. The snapshot is not redacted yet.
 pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
+    let baseline = (!host.base_packages.is_empty()).then(|| BaselineData {
+        image_digest: "sha256:0000".into(),
+        packages: host
+            .base_packages
+            .iter()
+            .map(|name| {
+                (
+                    format!("{name}.x86_64"),
+                    BaselinePackageEntry {
+                        name: name.clone(),
+                        epoch: None,
+                        version: "1.0".into(),
+                        release: "1.el9".into(),
+                        arch: "x86_64".into(),
+                    },
+                )
+            })
+            .collect(),
+        extracted_at: "2026-11-14T00:00:00Z".into(),
+    });
     let exec = host.build();
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
@@ -345,14 +405,17 @@ pub fn scan_unredacted(host: UnitHost) -> InspectionSnapshot {
         &pkg_source(),
         &exec,
         &inspectors,
-        None,
+        baseline.as_ref(),
         &NullProgress,
         &AtomicBool::new(false),
     );
-    validate(collected)
+    let mut snapshot = validate(collected)
         .expect("the snapshot validates")
         .state
-        .snapshot
+        .snapshot;
+    // The scan command records the baseline it collected against.
+    snapshot.baseline = baseline;
+    snapshot
 }
 
 /// The scan path: `collect()` then `validate` then `redact`, the three

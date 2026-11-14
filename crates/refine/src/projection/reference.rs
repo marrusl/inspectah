@@ -6,7 +6,8 @@ use inspectah_core::types::config::ConfigCategory;
 use inspectah_core::types::rpm::VersionChangeDirection;
 use inspectah_core::types::selinux::FcontextRule;
 use inspectah_core::types::units::UnitState;
-use inspectah_pipeline::render::service_intent::render_service_intent;
+use inspectah_pipeline::render::configtree::staged_writes;
+use inspectah_pipeline::render::unit_plan::plan_units;
 use inspectah_pipeline::render::var_dirs::effective_var_backing;
 
 use super::types::DECIDED_UNDER_CONFIG_FILES;
@@ -82,7 +83,7 @@ pub fn project_ref_version_changes(snap: &InspectionSnapshot) -> RefVersionChang
 /// 4. **Preset-unknown disabled** — disabled units not in divergent or matched sets
 /// 5. **Standalone drop-ins** — drop-ins for units not covered by any of the above
 ///
-/// Omitted/advisory data comes from `render_service_intent` in the pipeline crate.
+/// Omitted/advisory data comes from `plan_units` in the pipeline crate.
 /// Warnings are filtered from `snap.warnings` where `inspector == "units"`.
 pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     let svc = match &snap.units {
@@ -90,7 +91,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         None => return RefServices::default(),
     };
 
-    let render_plan = render_service_intent(snap);
+    let render_plan = plan_units(snap, &staged_writes(snap));
 
     let matched_set: HashSet<&str> = svc
         .inventory
@@ -141,10 +142,13 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
     }
 
     // Collect omitted unit names so they are excluded from the main list.
+    // Only the package reasons, as before the plan declined for its own
+    // files: the rows that show the other reasons are a later task's.
     let omitted_units: HashSet<&str> = render_plan
-        .omissions
+        .declined
         .iter()
-        .map(|o| o.unit.as_str())
+        .filter(|(_, _, reason)| reason.owning_package().is_some())
+        .map(|(name, _, _)| name.as_str())
         .collect();
 
     // 1. Divergent items (from state_changes)
@@ -211,12 +215,14 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
 
     // Omitted services (owning package excluded, or proven absent)
     let omitted: Vec<RefOmittedService> = render_plan
-        .omissions
+        .declined
         .iter()
-        .map(|o| RefOmittedService {
-            unit: o.unit.clone(),
-            package: o.owning_package.clone(),
-            reason: o.reason,
+        .filter_map(|(name, _, reason)| {
+            Some(RefOmittedService {
+                unit: name.as_str().to_owned(),
+                package: reason.owning_package()?.to_owned(),
+                reason: reason.clone(),
+            })
         })
         .collect();
 
@@ -225,7 +231,7 @@ pub fn project_ref_services(snap: &InspectionSnapshot) -> RefServices {
         .advisories
         .iter()
         .map(|a| RefServiceAdvisory {
-            unit: a.unit.clone(),
+            unit: a.unit.as_str().to_owned(),
             owning_package: a.owning_package.clone(),
             reasons: a.reasons.clone(),
         })

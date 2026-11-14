@@ -38,7 +38,9 @@ use super::safety::{
     is_valid_tuned_profile, operand_refusal, operator_kargs, sanitize_shell_value,
     shell_operand_refusal,
 };
-use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
+use super::unit_plan::{
+    is_package_installable, manual_follow_up_line, plan_units, unit_state_lines,
+};
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
 /// Human-readable label for a `DegradationReason`.
@@ -871,7 +873,7 @@ fn packages_section_lines(
 
     let no_uploads = inspectah_core::types::verified_upload::VerifiedUploads::new();
     let verified = render_ctx.map_or(&no_uploads, |c| &c.verified_uploads);
-    let pulled_in = super::service_intent::pulled_in_by_included(rpm);
+    let pulled_in = super::unit_plan::pulled_in_by_included(rpm);
 
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
@@ -1218,11 +1220,11 @@ fn not_carried_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-// --- Services section (delegated to service_intent authority) ---
+// --- Services section (delegated to the unit plan) ---
 
 fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let plan = render_service_intent(snap);
-    section("Service Enablement", plan.lines)
+    let plan = plan_units(snap, &staged_writes(snap));
+    section("Service Enablement", unit_state_lines(&plan))
 }
 
 // --- Service Drop-ins section ---
@@ -3342,7 +3344,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {needle:?}:\n{output}"))
         };
         let install = at("    /tmp/custom-tool-1.0-1.el9.x86_64.rpm \\");
-        let enable = at("    custom-tool.service");
+        let enable = at("    'custom-tool.service'");
         assert!(install < enable, "{output}");
         assert_eq!(
             output
@@ -4166,11 +4168,11 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
             "enable must use multi-line continuation"
         );
         assert!(
-            output.contains("systemctl disable \\\n    cups.service"),
+            output.contains("systemctl disable -- \\\n    'cups.service'"),
             "disable must use multi-line continuation"
         );
         // Preset-matching units from the inventory must NOT appear
@@ -4600,12 +4602,12 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\"),
+            output.contains("systemctl enable -- \\"),
             "4+ services should use continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("    httpd.service \\"),
+            output.contains("    'httpd.service' \\"),
             "services on indented lines with continuation"
         );
     }
@@ -4633,7 +4635,7 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service \\\n    sshd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service' \\\n    'sshd.service'"),
             "2 services must use multi-line continuation"
         );
     }
@@ -4661,12 +4663,12 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl mask \\\n    cups.service"),
+            output.contains("systemctl mask -- \\\n    'cups.service'"),
             "masked service must produce systemctl mask with continuation, got:\n{}",
             output
         );
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service'"),
             "enabled service must still work alongside masked"
         );
     }
@@ -4706,7 +4708,7 @@ RUN dnf install -y \
         });
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl disable \\"),
+            output.contains("systemctl disable -- \\"),
             "4+ disabled services should use continuation"
         );
     }
@@ -4991,7 +4993,7 @@ RUN dnf install -y \
     }
 
     /// End-to-end: containerfile service section uses implied_action via the
-    /// service_intent authority — enabled/disabled/masked services produce
+    /// unit plan: enabled/disabled/masked services produce
     /// the correct systemctl verbs.
     #[test]
     fn test_containerfile_services_use_implied_action() {
@@ -5037,15 +5039,15 @@ RUN dnf install -y \
 
         let output = render_containerfile(&snap, None, None);
         assert!(
-            output.contains("systemctl enable \\\n    httpd.service"),
+            output.contains("systemctl enable -- \\\n    'httpd.service'"),
             "enabled service must produce systemctl enable with continuation"
         );
         assert!(
-            output.contains("systemctl mask \\\n    cups.service"),
+            output.contains("systemctl mask -- \\\n    'cups.service'"),
             "masked service must produce systemctl mask with continuation"
         );
         assert!(
-            output.contains("systemctl disable \\\n    avahi-daemon.service"),
+            output.contains("systemctl disable -- \\\n    'avahi-daemon.service'"),
             "disabled service must produce systemctl disable with continuation"
         );
     }

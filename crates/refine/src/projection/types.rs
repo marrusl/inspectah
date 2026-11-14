@@ -13,7 +13,7 @@ use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::units::{PresetDefault, UnitState};
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
-use inspectah_pipeline::render::service_intent::{AdvisoryReason, OmissionReason};
+use inspectah_pipeline::render::unit_plan::{AdvisoryReason, OmissionReason};
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 
 // ── Decision projection ──────────────────────────────────────────

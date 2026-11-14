@@ -1,20 +1,61 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::aggregate::AggregateSnapshotMeta;
+use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::units::{PresetDefault, UnitSection, UnitState, UnitStateChange};
+use inspectah_core::types::units::{
+    CarriedUnit, PresetDefault, UnitAction, UnitFragment, UnitName, UnitSection, UnitState,
+    UnitStateChange, UnitSubject,
+};
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
+use inspectah_pipeline::render::configtree::staged_writes;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
-use inspectah_pipeline::render::service_intent::{
-    AdvisoryReason, OmissionReason, effective_target_packages, is_package_installable,
-    pulled_in_by_included, render_service_intent,
+use inspectah_pipeline::render::unit_plan::{
+    AdvisoryReason, OmissionReason, ServiceAdvisory, effective_target_packages,
+    is_package_installable, plan_units, pulled_in_by_included, unit_state_lines,
 };
 
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
+
+/// What the presence tests read from a plan: the unit state section's
+/// lines, and the declined commands and advisories.
+struct Rendered {
+    lines: Vec<String>,
+    omissions: Vec<Omission>,
+    advisories: Vec<ServiceAdvisory>,
+}
+
+/// One declined command, by unit name, with the owning package a presence
+/// reason names (empty for a reason about the export's files).
+#[derive(Debug)]
+struct Omission {
+    unit: String,
+    owning_package: String,
+    reason: OmissionReason,
+}
+
+/// `plan_units` for `snap` against the files its own export stages, and
+/// the section's lines.
+fn render(snap: &InspectionSnapshot) -> Rendered {
+    let plan = plan_units(snap, &staged_writes(snap));
+    Rendered {
+        lines: unit_state_lines(&plan),
+        omissions: plan
+            .declined
+            .iter()
+            .map(|(name, _, reason)| Omission {
+                unit: name.as_str().to_owned(),
+                owning_package: reason.owning_package().unwrap_or_default().to_owned(),
+                reason: reason.clone(),
+            })
+            .collect(),
+        advisories: plan.advisories,
+    }
+}
 
 fn state_change(
     unit: &str,
@@ -134,7 +175,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     // Omission comment IS in lines — user sees what was excluded
     assert!(
@@ -186,11 +227,11 @@ fn test_service_render_plan_emits_package_unreachable_service() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(plan.omissions.is_empty());
     assert_eq!(plan.advisories.len(), 1);
-    assert_eq!(plan.advisories[0].unit, "local-tool.service");
+    assert_eq!(plan.advisories[0].unit.as_str(), "local-tool.service");
     assert_eq!(
         plan.advisories[0].reasons,
         vec![AdvisoryReason::PackageUnreachable]
@@ -224,7 +265,7 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(
         plan.omissions.is_empty(),
@@ -272,7 +313,7 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
         ..Default::default()
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     // Must be omitted, NOT deferred
     assert_eq!(
@@ -339,7 +380,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(
         plan.omissions.is_empty(),
@@ -382,7 +423,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(
         plan.omissions.is_empty(),
@@ -430,11 +471,11 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
         ..Default::default()
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     // Advisory must survive even though the service is deferred
     assert_eq!(plan.advisories.len(), 1);
-    assert_eq!(plan.advisories[0].unit, "advisory-timer.service");
+    assert_eq!(plan.advisories[0].unit.as_str(), "advisory-timer.service");
     assert_eq!(
         plan.advisories[0].reasons,
         vec![AdvisoryReason::BaselineUnavailable]
@@ -486,7 +527,7 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
         ..Default::default()
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(
         plan.omissions.is_empty(),
@@ -551,7 +592,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     assert!(
         plan.omissions.is_empty(),
@@ -603,7 +644,7 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         mount_findings: Vec::new(),
     });
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     // Aggregate: no omissions, no advisories, service must be emitted
     assert!(
@@ -665,17 +706,17 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
         snap
     };
 
-    let plan = render_service_intent(&snapshot_with(Vec::new()));
+    let plan = render(&snapshot_with(Vec::new()));
     assert!(plan.omissions.is_empty(), "the unit is still emitted");
     assert_eq!(plan.advisories.len(), 1, "{:?}", plan.advisories);
-    assert_eq!(plan.advisories[0].unit, "vendor-agent.service");
+    assert_eq!(plan.advisories[0].unit.as_str(), "vendor-agent.service");
     assert_eq!(
         plan.advisories[0].reasons,
         vec![AdvisoryReason::PackageUnreachable],
         "a locally installed vendor RPM is not reachable by name"
     );
 
-    let served = render_service_intent(&snapshot_with(vec![
+    let served = render(&snapshot_with(vec![
         inspectah_core::types::repo::RepoId::new("vendor"),
     ]));
     assert!(
@@ -742,12 +783,16 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("nginx", excluded(), PackageState::Added)],
             owner: Some("nginx"),
             expected: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "nginx".into(),
+                },
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
             pulled_in_by: None,
             in_aggregate: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "nginx".into(),
+                },
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
         },
@@ -757,12 +802,16 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("nginx", excluded(), PackageState::Added)],
             owner: Some("nginx"),
             expected: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "nginx".into(),
+                },
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
             pulled_in_by: None,
             in_aggregate: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "nginx".into(),
+                },
                 "# Omitted: unit.service (package 'nginx' was excluded)",
             ),
         },
@@ -829,7 +878,9 @@ fn test_service_presence_tiers_table() {
             added: vec![],
             owner: Some("sssd"),
             expected: Expected::Omit(
-                OmissionReason::NotInTargetImage,
+                OmissionReason::NotInTargetImage {
+                    package: "sssd".into(),
+                },
                 "# Omitted: unit.service (package 'sssd' not in target image)",
             ),
             pulled_in_by: None,
@@ -859,12 +910,16 @@ fn test_service_presence_tiers_table() {
             added: vec![pkg("cockpit-ws", excluded(), PackageState::Added)],
             owner: Some("cockpit-ws"),
             expected: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "cockpit-ws".into(),
+                },
                 "# Omitted: unit.service (package 'cockpit-ws' was excluded)",
             ),
             pulled_in_by: Some(false),
             in_aggregate: Expected::Omit(
-                OmissionReason::PackageExcluded,
+                OmissionReason::PackageExcluded {
+                    package: "cockpit-ws".into(),
+                },
                 "# Omitted: unit.service (package 'cockpit-ws' was excluded)",
             ),
         },
@@ -926,7 +981,7 @@ fn test_service_presence_tiers_table() {
                 mount_findings: Vec::new(),
             });
 
-            let plan = render_service_intent(&snap);
+            let plan = render(&snap);
             let in_systemctl = plan
                 .lines
                 .iter()
@@ -935,7 +990,7 @@ fn test_service_presence_tiers_table() {
             match expected {
                 Expected::Omit(reason, comment) => {
                     assert_eq!(plan.omissions.len(), 1, "{}", label);
-                    assert_eq!(plan.omissions[0].reason, *reason, "{}", label);
+                    assert_eq!(&plan.omissions[0].reason, reason, "{}", label);
                     assert!(
                         plan.lines.iter().any(|l| l == comment),
                         "{}: missing {comment:?} in {:?}",
@@ -969,7 +1024,13 @@ const RHC_NOT_CARRIED: &str = "package 'rhc' is not carried: not user-installed 
 
 #[test]
 fn not_carried_describes_the_class_in_the_shared_wording() {
-    assert_eq!(OmissionReason::NotCarried.describe("rhc"), RHC_NOT_CARRIED);
+    assert_eq!(
+        OmissionReason::NotCarried {
+            package: "rhc".into()
+        }
+        .describe(),
+        RHC_NOT_CARRIED
+    );
 }
 
 fn added(name: &str, arch: &str, disposition: FindingKind) -> PackageEntry {
@@ -1012,16 +1073,19 @@ fn leaf_snapshot(
     snap
 }
 
-/// The unit is in no `systemctl` line of the plan.
+/// Whether the unit is a quoted operand of a `systemctl` line of the plan.
 fn acted_on(lines: &[String], unit: &str) -> bool {
+    let operand = format!("'{unit}'");
     lines
         .iter()
-        .any(|l| !l.starts_with('#') && l.split_whitespace().any(|w| w == unit))
+        .any(|l| !l.starts_with('#') && l.split_whitespace().any(|w| w == operand))
 }
 
 /// Units owned by an auto package nothing included pulls in are omitted on
-/// the scan path as not carried, whatever the action: enable, disable or
-/// mask.
+/// the scan path as not carried, for enable and disable. A mask is carried
+/// whatever its package: § 10.2 rule 5, which holds the presence tiers,
+/// applies to `enable`, `disable` and `set-default`, since `mask` reads no
+/// `[Install]` and succeeds on an absent unit.
 #[test]
 fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() {
     let cases = [
@@ -1052,12 +1116,19 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
         );
         apply_scan_package_defaults(&mut snap);
 
-        let plan = render_service_intent(&snap);
+        let plan = render(&snap);
+        if state == UnitState::Masked {
+            assert!(acted_on(&plan.lines, unit), "{unit}: {:?}", plan.lines);
+            assert!(plan.omissions.is_empty(), "{unit}: {:?}", plan.lines);
+            continue;
+        }
         assert!(!acted_on(&plan.lines, unit), "{unit}: {:?}", plan.lines);
         assert_eq!(plan.omissions.len(), 1, "{unit}");
         assert_eq!(
             plan.omissions[0].reason,
-            OmissionReason::NotCarried,
+            OmissionReason::NotCarried {
+                package: owner.into()
+            },
             "{unit}"
         );
         let comment = format!(
@@ -1089,7 +1160,7 @@ fn rhcd_renders_the_exact_not_carried_comment() {
         )],
     );
     apply_scan_package_defaults(&mut snap);
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
     assert!(
         plan.lines
             .contains(&format!("# Omitted: rhcd.service ({RHC_NOT_CARRIED})")),
@@ -1130,7 +1201,7 @@ fn a_not_carried_arch_does_not_omit_a_unit_another_arch_carries() {
         "the fixture's premise"
     );
 
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
     assert!(plan.omissions.is_empty(), "{:?}", plan.omissions);
     assert!(acted_on(&plan.lines, "foo.service"), "{:?}", plan.lines);
 }
@@ -1165,18 +1236,28 @@ fn an_excluded_leaf_makes_its_dependency_not_carried_and_stays_excluded_itself()
         ],
     );
     apply_scan_package_defaults(&mut snap);
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
 
     let reasons: Vec<(&str, OmissionReason)> = plan
         .omissions
         .iter()
-        .map(|o| (o.unit.as_str(), o.reason))
+        .map(|o| (o.unit.as_str(), o.reason.clone()))
         .collect();
     assert_eq!(
         reasons,
         vec![
-            ("cockpit.socket", OmissionReason::NotCarried),
-            ("cockpit-leaf.service", OmissionReason::PackageExcluded),
+            (
+                "cockpit.socket",
+                OmissionReason::NotCarried {
+                    package: "cockpit-ws".into()
+                }
+            ),
+            (
+                "cockpit-leaf.service",
+                OmissionReason::PackageExcluded {
+                    package: "cockpit".into()
+                }
+            ),
         ]
     );
     assert!(plan.lines.contains(&"# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)".to_string()));
@@ -1209,9 +1290,14 @@ fn an_owner_with_an_entry_outside_the_list_stays_excluded() {
         )],
     );
     apply_scan_package_defaults(&mut snap);
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
     assert_eq!(plan.omissions.len(), 1, "{:?}", plan.lines);
-    assert_eq!(plan.omissions[0].reason, OmissionReason::PackageExcluded);
+    assert_eq!(
+        plan.omissions[0].reason,
+        OmissionReason::PackageExcluded {
+            package: "foo".into()
+        }
+    );
 }
 
 /// An auto package an included leaf pulls in is in the image: its unit
@@ -1235,7 +1321,7 @@ fn a_pulled_in_auto_package_keeps_its_unit() {
             )],
         );
         apply_scan_package_defaults(&mut snap);
-        let plan = render_service_intent(&snap);
+        let plan = render(&snap);
         assert!(
             plan.omissions.is_empty(),
             "{disposition:?}: {:?}",
@@ -1361,9 +1447,14 @@ fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
         .map(|pkg| pkg.name)
         .collect();
     assert_eq!(listed, ["dnf-plugins-core"]);
-    let plan = render_service_intent(&snap);
+    let plan = render(&snap);
     assert_eq!(plan.omissions.len(), 1, "{:?}", plan.lines);
-    assert_eq!(plan.omissions[0].reason, OmissionReason::NotCarried);
+    assert_eq!(
+        plan.omissions[0].reason,
+        OmissionReason::NotCarried {
+            package: "dnf-plugins-core".into()
+        }
+    );
     assert!(!acted_on(&plan.lines, "dnf-plugins-core.timer"));
 }
 
@@ -1430,13 +1521,24 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
         );
         apply_scan_package_defaults(&mut not_carried);
 
+        let package = owner.clone();
         for (reason, snap) in [
-            (OmissionReason::PackageExcluded, excluded),
-            (OmissionReason::NotInTargetImage, not_in_target),
-            (OmissionReason::NotCarried, not_carried),
+            (OmissionReason::PackageExcluded { package }, excluded),
+            (
+                OmissionReason::NotInTargetImage {
+                    package: owner.clone(),
+                },
+                not_in_target,
+            ),
+            (
+                OmissionReason::NotCarried {
+                    package: owner.clone(),
+                },
+                not_carried,
+            ),
         ] {
             let label = format!("{reason:?}, {sep:?}");
-            let plan = render_service_intent(&snap);
+            let plan = render(&snap);
             assert_eq!(plan.omissions.len(), 1, "{label}: {:?}", plan.lines);
             assert_eq!(plan.omissions[0].reason, reason, "{label}");
             assert_eq!(
@@ -1490,4 +1592,204 @@ fn test_carried_unit(
     };
     CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("file is the unit"))
         .expect("a test unit is carried")
+}
+
+// ---------------------------------------------------------------------------
+// § 10.1 lines and § 10.2 rule 5's fragment half
+// ---------------------------------------------------------------------------
+
+/// A state change for `unit` with `fragment`, included.
+fn change_with(unit: &str, fragment: UnitFragment, state: UnitState) -> UnitStateChange {
+    let name: UnitName = unit.to_owned().try_into().expect("a unit name");
+    let carried = CarriedUnit::try_from(UnitSubject::new(name, fragment).expect("a subject"))
+        .expect("a carried unit");
+    UnitStateChange::new(carried, state, None).expect("a state change")
+}
+
+fn local(unit: &str) -> UnitFragment {
+    UnitFragment::Local {
+        file: unit.to_owned().try_into().expect("a unit name"),
+    }
+}
+
+fn vendor(unit: &str) -> UnitFragment {
+    UnitFragment::Vendor {
+        file: unit.to_owned().try_into().expect("a unit name"),
+        owning_package: None,
+    }
+}
+
+/// A snapshot with these state changes and config entries, and no package
+/// section: the route § 10.2 says runs every rule.
+fn units_snapshot(changes: Vec<UnitStateChange>, files: Vec<(&str, &str)>) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: files
+            .into_iter()
+            .map(|(path, content)| ConfigFileEntry {
+                path: path.into(),
+                category: ConfigCategory::Other,
+                content: content.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+    });
+    snap.units = Some(UnitSection {
+        state_changes: changes,
+        ..Default::default()
+    });
+    snap
+}
+
+/// § 10.1: one `RUN` per verb (enable, disable, mask), each unit
+/// single-quoted on its own line after `--`, ordered by kind (service,
+/// socket, path, timer, target, slice, then the storage kinds) and then by
+/// name, whatever order the snapshot lists them in.
+#[test]
+fn one_run_per_verb_with_units_in_kind_then_name_order() {
+    use UnitState::{Disabled, Enabled, Masked};
+    let snap = units_snapshot(
+        vec![
+            change_with("report.timer", vendor("report.timer"), Enabled),
+            change_with("myapp.path", vendor("myapp.path"), Enabled),
+            change_with("cockpit.socket", vendor("cockpit.socket"), Enabled),
+            change_with("zeta.service", vendor("zeta.service"), Enabled),
+            change_with("alpha.service", vendor("alpha.service"), Enabled),
+            change_with("kdump.service", vendor("kdump.service"), Disabled),
+            change_with(
+                "dev-hugepages.mount",
+                UnitFragment::Vendor {
+                    file: "dev-hugepages.mount".to_owned().try_into().unwrap(),
+                    owning_package: Some("systemd".into()),
+                },
+                Masked,
+            ),
+            change_with("bluetooth.service", vendor("bluetooth.service"), Masked),
+        ],
+        vec![],
+    );
+    assert_eq!(
+        render(&snap).lines,
+        [
+            "RUN systemctl enable -- \\",
+            "    'alpha.service' \\",
+            "    'zeta.service' \\",
+            "    'cockpit.socket' \\",
+            "    'myapp.path' \\",
+            "    'report.timer'",
+            "RUN systemctl disable -- \\",
+            "    'kdump.service'",
+            "RUN systemctl mask -- \\",
+            "    'bluetooth.service' \\",
+            "    'dev-hugepages.mount'",
+        ]
+    );
+}
+
+/// The administrator's unit file the conflict cases share, and a config
+/// entry that needs it as a directory.
+const WORKER_UNIT: &str = "/etc/systemd/system/worker.service";
+const WORKER_CHILD: &str = "/etc/systemd/system/worker.service/extra.conf";
+
+/// T15, conflict case: `worker.service/extra.conf` and `worker.service`,
+/// in either order, are both withheld by the stager (the staging half is
+/// `configtree_single_source_test`), so the local unit's enable is declined
+/// with `UnitFileNotStaged` and named in an `# Omitted:` line. Without the
+/// child, the enable is carried.
+#[test]
+fn t15_a_withheld_unit_file_declines_its_enable() {
+    let worker = || {
+        change_with(
+            "worker.service",
+            local("worker.service"),
+            UnitState::Enabled,
+        )
+    };
+    for (label, files) in [
+        (
+            "child first",
+            vec![(WORKER_CHILD, "[Service]\n"), (WORKER_UNIT, "[Unit]\n")],
+        ),
+        (
+            "unit first",
+            vec![(WORKER_UNIT, "[Unit]\n"), (WORKER_CHILD, "[Service]\n")],
+        ),
+    ] {
+        let snap = units_snapshot(vec![worker()], files);
+        let plan = plan_units(&snap, &staged_writes(&snap));
+        assert!(plan.planned.is_empty(), "{label}: {:?}", plan.planned);
+        assert_eq!(plan.declined.len(), 1, "{label}");
+        assert_eq!(plan.declined[0].0.as_str(), "worker.service", "{label}");
+        assert_eq!(plan.declined[0].1, UnitAction::Enable, "{label}");
+        assert_eq!(
+            plan.declined[0].2,
+            OmissionReason::UnitFileNotStaged,
+            "{label}"
+        );
+        let lines = unit_state_lines(&plan);
+        assert_eq!(
+            lines,
+            ["# Omitted: worker.service (its unit file is not in the export)"],
+            "{label}"
+        );
+    }
+
+    let snap = units_snapshot(vec![worker()], vec![(WORKER_UNIT, "[Unit]\n")]);
+    let lines = render(&snap).lines;
+    assert_eq!(
+        lines,
+        ["RUN systemctl enable -- \\", "    'worker.service'"],
+        "control: the staged unit file carries its enable"
+    );
+}
+
+/// Rule 5 asks the stager's question by `Destination`: a unit file offered
+/// as `/etc/systemd/./system//<name>` is the file at the plain spelling. A
+/// local unit's file at the odd spelling is staged, so its enable is
+/// carried; a file at the odd spelling of a vendor unit's name is a unit
+/// file staged at its name, so its enable is declined with the plain path.
+/// Control: with nothing at the vendor unit's name, it is enabled.
+#[test]
+fn rule_5_reads_a_path_spelled_two_ways_as_one_file() {
+    const ODD_LOCAL: &str = "/etc/systemd/./system//app.service";
+    const ODD_VENDOR: &str = "/etc//systemd/system/./sshd.service";
+    let snap = units_snapshot(
+        vec![
+            change_with("app.service", local("app.service"), UnitState::Enabled),
+            change_with("sshd.service", vendor("sshd.service"), UnitState::Enabled),
+        ],
+        vec![(ODD_LOCAL, "[Unit]\n"), (ODD_VENDOR, "[Unit]\n")],
+    );
+    let plan = plan_units(&snap, &staged_writes(&snap));
+    let planned: Vec<&str> = plan.planned.iter().map(|u| u.name().as_str()).collect();
+    assert_eq!(planned, ["app.service"]);
+    assert_eq!(
+        plan.declined,
+        [(
+            UnitName::try_from("sshd.service".to_owned()).unwrap(),
+            UnitAction::Enable,
+            OmissionReason::InstallEvidenceChanged {
+                path: "/etc/systemd/system/sshd.service".into()
+            }
+        )]
+    );
+    assert_eq!(
+        unit_state_lines(&plan)[0],
+        "# Omitted: sshd.service (the [Install] section in the image would not be the one \
+         recorded on the source host (/etc/systemd/system/sshd.service))"
+    );
+
+    let control = units_snapshot(
+        vec![change_with(
+            "sshd.service",
+            vendor("sshd.service"),
+            UnitState::Enabled,
+        )],
+        vec![],
+    );
+    assert_eq!(
+        render(&control).lines,
+        ["RUN systemctl enable -- \\", "    'sshd.service'"]
+    );
 }

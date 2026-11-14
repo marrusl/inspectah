@@ -41,7 +41,7 @@ use inspectah_core::types::units::UnitState;
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::repoless::{PackageRoute, route_for};
-use super::service_intent::pulled_in_by_included;
+use super::unit_plan::pulled_in_by_included;
 use crate::export_warning::{ExportWarning, sanitize_bounded};
 
 /// `source_repo` recorded for a package installed at system install time,

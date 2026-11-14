@@ -18,7 +18,7 @@ use inspectah_core::types::storage::{
     declaring_unit_label,
 };
 
-use super::service_intent::{installs_on_its_own_route, pulled_in_by_included};
+use super::unit_plan::{installs_on_its_own_route, pulled_in_by_included};
 
 /// The directories a unit file can sit in and still be a unit file this
 /// export can reason about.

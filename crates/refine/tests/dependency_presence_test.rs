@@ -17,7 +17,7 @@ use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinementOp};
 
 const UNIT: &str = "cockpit.socket";
-const ENABLED: &str = "    cockpit.socket";
+const ENABLED: &str = "    'cockpit.socket'";
 const OMITTED: &str = "# Omitted: cockpit.socket (package 'cockpit-ws' is not carried: not user-installed on the source host, and nothing this image installs needs it)";
 
 fn package(name: &str) -> PackageEntry {

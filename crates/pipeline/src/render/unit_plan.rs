@@ -1,14 +1,23 @@
+//! The unit plan (§ 10.1 and § 10.2 of the units spec): which unit-state
+//! `systemctl` commands the export carries, checked against the files the
+//! stager writes, and the lines that write them. The package presence tiers
+//! it uses, and the package installability helpers the package sections
+//! share, live here too.
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
-use inspectah_core::types::units::{UnitAction, UnitStateChange};
+use inspectah_core::types::units::{
+    CarriedUnit, UnitAction, UnitFragment, UnitName, UnitStateChange,
+};
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::comment::escape_comment_text;
+use super::configtree::{Destination, ETC_UNIT_DIR, StagedWrites, is_staged};
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
-use super::safety::shell_operand_refusal;
+use super::safety::single_quote;
 
 // ---------------------------------------------------------------------------
 // Package installability helpers (unchanged from prior tasks)
@@ -186,64 +195,75 @@ pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet
 }
 
 // ---------------------------------------------------------------------------
-// Service omission / advisory decision engine
+// The unit plan: every `systemctl` line for a collected unit
 // ---------------------------------------------------------------------------
 
-/// A service that was dropped from the Containerfile because its owning
-/// package is absent from the target image. The omission is recorded as a
-/// `# Omitted:` comment and surfaced through the refine projection.
+/// Why the plan writes no command for a unit it was asked to act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceOmission {
-    pub unit: String,
-    pub owning_package: String,
-    pub reason: OmissionReason,
-}
-
-/// Why a service's owning package is absent from the target image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmissionReason {
     /// Every `packages_added` entry for the owning package is excluded,
     /// and no included package pulls it in as a dependency.
-    PackageExcluded,
+    PackageExcluded { package: String },
     /// A baseline is available and the owning package is in neither the
     /// baseline nor `packages_added`.
-    NotInTargetImage,
+    NotInTargetImage { package: String },
     /// The owning package is absent, as for [`Self::PackageExcluded`], and
     /// every `packages_added` entry of its name is in the not-carried list
     /// (`not_carried::not_carried_packages`). Nothing included needs it,
     /// which is why it is absent, so this wins over `PackageExcluded` even
     /// when an operator's exclusion led there.
-    NotCarried,
+    NotCarried { package: String },
+    /// A local unit's own file is not in the export (§ 10.2 rule 5).
+    UnitFileNotStaged,
+    /// The file that supplies `[Install]` in the image is not the one the
+    /// row recorded (§ 10.2 rule 5). `path` is that file's image path.
+    InstallEvidenceChanged { path: String },
 }
 
 impl OmissionReason {
-    /// Human-readable explanation, shared by the Containerfile comment and
-    /// the refine UI so both surfaces say the same thing.
-    pub fn describe(self, owning_package: &str) -> String {
+    /// The text after the unit name in the `# Omitted:` line, and refine's
+    /// subtitle for the row: the one place it is written. Package names
+    /// come from the snapshot unchecked, so the Containerfile escapes the
+    /// finished line, not this text.
+    pub fn describe(&self) -> String {
         match self {
-            OmissionReason::PackageExcluded => {
-                format!("package '{owning_package}' was excluded")
+            Self::PackageExcluded { package } => format!("package '{package}' was excluded"),
+            Self::NotInTargetImage { package } => {
+                format!("package '{package}' not in target image")
             }
-            OmissionReason::NotInTargetImage => {
-                format!("package '{owning_package}' not in target image")
+            Self::NotCarried { package } => {
+                format!("package '{package}' is not carried: {NOT_CARRIED_REASON}")
             }
-            OmissionReason::NotCarried => {
-                format!("package '{owning_package}' is not carried: {NOT_CARRIED_REASON}")
-            }
+            Self::UnitFileNotStaged => "its unit file is not in the export".to_owned(),
+            Self::InstallEvidenceChanged { path } => format!(
+                "the [Install] section in the image would not be the one recorded on the \
+                 source host ({path})"
+            ),
+        }
+    }
+
+    /// The owning package a presence reason names, `None` for a reason
+    /// about the export's files.
+    pub fn owning_package(&self) -> Option<&str> {
+        match self {
+            Self::PackageExcluded { package }
+            | Self::NotInTargetImage { package }
+            | Self::NotCarried { package } => Some(package),
+            Self::UnitFileNotStaged | Self::InstallEvidenceChanged { .. } => None,
         }
     }
 }
 
-/// A service that IS emitted but carries supplemental context about why
-/// the renderer couldn't fully validate its presence.
+/// A unit that IS acted on but carries supplemental context about why
+/// the plan could not fully validate its package's presence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAdvisory {
-    pub unit: String,
+    pub unit: UnitName,
     pub owning_package: String,
     pub reasons: Vec<AdvisoryReason>,
 }
 
-/// Why a service received an advisory annotation.
+/// Why a unit received an advisory annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdvisoryReason {
     /// The owning package is in `packages_added` with `include: true` but
@@ -253,50 +273,129 @@ pub enum AdvisoryReason {
     BaselineUnavailable,
 }
 
-/// The output of the service decision engine — lines for the Containerfile
-/// plus structured omission/advisory metadata for the UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceRenderPlan {
-    pub lines: Vec<String>,
-    pub omissions: Vec<ServiceOmission>,
-    pub advisories: Vec<ServiceAdvisory>,
+/// A unit and the one command the plan writes for it.
+///
+/// The fields are private and there is no constructor outside this module:
+/// [`plan_units`] is the only way to get one, so [`systemctl_lines`], which
+/// takes nothing else, cannot name a unit the plan did not pass.
+///
+/// ```compile_fail,E0451
+/// use inspectah_core::types::units::{UnitAction, UnitName};
+/// use inspectah_pipeline::render::unit_plan::PlannedUnit;
+///
+/// let name = UnitName::try_from("sshd.service".to_string()).unwrap();
+/// let _ = PlannedUnit { name, action: UnitAction::Enable };
+/// ```
+///
+/// ```compile_fail,E0308
+/// use inspectah_core::types::units::UnitName;
+/// use inspectah_pipeline::render::unit_plan::systemctl_lines;
+///
+/// let name = UnitName::try_from("sshd.service".to_string()).unwrap();
+/// let _ = systemctl_lines(&[name]);
+/// ```
+#[derive(Debug, PartialEq, Eq)]
+pub struct PlannedUnit {
+    name: UnitName,
+    action: UnitAction,
 }
 
-/// Internal classification of whether a service should appear in output.
+impl PlannedUnit {
+    /// The unit the command acts on.
+    pub fn name(&self) -> &UnitName {
+        &self.name
+    }
+
+    /// The command.
+    pub fn action(&self) -> UnitAction {
+        self.action
+    }
+}
+
+/// What [`plan_units`] decided for every included state change.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct UnitPlan {
+    /// The commands the Containerfile writes.
+    pub planned: Vec<PlannedUnit>,
+    /// Every command the plan did not write, and why.
+    pub declined: Vec<(UnitName, UnitAction, OmissionReason)>,
+    /// Planned units whose package's presence could not be proved.
+    pub advisories: Vec<ServiceAdvisory>,
+    /// Enables left to the Scheduled Tasks section, which copies and
+    /// enables the timers it carries (§ 8).
+    pub deferred: Vec<UnitName>,
+}
+
+/// Internal classification of whether a unit's package is in the image.
 enum PresenceDecision {
-    /// Drop this service — owning package absent from the target image.
-    Omit {
-        owning_package: String,
-        reason: OmissionReason,
-    },
-    /// Keep this service; optionally attach advisory reasons.
+    /// Decline: the owning package is absent from the target image.
+    Omit(OmissionReason),
+    /// Keep the unit; optionally attach advisory reasons.
     Emit {
         advisory_reasons: Option<(String, Vec<AdvisoryReason>)>,
     },
 }
 
-// ---------------------------------------------------------------------------
-// systemctl_lines — format a RUN block (unchanged from containerfile.rs)
-// ---------------------------------------------------------------------------
-
-/// Format a `RUN systemctl enable/disable/mask` block using multi-line
-/// backslash continuation for consistency with the `RUN dnf install` style.
-/// The FIXME for a unit whose name cannot be a `systemctl` operand. The
-/// name is a snapshot string, so the line is escaped as comment text.
-fn refused_unit_fixme(unit: &str, why: &str) -> String {
-    escape_comment_text(&format!(
-        "# FIXME: unit {unit} left as the base image has it: the name {why}"
-    ))
+/// One `RUN systemctl <verb> --` per verb, enable then disable then mask,
+/// each unit single-quoted on its own continuation line, ordered by kind
+/// and then by name (§ 10.1). Takes only [`PlannedUnit`]s, which only
+/// [`plan_units`] builds.
+///
+/// [`single_quote`] is total on a [`UnitName`]: its character set holds no
+/// quote and no line break. `--` ends the options, so a name that starts
+/// with `-` (`-.slice`) is an operand.
+pub fn systemctl_lines(units: &[PlannedUnit]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for action in [UnitAction::Enable, UnitAction::Disable, UnitAction::Mask] {
+        let mut names: Vec<&UnitName> = units
+            .iter()
+            .filter(|u| u.action == action)
+            .map(|u| &u.name)
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        names.sort_by(|a, b| (a.kind(), a).cmp(&(b.kind(), b)));
+        lines.push(format!("RUN systemctl {action} -- \\"));
+        let last = names.len() - 1;
+        for (i, name) in names.into_iter().enumerate() {
+            let operand = single_quote(name.as_str());
+            lines.push(if i < last {
+                format!("    {operand} \\")
+            } else {
+                format!("    {operand}")
+            });
+        }
+    }
+    lines
 }
 
-fn systemctl_lines(verb: &str, units: &[String]) -> Vec<String> {
-    let mut lines = vec![format!("RUN systemctl {} \\", verb)];
-    for (i, u) in units.iter().enumerate() {
-        if i < units.len() - 1 {
-            lines.push(format!("    {} \\", u));
-        } else {
-            lines.push(format!("    {}", u));
-        }
+/// The unit state section's lines for `plan`: an `# Omitted:` line per
+/// declined command, then [`systemctl_lines`], then the note naming the
+/// enables left to the Scheduled Tasks section.
+pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
+    // The reason may name a package from the snapshot, so the finished
+    // line is escaped here rather than inside `describe`, which refine
+    // also calls and escapes for its own surface.
+    let mut lines: Vec<String> = plan
+        .declined
+        .iter()
+        .map(|(name, _, reason)| {
+            escape_comment_text(&format!(
+                "# Omitted: {} ({})",
+                name.as_str(),
+                reason.describe()
+            ))
+        })
+        .collect();
+    lines.extend(systemctl_lines(&plan.planned));
+    if !plan.deferred.is_empty() {
+        let names: Vec<&str> = plan.deferred.iter().map(UnitName::as_str).collect();
+        lines.push(format!(
+            "# {} unit(s) deferred to Scheduled Tasks section: {}",
+            names.len(),
+            names.join(", ")
+        ));
     }
     lines
 }
@@ -329,10 +428,107 @@ fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<Str
 }
 
 // ---------------------------------------------------------------------------
+// Rule 5, the row's own file
+// ---------------------------------------------------------------------------
+
+/// Where the image loads a unit file named `file` from `/etc`.
+fn etc_unit_path(file: &UnitName) -> String {
+    format!("{ETC_UNIT_DIR}/{}", file.as_str())
+}
+
+/// Rule 5's fragment half (§ 10.2): the export stages exactly the unit
+/// file the row recorded, or the command is declined.
+///
+/// - `Local`: the unit file at `/etc/systemd/system/<file>` is staged,
+///   else [`OmissionReason::UnitFileNotStaged`].
+/// - `Shadowed`: the shadow at `/etc/systemd/system/<file>` is staged,
+///   else [`OmissionReason::InstallEvidenceChanged`] with its path.
+/// - `Vendor`, a package-owned storage unit, and (for a mask, which this
+///   rule never sees) `Absent`: no unit file is staged at the unit's name,
+///   else `InstallEvidenceChanged` with that path.
+///
+/// "Staged" is [`is_staged`], the stager's own answer by [`Destination`],
+/// so the plan and the stager cannot disagree about a spelling. In a fleet
+/// aggregate a staged `Local` or `Shadowed` file whose path holds more than
+/// one content variant fails too: the row may have been recorded from
+/// another variant.
+fn rule_5_file(
+    snap: &InspectionSnapshot,
+    unit: &CarriedUnit,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    let fragment = match unit {
+        CarriedUnit::Ordinary(ordinary) => ordinary.fragment(),
+        CarriedUnit::PackagedStorage(_) => {
+            return no_file_at(etc_unit_path(unit.name()), staged);
+        }
+    };
+    match fragment {
+        UnitFragment::Local { file } => {
+            let path = etc_unit_path(file);
+            if !is_staged(staged, &path) {
+                return Err(OmissionReason::UnitFileNotStaged);
+            }
+            one_variant(snap, path)
+        }
+        UnitFragment::Shadowed { file, .. } => {
+            let path = etc_unit_path(file);
+            if !is_staged(staged, &path) {
+                return Err(OmissionReason::InstallEvidenceChanged { path });
+            }
+            one_variant(snap, path)
+        }
+        UnitFragment::Vendor { .. } | UnitFragment::Absent => {
+            no_file_at(etc_unit_path(unit.name()), staged)
+        }
+    }
+}
+
+/// `Ok` when the export stages no file at `path`.
+fn no_file_at(path: String, staged: &StagedWrites<'_>) -> Result<(), OmissionReason> {
+    if is_staged(staged, &path) {
+        Err(OmissionReason::InstallEvidenceChanged { path })
+    } else {
+        Ok(())
+    }
+}
+
+/// `Ok` unless the snapshot is a fleet aggregate whose config entries and
+/// drop-in rows at `path` hold more than one content, whichever of them is
+/// selected.
+fn one_variant(snap: &InspectionSnapshot, path: String) -> Result<(), OmissionReason> {
+    if snap.aggregate_meta.is_none() {
+        return Ok(());
+    }
+    let Ok(dest) = Destination::new(&path) else {
+        return Ok(());
+    };
+    let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == dest);
+    let config = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| at_dest(&f.path))
+        .map(|f| f.content.as_str());
+    let drop_ins = snap
+        .units
+        .iter()
+        .flat_map(|u| &u.drop_ins)
+        .filter(|d| at_dest(&d.path))
+        .map(|d| d.content.as_str());
+    let contents: std::collections::BTreeSet<&str> = config.chain(drop_ins).collect();
+    if contents.len() > 1 {
+        Err(OmissionReason::InstallEvidenceChanged { path })
+    } else {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // classify_service_presence — the tiered suppression model
 // ---------------------------------------------------------------------------
 
-/// Determine whether a service should be omitted or emitted, and if emitted,
+/// Determine whether a unit should be omitted or emitted, and if emitted,
 /// whether it needs advisory annotations.
 ///
 /// Tier logic (evaluated in order):
@@ -434,10 +630,9 @@ fn classify_service_presence(
         }
     } else {
         // Tier 7: baseline available and package not in it — proven absent
-        PresenceDecision::Omit {
-            owning_package: pkg_name.to_owned(),
-            reason: OmissionReason::NotInTargetImage,
-        }
+        PresenceDecision::Omit(OmissionReason::NotInTargetImage {
+            package: pkg_name.to_owned(),
+        })
     }
 }
 
@@ -467,15 +662,13 @@ fn excluded_owner(
     if entries.peek().is_none() || target_packages.contains(pkg_name) {
         return None;
     }
+    let package = pkg_name.to_owned();
     let reason = if entries.all(|p| not_carried.contains(&format!("{}.{}", p.name, p.arch))) {
-        OmissionReason::NotCarried
+        OmissionReason::NotCarried { package }
     } else {
-        OmissionReason::PackageExcluded
+        OmissionReason::PackageExcluded { package }
     };
-    Some(PresenceDecision::Omit {
-        owning_package: pkg_name.to_owned(),
-        reason,
-    })
+    Some(PresenceDecision::Omit(reason))
 }
 
 /// The presence decision for an aggregate snapshot.
@@ -496,239 +689,115 @@ fn aggregate_presence(
     })
 }
 
-// ---------------------------------------------------------------------------
-// render_service_intent — the main entry point
-// ---------------------------------------------------------------------------
+/// What the presence tiers read, computed once per plan.
+struct Presence<'a> {
+    rpm: &'a RpmSection,
+    target_packages: std::collections::BTreeSet<String>,
+    not_carried: std::collections::HashSet<String>,
+    baseline_unavailable: bool,
+    is_aggregate: bool,
+}
 
-/// Produce a `ServiceRenderPlan` from the snapshot. This is the single
-/// authority for service omissions and advisories — `containerfile.rs`
-/// delegates its service section to this function.
-pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
-    let ct_units = config_tree_units(snap);
-
-    let services = match &snap.units {
-        Some(s) => s,
-        None => {
-            return ServiceRenderPlan {
-                lines: Vec::new(),
-                omissions: Vec::new(),
-                advisories: Vec::new(),
-            };
+impl<'a> Presence<'a> {
+    fn new(snap: &InspectionSnapshot, rpm: &'a RpmSection) -> Self {
+        Self {
+            rpm,
+            target_packages: effective_target_packages(rpm),
+            baseline_unavailable: rpm.baseline_package_names.is_none(),
+            // Empty for an aggregate, which `not_carried` never classifies.
+            not_carried: not_carried_packages(snap)
+                .into_iter()
+                .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
+                .collect(),
+            // Aggregate snapshots use leaf-only packages_added, so the
+            // tiers that read absence from it would omit units whose owning
+            // package is an auto (non-leaf) dependency. Aggregate applies
+            // Tier 2 alone; see `aggregate_presence`.
+            is_aggregate: snap.aggregate_meta.is_some(),
         }
-    };
-
-    // When no RPM section exists, fall back to emitting everything
-    // without omission/advisory logic (no package data to reason about).
-    let rpm = match &snap.rpm {
-        Some(r) => r,
-        None => return render_without_rpm(snap, services, &ct_units),
-    };
-
-    let target_packages = effective_target_packages(rpm);
-    let baseline_unavailable = rpm.baseline_package_names.is_none();
-    // Empty for an aggregate, which `not_carried` never classifies.
-    let not_carried: std::collections::HashSet<String> = not_carried_packages(snap)
-        .into_iter()
-        .map(|pkg| format!("{}.{}", pkg.name, pkg.arch))
-        .collect();
-
-    let included_changes: Vec<_> = services
-        .state_changes
-        .iter()
-        .filter(|sc| sc.disposition.is_included())
-        .collect();
-
-    if included_changes.is_empty() {
-        return ServiceRenderPlan {
-            lines: Vec::new(),
-            omissions: Vec::new(),
-            advisories: Vec::new(),
-        };
     }
 
-    // Aggregate snapshots use leaf-only packages_added, so
-    // classify_service_presence would incorrectly omit services whose
-    // owning package is an auto (non-leaf) dependency. Aggregate applies
-    // Tier 2 alone; see `aggregate_presence`.
-    let is_aggregate = snap.aggregate_meta.is_some();
-
-    let mut omissions = Vec::new();
-    let mut omission_comments = Vec::new();
-    let mut advisories = Vec::new();
-    let mut safe_enabled = Vec::new();
-    let mut safe_disabled = Vec::new();
-    let mut safe_masked = Vec::new();
-    let mut deferred = Vec::new();
-    let mut refused = Vec::new();
-
-    for sc in &included_changes {
-        let u = sc.unit().name().as_str();
-        if let Some(why) = shell_operand_refusal(u) {
-            refused.push(refused_unit_fixme(u, why));
-            continue;
-        }
-
-        // Evaluate omission BEFORE config-tree deferral — a proven-absent
-        // service never becomes deferred fiction.
-        let presence = if is_aggregate {
-            aggregate_presence(sc, rpm, &target_packages, &not_carried)
+    fn decide(&self, sc: &UnitStateChange) -> PresenceDecision {
+        if self.is_aggregate {
+            aggregate_presence(sc, self.rpm, &self.target_packages, &self.not_carried)
         } else {
             classify_service_presence(
                 sc,
-                rpm,
-                &target_packages,
-                &not_carried,
-                baseline_unavailable,
+                self.rpm,
+                &self.target_packages,
+                &self.not_carried,
+                self.baseline_unavailable,
             )
-        };
-
-        match presence {
-            PresenceDecision::Omit {
-                owning_package,
-                reason,
-            } => {
-                // The owner comes from the snapshot unchecked, so escape
-                // the finished line here rather than inside `describe`,
-                // which refine also calls and escapes for its own surface.
-                omission_comments.push(escape_comment_text(&format!(
-                    "# Omitted: {} ({})",
-                    u,
-                    reason.describe(&owning_package)
-                )));
-                omissions.push(ServiceOmission {
-                    unit: u.to_owned(),
-                    owning_package,
-                    reason,
-                });
-                continue;
-            }
-            PresenceDecision::Emit { advisory_reasons } => {
-                if let Some((pkg, reasons)) = advisory_reasons {
-                    advisories.push(ServiceAdvisory {
-                        unit: u.to_owned(),
-                        owning_package: pkg,
-                        reasons,
-                    });
-                }
-            }
         }
-
-        // Advisory services remain in the main action list — advisory is
-        // supplemental context, not a reason to exclude.
-        match sc.implied_action() {
-            UnitAction::Enable => {
-                if ct_units.contains(u) {
-                    deferred.push(u.to_owned());
-                } else {
-                    safe_enabled.push(u.to_owned());
-                }
-            }
-            UnitAction::Disable => {
-                safe_disabled.push(u.to_owned());
-            }
-            UnitAction::Mask => {
-                safe_masked.push(u.to_owned());
-            }
-        }
-    }
-
-    let mut lines = refused;
-    lines.extend(omission_comments);
-    if !safe_enabled.is_empty() {
-        lines.extend(systemctl_lines("enable", &safe_enabled));
-    }
-    if !safe_disabled.is_empty() {
-        lines.extend(systemctl_lines("disable", &safe_disabled));
-    }
-    if !safe_masked.is_empty() {
-        lines.extend(systemctl_lines("mask", &safe_masked));
-    }
-    if !deferred.is_empty() {
-        lines.push(format!(
-            "# {} unit(s) deferred to Scheduled Tasks section: {}",
-            deferred.len(),
-            deferred.join(", ")
-        ));
-    }
-
-    ServiceRenderPlan {
-        lines,
-        omissions,
-        advisories,
     }
 }
 
-/// Fallback renderer when no RPM section is available — emit all included
-/// services without omission/advisory logic.
-fn render_without_rpm(
-    _snap: &InspectionSnapshot,
-    services: &inspectah_core::types::units::UnitSection,
-    ct_units: &std::collections::HashSet<String>,
-) -> ServiceRenderPlan {
-    let included_changes: Vec<_> = services
+// ---------------------------------------------------------------------------
+// plan_units: the main entry point
+// ---------------------------------------------------------------------------
+
+/// The one check of the assembled export (§ 10.2): every included state
+/// change, planned against `staged`, the decision the stager acts on. The
+/// single authority for which unit-state `systemctl` lines the
+/// Containerfile carries; refine reads the same plan.
+///
+/// Per state change, in order:
+///
+/// 1. A `mask` reads no `[Install]` and succeeds on an absent unit, so rule
+///    5 does not apply to it and it is planned.
+/// 2. Rule 5, the row's own file ([`rule_5_file`]): the export stages the
+///    unit file the row recorded and no other.
+/// 3. Rule 5, the package: the presence tiers ([`classify_service_presence`],
+///    unchanged; an aggregate applies Tier 2 alone). With no package section
+///    there is nothing to read and the unit is emitted: there is no separate
+///    path without one.
+/// 4. An `enable` of a unit the Scheduled Tasks section carries is left to
+///    that section and recorded in `deferred`.
+///
+/// Every other command is planned.
+pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitPlan {
+    let mut plan = UnitPlan::default();
+    let Some(units) = &snap.units else {
+        return plan;
+    };
+    let ct_units = config_tree_units(snap);
+    let presence = snap.rpm.as_ref().map(|rpm| Presence::new(snap, rpm));
+
+    for sc in units
         .state_changes
         .iter()
         .filter(|sc| sc.disposition.is_included())
-        .collect();
-
-    if included_changes.is_empty() {
-        return ServiceRenderPlan {
-            lines: Vec::new(),
-            omissions: Vec::new(),
-            advisories: Vec::new(),
-        };
-    }
-
-    let mut safe_enabled = Vec::new();
-    let mut safe_disabled = Vec::new();
-    let mut safe_masked = Vec::new();
-    let mut deferred = Vec::new();
-    let mut refused = Vec::new();
-
-    for sc in &included_changes {
-        let u = sc.unit().name().as_str();
-        if let Some(why) = shell_operand_refusal(u) {
-            refused.push(refused_unit_fixme(u, why));
-            continue;
-        }
-        match sc.implied_action() {
-            UnitAction::Enable => {
-                if ct_units.contains(u) {
-                    deferred.push(u.to_owned());
-                } else {
-                    safe_enabled.push(u.to_owned());
+    {
+        let name = sc.unit().name().clone();
+        let action = sc.implied_action();
+        if action != UnitAction::Mask {
+            if let Err(reason) = rule_5_file(snap, sc.unit(), staged) {
+                plan.declined.push((name, action, reason));
+                continue;
+            }
+            match presence.as_ref().map(|p| p.decide(sc)) {
+                Some(PresenceDecision::Omit(reason)) => {
+                    plan.declined.push((name, action, reason));
+                    continue;
                 }
+                Some(PresenceDecision::Emit {
+                    advisory_reasons: Some((owning_package, reasons)),
+                }) => plan.advisories.push(ServiceAdvisory {
+                    unit: name.clone(),
+                    owning_package,
+                    reasons,
+                }),
+                Some(PresenceDecision::Emit {
+                    advisory_reasons: None,
+                })
+                | None => {}
             }
-            UnitAction::Disable => {
-                safe_disabled.push(u.to_owned());
-            }
-            UnitAction::Mask => {
-                safe_masked.push(u.to_owned());
+            if action == UnitAction::Enable && ct_units.contains(name.as_str()) {
+                plan.deferred.push(name);
+                continue;
             }
         }
+        plan.planned.push(PlannedUnit { name, action });
     }
-
-    let mut lines = refused;
-    if !safe_enabled.is_empty() {
-        lines.extend(systemctl_lines("enable", &safe_enabled));
-    }
-    if !safe_disabled.is_empty() {
-        lines.extend(systemctl_lines("disable", &safe_disabled));
-    }
-    if !safe_masked.is_empty() {
-        lines.extend(systemctl_lines("mask", &safe_masked));
-    }
-    if !deferred.is_empty() {
-        lines.push(format!(
-            "# {} unit(s) deferred to Scheduled Tasks section: {}",
-            deferred.len(),
-            deferred.join(", ")
-        ));
-    }
-
-    ServiceRenderPlan {
-        lines,
-        omissions: Vec::new(),
-        advisories: Vec::new(),
-    }
+    plan
 }
