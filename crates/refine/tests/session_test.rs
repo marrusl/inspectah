@@ -2048,26 +2048,48 @@ fn toggling_a_shadowed_config_file_is_refused_in_both_directions() {
 //
 // An enabled, preset-matched service whose unit file the administrator
 // replaced has no state divergence. The shadow reaches the export through
-// its drop-in row alone; nothing invents a state change for the unit.
+// its drop-in row alone; nothing invents a state change for the unit. The
+// fixture also holds one real state change, `httpd.service` enabled against
+// a `disable` preset, as the positive control.
 
 const SHADOWED_UNIT: &str = "sshd.service";
 const FULL_SHADOW_PATH: &str = "/etc/systemd/system/sshd.service";
+const CHANGED_UNIT: &str = "httpd.service";
 
 fn full_shadow_snapshot() -> InspectionSnapshot {
     use inspectah_core::types::ShadowType;
     use inspectah_core::types::units::{
         PresetDefault, SystemdDropIn, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+        UnitStateChange,
     };
+
+    let name = |unit: &str| UnitName::try_from(unit.to_string()).unwrap();
 
     let mut snap = InspectionSnapshot::new();
     snap.baseline = Some(empty_baseline());
     snap.units = Some(UnitSection {
-        state_changes: vec![],
-        inventory: vec![UnitInventoryEntry {
-            unit: UnitName::try_from(SHADOWED_UNIT.to_string()).unwrap(),
-            state: UnitState::Enabled,
-            preset: Some(PresetDefault::Enable),
+        state_changes: vec![UnitStateChange {
+            unit: name(CHANGED_UNIT),
+            current_state: UnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            disposition: FindingKind::included(),
+            locked: false,
+            owning_package: Some("httpd".into()),
+            aggregate: None,
+            attention_reason: None,
         }],
+        inventory: vec![
+            UnitInventoryEntry {
+                unit: name(CHANGED_UNIT),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Disable),
+            },
+            UnitInventoryEntry {
+                unit: name(SHADOWED_UNIT),
+                state: UnitState::Enabled,
+                preset: Some(PresetDefault::Enable),
+            },
+        ],
         drop_ins: vec![SystemdDropIn {
             unit: SHADOWED_UNIT.into(),
             path: FULL_SHADOW_PATH.into(),
@@ -2119,23 +2141,29 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
         "full_shadow"
     );
 
-    // Then absence: no state change row exists for the unit.
-    assert!(
-        !decisions
-            .service_states
-            .iter()
-            .any(|s| s.entry.unit.as_str() == SHADOWED_UNIT),
-        "an enabled, preset-matched unit has no state change row, got {:?}",
-        decisions.service_states
+    // Then absence: the state rows are filled (the real change is there)
+    // and hold no row for the shadowed unit, in the session and in the
+    // projected snapshot.
+    let session_rows: Vec<&str> = decisions
+        .service_states
+        .iter()
+        .map(|s| s.entry.unit.as_str())
+        .collect();
+    assert_eq!(
+        session_rows,
+        [CHANGED_UNIT],
+        "the session's state rows hold the real change and nothing invented"
     );
-    assert!(
-        session
-            .snapshot_projected()
-            .units
-            .unwrap()
-            .state_changes
-            .is_empty(),
-        "the projected snapshot must hold no invented state change"
+    let projected = session.snapshot_projected().units.unwrap();
+    let projected_rows: Vec<&str> = projected
+        .state_changes
+        .iter()
+        .map(|s| s.unit.as_str())
+        .collect();
+    assert_eq!(
+        projected_rows,
+        [CHANGED_UNIT],
+        "the projected state changes hold the real change and nothing invented"
     );
 
     // The drop-in toggles alone: staged, then gone, then back.
@@ -2155,5 +2183,60 @@ fn a_full_shadow_gets_no_synthetic_state_change_and_toggles_alone() {
     assert!(
         full_shadow_is_staged(&session),
         "SetInclude(true) on the drop-in restores the staged file"
+    );
+}
+
+/// The `RUN systemctl ...` instruction lines of a Containerfile, each joined
+/// with its backslash continuation lines into one string.
+fn systemctl_instructions(containerfile: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in containerfile.lines() {
+        if let Some(instr) = current.as_mut() {
+            instr.push(' ');
+            instr.push_str(line.trim().trim_end_matches('\\').trim());
+            if !line.trim_end().ends_with('\\') {
+                out.push(current.take().unwrap());
+            }
+        } else if line.starts_with("RUN systemctl ") {
+            let instr = line.trim_end_matches('\\').trim().to_string();
+            if line.trim_end().ends_with('\\') {
+                current = Some(instr);
+            } else {
+                out.push(instr);
+            }
+        }
+    }
+    out.extend(current);
+    out
+}
+
+/// A unit at its preset whose only change is a full shadow gets its shadow
+/// file copied and no `systemctl` line; a real state change in the same
+/// render keeps its line.
+#[test]
+fn a_full_shadow_at_its_preset_is_copied_with_no_systemctl_line() {
+    let session = RefineSession::new(full_shadow_snapshot());
+    let containerfile = &session.view().containerfile_preview;
+    let systemctl = systemctl_instructions(containerfile);
+
+    // Positive control: the real state change renders its enable line.
+    assert!(
+        systemctl
+            .iter()
+            .any(|i| i.starts_with("RUN systemctl enable") && i.contains(CHANGED_UNIT)),
+        "the real state change must render `systemctl enable {CHANGED_UNIT}`, got:\n{containerfile}"
+    );
+
+    // The shadow file is still copied.
+    assert!(
+        containerfile.contains("COPY drop-ins/etc/systemd/system/ /etc/systemd/system/"),
+        "the full shadow must still be copied, got:\n{containerfile}"
+    );
+
+    // And no systemctl line names the shadowed unit.
+    assert!(
+        !systemctl.iter().any(|i| i.contains(SHADOWED_UNIT)),
+        "no systemctl line may name {SHADOWED_UNIT}, got: {systemctl:?}"
     );
 }
