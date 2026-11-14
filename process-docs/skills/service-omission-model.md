@@ -1,16 +1,47 @@
 # Service omission model
 
-`plan_units` in `crates/pipeline/src/render/unit_plan.rs` is the single
+`plan_units` in `crates/pipeline/src/render/unit_plan.rs` is the
 authority for which `systemctl enable`, `disable` and `mask` lines the
-Containerfile carries, for every unit kind: services, sockets, paths,
-timers, targets, slices, and package-owned mount, automount and swap
-units. It reads the snapshot's `units` section
+Containerfile carries for collected units of every kind: services,
+sockets, paths, timers, targets, slices, and package-owned mount,
+automount and swap units. It reads the snapshot's `units` section
 (`UnitSection.state_changes`, `UnitStateChange` in
 `crates/core/src/types/units.rs`) and checks each included row against
 `staged_writes`, the stager's own decision, so the plan and the files the
 export writes cannot disagree. `containerfile.rs` writes the plan's
 lines in the `# === Systemd Unit State ===` section, after the
 configuration `COPY`, and refine's projection reads the same plan.
+
+## The sites outside the plan, until a later phase
+
+Three `systemctl enable` sites in `containerfile.rs` are not planned by
+`plan_units` in this phase. A later phase of the units plan moves them
+into it and removes them:
+
+- The Scheduled Tasks section enables local timers, cron-converted
+  timers and `@reboot` services. `plan_units` leaves the `enable` of a
+  unit that section carries to it (`deferred`, rule 6 below).
+- The flatpak block copies and enables `flatpak-provision.service`.
+- The kernel and boot section enables `tuned.service`, after the unit
+  state section, so a carried `disable tuned.service` is undone by it
+  and a carried `mask tuned.service` fails the build.
+
+Each site enables a unit only by a proved `UnitName`
+(`systemctl_enable_line` takes nothing else; `enableable_unit` refuses a
+name that does not parse with a `# FIXME:`, and `constant_unit` proves
+the two fixed names). The scheduled and flatpak sites also ask
+`is_staged` for every file they name, a timer's activated service
+included when the row carries one, so they never copy or enable a file
+the stager withheld. They do not apply the plan's rules, so a decline
+there has no `# Omitted:` line and no reason in refine.
+
+**The runtime updater default does not reach a local or shadowed
+timer.** The Scheduled Tasks section enables a timer whose file is in
+`/etc/systemd/system/` from its own row, whatever the unit row's
+disposition. A `dnf-automatic` timer with a local file or a shadow is
+therefore enabled even though its unit row is excluded by default, and
+excluding that row changes nothing. The bypass ends when local timers
+move into the plan.
 
 ## The rules, per verb
 
@@ -39,10 +70,17 @@ has no owner.
 
 Rule 1 is the stager's, not the plan's: `staged_writes` withholds a
 zero-length file at a unit path (a mask is carried only as a `systemctl
-mask`), and two offers with different content at one destination, or a
-file and a directory at one path, are a `Conflict` and both are withheld
-and named in a FIXME. Identical content offered twice at one destination
-is one write.
+mask`), and two collected offers with different content at one
+destination, or a file and a directory at one path, are a `Conflict` and
+both are withheld and named in a FIXME. Identical content offered twice
+at one destination is one write, and a repo file, GPG key or firewall
+zone yields to a config entry at its destination. Generated units are
+the interim exception: a cron-converted unit or the flatpak service is
+never a same-destination conflict: with a collected file at its path,
+the collected file is the write and the generated one goes in `beside`,
+written after it. This lasts until generated units become plan requests.
+The staging rules in full are in
+[unit-state-correctness](unit-state-correctness.md).
 
 **Every rule that asks whether a file is staged asks `is_staged`**, which
 looks the path up in `staged_writes` by `Destination`, never by a string

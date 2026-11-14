@@ -1,6 +1,6 @@
 ---
 name: unit-state-correctness
-description: Correctness requirements found while building unit state for every kind. A type that feeds an unchecked constructor of a proved type has no public fields, and a source-level test guards PlannedUnit because stable rustdoc does not check compile_fail error codes; zero length is decided without decoding a unit file, and a file that is not text never degrades the scan; every staged-file question goes to staged_writes through Destination; absence tests on systemctl lines use the strict helper.
+description: Correctness requirements found while building unit state for every kind. A type that feeds an unchecked constructor of a proved type has no public fields, and a source-level test guards PlannedUnit because stable rustdoc does not check compile_fail error codes; zero length is decided without decoding a unit file, and a file that is not text never degrades the scan; every staged-file question goes to staged_writes through Destination, which covers every file under config/, drop-ins/ and flatpak/ except the tmpfiles fragment; settings are extracted from logical lines; a path is one destination per staging filesystem, not only per spelling; absence tests on systemctl lines use the strict helper.
 ---
 
 # Unit State Correctness
@@ -65,6 +65,90 @@ Identical content offered twice at one destination is one write, not a
 conflict. A custom repo file is both a config entry and an
 `rpm.repo_files` row, an unowned GPG key and a firewall zone likewise,
 so withholding both offers would drop every one of them.
+
+**A file two sections record is decided by its config entry.** Where an
+included `ConfigFile` offer shares a destination with a `RepoFile`,
+`GpgKey` or `FirewallZone` offer (`StagedFileKind::is_inventory_record`),
+the inventory offer yields. In a fleet aggregate the repo, key and zone
+inventories keep one representative payload per path while the config
+entry keeps the content variants the operator selects from, so without
+this rule two differing hosts withheld both and the repo file left the
+export. These three are the only kinds the config walk can record at
+the same path, because it excludes none of their directories. Two
+differing config entries at one destination still conflict.
+
+**What the decision covers.** `write_config_tree` writes `writes`, then
+`beside`, and nothing else under `config/`, `drop-ins/` and `flatpak/`:
+config entries, repo files, GPG keys, firewall zones, drop-in rows, the
+scheduled section's local timer files and generated units, the flatpak
+provisioning service, and the kernel arguments file (`KargsFile`, at
+`KARGS_PATH`), which is decided like a collected offer, not like a
+generated unit. Still written outside the decision: the flatpak manifest
+(`flatpak/flatpak-install.json`), quadlets (`quadlet/`), env files
+(`env-files/`), subscription files (`subscription/`), and the `/var`
+tmpfiles fragment, which `write_tmpfiles_conf` writes after the stager
+with a plain write at `config/usr/lib/tmpfiles.d/inspectah-var.conf`.
+That last one is under `config/` and no offer is checked against its
+path. A new writer under those three directories goes through
+`offers` and `staged_writes`, or the Containerfile and the export can
+disagree again.
+
+**`Destination::new` refuses a path too long for a filesystem.** A raw
+path over `MAX_EXPORT_PATH_LEN` (4096 bytes, Linux `PATH_MAX`) is
+`TooLong`, checked before anything else so that normalizing never walks
+an unbounded input, and a component over `MAX_PATH_COMPONENT_LEN` (255
+bytes, `NAME_MAX`) is `ComponentTooLong`. The offer lands in `refused`
+with that rule and is named in a FIXME.
+
+## Settings are read from logical lines
+
+A value copied out of a unit file into a field that redaction treats as
+an identifier (`MountUnitFinding.mount_point`, classified in
+`every_field_of_a_content_bearing_type_is_classified`) must provably
+come from the directive it is named for. systemd reads a unit file by
+logical line (`config_parse` and `read_line_full`): lines end at `\n`,
+`\r` or `\0`; a comment line is skipped, even inside a continuation; a
+line ending in an unescaped backslash continues, the backslash becomes a
+space and the next line is appended; an empty line ends a continuation.
+A reader that walks physical lines takes the tail of a continued
+`What=` for a directive of its own:
+
+```ini
+What=https://files.example/volume?\
+Where=/opt/token=secret
+```
+
+is one `What=` to systemd, and a physical-line reader recorded
+`/opt/token=secret` as the mount point, where redaction of the captured
+file never reached it. `mount_settings` reads `logical_lines`. Any new
+setting taken from a unit file goes through the same function. Option
+lists follow systemd's own matcher too (`fstab_filter_options`): split
+only at unescaped commas, nothing trimmed inside the value, `name` or
+`name=...` matches, and the last match wins.
+
+## A path is one destination per staging filesystem, not only per spelling
+
+`Destination` decides identity lexically and case-sensitively, as the
+Linux target does, and the Containerfile, the unit plan and refine's
+view read the decision with no staging directory. The export is staged
+on the operator's filesystem first, and that one may disagree: APFS is
+case-insensitive and normalizes Unicode by default, so two destinations
+can be one file there, and a second plain write replaces the first
+without an error.
+
+So the stager, not the decision, proves each staged path is new on the
+staging filesystem. `Stager` in `configtree.rs` creates every directory
+with `create_dir` and reuses one only when it created that exact path,
+creates every file with `create_new`, and replaces a file only for a
+`beside` write at a path it wrote under that exact spelling. Any
+`AlreadyExists` fails the export: when the existing entry is, by device
+and inode, one the stager created, the error names it and the file it
+was staged for. Never fold case in the decision instead: that is wrong
+for the target and misses Unicode normalization. The cost is that on
+macOS such a snapshot does not export until the operator excludes one of
+the two files, and refine's view cannot show it beforehand. The staging
+directory must be fresh, and nothing else may write into it before the
+stager runs.
 
 ## Absence tests on `systemctl` lines use the strict helper
 

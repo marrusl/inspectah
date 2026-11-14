@@ -140,8 +140,10 @@ rows, with their mount point and advisory lines and no checkbox: the
 export never writes a command for them, and their unit file is decided
 on its Configuration Files row, which the row links to. A configuration
 file or drop-in that the export does not write, because another file
-claims the same path, shows why under its row. The aggregate view does
-not show kinds, reasons or mount units yet.
+claims the same path, shows why under its row. The fleet (aggregate)
+refine view does not yet show unit kinds, the reason a command is
+declined, withheld files or mount findings: they appear in the
+single-host view and in the Containerfile preview.
 
 If a request to change an Advisory or Inventory row does reach the server,
 the server refuses it with HTTP 422 and a message. The refine UI does not

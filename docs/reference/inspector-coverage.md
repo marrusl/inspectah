@@ -148,7 +148,7 @@ A command the export cannot reproduce is left out with a `# Omitted:` line namin
 | A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
 | A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |
 
-A shadowed unit's command depends on its shadow, not on its package, and a mask is carried whatever its package's state. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
+A shadowed unit's command depends on its shadow, not on its package, and a mask does not depend on its package's state; the rules in the table above, and the rule for units the image needs, still apply to both. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
 
 #### Mount findings
 
@@ -158,10 +158,9 @@ A mount, automount or swap unit the administrator wrote is recorded in `mount_fi
 # Advisory: srv.mount is enabled on the source host. inspectah does not enable, disable or mask a mount, automount or swap unit the administrator wrote.
 #   Its unit file is copied into the image. No enable line is written, but the unit still starts if another unit requires it or names its mount point in RequiresMountsFor=, and it replaces a unit of the same name that the image ships.
 #   /srv is a symlink into /var in the RHEL bootc base image. The unit must be renamed for the resolved path (for /srv: var-srv.mount with Where=/var/srv).
-#   To carry it, add after the configuration COPY: RUN systemctl enable -- 'srv.mount'
 ```
 
-The lines that follow the first depend on the finding: whether its unit file is staged; a mount point under `/usr`, one bootc and ostree own (`/`, `/boot`, `/boot/efi`, `/sysroot`, `/var`), one under `/home`, `/mnt`, `/root` or `/srv` (links into `/var` in the base image), or one under `/opt` (a directory of the read-only image); a staged `tmp.mount`; a mount or swap without `nofail`; and, for an enabled or masked unit, the line to add by hand. A masked finding does not mount, so it gets no mount point or `nofail` line. The mount source (`What=`) is not recorded.
+The lines that follow the first depend on the finding: whether its unit file is staged; a mount point under `/usr`, one bootc and ostree own (`/`, `/boot`, `/boot/efi`, `/sysroot`, `/var`), one under `/home`, `/mnt`, `/root` or `/srv` (links into `/var` in the base image), or one under `/opt` (a directory of the read-only image); a staged `tmp.mount`; a mount or swap without `nofail` and with no drop-in, which could set it; and, for an enabled or masked unit, the line to add by hand. A masked finding does not mount, so it gets no mount point or `nofail` line. The line to add by hand is left out where the advisory rules it out: for an enabled unit the advisory says to rename, as in the example, for a masked unit whose unit file is staged at its name (`systemctl mask` fails on a regular file there), and for a masked `tmp.mount`. `Where=` and `Options=` are read by logical line, as systemd reads them, so a line that continues another setting is part of that setting. The mount source (`What=`) is not recorded.
 
 #### Unit shadows
 
@@ -172,7 +171,7 @@ A unit file under `/etc/systemd/system/` can change a unit two ways, and the exp
 | Drop-in | A `.conf` file under `/etc/systemd/system/<unit>.d/` | An override merged on top of the vendor unit. Base image updates to the vendor unit still apply. |
 | Full shadow | A non-empty `<unit>` file directly under `/etc/systemd/system/` whose vendor unit exists in `/usr/lib/systemd/system/` | The administrator's file replaces the vendor unit. Base image updates to that unit are silently ignored. |
 
-Both are Service Drop-ins entries, for units of every kind except storage units and timers: a full copy of a mount, automount or swap unit is a mount finding, and a timer's full shadow is left to the Scheduled Tasks section. A full shadow is found whether or not the unit also has a state change, so a unit enabled at its preset (for example `sshd.service`) is still reported. A mask is not a shadow: it is a masked state, carried only as `systemctl mask`.
+Both are Service Drop-ins entries. Drop-ins are collected for a unit of any kind, mount, automount, swap and timer units included. Full shadows are collected for every kind except storage units and timers: a full copy of a mount, automount or swap unit is a mount finding, and a timer's full shadow is left to the Scheduled Tasks section. A full shadow is found whether or not the unit also has a state change, so a unit enabled at its preset (for example `sshd.service`) is still reported. A mask is not a shadow: it is a masked state, carried only as `systemctl mask`.
 
 A full shadow that has no state change gets no unit row, in the scan or in `refine`. Its decision is its Service Drop-ins row, which carries the shadow badge and explanation and the include toggle for the file. Excluding that row leaves the file out of the export; the export writes no `systemctl` line for the unit.
 
