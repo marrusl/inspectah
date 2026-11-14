@@ -85,9 +85,14 @@ function decisionCount(
   if (id === "users_groups") {
     return userDecisionCount != null ? String(userDecisionCount) : "...";
   }
+  // Every row the section renders is a toggle: state rows and drop-ins,
+  // including a full shadow whose unit has no state row.
   if (id === "units") {
     if (!viewData) return "...";
-    return String(viewData.unit_states?.length ?? 0);
+    return String(
+      (viewData.unit_states?.length ?? 0) +
+        (viewData.unit_dropins?.length ?? 0),
+    );
   }
   // Tuned rows only: the sysctl panel holds no decisions.
   if (id === "system_tuning") {

@@ -344,6 +344,93 @@ describe("Sidebar", () => {
     expect(zeroBadges.length).toBeGreaterThan(0);
   });
 
+  describe("units section count", () => {
+    const TRIAGE = {
+      triage: { mode: "single_host" as const, baseline: null },
+      primary_reason: "service_baseline_match" as const,
+      annotations: [],
+    };
+
+    function renderUnits(viewData: ViewResponse) {
+      render(
+        <Sidebar
+          activeSection="packages"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={viewData}
+          groups={MOCK_GROUPS}
+        />,
+      );
+      return screen.getByRole("link", { name: /^Services / });
+    }
+
+    it("announces an empty units section as cleared", () => {
+      // Control: the same query finds the announcement when nothing is left.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+      expect(
+        screen.getByText("Services: 0 decisions remaining"),
+      ).toBeInTheDocument();
+    });
+
+    it("counts a full-shadow drop-in when the unit has no state row", () => {
+      // A unit at its preset whose only change is a full shadow has no
+      // state row: its one decision is the drop-in toggle.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [
+          {
+            unit: "sshd.service",
+            path: "/etc/systemd/system/sshd.service",
+            triage: TRIAGE,
+            include: true,
+            shadow_type: "full_shadow",
+            shadow_rationale: null,
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("counts a state row and its drop-in as two decisions", () => {
+      // Each renders its own toggle, and Include all sends an op for each.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [
+          {
+            unit: "httpd.service",
+            triage: TRIAGE,
+            include: true,
+            current_state: "enabled",
+          },
+        ],
+        unit_dropins: [
+          {
+            unit: "httpd.service",
+            path: "/etc/systemd/system/httpd.service.d/override.conf",
+            triage: TRIAGE,
+            include: true,
+            shadow_type: "drop_in",
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("2 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   it("shows skeleton placeholders when groups are loading", () => {
     render(
       <Sidebar
