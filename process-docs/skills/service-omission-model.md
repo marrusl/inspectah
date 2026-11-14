@@ -12,36 +12,45 @@ export writes cannot disagree. `containerfile.rs` writes the plan's
 lines in the `# === Systemd Unit State ===` section, after the
 configuration `COPY`, and refine's projection reads the same plan.
 
-## The sites outside the plan, until a later phase
+## Every `systemctl` line is the plan's
 
-Three `systemctl enable` sites in `containerfile.rs` are not planned by
-`plan_units` in this phase. A later phase of the units plan moves them
-into it and removes them:
+**`RUN systemctl` is written by `unit_plan::systemctl_lines` and by
+nothing else.** `systemctl_lines` takes only `PlannedUnit`, which only
+`plan_units` builds, so a line cannot name a unit the plan did not pass.
+`t21_every_systemctl_command_in_the_containerfile_is_planned` in
+`crates/cli/tests/units_scan_test.rs` enforces it: it reads every
+`systemctl` instruction out of the rendered Containerfile, comments
+skipped and continuations joined, on the scan and the refine export, and
+requires the (verb, unit) pairs to equal the plan's. A new section that
+needs a `systemctl` line adds a request to the plan.
 
-- The Scheduled Tasks section enables local timers, cron-converted
-  timers and `@reboot` services. `plan_units` leaves the `enable` of a
-  unit that section carries to it (`deferred`, rule 6 below).
-- The flatpak block copies and enables `flatpak-provision.service`.
-- The kernel and boot section enables `tuned.service`, after the unit
-  state section, so a carried `disable tuned.service` is undone by it
-  and a carried `mask tuned.service` fails the build.
+The plan takes three kinds of request (§ 10.2):
 
-Each site enables a unit only by a proved `UnitName`
-(`systemctl_enable_line` takes nothing else; `enableable_unit` refuses a
-name that does not parse with a `# FIXME:`, and `constant_unit` proves
-the two fixed names). The scheduled and flatpak sites also ask
-`is_staged` for every file they name, a timer's activated service
-included when the row carries one, so they never copy or enable a file
-the stager withheld. They do not apply the plan's rules, so a decline
-there has no `# Omitted:` line and no reason in refine.
+- each included state change, rendered in the unit state section;
+- the units inspectah generates from cron entries (timers, and the
+  service of an `@reboot` entry), in `UnitPlan.scheduled`, copied and
+  enabled in the Scheduled Tasks section before the unit state section;
+- `flatpak-provision.service`, in `UnitPlan.workloads`, copied and
+  enabled in the container workloads section after it.
 
-**The runtime updater default does not reach a local or shadowed
-timer.** The Scheduled Tasks section enables a timer whose file is in
-`/etc/systemd/system/` from its own row, whatever the unit row's
-disposition. A `dnf-automatic` timer with a local file or a shadow is
-therefore enabled even though its unit row is excluded by default, and
-excluding that row changes nothing. The bypass ends when local timers
-move into the plan.
+A generated request needs only its own files: the timer and its paired
+service, or the `@reboot` service. When the stager withheld one as
+`GeneratedNameCollision` the request is declined with
+`OmissionReason::GeneratedNameCollision`, a FIXME in the generated
+unit's own section; when one is missing for any other reason it is
+declined with `UnitFileNotStaged`. Declines are in
+`UnitPlan.generated_declined` with their `GeneratedSource` (the cron
+row's name, or the flatpak provisioning service), which refine projects
+as `declined_generated` for the scheduled or flatpak row. A name that is
+not a unit name, or that the stager refuses, is no request: the
+Scheduled Tasks section names it in a `# FIXME:`
+(`refused_generated_name_fixme`).
+
+The kernel and boot section writes the tuned profile and no `systemctl`
+line: `tuned.service` is enabled, disabled or masked only through its own
+unit row. A local timer is enabled through its unit row too, never by the
+Scheduled Tasks section, and a runtime updater timer with a local file
+or a full shadow gets the updater default like any updater.
 
 ## The rules, per verb
 
@@ -55,7 +64,6 @@ each included state change. The first that fails declines the command.
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
 | 5 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | `enable`, `disable` | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
-| 6 | An `enable` of a unit the Scheduled Tasks section carries is left to that section (`deferred`). | `enable` | not declined |
 
 A `mask` that passes rule 4 is planned. It reads no `[Install]` and
 succeeds on an absent unit, so rule 5 does not apply to it, and the
@@ -74,19 +82,16 @@ mask`), and two collected offers with different content at one
 destination, or a file and a directory at one path, are a `Conflict` and
 both are withheld and named in a FIXME. Identical content offered twice
 at one destination is one write, and a repo file, GPG key or firewall
-zone yields to a config entry at its destination. Generated units are
-the interim exception: a cron-converted unit or the flatpak service is
-never a same-destination conflict: with a collected file at its path,
-the collected file is the write and the generated one goes in `beside`,
-written after it. This lasts until generated units become plan requests.
-The staging rules in full are in
+zone yields to a config entry at its destination. A unit inspectah
+generates whose name a collected unit shares is withheld as
+`GeneratedNameCollision`, every file of it (the paired service of a
+generated timer included), so a generated file never replaces the
+host's own. The staging rules in full are in
 [unit-state-correctness](unit-state-correctness.md).
 
 **Every rule that asks whether a file is staged asks `is_staged`**, which
-looks the path up in `staged_writes` by `Destination`, never by a string
-compare, and counts `beside` as well as `writes`. A path spelled two
-ways is one destination, and a generated unit in `beside` can be the
-only file at a destination whose collected offer was withheld.
+looks the path up in `staged_writes.writes` by `Destination`, never by a
+string compare. A path spelled two ways is one destination.
 
 Runtime package updaters (`RUNTIME_UPDATERS` in `core/baseline.rs`) are
 excluded by default at collect and in the fleet merge, and can be
@@ -136,14 +141,16 @@ showed, and the build failed with no warning anywhere.
 - `UnitFileNotStaged`, `InstallEvidenceChanged { path }`,
   `StorageFileStaged { path }`, `TargetNeedsUnit` and
   `MaskPathOccupied { path }`: the rules above.
+- `GeneratedNameCollision`: a generated request whose files the stager
+  withheld because a collected unit has its name. A FIXME.
 
 `AdvisoryReason::PackageUnreachable` and `BaselineUnavailable` are the
 emitted-with-context tiers.
 
 `declined_line` is the one place the marker (`# Omitted:` or
 `# FIXME:`) and the text of a declined command are built, from
-`OmissionReason::describe` or, for `TargetNeedsUnit`,
-`target_needs_unit_text` (in `core/baseline.rs`, beside the list it
+`OmissionReason::describe` (a FIXME for `GeneratedNameCollision`) or,
+for `TargetNeedsUnit`, `target_needs_unit_text` (in `core/baseline.rs`, beside the list it
 reads). The Containerfile and refine's `declined` view both call it, so
 the surfaces cannot drift. `OmissionReason::name` is the one spelling of
 the variant, which refine's view sends as the reason.

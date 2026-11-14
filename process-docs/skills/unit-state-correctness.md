@@ -56,10 +56,26 @@ Rules 2, 4 and 5 and the mount advisories ask whether a file is staged
 with `is_staged`, which looks the path up in `staged_writes` by
 `Destination`, never by comparing strings. `/etc/systemd/system//x.mount`
 and `/etc/systemd/system/x.mount` are one destination, and a string
-compare would answer differently from the stager. `is_staged` counts
-`beside` as well as `writes`: a generated unit in `beside` can be the
-only file landing at a destination whose collected offer was withheld,
-and a `mask` there would still fail.
+compare would answer differently from the stager. `is_staged` reads
+`writes`, the one list of what lands.
+
+**A generated unit never lands beside or over a collected one.** The
+interim rules of phase 2 are retired: generated and flatpak offers
+written `beside` a collected file, the per-unit withhold that followed,
+and `plan.deferred`, which left a collected unit's `enable` to the
+Scheduled Tasks section. In their place, rule 3 of `staged_writes` is the
+generated-name collision of § 10.2. A collected unit is an included
+state change (its unit path) or an included config entry or drop-in row
+at the generated path, whatever its content, a zero-length mask file
+included. Every file of a generated unit with such a name is withheld
+as `WithheldWhy::GeneratedNameCollision { unit }`, the paired service of
+a generated timer included, and the plan declines its request with
+`OmissionReason::GeneratedNameCollision`. Excluding the collected row
+and its file lets the generated unit back in. A unit in the inventory
+only (at its preset, no `/etc` file) is not counted as collected. Two
+cron units of one name are one destination twice and the last one is
+written; every other clash at one destination is an ordinary
+`Conflict`.
 
 Identical content offered twice at one destination is one write, not a
 conflict. A custom repo file is both a config entry and an
@@ -81,12 +97,13 @@ the same path, because it excludes none of their directories. Two
 differing config entries at one destination still conflict.
 
 **What the decision covers.** Under `config/`, `drop-ins/` and
-`flatpak/`, `write_config_tree` writes `writes`, then `beside`, and
-nothing else except the flatpak manifest, and the export's only other
-file there is the tmpfiles fragment (both below). The decision covers
-config entries, repo files, GPG keys, firewall zones, drop-in rows, the
-scheduled section's local timer files and generated units, the flatpak
-provisioning service, and the kernel arguments file (`KargsFile`, at
+`flatpak/`, `write_config_tree` writes `writes` and nothing else except
+the flatpak manifest, and the export's only other file there is the
+tmpfiles fragment (both below). The decision covers config entries, repo
+files, GPG keys, firewall zones, drop-in rows (a local timer's file is
+one of these two, never a scheduled-section offer), the units the
+scheduled section generates from cron, the flatpak provisioning
+service, and the kernel arguments file (`KargsFile`, at
 `KARGS_PATH`), which is decided like a collected offer, not like a
 generated unit. Still written outside the decision: the flatpak manifest
 (`flatpak/flatpak-install.json`), quadlets (`quadlet/`), env files
@@ -144,9 +161,8 @@ without an error.
 So the stager, not the decision, proves each staged path is new on the
 staging filesystem. `Stager` in `configtree.rs` creates every directory
 with `create_dir` and reuses one only when it created that exact path,
-creates every file with `create_new`, and replaces a file only for a
-`beside` write at a path it wrote under that exact spelling. Any
-`AlreadyExists` fails the export: when the existing entry is, by device
+and creates every file with `create_new`. Any `AlreadyExists` fails the
+export: when the existing entry is, by device
 and inode, one the stager created, the error names it and the file it
 was staged for. Never fold case in the decision instead: that is wrong
 for the target and misses Unicode normalization. The cost is that on

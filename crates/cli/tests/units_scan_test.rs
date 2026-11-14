@@ -4950,7 +4950,7 @@ fn systemctl_commands(containerfile: &str) -> Vec<(String, String)> {
 /// activation, a generated timer and collected state changes. Every
 /// `systemctl` command in the rendered Containerfile, read from its text,
 /// is a `PlannedUnit` of the export's plan, and every planned unit is
-/// rendered. Presence first: the plan holds a collected command, the
+/// rendered, through the scan export and the refine export. Presence first: the plan holds a collected command, the
 /// generated timer's enable, the flatpak service's enable and tuned's.
 #[test]
 fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
@@ -4996,11 +4996,15 @@ fn t21_every_systemctl_command_in_the_containerfile_is_planned() {
         );
     }
 
-    let cf = containerfile_in(&render_export(&snap));
-    let mut rendered = systemctl_commands(&cf);
-    rendered.sort();
-    assert_eq!(rendered, planned, "{cf}");
-    assert_kernel_section_writes_the_profile_only(&cf, "full scan");
+    // The scan export renders the plan computed here; the refine export,
+    // with no toggle changed, carries the same commands.
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        let mut rendered = systemctl_commands(&cf);
+        rendered.sort();
+        assert_eq!(rendered, planned, "{route}:\n{cf}");
+        assert_kernel_section_writes_the_profile_only(&cf, route);
+    }
 }
 
 /// The scheduled section's comment says which local timers the export

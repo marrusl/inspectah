@@ -115,7 +115,8 @@ pub enum ItemId {
         path: String,
     },
     // A collected systemd timer has no item here: its row describes it, its
-    // state is a `Unit` row and a local file a `Config` row (§ 8, § 11.1).
+    // state is a `Unit` row, a local file a `Config` row, and an `/etc` copy
+    // of a vendor timer a `DropIn` row (§ 8, § 7.7, § 11.1).
     AtJob {
         file: String,
     },
