@@ -242,12 +242,12 @@ Four fields had this gap, found one at a time:
 | `containers.compose_files[].raw_content` | — | fixing the first |
 | `containers.quadlet_units[].content` | **the built image** | review of the first fix |
 | `scheduled_tasks.*.timer_content` | `config/etc/systemd/system/` | review of the first fix |
+| `scheduled_tasks.systemd_timers[].description` | the audit report | the sweep test below |
 
 `SystemdTimer` has carried no file content since phase 3 of the units
 plan: a local timer's file is a config entry or a drop-in row, scrubbed
 by those passes. `timer_content` and `service_content` remain on
 `generated_timer_units` only.
-| `scheduled_tasks.systemd_timers[].description` | the audit report | the sweep test below |
 
 The sysctl section (`kernel_boot.sysctl`) was classified when it was
 added, not found later: `SysctlSection.runtime` values,
