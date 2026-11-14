@@ -1534,3 +1534,70 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         }
     }
 }
+
+/// The timer and `@reboot` sites enable only names that parse as a
+/// `UnitName`: a name with a control character or a space gets no
+/// instruction and the sites' refusal FIXME, at the local timer, cron
+/// timer and `@reboot` sites alike; a legal escaped name (`\x2d`) is
+/// enabled as a quoted operand. Each name has a file body, so whether the
+/// stager writes the file is not what decides.
+#[test]
+fn scheduled_sites_enable_only_proved_unit_names() {
+    const ESCAPED: &str = r"backup\x2djob";
+    type Section = fn(&str) -> ScheduledTaskSection;
+    let sites: [(&str, &str, Section); 3] = [
+        ("local timer", "timer", |name| ScheduledTaskSection {
+            systemd_timers: vec![SystemdTimer {
+                name: name.into(),
+                source: "local".into(),
+                timer_content: "[Timer]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ("cron timer", "timer", |name| ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: name.into(),
+                cron_expr: "0 3 * * *".into(),
+                timer_content: "[Timer]\n".into(),
+                service_content: "[Service]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ("@reboot service", "service", |name| ScheduledTaskSection {
+            generated_timer_units: vec![GeneratedTimerUnit {
+                name: name.into(),
+                cron_expr: "@reboot".into(),
+                service_content: "[Service]\n".into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    ];
+    for (site, suffix, section) in sites {
+        for refused in ["report\u{1b}", "report job"] {
+            let output = scheduled(section(refused));
+            let active: Vec<&str> = output.lines().filter(|l| !l.starts_with('#')).collect();
+            assert!(
+                !active.iter().any(|l| l.contains("systemctl")),
+                "{site}, {refused:?}: {active:#?}"
+            );
+            assert!(
+                output.lines().any(|l| l
+                    .starts_with("# FIXME: Timer unit name contains unsafe characters")
+                    && l.contains("report")),
+                "{site}, {refused:?}: the site names the refusal:\n{output}"
+            );
+        }
+        let output = scheduled(section(ESCAPED));
+        let line = format!("RUN systemctl enable -- '{ESCAPED}.{suffix}'");
+        assert!(
+            output.lines().any(|l| l == line),
+            "{site}: missing {line:?}\n{output}"
+        );
+    }
+}

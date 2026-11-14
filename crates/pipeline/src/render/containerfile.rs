@@ -23,6 +23,7 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::{RepoId, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+use inspectah_core::types::units::UnitName;
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
@@ -1471,11 +1472,11 @@ fn scheduled_files_staged(
 }
 
 /// `RUN systemctl enable -- 'unit' ...` for units a section copies and
-/// enables itself, outside the unit plan: every operand single-quoted after
-/// `--`, as § 10.1 writes the plan's lines. Each name is a value its caller
-/// already proved a shell operand, or a constant.
-fn systemctl_enable_line<S: AsRef<str>>(units: &[S]) -> String {
-    let operands: Vec<String> = units.iter().map(|u| single_quote(u.as_ref())).collect();
+/// enables itself, outside the unit plan: every operand a proved
+/// [`UnitName`], single-quoted after `--`, as § 10.1 writes the plan's
+/// lines.
+fn systemctl_enable_line(units: &[UnitName]) -> String {
+    let operands: Vec<String> = units.iter().map(|u| single_quote(u.as_str())).collect();
     format!("RUN systemctl enable -- {}", operands.join(" "))
 }
 
@@ -1483,11 +1484,20 @@ fn systemctl_enable_line<S: AsRef<str>>(units: &[S]) -> String {
 /// profile.
 const TUNED_SERVICE: &str = "tuned.service";
 
+/// A unit name constant of this module as a [`UnitName`]. The constants
+/// are literals that parse, which `the_enabled_unit_constants_are_unit_names`
+/// checks, so the parse cannot fail at run time.
+fn constant_unit(name: &'static str) -> UnitName {
+    UnitName::try_from(name.to_owned()).expect("a unit name constant of this module parses")
+}
+
 /// The unit file `name.suffix` if it may be enabled: the config tree
-/// staged it ([`staged_unit_file`]) and it is safe as a shell word.
+/// would stage it under that name ([`staged_unit_file`]), the name is a
+/// proved [`UnitName`], and it does not start like an option
+/// ([`operand_refusal`]), as these interim sites have always refused.
 /// Otherwise push a FIXME, with the name escaped as comment text, and
 /// return `None`.
-fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<String> {
+fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<UnitName> {
     let shown = language_packages::sanitize_for_comment(name);
     let Some(unit) = staged_unit_file(name, suffix) else {
         body.push(format!(
@@ -1495,13 +1505,15 @@ fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<S
         ));
         return None;
     };
-    if !is_shell_operand(&unit) {
-        body.push(format!(
-            "# FIXME: Timer unit name contains unsafe characters: {shown}"
-        ));
-        return None;
+    match UnitName::try_from(unit) {
+        Ok(unit) if operand_refusal(unit.as_str()).is_none() => Some(unit),
+        _ => {
+            body.push(format!(
+                "# FIXME: Timer unit name contains unsafe characters: {shown}"
+            ));
+            None
+        }
     }
-    Some(unit)
 }
 
 // --- Config section ---
@@ -1719,7 +1731,7 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
                     .into(),
             );
-            body.push(systemctl_enable_line(&[FLATPAK_SERVICE]));
+            body.push(systemctl_enable_line(&[constant_unit(FLATPAK_SERVICE)]));
         }
     }
     let total_workloads = included_quadlets + included_flatpaks;
@@ -1953,7 +1965,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 kb.tuned_active
             ));
             body.push("RUN echo \"manual\" > /etc/tuned/profile_mode".into());
-            body.push(systemctl_enable_line(&[TUNED_SERVICE]));
+            body.push(systemctl_enable_line(&[constant_unit(TUNED_SERVICE)]));
         }
     }
 
@@ -6753,6 +6765,16 @@ RUN dnf install -y \
     /// name the config-tree writer refuses names a unit that was never
     /// staged. Neither may add an active line; the ordinary timers beside
     /// them are still enabled.
+    #[test]
+    fn the_enabled_unit_constants_are_unit_names() {
+        for name in [FLATPAK_SERVICE, TUNED_SERVICE] {
+            assert_eq!(
+                UnitName::try_from(name.to_owned()).map(|u| u.as_str().to_owned()),
+                Ok(name.to_owned())
+            );
+        }
+    }
+
     #[test]
     fn refused_timer_names_add_no_active_instruction() {
         use inspectah_core::types::scheduled::{
