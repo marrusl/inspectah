@@ -107,6 +107,10 @@ Inspecting host rhel9...
   To review: inspectah refine rhel9-20261104-222606.tar.gz
 ```
 
+This output was recorded before the scan collected every unit kind. The
+`Services` line now reads `Units`, and counts the unit state changes of
+every kind (sockets, timers and the rest), not services alone.
+
 The `Containers` line counts running containers only. The Quadlet units
 and Compose file on this host are captured anyway, as Step 7 shows.
 
@@ -415,8 +419,9 @@ cat inspectah-rhel9-refined/Containerfile
 The Containerfile is long, so this excerpt keeps the base image, the
 package list, the service steps, and the config copy. Each `...` stands for
 omitted lines; the lines shown are unchanged. It was recorded with an
-earlier release, whose export also enabled `sshd.service`; Services below
-says what differs now.
+earlier release, whose export also enabled `sshd.service` and wrote the
+unit commands in a different place and form; Services below says what
+differs now.
 
 ```dockerfile
 FROM registry.redhat.io/rhel9/rhel-bootc:9.8
@@ -480,6 +485,13 @@ Compare it with the Containerfile inside the scan tarball from Step 1:
   `sshd.service`, because refine used to add an enable for a unit file
   that fully shadows the vendor unit, although you did not decide it.
   It no longer does. The export still copies the `sshd.service` unit file.
+  The current export also writes these commands differently from the
+  recorded excerpt: under the header `# === Systemd Unit State ===`
+  instead of `# === Service Enablement ===`, after the
+  `COPY config/etc/ /etc/` line instead of before it, so each command
+  runs after the files it names are in place, and as
+  `RUN systemctl enable -- \` with each unit single-quoted on its own
+  line (`'httpd.service' \`).
 
 The rest of the Containerfile covers the Python virtual environments, the npm application, the three
 Quadlet units, the Compose file as a reference, the

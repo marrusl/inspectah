@@ -176,6 +176,10 @@ Inspecting host rhel9...
   To review: inspectah refine rhel9-20261104-222606.tar.gz
 ```
 
+This output was recorded before the scan collected every unit kind. The
+`Services` line now reads `Units`, and counts the unit state changes of
+every kind (sockets, timers and the rest), not services alone.
+
 The tarball is written to your current directory. The filename includes
 the hostname and a timestamp.
 

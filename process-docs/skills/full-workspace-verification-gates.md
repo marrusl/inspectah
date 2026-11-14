@@ -33,6 +33,12 @@ but it never runs vitest (`npm test`) or Playwright (`npm run
 test:e2e`). A passing hook on a frontend change says nothing about
 either.
 
+**Never run cargo and vitest at the same time.** `crates/web/build.rs`
+runs `npm ci` in `crates/web/ui` whenever the build script reruns, and `npm ci`
+deletes and reinstalls `node_modules`, so a vitest run started beside a
+cargo command loses its dependencies partway through and fails for no
+reason in the code. Run the frontend gate after cargo finishes.
+
 ## 2. `cargo clippy --workspace --all-targets -- -D clippy::all` is required and passes
 
 This command is the clippy gate. It exits 0 with zero warnings as of

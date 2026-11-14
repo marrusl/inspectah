@@ -10,7 +10,7 @@ carried**.
 
 An entry of `packages_added` is in the class when it is in
 `auto_packages` and no leaf the export installs pulls it in, as
-`service_intent::pulled_in_by_included` answers from `leaf_dep_tree`.
+`unit_plan::pulled_in_by_included` answers from `leaf_dep_tree`.
 A leaf counts only when `installs_on_its_own_route` holds for it: an
 included leaf the export renders only as a manual step (no repo serves
 it and no RPM is carried, or a repo-enabling package demoted for a

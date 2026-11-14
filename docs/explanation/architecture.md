@@ -123,8 +123,10 @@ provides the host abstraction.
 - **inspectors/config/** -- Configuration file discovery via filesystem walk
   (`walk.rs`), RPM ownership classification (`classify.rs`), and modified
   config detection via `rpm -Va` (`rpmva.rs`).
-- **inspectors/services.rs** -- Systemd unit enumeration, preset comparison,
-  and enablement state detection.
+- **inspectors/units/** -- Systemd unit enumeration for every unit kind,
+  the unit file each name loads (`resolve.rs`), owning packages, preset
+  comparison, enablement state, drop-ins and full shadows, and the
+  administrator's mount, automount and swap units.
 - **inspectors/network.rs** -- Firewall rules, hostname, DNS configuration,
   network connection profiles, and proxy settings.
 - **inspectors/kernelboot.rs** -- Kernel parameters, loaded modules, sysctl
@@ -194,7 +196,7 @@ Pipeline's modules:
   - `secrets.rs` -- Secrets scan summary renderer.
   - `safety.rs` -- Safety net warnings for items that need manual review.
   - Supporting modules: `baseline_fmt.rs`, `configtree.rs`,
-    `service_intent.rs`, `readme.rs`.
+    `unit_plan.rs` (every `systemctl` line for a collected unit), `readme.rs`.
 
 Pipeline produces an export in two ways: the CLI scan tarball, staged by
 `render_all` in `crates/pipeline/src/render/mod.rs`, and the refine web

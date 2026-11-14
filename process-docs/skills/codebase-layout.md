@@ -25,7 +25,7 @@ Directory structure and module organization for inspectah. Helps new agents navi
 | `crates/web/` | Embedded web server (axum), React UI host | No |
 | `crates/pipeline/` | Orchestrates inspectors, rendering, redaction | No |
 | `crates/refine/` | Interactive triage engine, session persistence | No |
-| `crates/collect/` | System inspectors (RPM, config, services, etc.) | No |
+| `crates/collect/` | System inspectors (RPM, config, units, etc.) | No |
 | `crates/core/` | Types, traits, snapshot container, aggregate merge/validate logic | No |
 
 **Dependency direction**, as the manifests declare it: `core` depends on
@@ -54,7 +54,7 @@ no other workspace crate; `collect` on `core`; `pipeline` on `core` and
 Each module defines the data model for a snapshot section:
 - `rpm.rs` — RPM package types
 - `config.rs` — Modified config file types
-- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`); `UnitName` proves a unit name once and gives its kind, instance and template. `InstanceName::template` builds a `UnitName` without a re-parse, which is sound only because `InstanceName`'s fields are private; any type that feeds an unchecked `UnitName` constructor must have no public fields, so a caller cannot swap in text the parser never checked
+- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`, `mount_findings`); `UnitName` proves a unit name once and gives its kind, instance and template. A state change's unit is a `CarriedUnit` (an ordinary unit with its `UnitFragment`, or a package-owned storage unit); an administrator's mount, automount or swap unit is an `AdvisoryUnit` in a `MountUnitFinding`, never a state change. `InstanceName::template` builds a `UnitName` without a re-parse, which is sound only because `InstanceName`'s fields are private; any type that feeds an unchecked constructor of a proved type has no public fields (`UnitName`, `UnitSubject`, `UnitStateChange`'s unit and state, and `PlannedUnit` and `Destination` in the pipeline), so a caller cannot swap in text the parser never checked
 - `containers.rs` — Podman/Docker container types
 - `network.rs`, `storage.rs`, `kernelboot.rs`, `selinux.rs`, `scheduled.rs`, `nonrpm.rs`, `users.rs`
 - `sysctl/`: `KernelBootSection.sysctl`, the sysctl search path as collected (`SysctlSection`, `SysctlDir`, `SysctlKey`); records, decides nothing
@@ -71,7 +71,7 @@ Each module defines the data model for a snapshot section:
 
 **Core traits:** `crates/core/src/traits/` — Inspector, Executor, Renderer, Detector, Progress
 
-**Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`
+**Core data containers:** `snapshot.rs`, `pipeline.rs`, `baseline.rs` at `crates/core/src/`. `baseline.rs` also holds the named unit lists: `TARGET_NEEDED_UNITS` and `TMP_MOUNT` (units the export never switches off, with `target_needs_unit_text`), `RUNTIME_UPDATERS`, `STOCK_STATE` and `INCOMPATIBLE_SERVICES`
 
 **Core helper modules:** `crates/core/src/`
 - `rpm_filename.rs` — RPM filename parsing (`RpmFilename::parse_untrusted`) and the staged-upload filename allowlist (`validate_staged_name`)
@@ -89,7 +89,10 @@ only when the subscription is preserved), and the pipeline runs it through
   - `rpm/repoless.rs` — Repo-less RPM detection (empty/disabled repos) and dnf cache scanning
   - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
 - `config/` — Modified config files via `rpm -Va`
-- `services.rs` (writes the `units` section), `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
+- `units/`: `UnitsInspector`, which writes the `units` section for every unit kind
+  - `mod.rs`: the inspector: `systemctl list-unit-files`, masks, drop-ins, owners, state changes and mount findings
+  - `resolve.rs`: the unit file systemd would load for a name, from `/etc/systemd/system` and the vendor directory
+- `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
 - `modernization.rs`: not an `Inspector`, detection rules for modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.
 - `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
 
@@ -114,13 +117,13 @@ Artifact generators invoked after triage decisions finalized:
 - `secrets.rs` — Redacted secrets summary
 - `tarball.rs` — Snapshot archive packaging
 - `users.rs` — User/group materialization (passwd/group entries)
-- `not_carried.rs`: the not-carried class (`classify_auto_carriage`, `apply_scan_package_defaults`, `not_carried_packages`); the one decider of which auto packages the image leaves out, read by the Containerfile, the audit report and `service_intent.rs`; `var_dirs.rs` asks `service_intent::pulled_in_by_included` directly
-- `service_intent.rs` — Quadlet/systemd service migration
+- `not_carried.rs`: the not-carried class (`classify_auto_carriage`, `apply_scan_package_defaults`, `not_carried_packages`); the one decider of which auto packages the image leaves out, read by the Containerfile, the audit report and `unit_plan.rs`; `var_dirs.rs` asks `unit_plan::pulled_in_by_included` directly
+- `unit_plan.rs`: `plan_units`, every `systemctl` line for a collected unit, checked against `staged_writes` (see `service-omission-model.md`); `declined_line`, the one source of a declined command's text; `mount_advisory_lines` for mount findings; `unit_state_lines` writes the `# === Systemd Unit State ===` section
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`
 - `repoless.rs`: package routing (`route_for`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer
 - `safety.rs` — Safety checks and destructive-action warnings
-- `configtree.rs` — Config file tree visualization
+- `configtree.rs`: the staged file tree. `staged_writes` is the one decision of which offered files the export writes, keyed by `Destination` (a normalized image path), with every withheld and refused offer; `is_staged` asks it
 - `baseline_fmt.rs` — Baseline comparison formatting
 - `readme.rs` — Auto-generated README for output directory
 - `advisory.rs`, `repo_enabling.rs`: advisory rendering and repository enablement
@@ -183,6 +186,10 @@ Playwright end-to-end tests live beside `src/`, in `crates/web/ui/e2e/`.
 | Location | Type |
 |----------|------|
 | `crates/*/tests/` | Per-crate integration tests |
+| `crates/cli/tests/units_scan_test.rs` | The units section through the scan path on collector-built hosts, then render, refine and the fleet merge; hosts come from the `UnitHost` builder in `crates/cli/tests/support/unit_hosts.rs` |
+| `crates/cli/tests/staged_writes_parity_test.rs` | The scan and refine exports stage the same files from one snapshot |
+| `crates/collect/tests/units_test.rs` | The units inspector over `MockExecutor` |
+| `crates/pipeline/tests/unit_plan_test.rs` | `plan_units` and the unit state section on hand-built `UnitSection`s |
 | `crates/web/ui/e2e/` | Playwright browser tests (React UI). Fixtures under `e2e/fixtures/` are hand-maintained, not generated — see `e2e-fixtures-are-hand-maintained.md`. |
 | `crates/web/ui/src/**/__tests__/` | Vitest unit tests (React components and hooks) |
 | `tests/e2e/fixtures/` | Fixture tarballs (`factor-topology/`); no test code at the top level |

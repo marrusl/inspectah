@@ -54,7 +54,7 @@ All are `Option` types: absent when the inspector did not run or was not applica
 |:------|:-----|:----------|:------------|
 | `rpm` | `RpmSection?` | `RpmInspector` | Installed packages, version changes, repo files, GPG keys, module streams, leaf/auto classification, dependency tree. |
 | `config` | `ConfigSection?` | `ConfigInspector` | RPM-owned modified files (`rpm -Va`), unowned `/etc` files, orphaned configs, including PAM files, audit rules, and custom tuned profiles. Ostree systems use `/usr/etc` overlay diffing instead. |
-| `units` | `UnitSection?` | `ServicesInspector` | Systemd unit files, enabled/disabled state, preset deviations, drop-in overrides, full unit shadows. |
+| `units` | `UnitSection?` | `UnitsInspector` | Systemd unit state for every unit kind: enabled, disabled and masked units against their presets, every unit's state, drop-in overrides, full unit shadows, and the administrator's mount, automount and swap units (`mount_findings`). |
 | `network` | `NetworkSection?` | `NetworkInspector` | NetworkManager connections, firewall zones/direct rules, static routes, `/etc/hosts` additions, proxy settings, DNS provenance. |
 | `storage` | `StorageSection?` | `StorageInspector` | fstab entries, active mount points, LVM volumes, `/var` directories with their backing, credential references in mount options. |
 | `scheduled_tasks` | `ScheduledTaskSection?` | `ScheduledTasksInspector` | Cron jobs (system + user), systemd timers, at jobs, generated timer unit conversions. |

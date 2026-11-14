@@ -124,11 +124,24 @@ model.
 | "Advisory: Modernization" or "Advisory: Cross-tree symlink", with a rationale beneath the row | Advisory. inspectah is reporting something, not asking for a decision. There is no checkbox. The finding is listed in the audit report, and its file is not copied into the image. |
 | "Inventory", or a badge naming the row that owns the decision | Inventory. The row is shown for reference. There is no checkbox. |
 
-A configuration file that a service drop-in already carries is Inventory,
+A configuration file that a unit drop-in already carries is Inventory,
 so the decision is made once. Its badge reads "Controlled in Service
 Drop-ins", with the owning row's state beside it and a "Go to owner" link.
 A unit at its preset state that has a drop-in is listed under "Other
 drop-in overrides" in Services.
+
+Each row in Services shows the unit's kind (service, socket, timer, and
+so on). When the export will not write the row's command, the reason
+shows under the row, in the same words as the Containerfile's
+`# Omitted:` or `# FIXME:` line. An unlocked row that inspectah flagged
+shows why, for example a package updater that is excluded by default.
+The administrator's mount, automount and swap units follow the unit
+rows, with their mount point and advisory lines and no checkbox: the
+export never writes a command for them, and their unit file is decided
+on its Configuration Files row, which the row links to. A configuration
+file or drop-in that the export does not write, because another file
+claims the same path, shows why under its row. The aggregate view does
+not show kinds, reasons or mount units yet.
 
 If a request to change an Advisory or Inventory row does reach the server,
 the server refuses it with HTTP 422 and a message. The refine UI does not

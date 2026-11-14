@@ -1043,6 +1043,28 @@ both releases unless it names one.
   RHEL 9 host, with no administrator involved.
 - Both stock hosts report `systemd-remount-fs.service` as
   `enabled-runtime`, which the services inspector warns about.
+- On a stock and a drifted host of each release, no socket, path, slice
+  or storage unit differed from preset, one target did with no
+  administrator involved (`remote-cryptsetup.target`, above), and the
+  only enabled instance was `getty@tty1.service`. The only differing
+  units that were not services were one local timer and
+  `remote-cryptsetup.target`. Two clean installs and one drift tool are
+  not a fleet.
+- A package install enables some units through another unit's `Also=`.
+  On RHEL 9, `NetworkManager-wait-online.service` and, once
+  `device-mapper-multipath` is installed, `multipathd.socket` are
+  enabled against a `disable` preset with no administrator involved.
+- The packaged units that use `Also=` in the measured package set are
+  vendor units with nothing under `/etc` but links.
+- A package install in the image applies the preset and links the unit
+  by the vendor `[Install]` (measured for `cups` and `libvirt-daemon`).
+- An upheld unit is started as soon as its `.upholds` link exists and
+  restarted whenever it goes inactive, so a `Type=oneshot` unit without
+  `RemainAfterExit=yes` loops until it hits its start limit and leaves
+  the host degraded on every boot. Measured on RHEL 10 (RHEL 9 makes no
+  `.upholds` link, above).
+- On a package-mode host with `tmp.mount` masked, after a reboot `/tmp`
+  is a plain directory on the writable root filesystem.
 - Layout of both base images: `/home`, `/mnt`, `/root` (to
   `var/roothome`) and `/srv` are links into `/var`. `/opt` and
   `/usr/local` are directories. `/tmp` and `/var/tmp` are mode 1777
@@ -1101,6 +1123,15 @@ daemon list, and in the base images after `dnf install cups libvirt-daemon`.
   `.wants`, is removed too. `disable libvirtd.service` removes the
   `virtlogd` and `virtlockd` socket links that `virtqemud.service`
   also names.
+- An `enable` then `disable` pair, the unit's own command and then the
+  opposite verb for each `Also=` member recorded on the other side,
+  reproduced the host exactly for `cups.service` and `cups.socket`.
+- The four template units of the instance tables, read on the installed
+  hosts: `wg-quick@.service` runs `wg-quick up %i` and names no path
+  under `/etc`. The OpenVPN templates (`openvpn-client@`,
+  `openvpn-server@`) pass `--config %i.conf` with a
+  `WorkingDirectory=`. `dirsrv@.service` names its
+  `/etc/dirsrv/slapd-%i` directory and never names its data directory.
 - `add-wants` and `add-requires` do not read `[Install]`. They create
   no `Also=` member link and no alias link. No verb creates an alias
   link without `enable`: `systemctl link` does nothing for a unit
