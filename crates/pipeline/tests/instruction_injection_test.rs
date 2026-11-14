@@ -1483,12 +1483,13 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
         ),
     ];
     for (label, output, line) in cases {
+        let joined = joined_instructions(&output);
         assert!(
-            output.lines().any(|l| l == line),
+            joined.iter().any(|l| l == line),
             "{label}: missing {line:?}\n{output}"
         );
-        for l in output
-            .lines()
+        for l in joined
+            .iter()
             .filter(|l| !l.starts_with('#') && l.contains("systemctl "))
         {
             let (_, operands) = l
@@ -1503,6 +1504,28 @@ fn every_systemctl_site_quotes_its_operands_after_the_end_of_options() {
             );
         }
     }
+}
+
+/// Each line of `output`, with an instruction's `\` continuation lines
+/// joined onto it by one space, as the shell reads it.
+fn joined_instructions(output: &str) -> Vec<String> {
+    let mut joined: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in output.lines() {
+        let (text, continues) = match line.strip_suffix('\\') {
+            Some(head) => (head.trim(), true),
+            None => (line.trim(), false),
+        };
+        match joined.last_mut() {
+            Some(last) if open => {
+                last.push(' ');
+                last.push_str(text);
+            }
+            _ => joined.push(text.to_owned()),
+        }
+        open = continues;
+    }
+    joined
 }
 
 /// The timer and `@reboot` sites enable only names that parse as a
@@ -1556,7 +1579,7 @@ fn scheduled_sites_enable_only_proved_unit_names() {
         let output = scheduled(section(ESCAPED));
         let line = format!("RUN systemctl enable -- '{ESCAPED}.{suffix}'");
         assert!(
-            output.lines().any(|l| l == line),
+            joined_instructions(&output).contains(&line),
             "{site}: missing {line:?}\n{output}"
         );
     }

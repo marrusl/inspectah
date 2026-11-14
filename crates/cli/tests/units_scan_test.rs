@@ -4462,3 +4462,319 @@ fn a_scheduled_timer_row_links_to_its_unit_row() {
         })
     );
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 "What the plan takes" item 3: generated units are plan requests
+// (T21, generated and flatpak cases).
+// ---------------------------------------------------------------------
+
+/// The cron file the scheduled inspector converts to `cron-backup.timer`
+/// and `cron-backup.service`.
+const CRON_FILE: &str = "/etc/cron.d/backup";
+const CRON_LINE: &str = "0 2 * * * root /usr/local/bin/backup\n";
+const CRON_BACKUP_TIMER: &str = "cron-backup.timer";
+/// The host's own `cron-backup.timer` body, a local or vendor file.
+const HOST_CRON_BACKUP_TIMER: &str =
+    "[Timer]\nOnCalendar=weekly\n[Install]\nWantedBy=timers.target\n";
+
+/// The FIXME the export writes for a generated request declined because a
+/// collected unit has its name, by its prefix and unit.
+fn collision_fixme<'a>(containerfile: &'a str, unit: &str) -> Option<&'a str> {
+    let prefix = format!("# FIXME: {unit} (");
+    containerfile.lines().find(|l| {
+        l.starts_with(&prefix) && l.contains("a unit collected from the host has its name")
+    })
+}
+
+/// A host with the cron file and, from `host`, whatever else.
+fn with_cron_backup(host: UnitHost) -> UnitHost {
+    host.file(CRON_FILE, CRON_LINE)
+}
+
+/// The scan export and the refine export of `snap`, each with its label.
+fn both_exports(snap: &InspectionSnapshot) -> [(&'static str, tempfile::TempDir); 2] {
+    [
+        ("scan", render_export(snap)),
+        ("refine", export_session(&session(snap))),
+    ]
+}
+
+/// T21: a generated cron timer and service named for a collected, enabled
+/// vendor timer. Through the scan export and the refine export the
+/// generated request is declined with a FIXME, neither generated file is
+/// in the staged tree, and the vendor timer's enable is carried in the
+/// unit state section against the package's unit. Control: the same cron
+/// file on a host with no unit of that name stages the generated pair and
+/// enables the timer from the scheduled section.
+#[test]
+fn t21_a_generated_timer_named_for_a_vendor_timer_is_declined() {
+    let host = with_cron_backup(
+        UnitHost::new()
+            .base_package("glibc")
+            .package("backuppkg")
+            .unit(CRON_BACKUP_TIMER, "enabled")
+            .preset("disable *")
+            .vendor_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER, Some("backuppkg")),
+    );
+    let snap = scan(host);
+    assert!(
+        matches!(
+            fragment_of(&snap, CRON_BACKUP_TIMER),
+            UnitFragment::Vendor { .. }
+        ),
+        "presence: the vendor timer's state change"
+    );
+    assert!(
+        snap.scheduled_tasks.as_ref().is_some_and(|st| st
+            .generated_timer_units
+            .iter()
+            .any(|u| u.name == "cron-backup")),
+        "presence: the generated unit"
+    );
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            collision_fixme(&cf, CRON_BACKUP_TIMER).is_some(),
+            "{route}:\n{cf}"
+        );
+        for name in [CRON_BACKUP_TIMER, "cron-backup.service"] {
+            assert!(
+                files_named(tree.path(), name).is_empty(),
+                "{route}: a generated {name} is staged"
+            );
+        }
+        assert!(acts(&cf, "enable", CRON_BACKUP_TIMER), "{route}:\n{cf}");
+        assert!(
+            unit_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'cron-backup.timer'")),
+            "{route}: the enable is the unit state section's:\n{cf}"
+        );
+        assert!(
+            scheduled_lines(&cf)
+                .iter()
+                .all(|l| !l.contains("systemctl")),
+            "{route}:\n{cf}"
+        );
+    }
+
+    let control = scan(with_cron_backup(UnitHost::new().preset("disable *")));
+    for (route, tree) in both_exports(&control) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            collision_fixme(&cf, CRON_BACKUP_TIMER).is_none(),
+            "{route}:\n{cf}"
+        );
+        for name in [CRON_BACKUP_TIMER, "cron-backup.service"] {
+            assert_eq!(files_named(tree.path(), name).len(), 1, "{route}: {name}");
+        }
+        assert!(
+            scheduled_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'cron-backup.timer'")),
+            "{route}: the scheduled section enables the generated timer:\n{cf}"
+        );
+        assert!(acts(&cf, "enable", CRON_BACKUP_TIMER), "{route}:\n{cf}");
+    }
+}
+
+/// A local `cron-backup.timer`, `disabled` on the host, beside a generated
+/// `cron-backup`: the local timer's own row decides. Through both routes no
+/// instruction names it, the generated request is declined with the
+/// collision FIXME, and the timer file staged is the host's. Control: the
+/// same local timer `enabled` is enabled from the unit state section, with
+/// the generated request declined all the same.
+#[test]
+fn a_disabled_local_timer_named_like_a_generated_one_stays_disabled() {
+    let host = |state: &str| {
+        with_cron_backup(
+            UnitHost::new()
+                .unit(CRON_BACKUP_TIMER, state)
+                .preset("disable *")
+                .etc_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER),
+        )
+    };
+    let disabled = scan(host("disabled"));
+    for (route, tree) in both_exports(&disabled) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            in_no_systemctl_instruction(&cf, CRON_BACKUP_TIMER),
+            "{route}:\n{cf}"
+        );
+        assert!(
+            collision_fixme(&cf, CRON_BACKUP_TIMER).is_some(),
+            "{route}:\n{cf}"
+        );
+        let timers = files_named(tree.path(), CRON_BACKUP_TIMER);
+        assert_eq!(timers.len(), 1, "{route}: {timers:?}");
+        assert_eq!(
+            std::fs::read_to_string(&timers[0]).unwrap(),
+            HOST_CRON_BACKUP_TIMER,
+            "{route}: the host's timer is staged"
+        );
+        assert!(
+            files_named(tree.path(), "cron-backup.service").is_empty(),
+            "{route}: no generated service"
+        );
+    }
+
+    let enabled = scan(host("enabled"));
+    for (route, tree) in both_exports(&enabled) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            unit_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'cron-backup.timer'")),
+            "{route}:\n{cf}"
+        );
+        assert!(
+            collision_fixme(&cf, CRON_BACKUP_TIMER).is_some(),
+            "{route}:\n{cf}"
+        );
+    }
+}
+
+const FLATPAK_PROVISION: &str = "flatpak-provision.service";
+const FLATPAK_PROVISION_COPY: &str =
+    "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
+
+/// `snap` with one included flatpak application.
+fn with_flatpak_app(mut snap: InspectionSnapshot) -> InspectionSnapshot {
+    use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
+    snap.containers = Some(ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.example.App".into(),
+            remote: "flathub".into(),
+            remote_url: "https://dl.flathub.org/repo/".into(),
+            branch: "stable".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// The index of the first line of `containerfile` equal to `line`.
+fn line_index(containerfile: &str, line: &str) -> Option<usize> {
+    containerfile.lines().position(|l| l == line)
+}
+
+/// T21, flatpak: the provisioning service's enable is quoted, after `--`,
+/// and follows its own `COPY`, through both routes.
+#[test]
+fn t21_the_flatpak_enable_is_quoted_and_follows_its_copy() {
+    let snap = with_flatpak_app(scan(UnitHost::new()));
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        let copy = line_index(&cf, FLATPAK_PROVISION_COPY)
+            .unwrap_or_else(|| panic!("{route}: no COPY:\n{cf}"));
+        let enable = line_index(&cf, "RUN systemctl enable -- \\")
+            .filter(|i| cf.lines().nth(i + 1) == Some("    'flatpak-provision.service'"))
+            .unwrap_or_else(|| panic!("{route}: no quoted enable:\n{cf}"));
+        assert!(enable > copy, "{route}: the enable follows its COPY:\n{cf}");
+        assert!(acts(&cf, "enable", FLATPAK_PROVISION), "{route}:\n{cf}");
+    }
+}
+
+/// § 10.2's flatpak rescan case: a host built from an inspectah image has a
+/// local, enabled `flatpak-provision.service`. Its rescan carries the
+/// collected copy, enabled from the unit state section, and withholds the
+/// generated one with the collision FIXME and no COPY of it. With the
+/// collected row and its file excluded in refine, the generated service
+/// is copied and enabled again (the control).
+#[test]
+fn a_rescanned_flatpak_provisioning_service_keeps_the_collected_copy() {
+    const COLLECTED: &str =
+        "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target\n";
+    let snap = with_flatpak_app(scan(
+        UnitHost::new()
+            .unit(FLATPAK_PROVISION, "enabled")
+            .preset("disable *")
+            .etc_unit(FLATPAK_PROVISION, COLLECTED),
+    ));
+    assert!(
+        matches!(
+            fragment_of(&snap, FLATPAK_PROVISION),
+            UnitFragment::Local { .. }
+        ),
+        "presence: the collected row"
+    );
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            collision_fixme(&cf, FLATPAK_PROVISION).is_some(),
+            "{route}:\n{cf}"
+        );
+        assert!(!cf.contains(FLATPAK_PROVISION_COPY), "{route}:\n{cf}");
+        assert!(
+            !tree.path().join("flatpak").join(FLATPAK_PROVISION).exists(),
+            "{route}: the generated service is staged"
+        );
+        let collected = tree
+            .path()
+            .join("config/etc/systemd/system")
+            .join(FLATPAK_PROVISION);
+        assert_eq!(
+            std::fs::read_to_string(&collected).unwrap(),
+            COLLECTED,
+            "{route}"
+        );
+        assert!(
+            unit_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'flatpak-provision.service'")),
+            "{route}:\n{cf}"
+        );
+    }
+
+    let path = etc_path(FLATPAK_PROVISION);
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[
+            (unit_item(FLATPAK_PROVISION), false),
+            (config_item(&path), false),
+        ],
+    ));
+    assert!(
+        collision_fixme(&excluded, FLATPAK_PROVISION).is_none(),
+        "{excluded}"
+    );
+    assert!(excluded.contains(FLATPAK_PROVISION_COPY), "{excluded}");
+    assert!(acts(&excluded, "enable", FLATPAK_PROVISION), "{excluded}");
+}
+
+/// § 11.1: a declined generated request shows on the row that asked for
+/// it. Through the refine session, the declined `cron-backup.timer`
+/// request names its scheduled row with the plan's FIXME; with no unit of
+/// that name, nothing is declined (the control).
+#[test]
+fn a_declined_generated_request_shows_on_its_scheduled_row() {
+    use inspectah_refine::projection::{DeclinedRenders, GeneratedRowView};
+    let snap = scan(with_cron_backup(
+        UnitHost::new()
+            .unit(CRON_BACKUP_TIMER, "disabled")
+            .preset("disable *")
+            .etc_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER),
+    ));
+    let refine = session(&snap);
+    let views = &refine.decisions().declined_generated;
+    assert_eq!(views.len(), 1, "{views:?}");
+    assert_eq!(
+        views[0].row,
+        GeneratedRowView::Scheduled {
+            name: "cron-backup".into()
+        }
+    );
+    assert_eq!(views[0].unit.as_str(), CRON_BACKUP_TIMER);
+    assert_eq!(views[0].declined.renders, DeclinedRenders::Fixme);
+    assert_eq!(views[0].declined.reason, "GeneratedNameCollision");
+    let cf = containerfile_in(&export_session(&refine));
+    assert_eq!(
+        collision_fixme(&cf, CRON_BACKUP_TIMER),
+        Some(format!("# FIXME: {}", views[0].declined.text).as_str())
+    );
+
+    let control = session(&scan(with_cron_backup(UnitHost::new().preset("disable *"))));
+    assert!(control.decisions().declined_generated.is_empty());
+}

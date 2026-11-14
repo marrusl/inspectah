@@ -573,13 +573,13 @@ fn the_scheduled_copy_follows_what_the_export_writes() {
     assert!(containerfile.contains(SCHEDULED_COPY), "{containerfile}");
 }
 
-// --- Interim: a generated unit beside a collected file of its name ------
+// --- A generated unit and a collected file of its name (§ 10.2) --------
 
 /// The flatpak provisioning service's image path.
 const FLATPAK_UNIT: &str = "/etc/systemd/system/flatpak-provision.service";
 const FLATPAK_COPY: &str =
     "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service";
-const FLATPAK_ENABLE: &str = "RUN systemctl enable -- 'flatpak-provision.service'";
+const FLATPAK_ENABLE: &str = "RUN systemctl enable -- \\\n    'flatpak-provision.service'";
 
 fn with_flatpak(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     use inspectah_core::types::containers::{ContainerSection, FlatpakApp};
@@ -604,13 +604,15 @@ fn generated_flatpak_service() -> String {
         .expect("the generated service is staged")
 }
 
-/// A rescan of a host built from an inspectah image carries a collected
-/// `flatpak-provision.service` beside the generated one. Until the
-/// generated-name collision rule arrives, both are written to their own
-/// trees as before, nothing is withheld, and the containers section's COPY
-/// and enable name a file the export wrote. With identical content too.
+/// A rescan of a host built from an inspectah image records a collected
+/// `flatpak-provision.service`. The generated one is withheld as
+/// `GeneratedNameCollision` whatever its content, the collected file is
+/// written under `config/`, and the containers section neither copies nor
+/// enables the generated service and names the declined request in a
+/// FIXME (§ 10.2). Control: with no collected file, the generated service
+/// is staged, copied and enabled after its `COPY`.
 #[test]
-fn a_collected_flatpak_service_stays_beside_the_generated_one() {
+fn a_collected_flatpak_service_withholds_the_generated_one() {
     let generated = generated_flatpak_service();
     for (label, collected) in [
         (
@@ -624,31 +626,56 @@ fn a_collected_flatpak_service_stays_beside_the_generated_one() {
             vec![],
         ));
         let staged = staged_writes(&snap);
-        assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        assert_eq!(
+            staged
+                .withheld
+                .iter()
+                .map(|(at, kind, why)| (at.as_str(), *kind, why.name()))
+                .collect::<Vec<_>>(),
+            [(
+                FLATPAK_UNIT,
+                StagedFileKind::FlatpakService,
+                "GeneratedNameCollision"
+            )],
+            "{label}"
+        );
         let (dir, containerfile) = export(&snap);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("config").join(&FLATPAK_UNIT[1..])).unwrap(),
             collected,
             "{label}: the collected file is written under config/"
         );
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("flatpak/flatpak-provision.service")).unwrap(),
-            generated,
-            "{label}: the generated file is written under flatpak/"
+        assert!(
+            !dir.path()
+                .join("flatpak/flatpak-provision.service")
+                .exists(),
+            "{label}: the generated file is not written"
         );
         assert!(
-            containerfile.contains(FLATPAK_COPY),
+            !containerfile.contains(FLATPAK_COPY),
             "{label}:\n{containerfile}"
         );
         assert!(
-            containerfile.contains(FLATPAK_ENABLE),
+            !containerfile.contains(FLATPAK_ENABLE),
             "{label}:\n{containerfile}"
         );
         assert!(
-            fixme_naming(&containerfile, FLATPAK_UNIT).is_none(),
+            containerfile
+                .lines()
+                .any(|l| l.starts_with("# FIXME: flatpak-provision.service (")),
             "{label}:\n{containerfile}"
         );
     }
+
+    let (dir, containerfile) = export(&with_flatpak(staged_snapshot(vec![], vec![])));
+    assert!(
+        dir.path()
+            .join("flatpak/flatpak-provision.service")
+            .is_file()
+    );
+    let copy = containerfile.find(FLATPAK_COPY).expect("the COPY");
+    let enable = containerfile.find(FLATPAK_ENABLE).expect("the enable");
+    assert!(copy < enable, "{containerfile}");
 }
 
 fn with_generated(mut snap: InspectionSnapshot, units: &[(&str, &str)]) -> InspectionSnapshot {
@@ -670,6 +697,9 @@ fn with_generated(mut snap: InspectionSnapshot, units: &[(&str, &str)]) -> Inspe
     snap
 }
 
+/// The configuration section's `COPY` of the `/etc` tree, which carries the
+/// host's own unit files.
+const CONFIG_ETC_COPY: &str = "COPY config/etc/ /etc/";
 const CRON_TIMER: &str = "/etc/systemd/system/cron-backup.timer";
 const CRON_SERVICE: &str = "/etc/systemd/system/cron-backup.service";
 /// The cron-generated pair named `cron-backup`.
@@ -702,15 +732,16 @@ fn with_host_timer(mut snap: InspectionSnapshot) -> InspectionSnapshot {
 /// A generated cron unit named like a file the host has never replaces it,
 /// and neither of its files lands beside the host's: where a config entry
 /// or a drop-in row records the host's file at either path of the
-/// generated pair, neither generated file is written (§ 10.2, "the paired
-/// service of a generated timer included"). The host's content is what the
-/// export stages and nothing is withheld. With both host files carried,
-/// the enable names files a `COPY` carries. With the host's service row
+/// generated pair, both generated files are withheld as
+/// `GeneratedNameCollision` (§ 10.2, "the paired service of a generated
+/// timer included"), the host's content is what the export stages, the
+/// generated request is declined with its FIXME and nothing enables the
+/// timer from the scheduled section. With the host's service row
 /// excluded, as an operator does on a rescan, no file is at the service's
-/// path in either tree and nothing enables the timer; the same rescan with
-/// the row included (the first case) is its control. The timer's
-/// description records no file, so with it alone the generated pair lands,
-/// as it does with no host file of that name (the control).
+/// path in either tree; the same rescan with the row included (the first
+/// case) is its control. The timer's description records no file, so
+/// with it alone the generated pair lands and is enabled, as it does with
+/// no host file of that name (the control).
 #[test]
 fn a_generated_timer_never_replaces_the_hosts_own_timer() {
     let generated = &[(GENERATED_TIMER, GENERATED_SERVICE)];
@@ -735,7 +766,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             "config",
             HOST_TIMER,
             Some(HOST_SERVICE),
-            SCHEDULED_COPY,
+            CONFIG_ETC_COPY,
         ),
         (
             "the service's config row excluded on a rescan",
@@ -752,7 +783,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             "config",
             HOST_TIMER,
             None,
-            SCHEDULED_COPY,
+            CONFIG_ETC_COPY,
         ),
         (
             "a drop-in row and the service's config entry",
@@ -777,7 +808,7 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             "config",
             HOST_TIMER,
             None,
-            SCHEDULED_COPY,
+            CONFIG_ETC_COPY,
         ),
         (
             "the description alone",
@@ -796,8 +827,21 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             SCHEDULED_COPY,
         ),
     ] {
+        let collided = timer == HOST_TIMER;
         let staged = staged_writes(&snap);
-        assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        if collided {
+            assert!(
+                !staged.withheld.is_empty()
+                    && staged.withheld.iter().all(|(_, kind, why)| {
+                        *kind == StagedFileKind::GeneratedUnit
+                            && why.name() == "GeneratedNameCollision"
+                    }),
+                "{label}: {:?}",
+                staged.withheld
+            );
+        } else {
+            assert!(staged.withheld.is_empty(), "{label}: {:?}", staged.withheld);
+        }
         let (dir, containerfile) = export(&snap);
         assert_eq!(
             std::fs::read_to_string(dir.path().join(timer_root).join(&CRON_TIMER[1..])).unwrap(),
@@ -829,24 +873,24 @@ fn a_generated_timer_never_replaces_the_hosts_own_timer() {
             );
         }
         assert!(containerfile.contains(copy), "{label}:\n{containerfile}");
-        let enabled = containerfile
-            .lines()
-            .any(|l| l.starts_with("RUN systemctl enable") && l.contains("cron-backup.timer"));
         assert_eq!(
-            enabled,
-            service.is_some(),
-            "{label}: the enable names a timer whose service is carried:\n{containerfile}"
+            containerfile.contains("RUN systemctl enable -- \\\n    'cron-backup.timer'"),
+            !collided,
+            "{label}: the scheduled section enables only its own pair:\n{containerfile}"
         );
-        assert!(
-            fixme_naming(&containerfile, CRON_TIMER).is_none(),
-            "{label}:\n{containerfile}"
+        assert_eq!(
+            containerfile
+                .lines()
+                .any(|l| l.starts_with("# FIXME: cron-backup.timer (")),
+            collided,
+            "{label}: the declined request's FIXME:\n{containerfile}"
         );
     }
 }
 
-/// Two generated units of one name (one cron file with two lines): the
-/// interim rule writes both in order, as before, so the later one is what
-/// lands, and nothing is withheld.
+/// Two generated units of one name (one cron file with two lines):
+/// `staged_writes` keeps the last, as the stager has always written them,
+/// so the later one is what lands, and nothing is withheld.
 #[test]
 fn two_generated_units_of_one_name_are_written_in_order() {
     let snap = with_generated(

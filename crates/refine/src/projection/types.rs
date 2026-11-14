@@ -45,6 +45,29 @@ pub struct DecisionProjection {
     pub not_carried: Vec<NotCarriedRow>,
     /// The notice the export sends for the rows that own an enabled unit.
     pub not_carried_notice: Option<ExportWarning>,
+    /// Every request for a unit inspectah generates that the plan does not
+    /// write, for the scheduled or flatpak row that asked for it (§ 11.1).
+    pub declined_generated: Vec<DeclinedGeneratedView>,
+}
+
+/// The row a generated unit's request came from (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "row", rename_all = "snake_case")]
+pub enum GeneratedRowView {
+    /// A scheduled `generated_timer_units` row; `name` is its name, the
+    /// row's id in the scheduled section.
+    Scheduled { name: String },
+    /// The flatpak applications, which share one provisioning service.
+    Flatpak,
+}
+
+/// A generated unit's request the plan declined, and the row to show it on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclinedGeneratedView {
+    pub row: GeneratedRowView,
+    /// The unit the request would have enabled.
+    pub unit: UnitName,
+    pub declined: DeclinedView,
 }
 
 // ── Unit rows (§ 11.1) ───────────────────────────────────────────

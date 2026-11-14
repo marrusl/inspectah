@@ -17,7 +17,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderError;
-use inspectah_core::types::units::UNIT_TYPE_SUFFIXES;
+use inspectah_core::types::units::{UNIT_TYPE_SUFFIXES, UnitName};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -133,6 +133,11 @@ pub enum WithheldWhy {
     /// Another staged file has this destination, or needs it as a
     /// directory.
     Conflict { other: Destination },
+    /// A unit inspectah generates has the name of a collected unit:
+    /// `unit`, an included state change or a file a config entry or a
+    /// drop-in row records (§ 10.2). Every file of the generated unit is
+    /// withheld, the paired service of a generated timer included.
+    GeneratedNameCollision { unit: UnitName },
 }
 
 impl WithheldWhy {
@@ -142,6 +147,7 @@ impl WithheldWhy {
         match self {
             Self::ZeroLengthUnitFile => "ZeroLengthUnitFile",
             Self::Conflict { .. } => "Conflict",
+            Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
         }
     }
 
@@ -162,6 +168,11 @@ impl WithheldWhy {
                 "{other} is also staged, and one of the two paths is a directory \
                  of the other; exclude one of the two"
             ),
+            Self::GeneratedNameCollision { unit } => format!(
+                "inspectah generates this file for a unit, and {} is a unit collected \
+                 from the host; the generated file is not written over it",
+                unit.as_str()
+            ),
         }
     }
 }
@@ -176,25 +187,12 @@ pub struct StagedWrite<'a> {
 }
 
 /// Every file the export writes, and every file it was offered and does
-/// not write. The stager writes `writes`, then `beside`, and nothing else.
+/// not write. The stager writes `writes` and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StagedWrites<'a> {
     /// One write per destination, keyed by where the file lands in the
-    /// image. Where `beside` holds a write at the same destination in the
-    /// same `config/` tree, the content and `source` here can differ from
-    /// what lands: a generated unit written beside a collected file, or
-    /// two generated units of one name, where the first is here and the
-    /// last lands. A reader that needs the landed content or source
-    /// consults `beside` too, as `is_staged` does: a `beside` write can be
-    /// the only file at a destination whose collected offer is withheld.
+    /// image: what lands there.
     pub writes: BTreeMap<Destination, StagedWrite<'a>>,
-    /// Interim: generated units (`GeneratedUnit`, `FlatpakService`)
-    /// written at a destination that another offer also has, in offer
-    /// order after `writes`, exactly as the stager wrote them before
-    /// `staged_writes` existed. Removed by the generated-name collision
-    /// rule of § 10.2, which arrives with generated units as plan
-    /// requests.
-    pub beside: Vec<(Destination, StagedWrite<'a>)>,
     /// Offered files with a valid destination that are not written.
     pub withheld: Vec<(Destination, StagedFileKind, WithheldWhy)>,
     /// Offered files whose path is not a [`Destination`], as offered.
@@ -376,15 +374,8 @@ struct Stager {
 
 impl Stager {
     /// Write `content` at `root/rel`, creating `root` and the directories
-    /// below it. `replace` allows writing over a file this stager wrote at
-    /// exactly that path (a `beside` write).
-    fn write(
-        &mut self,
-        root: &Path,
-        rel: &Path,
-        content: &str,
-        replace: bool,
-    ) -> Result<(), RenderError> {
+    /// below it.
+    fn write(&mut self, root: &Path, rel: &Path, content: &str) -> Result<(), RenderError> {
         let path = root.join(rel);
         let named = |e: std::io::Error| {
             RenderError::Io(std::io::Error::new(
@@ -406,9 +397,6 @@ impl Stager {
                 }
                 Err(e) => return Err(named(e)),
             }
-        }
-        if replace && self.known.contains(&path) {
-            return std::fs::write(&path, content).map_err(named);
         }
         let mut file = match std::fs::OpenOptions::new()
             .write(true)
@@ -535,10 +523,10 @@ impl StagedFileKind {
         matches!(self, Self::RepoFile | Self::GpgKey | Self::FirewallZone)
     }
 
-    /// Whether the file is a unit inspectah generates: the interim rule of
-    /// [`staged_writes`] writes it beside a collected file of its path
-    /// rather than calling the two a conflict. The generated kargs file is
-    /// not one: it is decided like a collected offer.
+    /// Whether inspectah generates the file from its own template: a
+    /// unit the scheduled section converts from cron, or the flatpak
+    /// provisioning service. The generated kargs file is not one: it is
+    /// decided like a collected offer.
     fn is_generated_unit(self) -> bool {
         matches!(self, Self::GeneratedUnit | Self::FlatpakService)
     }
@@ -688,33 +676,99 @@ fn offers(snap: &InspectionSnapshot) -> Vec<Offer<'_>> {
     out
 }
 
-/// The destinations of every file of each included generated unit that
-/// offers a file at one of `collected`: both files of a timer and its
-/// paired service, or an `@reboot` service alone. Interim rule 3 of
-/// [`staged_writes`].
-fn generated_unit_files_at(
-    snap: &InspectionSnapshot,
-    collected: &BTreeSet<&Destination>,
-) -> BTreeSet<Destination> {
-    let mut out = BTreeSet::new();
-    let Some(st) = &snap.scheduled_tasks else {
-        return out;
-    };
-    for u in st
-        .generated_timer_units
-        .iter()
-        .filter(|u| u.disposition.is_included())
+/// The files of each unit inspectah generates, by unit: for each included
+/// cron unit its timer and paired service (or an `@reboot` service alone),
+/// and the flatpak provisioning service. Two cron units of one name share
+/// their destinations, and so their group. A file whose name is refused
+/// is in no group: it is never offered.
+fn generated_unit_groups(snap: &InspectionSnapshot) -> Vec<Vec<Destination>> {
+    let mut groups: Vec<Vec<Destination>> = Vec::new();
+    if let Some(st) = &snap.scheduled_tasks {
+        for u in st
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.disposition.is_included())
+        {
+            let files: Vec<Destination> =
+                [("timer", &u.timer_content), ("service", &u.service_content)]
+                    .into_iter()
+                    .filter_map(|(suffix, content)| {
+                        Offer::scheduled_unit(
+                            StagedFileKind::GeneratedUnit,
+                            &u.name,
+                            suffix,
+                            content,
+                        )
+                    })
+                    .filter_map(|offer| Destination::new(&offer.path).ok())
+                    .collect();
+            if !files.is_empty() && !groups.contains(&files) {
+                groups.push(files);
+            }
+        }
+    }
+    let flatpak_included = snap.containers.as_ref().is_some_and(|c| {
+        c.flatpak_apps
+            .iter()
+            .any(|app| app.disposition.is_included())
+    });
+    if flatpak_included
+        && let Ok(dest) = Destination::new(&format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}"))
     {
-        let files: Vec<Destination> =
-            [("timer", &u.timer_content), ("service", &u.service_content)]
-                .into_iter()
-                .filter_map(|(suffix, content)| {
-                    Offer::scheduled_unit(StagedFileKind::GeneratedUnit, &u.name, suffix, content)
-                })
-                .filter_map(|offer| Destination::new(&offer.path).ok())
-                .collect();
-        if files.iter().any(|dest| collected.contains(dest)) {
-            out.extend(files);
+        groups.push(vec![dest]);
+    }
+    groups
+}
+
+/// The image paths of the units collected from the host, as § 10.2's
+/// generated-name collision reads them: the unit file path of every
+/// included state change, and every path an included config entry or
+/// drop-in row offers, whatever its content (a zero-length file there is
+/// the host's mask). An excluded row is not counted, so excluding the
+/// collected row and its file lets the generated unit back in.
+fn collected_unit_paths(
+    snap: &InspectionSnapshot,
+    resolved: &[(Destination, StagedFileKind, Cow<'_, str>)],
+) -> BTreeSet<Destination> {
+    let mut paths: BTreeSet<Destination> = resolved
+        .iter()
+        .filter(|(_, kind, _)| matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn))
+        .map(|(dest, _, _)| dest.clone())
+        .collect();
+    if let Some(units) = &snap.units {
+        paths.extend(
+            units
+                .state_changes
+                .iter()
+                .filter(|sc| sc.disposition.is_included())
+                .filter_map(|sc| {
+                    Destination::new(&format!("{ETC_UNIT_DIR}/{}", sc.unit().name().as_str())).ok()
+                }),
+        );
+    }
+    paths
+}
+
+/// Every file of a generated unit whose name a collected unit shares, and
+/// why it is withheld (§ 10.2): [`WithheldWhy::GeneratedNameCollision`]
+/// naming the collected unit, or a [`WithheldWhy::Conflict`] with the
+/// collected path when its file name is not a unit name.
+fn generated_name_collisions(
+    groups: &[Vec<Destination>],
+    collected: &BTreeSet<Destination>,
+) -> BTreeMap<Destination, WithheldWhy> {
+    let mut out = BTreeMap::new();
+    for files in groups {
+        let Some(hit) = files.iter().find(|dest| collected.contains(*dest)) else {
+            continue;
+        };
+        let file_name = hit.as_str().rsplit('/').next().unwrap_or_default();
+        let why = match UnitName::try_from(file_name.to_owned()) {
+            Ok(unit) => WithheldWhy::GeneratedNameCollision { unit },
+            Err(_) => WithheldWhy::Conflict { other: hit.clone() },
+        };
+        for dest in files {
+            out.entry(dest.clone()).or_insert_with(|| why.clone());
         }
     }
     out
@@ -729,12 +783,13 @@ fn generated_unit_files_at(
 /// 2. A config entry at a destination another section carries
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
-/// 3. Interim: where a config entry or a drop-in row with content is
-///    offered at either file of a generated unit, neither of that unit's
-///    files is written (its timer and paired service, or an `@reboot`
-///    service alone), so the host's own unit file is never replaced by a
-///    generated one and no generated file lands beside it. A zero-length
-///    file is a mask, not a unit file (rule 6), and does not count.
+/// 3. A unit inspectah generates whose name is also a collected unit's
+///    (an included state change, or an included config entry or drop-in
+///    row at its path) has every file withheld as
+///    `GeneratedNameCollision`, the paired service of a generated timer
+///    included (§ 10.2). So a generated file never replaces the host's
+///    own, and none lands beside it. The plan declines the generated
+///    unit's request for the same reason.
 /// 4. A file two sections record: the config walk and the repo, GPG key
 ///    or firewall inventory record one host file twice. Where a config
 ///    entry is offered at the destination, the repo file, GPG key or
@@ -743,23 +798,20 @@ fn generated_unit_files_at(
 ///    entry is included, which is not always the selected one: refine's
 ///    `SelectVariant` sets only `variant_selection`, and `SetInclude` on
 ///    the path includes the first-ranked entry.
-///    Collected offers at one destination with the same content are one
-///    write. Collected offers with different
-///    contents at one destination, and a destination another offer needs
-///    as a directory, are a `Conflict`: every file there is withheld, so
-///    neither silently replaces or blocks the other.
-/// 5. Interim: a generated offer (`GeneratedUnit`, `FlatpakService`) is
-///    never a same-destination conflict. With a collected offer there, the
-///    collected file is the write and the generated one goes in `beside`;
-///    with several generated offers and no collected one, the first is
-///    the write and the rest go in `beside`. Written in that order, as
-///    before.
-/// 6. A zero-length file directly in `/etc/systemd/system` named as a
+/// 5. Two cron units of one name (one cron file with two entries) offer
+///    one destination twice: the last one is the write, as the stager has
+///    always written them.
+/// 6. Offers at one destination with the same content are one write.
+///    Offers with different contents at one destination, and a
+///    destination another offer needs as a directory, are a `Conflict`:
+///    every file there is withheld, so neither silently replaces or
+///    blocks the other.
+/// 7. A zero-length file directly in `/etc/systemd/system` named as a
 ///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
 ///    section offered it (§ 10.2 rule 1).
 ///
-/// Everything else is written. [`write_config_tree`] writes `writes`, then
-/// `beside`, and nothing else, and [`unstaged_files`] names `withheld` and `refused` in
+/// Everything else is written. [`write_config_tree`] writes `writes` and
+/// nothing else, and [`unstaged_files`] names `withheld` and `refused` in
 /// the Containerfile, so the export and the Containerfile read one
 /// decision.
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
@@ -782,28 +834,15 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         resolved.push((dest, offer.kind, offer.content));
     }
 
-    // Interim, replaced by the generated-name collision rule (§ 10.2).
-    // Where the host has its own unit file, recorded by a config entry or
-    // a drop-in row with content, at either file of a generated unit,
-    // neither generated file is written: one would be written over the
-    // host's file, or, beside a drop-in row, copied over it later in the
-    // Containerfile, and the other would pair a generated file with the
-    // host's. The host's own timer kept this protection while the
-    // scheduled section offered it; its config entry or drop-in row now
-    // carries it.
-    let collected_units: BTreeSet<&Destination> = resolved
-        .iter()
-        .filter(|(_, kind, content)| {
-            matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn)
-                && !content.is_empty()
-        })
-        .map(|(dest, _, _)| dest)
-        .collect();
-    let dropped_generated = generated_unit_files_at(snap, &collected_units);
+    let collected = collected_unit_paths(snap, &resolved);
+    let collisions = generated_name_collisions(&generated_unit_groups(snap), &collected);
 
     let mut by_dest: BTreeMap<Destination, Vec<(StagedFileKind, Cow<'_, str>)>> = BTreeMap::new();
     for (dest, kind, content) in resolved {
-        if kind == StagedFileKind::GeneratedUnit && dropped_generated.contains(&dest) {
+        if kind.is_generated_unit()
+            && let Some(why) = collisions.get(&dest)
+        {
+            out.withheld.push((dest, kind, why.clone()));
             continue;
         }
         by_dest.entry(dest).or_default().push((kind, content));
@@ -823,37 +862,26 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
         {
             offered.retain(|(kind, _)| !kind.is_inventory_record());
         }
-        // Collected offers with one content are one write.
-        let first_collected = offered
-            .iter()
-            .find(|(kind, _)| !kind.is_generated_unit())
-            .map(|(_, content)| content.clone());
-        if let Some(first) = first_collected
+        // Two cron units of one name: the last one is the write.
+        if offered.len() > 1
             && offered
                 .iter()
-                .filter(|(kind, _)| !kind.is_generated_unit())
-                .all(|(_, content)| *content == first)
+                .all(|(kind, _)| *kind == StagedFileKind::GeneratedUnit)
+            && let Some(last) = offered.pop()
         {
-            let mut kept = false;
-            offered.retain(|(kind, _)| {
-                kind.is_generated_unit() || !std::mem::replace(&mut kept, true)
-            });
+            *offered = vec![last];
+        }
+        // Offers with one content are one write.
+        if let Some((_, first)) = offered.first().cloned()
+            && offered.iter().all(|(_, content)| *content == first)
+        {
+            offered.truncate(1);
         }
     }
 
-    // Interim: generated offers are never a same-destination conflict,
-    // with a collected offer or with each other; only collected offers
-    // with different content are. The generated-name collision rule of
-    // § 10.2, which arrives with generated units as plan requests,
-    // replaces this.
     let mut conflicts: BTreeMap<Destination, Destination> = BTreeMap::new();
     for (dest, offered) in &by_dest {
-        if offered
-            .iter()
-            .filter(|(kind, _)| !kind.is_generated_unit())
-            .count()
-            > 1
-        {
+        if offered.len() > 1 {
             conflicts
                 .entry(dest.clone())
                 .or_insert_with(|| dest.clone());
@@ -881,23 +909,10 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
             }));
             continue;
         }
-        // At most one collected offer is left: more is a conflict, above.
-        // It is the destination's write; with none, the first generated
-        // offer is. Any other generated offer is written beside it.
-        let (mut generated, collected): (Vec<_>, Vec<_>) = offered
-            .into_iter()
-            .partition(|(kind, _)| kind.is_generated_unit());
-        let primary = match collected.into_iter().next() {
-            Some(offer) => offer,
-            None if !generated.is_empty() => generated.remove(0),
-            None => continue,
+        // At most one offer is left: more is a conflict, above.
+        let Some((source, content)) = offered.into_iter().next() else {
+            continue;
         };
-        out.beside.extend(
-            generated
-                .into_iter()
-                .map(|(source, content)| (dest.clone(), StagedWrite { source, content })),
-        );
-        let (source, content) = primary;
         if content.is_empty() && dest.is_unit_file_path() {
             out.withheld
                 .push((dest, source, WithheldWhy::ZeroLengthUnitFile));
@@ -960,30 +975,9 @@ pub(crate) fn staged_count(staged: &StagedWrites<'_>, kind: StagedFileKind) -> u
     staged.writes.values().filter(|w| w.source == kind).count()
 }
 
-/// Whether the export writes any file under `config/etc/systemd/system/`,
-/// the directory the scheduled section copies, by [`staged_writes`].
-pub(crate) fn stages_config_unit_dir(staged: &StagedWrites<'_>) -> bool {
-    let beside = staged.beside.iter().map(|(dest, write)| (dest, write));
-    staged.writes.iter().chain(beside).any(|(dest, write)| {
-        !matches!(
-            write.source,
-            StagedFileKind::DropIn | StagedFileKind::FlatpakService
-        ) && dest
-            .as_str()
-            .strip_prefix(ETC_UNIT_DIR)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
-}
-
-/// Whether the export writes a file at `path`, by [`staged_writes`]: in
-/// `writes`, or in `beside`, which also lands. A generated unit in `beside`
-/// can be the only file at a destination whose collected offer is withheld
-/// (a zero-length file at a unit path), and a `mask` there would still meet
-/// it.
+/// Whether the export writes a file at `path`, by [`staged_writes`].
 pub(crate) fn is_staged(staged: &StagedWrites<'_>, path: &str) -> bool {
-    Destination::new(path).is_ok_and(|dest| {
-        staged.writes.contains_key(&dest) || staged.beside.iter().any(|(d, _)| *d == dest)
-    })
+    Destination::new(path).is_ok_and(|dest| staged.writes.contains_key(&dest))
 }
 
 /// The remote, application id and branch of a flatpak `install` line,
@@ -1140,15 +1134,9 @@ pub fn write_config_tree(
     // a write the staging filesystem would put over another ([`Stager`]).
     let staged = staged_writes(snap);
     let mut stager = Stager::default();
-    let beside = staged.beside.iter().map(|(d, w)| (d, w, true));
-    for (dest, write, replace) in staged
-        .writes
-        .iter()
-        .map(|(d, w)| (d, w, false))
-        .chain(beside)
-    {
+    for (dest, write) in &staged.writes {
         let (root, rel) = write.source.staged_at(output_dir, dest);
-        stager.write(&root, &rel, &write.content, replace)?;
+        stager.write(&root, &rel, &write.content)?;
     }
 
     // The kernel boot files: the kargs file is an offer of the decision

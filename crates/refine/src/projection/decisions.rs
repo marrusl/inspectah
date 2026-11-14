@@ -21,12 +21,14 @@ use inspectah_pipeline::render::configtree::{
     Destination, PathError, StagedFileKind, StagedWrites, WithheldWhy, staged_writes,
 };
 use inspectah_pipeline::render::unit_plan::{
-    DeclinedMarker, OmissionReason, UnitPlan, declined_line, etc_unit_path, plan_units,
+    DeclinedMarker, GeneratedSource, OmissionReason, UnitPlan, declined_line, etc_unit_path,
+    plan_units,
 };
 
 use super::types::{
-    ConfigWithheldView, DecisionProjection, DeclinedRenders, DeclinedView, DropInView,
-    FragmentView, MountFindingView, NotCarriedRow, RepoGroup, UnitStateView, WithheldView,
+    ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders, DeclinedView,
+    DropInView, FragmentView, GeneratedRowView, MountFindingView, NotCarriedRow, RepoGroup,
+    UnitStateView, WithheldView,
 };
 use crate::types::{RefinedDropIn, RefinedServiceState};
 
@@ -49,6 +51,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let unit_dropins = drop_in_views(dropins, &withheld);
     let mount_findings = mount_finding_views(&snap, &plan);
     let config_withheld = config_withheld_views(&snap, &withheld);
+    let declined_generated = declined_generated_views(&plan);
 
     // Classify containers → tuple of (quadlets, flatpaks)
     let (quadlets, flatpaks) = classify_containers(&snap);
@@ -101,7 +104,26 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         baseline_summary,
         not_carried,
         not_carried_notice,
+        declined_generated,
     }
+}
+
+/// One view per generated unit's request the plan declined, with the row
+/// it came from (§ 11.1).
+fn declined_generated_views(plan: &UnitPlan) -> Vec<DeclinedGeneratedView> {
+    plan.generated_declined
+        .iter()
+        .map(|decline| DeclinedGeneratedView {
+            row: match &decline.source {
+                GeneratedSource::Cron { name } => {
+                    GeneratedRowView::Scheduled { name: name.clone() }
+                }
+                GeneratedSource::FlatpakProvisioning => GeneratedRowView::Flatpak,
+            },
+            unit: decline.unit.clone(),
+            declined: declined_view(&decline.unit, UnitAction::Enable, &decline.reason),
+        })
+        .collect()
 }
 
 /// The row's view of a declined command: [`declined_line`] decides the
@@ -119,7 +141,7 @@ fn declined_view(name: &UnitName, action: UnitAction, reason: &OmissionReason) -
 }
 
 /// One view per state change row, each with the plan's decline, if any.
-/// A row the plan does not decline (planned, deferred, or excluded, as a
+/// A row the plan does not decline (planned, or excluded, as a
 /// runtime updater is) has none.
 fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<UnitStateView> {
     let declined: BTreeMap<&UnitName, (UnitAction, &OmissionReason)> = plan

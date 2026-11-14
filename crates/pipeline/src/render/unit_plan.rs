@@ -17,11 +17,14 @@ use inspectah_core::types::units::{
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::comment::escape_comment_text;
-use super::configtree::{Destination, ETC_UNIT_DIR, PathError, StagedWrites, is_staged};
+use super::configtree::{
+    Destination, ETC_UNIT_DIR, FLATPAK_SERVICE, PathError, StagedWrites, WithheldWhy, is_staged,
+    staged_unit_file,
+};
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
 use super::repo_enabling::{RepoEnablingExport, repo_enabling_export};
 use super::repoless::{PackageRoute, route_for};
-use super::safety::single_quote;
+use super::safety::{operand_refusal, single_quote};
 use super::selinux::{
     BASE_IMAGE_DIRECTORIES, BASE_VAR_SYMLINKS, BOOTC_OWNED_MOUNT_POINTS, IMAGE_USR,
 };
@@ -235,7 +238,16 @@ pub enum OmissionReason {
     /// A mask and a staged unit file claim one path: `systemctl mask`
     /// exits 1 on a regular file there (§ 10.2 rule 4).
     MaskPathOccupied { path: String },
+    /// A unit inspectah generates has a collected unit's name, so the
+    /// stager withholds its files (§ 10.2, "What the plan takes" item 3).
+    /// Rendered as a FIXME, not an `# Omitted:` line.
+    GeneratedNameCollision,
 }
+
+/// [`OmissionReason::GeneratedNameCollision`]'s text, after the unit name.
+const GENERATED_NAME_COLLISION: &str = "inspectah generates this unit, and a unit collected \
+     from the host has its name, so the generated files are not written and the unit is not \
+     enabled here; to carry the generated unit, exclude the collected unit and its file";
 
 impl OmissionReason {
     /// The text after the unit name in the `# Omitted:` line, and refine's
@@ -263,6 +275,7 @@ impl OmissionReason {
             Self::MaskPathOccupied { path } => {
                 format!("the export also carries a unit file at {path}; exclude one of the two")
             }
+            Self::GeneratedNameCollision => GENERATED_NAME_COLLISION.to_owned(),
         }
     }
 
@@ -279,6 +292,7 @@ impl OmissionReason {
             Self::StorageFileStaged { .. } => "StorageFileStaged",
             Self::TargetNeedsUnit => "TargetNeedsUnit",
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
+            Self::GeneratedNameCollision => "GeneratedNameCollision",
         }
     }
 
@@ -293,7 +307,8 @@ impl OmissionReason {
             | Self::InstallEvidenceChanged { .. }
             | Self::StorageFileStaged { .. }
             | Self::TargetNeedsUnit
-            | Self::MaskPathOccupied { .. } => None,
+            | Self::MaskPathOccupied { .. }
+            | Self::GeneratedNameCollision => None,
         }
     }
 }
@@ -371,9 +386,16 @@ pub struct UnitPlan {
     pub declined: Vec<(UnitName, UnitAction, OmissionReason)>,
     /// Planned units whose package's presence could not be proved.
     pub advisories: Vec<ServiceAdvisory>,
-    /// Enables left to the Scheduled Tasks section, which copies and
-    /// enables the timers it carries (§ 8).
-    pub deferred: Vec<UnitName>,
+    /// The enables of the units the scheduled section generates from cron
+    /// entries, which that section copies and enables (§ 10.2 item 3,
+    /// § 10.7).
+    pub scheduled: Vec<PlannedUnit>,
+    /// The enable of `flatpak-provision.service`, which the container
+    /// workloads section copies and enables.
+    pub workloads: Vec<PlannedUnit>,
+    /// Every generated unit's request the plan did not write, and why. Each
+    /// section writes its own as a FIXME or an `# Omitted:` line.
+    pub generated_declined: Vec<GeneratedDecline>,
     /// Excluded rows of runtime package updaters (§ 10.4). Not planned, as
     /// no excluded row is, and not declined: the row's exclusion decided
     /// it. The section names each in [`excluded_updater_line`].
@@ -382,6 +404,119 @@ pub struct UnitPlan {
     /// ([`mount_advisory_lines`]), unescaped. Not commands: the section
     /// writes them after its `systemctl` lines (§ 10.1).
     pub mount_advisories: Vec<Vec<String>>,
+}
+
+/// What asked for a generated unit's enable: the row it shows on (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GeneratedSource {
+    /// A unit the scheduled section generates from a cron entry; `name` is
+    /// its `generated_timer_units` row's name.
+    Cron { name: String },
+    /// The flatpak provisioning service, for the included flatpak apps.
+    FlatpakProvisioning,
+}
+
+/// A generated unit's request the plan did not write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedDecline {
+    pub source: GeneratedSource,
+    pub unit: UnitName,
+    pub reason: OmissionReason,
+}
+
+/// The unit `name.suffix` a generated request enables, when that name is
+/// one the stager writes ([`staged_unit_file`]), a [`UnitName`], and an
+/// operand inspectah writes. `None` otherwise: the scheduled section names
+/// the refusal in a FIXME.
+pub(crate) fn generated_unit_name(name: &str, suffix: &str) -> Option<UnitName> {
+    let file = staged_unit_file(name, suffix)?;
+    UnitName::try_from(file)
+        .ok()
+        .filter(|unit| operand_refusal(unit.as_str()).is_none())
+}
+
+/// Whether a generated unit whose files are `files` may be enabled: every
+/// file is staged. [`OmissionReason::GeneratedNameCollision`] when the
+/// stager withheld one for a collision, and
+/// [`OmissionReason::UnitFileNotStaged`] when one is not staged for any
+/// other reason.
+fn generated_request(files: &[String], staged: &StagedWrites<'_>) -> Result<(), OmissionReason> {
+    let collided = files.iter().any(|path| {
+        Destination::new(path).is_ok_and(|dest| {
+            staged.withheld.iter().any(|(at, _, why)| {
+                *at == dest && matches!(why, WithheldWhy::GeneratedNameCollision { .. })
+            })
+        })
+    });
+    if collided {
+        return Err(OmissionReason::GeneratedNameCollision);
+    }
+    if !files.iter().all(|path| is_staged(staged, path)) {
+        return Err(OmissionReason::UnitFileNotStaged);
+    }
+    Ok(())
+}
+
+/// § 10.2 "What the plan takes" item 3: the enables of the units
+/// inspectah generates. A cron unit enables its timer, whose paired
+/// service must be staged too, or for `@reboot` its service. Two cron
+/// units of one name are one request.
+fn plan_generated(snap: &InspectionSnapshot, staged: &StagedWrites<'_>, plan: &mut UnitPlan) {
+    if let Some(st) = &snap.scheduled_tasks {
+        let mut seen = std::collections::BTreeSet::new();
+        for u in st
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.disposition.is_included() && !u.name.is_empty())
+        {
+            let reboot = u.cron_expr == "@reboot";
+            let suffix = if reboot { "service" } else { "timer" };
+            let Some(unit) = generated_unit_name(&u.name, suffix) else {
+                continue;
+            };
+            if !seen.insert(unit.clone()) {
+                continue;
+            }
+            let mut files = vec![etc_unit_path(&unit)];
+            if !reboot && !u.service_content.is_empty() {
+                files.push(format!("{ETC_UNIT_DIR}/{}.service", u.name));
+            }
+            match generated_request(&files, staged) {
+                Ok(()) => plan.scheduled.push(PlannedUnit {
+                    name: unit,
+                    action: UnitAction::Enable,
+                }),
+                Err(reason) => plan.generated_declined.push(GeneratedDecline {
+                    source: GeneratedSource::Cron {
+                        name: u.name.clone(),
+                    },
+                    unit,
+                    reason,
+                }),
+            }
+        }
+    }
+    let flatpak_included = snap.containers.as_ref().is_some_and(|c| {
+        c.flatpak_apps
+            .iter()
+            .any(|app| app.disposition.is_included())
+    });
+    if flatpak_included {
+        let unit = UnitName::try_from(FLATPAK_SERVICE.to_owned())
+            .expect("FLATPAK_SERVICE is a unit name literal");
+        let files = [etc_unit_path(&unit)];
+        match generated_request(&files, staged) {
+            Ok(()) => plan.workloads.push(PlannedUnit {
+                name: unit,
+                action: UnitAction::Enable,
+            }),
+            Err(reason) => plan.generated_declined.push(GeneratedDecline {
+                source: GeneratedSource::FlatpakProvisioning,
+                unit,
+                reason,
+            }),
+        }
+    }
 }
 
 /// Internal classification of whether a unit's package is in the image.
@@ -466,13 +601,18 @@ impl DeclinedLine {
 /// The line for one entry of [`UnitPlan::declined`]: the one place the
 /// marker and the text are chosen, for the Containerfile and refine alike.
 /// [`OmissionReason::TargetNeedsUnit`] is a FIXME with § 10.3's sentence
-/// ([`target_needs_unit_text`]); every other reason is an `# Omitted:` line
-/// naming the unit, then [`OmissionReason::describe`] in parentheses.
+/// ([`target_needs_unit_text`]); [`OmissionReason::GeneratedNameCollision`]
+/// is a FIXME naming the unit, then its text in parentheses; every other
+/// reason is an `# Omitted:` line in that form.
 pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedLine {
     match reason {
         OmissionReason::TargetNeedsUnit => DeclinedLine {
             marker: DeclinedMarker::Fixme,
             text: target_needs_unit_text(name.as_str(), action),
+        },
+        OmissionReason::GeneratedNameCollision => DeclinedLine {
+            marker: DeclinedMarker::Fixme,
+            text: format!("{} ({})", name.as_str(), reason.describe()),
         },
         _ => DeclinedLine {
             marker: DeclinedMarker::Omitted,
@@ -498,7 +638,6 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
 /// The unit state section's lines for `plan`, in § 10.1's order: a line per
 /// declined command ([`declined_line`]), a line per excluded runtime
 /// updater ([`excluded_updater_line`]), then [`systemctl_lines`], then the
-/// note naming the enables left to the Scheduled Tasks section, then the
 /// comment-only mount advisory blocks ([`UnitPlan::mount_advisories`]),
 /// one after another. Each block starts with its `# Advisory:` line, so
 /// no line separates them.
@@ -519,14 +658,6 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
     lines.extend(systemctl_lines(&plan.planned));
-    if !plan.deferred.is_empty() {
-        let names: Vec<&str> = plan.deferred.iter().map(UnitName::as_str).collect();
-        lines.push(format!(
-            "# {} unit(s) deferred to Scheduled Tasks section: {}",
-            names.len(),
-            names.join(", ")
-        ));
-    }
     // A mount point comes from a host file: escaped here, as above.
     lines.extend(
         plan.mount_advisories
@@ -741,29 +872,6 @@ pub fn mount_advisory_lines(
         ));
     }
     lines
-}
-
-// ---------------------------------------------------------------------------
-// config_tree_units: the units the scheduled section generates from cron
-// ---------------------------------------------------------------------------
-
-/// The units the scheduled section generates from cron entries and enables
-/// itself. A local timer is not one: its state is its own unit row (§ 8).
-fn config_tree_units(snap: &InspectionSnapshot) -> std::collections::HashSet<String> {
-    let mut units = std::collections::HashSet::new();
-    if let Some(st) = &snap.scheduled_tasks {
-        for u in &st.generated_timer_units {
-            if u.disposition.is_included() && !u.name.is_empty() {
-                if !u.timer_content.is_empty() {
-                    units.insert(format!("{}.timer", u.name));
-                }
-                if !u.service_content.is_empty() {
-                    units.insert(format!("{}.service", u.name));
-                }
-            }
-        }
-    }
-    units
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,17 +1283,20 @@ impl<'a> Presence<'a> {
 ///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
 ///    alone). With no package section there is nothing to read and the unit
 ///    is emitted: there is no separate path without one.
-/// 6. An `enable` of a unit the Scheduled Tasks section carries is left to
-///    that section and recorded in `deferred`.
 ///
 /// Every other command is planned. Each mount finding gets its § 10.6
-/// advisory lines against `staged`, in `mount_advisories`.
+/// advisory lines against `staged`, in `mount_advisories`. The enables of
+/// the units inspectah generates are planned first ([`plan_generated`]),
+/// in `scheduled` and `workloads`, or declined in `generated_declined`:
+/// a generated unit whose name a collected unit shares was withheld by the
+/// stager, so the collected unit is planned against the files that
+/// remain.
 pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitPlan {
     let mut plan = UnitPlan::default();
+    plan_generated(snap, staged, &mut plan);
     let Some(units) = &snap.units else {
         return plan;
     };
-    let ct_units = config_tree_units(snap);
     let presence = snap.rpm.as_ref().map(|rpm| Presence::new(snap, rpm));
 
     plan.excluded_updaters = units
@@ -1235,10 +1346,6 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                     advisory_reasons: None,
                 })
                 | None => {}
-            }
-            if action == UnitAction::Enable && ct_units.contains(name.as_str()) {
-                plan.deferred.push(name);
-                continue;
             }
         }
         plan.planned.push(PlannedUnit { name, action });

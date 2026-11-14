@@ -23,14 +23,14 @@ use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::repo::{RepoId, parse_repo_sections};
 use inspectah_core::types::rpm::{PackageEntry, RpmSection};
-use inspectah_core::types::units::UnitName;
+use inspectah_core::types::units::{UnitAction, UnitName};
 
 use inspectah_core::types::group_render::{DegradationReason, GroupRenderState};
 
+use super::comment::escape_comment_text;
 use super::configtree::{
-    Destination, ETC_UNIT_DIR, FLATPAK_SERVICE, KARGS_PATH, StagedFileKind, StagedWrites,
-    UnstagedWhy, is_staged, staged_count, staged_unit_file, staged_writes, stages_config_unit_dir,
-    unstaged_files, validate_path,
+    Destination, KARGS_PATH, StagedFileKind, UnstagedWhy, is_staged, staged_count,
+    staged_unit_file, staged_writes, unstaged_files, validate_path,
 };
 use super::language_packages;
 use super::not_carried::{NOT_CARRIED_REASON, not_carried_packages};
@@ -41,7 +41,8 @@ use super::safety::{
     single_quote,
 };
 use super::unit_plan::{
-    is_package_installable, manual_follow_up_line, plan_units, unit_state_lines,
+    GeneratedSource, declined_line, generated_unit_name, is_package_installable,
+    manual_follow_up_line, plan_units, systemctl_lines, unit_state_lines,
 };
 use super::var_dirs::{EffectiveBacking, UnresolvedReason, effective_var_backing};
 
@@ -1382,10 +1383,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     let mut body = Vec::new();
-    let staged = staged_writes(snap);
+    let plan = plan_units(snap, &staged_writes(snap));
 
-    // Only when the stager writes a generated unit there.
-    if !included_timers.is_empty() && stages_config_unit_dir(&staged) {
+    // The generated units the plan enables are copied here, before their
+    // enable (§ 10.7).
+    if !plan.scheduled.is_empty() {
         body.push("COPY config/etc/systemd/system/ /etc/systemd/system/".into());
     }
 
@@ -1416,36 +1418,39 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Consolidate timer enables. A unit is enabled only if its name is
-    // staged under the same name and is safe in a shell word, otherwise the
-    // Containerfile says so in a FIXME, and only if the stager writes its
-    // file and the service file it activates: a file the stager withholds
-    // is named in the config section's FIXME, and nothing here names it.
-    let mut timer_names = Vec::new();
-    let mut reboot_service_names = Vec::new();
-    for u in &included_timers {
-        if !u.name.is_empty() {
-            // @reboot entries have no timer — enable the service instead
-            if u.cron_expr == "@reboot" {
-                if let Some(unit) = enableable_unit(&u.name, "service", &mut body)
-                    && scheduled_files_staged(&staged, &u.name, "service", false)
-                {
-                    reboot_service_names.push(unit);
-                }
-            } else if let Some(unit) = enableable_unit(&u.name, "timer", &mut body)
-                && scheduled_files_staged(&staged, &u.name, "timer", !u.service_content.is_empty())
-            {
-                timer_names.push(unit);
-            }
-        }
+    // A name the stager refuses, or that is no unit name, is named in a
+    // FIXME here: it is no plan request. Every other request is the
+    // plan's, enabled with the shared helper or declined with its line.
+    for u in included_timers.iter().filter(|u| !u.name.is_empty()) {
+        let suffix = if u.cron_expr == "@reboot" {
+            "service"
+        } else {
+            "timer"
+        };
+        refused_generated_name_fixme(&u.name, suffix, &mut body);
     }
-    if !timer_names.is_empty() {
-        body.push(systemctl_enable_line(&timer_names));
+    for decline in plan
+        .generated_declined
+        .iter()
+        .filter(|d| matches!(d.source, GeneratedSource::Cron { .. }))
+    {
+        body.push(escape_comment_text(
+            &declined_line(&decline.unit, UnitAction::Enable, &decline.reason).comment(),
+        ));
     }
-    if !reboot_service_names.is_empty() {
-        body.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
-        body.push(systemctl_enable_line(&reboot_service_names));
+    let reboot_services: Vec<&str> = plan
+        .scheduled
+        .iter()
+        .map(|p| p.name().as_str())
+        .filter(|name| name.ends_with(".service"))
+        .collect();
+    if !reboot_services.is_empty() {
+        body.push(format!(
+            "# @reboot cron job(s), boot-triggered oneshot service(s): {}",
+            reboot_services.join(", ")
+        ));
     }
+    body.extend(systemctl_lines(&plan.scheduled));
 
     if !st.at_jobs.is_empty() {
         body.push(format!(
@@ -1461,23 +1466,6 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     section("Scheduled Tasks", body)
-}
-
-/// Whether the stager writes the scheduled unit `name.suffix` under
-/// `/etc/systemd/system` and, when `with_service`, the `name.service` that
-/// timer activates, by [`is_staged`]. Gating, not planning: these enables
-/// become plan requests in a later phase (§ 10.2).
-fn scheduled_files_staged(
-    staged: &StagedWrites<'_>,
-    name: &str,
-    suffix: &str,
-    with_service: bool,
-) -> bool {
-    let staged_at = |suffix: &str| {
-        staged_unit_file(name, suffix)
-            .is_some_and(|file| is_staged(staged, &format!("{ETC_UNIT_DIR}/{file}")))
-    };
-    staged_at(suffix) && (!with_service || staged_at("service"))
 }
 
 /// `RUN systemctl enable -- 'unit' ...` for units a section copies and
@@ -1500,28 +1488,20 @@ fn constant_unit(name: &'static str) -> UnitName {
     UnitName::try_from(name.to_owned()).expect("a unit name constant of this module parses")
 }
 
-/// The unit file `name.suffix` if it may be enabled: the config tree
-/// would stage it under that name ([`staged_unit_file`]), the name is a
-/// proved [`UnitName`], and it does not start like an option
-/// ([`operand_refusal`]), as these interim sites have always refused.
-/// Otherwise push a FIXME, with the name escaped as comment text, and
-/// return `None`.
-fn enableable_unit(name: &str, suffix: &str, body: &mut Vec<String>) -> Option<UnitName> {
+/// Push a FIXME when the generated unit `name.suffix` is no plan request
+/// ([`generated_unit_name`]): the config tree would not stage it under that
+/// name ([`staged_unit_file`]), or it is no [`UnitName`], or it starts like
+/// an option. The name is escaped as comment text.
+fn refused_generated_name_fixme(name: &str, suffix: &str, body: &mut Vec<String>) {
     let shown = language_packages::sanitize_for_comment(name);
-    let Some(unit) = staged_unit_file(name, suffix) else {
+    if staged_unit_file(name, suffix).is_none() {
         body.push(format!(
             "# FIXME: timer {shown} not staged: the name is not a single path component"
         ));
-        return None;
-    };
-    match UnitName::try_from(unit) {
-        Ok(unit) if operand_refusal(unit.as_str()).is_none() => Some(unit),
-        _ => {
-            body.push(format!(
-                "# FIXME: Timer unit name contains unsafe characters: {shown}"
-            ));
-            None
-        }
+    } else if generated_unit_name(name, suffix).is_none() {
+        body.push(format!(
+            "# FIXME: Timer unit name contains unsafe characters: {shown}"
+        ));
     }
 }
 
@@ -1722,23 +1702,31 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         body.push("COPY quadlet/ /etc/containers/systemd/".into());
     }
     if included_flatpaks > 0 {
-        // The provisioning service only when the stager writes it: a
-        // service it withholds is named in the config section's FIXME.
-        let service_staged = is_staged(
-            &staged_writes(snap),
-            &format!("{ETC_UNIT_DIR}/{FLATPAK_SERVICE}"),
-        );
-        if service_staged {
+        // The provisioning service is a plan request (§ 10.2 item 3): its
+        // COPY and its enable sit together here, after the unit state
+        // section, only when the plan enables it; a declined request is
+        // named here.
+        let plan = plan_units(snap, &staged_writes(snap));
+        if !plan.workloads.is_empty() {
             body.push("# Flatpak applications: installed on first boot via oneshot service".into());
+        }
+        for decline in plan
+            .generated_declined
+            .iter()
+            .filter(|d| d.source == GeneratedSource::FlatpakProvisioning)
+        {
+            body.push(escape_comment_text(
+                &declined_line(&decline.unit, UnitAction::Enable, &decline.reason).comment(),
+            ));
         }
         body.push("# Manifest: flatpak/flatpak-install.json".into());
         body.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
-        if service_staged {
+        if !plan.workloads.is_empty() {
             body.push(
                 "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
                     .into(),
             );
-            body.push(systemctl_enable_line(&[constant_unit(FLATPAK_SERVICE)]));
+            body.extend(systemctl_lines(&plan.workloads));
         }
     }
     let total_workloads = included_quadlets + included_flatpaks;
@@ -6775,6 +6763,7 @@ RUN dnf install -y \
     /// them are still enabled.
     #[test]
     fn the_enabled_unit_constants_are_unit_names() {
+        use crate::render::configtree::FLATPAK_SERVICE;
         for name in [FLATPAK_SERVICE, TUNED_SERVICE] {
             assert_eq!(
                 UnitName::try_from(name.to_owned()).map(|u| u.as_str().to_owned()),
@@ -6840,7 +6829,9 @@ RUN dnf install -y \
             "a carriage return reached the output: {output}"
         );
         assert!(
-            active.contains(&"RUN systemctl enable -- 'backup.timer'"),
+            active
+                .windows(2)
+                .any(|w| w == ["RUN systemctl enable -- \\", "    'backup.timer'"]),
             "the generated timer is not enabled: {active:#?}"
         );
         assert!(

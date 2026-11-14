@@ -282,66 +282,6 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
     );
 }
 
-/// Proven-absent package with config-tree timer → omitted (not deferred).
-/// "Suppress beats defer" — omission is evaluated BEFORE config-tree deferral.
-#[test]
-fn test_service_render_plan_suppresses_before_config_tree_deferral() {
-    let mut snap = InspectionSnapshot::new();
-    snap.rpm = Some(RpmSection {
-        baseline_package_names: Some(vec!["firewalld".into()]),
-        packages_added: vec![],
-
-        ..Default::default()
-    });
-    snap.units = Some(UnitSection {
-        state_changes: vec![state_change(
-            "absent-timer.service",
-            UnitState::Enabled,
-            Some(PresetDefault::Disable),
-            Some("absent-pkg"),
-        )],
-        inventory: vec![],
-        drop_ins: vec![],
-        mount_findings: Vec::new(),
-    });
-    // Make this unit also a config-tree timer unit
-    snap.scheduled_tasks = Some(inspectah_core::types::scheduled::ScheduledTaskSection {
-        systemd_timers: vec![inspectah_core::types::scheduled::SystemdTimer {
-            name: "absent-timer".into(),
-            source: "local".into(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-
-    let plan = render(&snap);
-
-    // Must be omitted, NOT deferred
-    assert_eq!(
-        plan.omissions.len(),
-        1,
-        "proven-absent must be omitted even with timer"
-    );
-    assert_eq!(plan.omissions[0].unit, "absent-timer.service");
-    // Omission comment IS in lines
-    assert!(
-        plan.lines
-            .iter()
-            .any(|l| l.contains("# Omitted: absent-timer.service")),
-        "omission comment must appear in output lines"
-    );
-    // But no systemctl or deferred line references it
-    assert!(
-        plan.lines.iter().all(|l| {
-            if l.starts_with("# Omitted:") {
-                return true;
-            }
-            !l.contains("absent-timer")
-        }),
-        "omitted service must not appear in systemctl or deferred lines"
-    );
-}
-
 /// Tiers 4+5: baseline package + included-installable package → zero
 /// omissions, zero advisories.
 #[test]
@@ -2316,15 +2256,68 @@ fn the_first_failing_rule_decides() {
     );
 }
 
-/// Rule 4 reads what lands: a zero-length masked `cron-backup.timer` is
-/// withheld, and a generated timer of the same name is written at that
-/// path. The mask is then declined with `MaskPathOccupied` and the
-/// generated file lands, never a mask and a file together. Control: the
-/// same mask with no generated timer is planned and nothing lands there.
-#[test]
-fn rule_4_sees_a_generated_unit_where_a_withheld_mask_file_was() {
+/// The generated `cron-backup` pair of one cron entry.
+fn with_generated_cron_backup(mut snap: InspectionSnapshot) -> InspectionSnapshot {
     use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
-    use inspectah_pipeline::render::configtree::{Destination, StagedFileKind};
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-backup".into(),
+            cron_expr: "0 2 * * *".into(),
+            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
+            service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// What lands at each path of the generated `cron-backup` pair, and why
+/// each file there is withheld.
+fn cron_backup_paths(
+    snap: &InspectionSnapshot,
+) -> Vec<(
+    Option<inspectah_pipeline::render::configtree::StagedFileKind>,
+    Vec<String>,
+)> {
+    use inspectah_pipeline::render::configtree::Destination;
+    let staged = staged_writes(snap);
+    [
+        "/etc/systemd/system/cron-backup.timer",
+        "/etc/systemd/system/cron-backup.service",
+    ]
+    .into_iter()
+    .map(|path| {
+        let dest = Destination::new(path).expect("a destination");
+        let why = staged
+            .withheld
+            .iter()
+            .filter(|(at, _, _)| *at == dest)
+            .map(|(_, _, why)| why.name().to_owned())
+            .collect();
+        (staged.writes.get(&dest).map(|w| w.source), why)
+    })
+    .collect()
+}
+
+/// The generated requests the plan declined, by unit and reason.
+fn generated_declined_of(snap: &InspectionSnapshot) -> Vec<(String, OmissionReason)> {
+    plan_units(snap, &staged_writes(snap))
+        .generated_declined
+        .into_iter()
+        .map(|d| (d.unit.as_str().to_owned(), d.reason))
+        .collect()
+}
+
+/// § 10.2 rules 1 and 4 with a generated unit of the masked unit's name: a
+/// zero-length masked `cron-backup.timer` is withheld (rule 1), and the
+/// generated pair of that name is withheld for the collision, so nothing
+/// lands at the path, the mask is planned, and the generated request is
+/// declined with `GeneratedNameCollision`. Control: the same mask with no
+/// generated timer is planned the same way and nothing is declined.
+#[test]
+fn a_masked_unit_withholds_a_generated_unit_of_its_name() {
     const UNIT: &str = "cron-backup.timer";
     const PATH: &str = "/etc/systemd/system/cron-backup.timer";
     let masked = || {
@@ -2333,59 +2326,97 @@ fn rule_4_sees_a_generated_unit_where_a_withheld_mask_file_was() {
             vec![(PATH, "")],
         )
     };
-    let dest = Destination::new(PATH).expect("a destination");
-    let lands_at = |snap: &InspectionSnapshot| -> Vec<StagedFileKind> {
-        let staged = staged_writes(snap);
-        staged
-            .writes
-            .get(&dest)
-            .map(|w| w.source)
-            .into_iter()
-            .chain(
-                staged
-                    .beside
-                    .iter()
-                    .filter(|(d, _)| *d == dest)
-                    .map(|(_, w)| w.source),
-            )
-            .collect()
-    };
+    let mask_lines = [
+        "RUN systemctl mask -- \\".to_owned(),
+        format!("    '{UNIT}'"),
+    ];
 
-    let mut with_generated = masked();
-    with_generated.scheduled_tasks = Some(ScheduledTaskSection {
-        generated_timer_units: vec![GeneratedTimerUnit {
-            name: "cron-backup".into(),
-            timer_content: "[Timer]\nOnCalendar=daily\n".into(),
-            service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
-            disposition: FindingKind::included(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
+    let with_generated = with_generated_cron_backup(masked());
     assert_eq!(
-        lands_at(&with_generated),
-        [StagedFileKind::GeneratedUnit],
-        "the generated timer lands at the path"
+        cron_backup_paths(&with_generated),
+        [
+            (
+                None,
+                vec![
+                    "GeneratedNameCollision".to_owned(),
+                    "ZeroLengthUnitFile".to_owned()
+                ]
+            ),
+            (None, vec!["GeneratedNameCollision".to_owned()]),
+        ]
     );
-    let lines = render(&with_generated).lines;
-    assert!(in_no_systemctl_instruction(&lines, UNIT), "{lines:?}");
+    assert_eq!(render(&with_generated).lines, mask_lines);
     assert_eq!(
-        declined_of(&with_generated),
-        [(
-            UNIT.to_owned(),
-            UnitAction::Mask,
-            OmissionReason::MaskPathOccupied { path: PATH.into() }
-        )]
+        generated_declined_of(&with_generated),
+        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
     );
 
     let control = masked();
-    assert_eq!(lands_at(&control), [], "nothing lands at the path");
+    assert_eq!(
+        cron_backup_paths(&control),
+        [
+            (None, vec!["ZeroLengthUnitFile".to_owned()]),
+            (None, vec![])
+        ]
+    );
+    assert_eq!(render(&control).lines, mask_lines);
+    assert!(generated_declined_of(&control).is_empty());
+}
+
+/// An imported `Local` row, a zero-length config entry at its path, and a
+/// generated unit of its name: rule 1 withholds the zero-length file, the
+/// generated pair is withheld for the collision and its request declined,
+/// and the row's enable is omitted as `UnitFileNotStaged`, so no enable
+/// acts on a file nobody recorded. Control: the row's file with content is
+/// staged and the enable is planned, with the generated request declined
+/// all the same.
+#[test]
+fn an_imported_local_row_over_a_mask_file_is_not_enabled_against_a_generated_file() {
+    const UNIT: &str = "cron-backup.timer";
+    const PATH: &str = "/etc/systemd/system/cron-backup.timer";
+    let snap = |content: &str| {
+        with_generated_cron_backup(units_snapshot(
+            vec![change_with(UNIT, local(UNIT), UnitState::Enabled)],
+            vec![(PATH, content)],
+        ))
+    };
+
+    let empty = snap("");
+    assert_eq!(cron_backup_paths(&empty)[0].0, None, "nothing lands");
+    assert_eq!(
+        declined_of(&empty),
+        [(
+            UNIT.to_owned(),
+            UnitAction::Enable,
+            OmissionReason::UnitFileNotStaged
+        )]
+    );
+    assert!(
+        in_no_systemctl_instruction(&render(&empty).lines, UNIT),
+        "{:?}",
+        render(&empty).lines
+    );
+    assert_eq!(
+        generated_declined_of(&empty),
+        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
+    );
+
+    let control = snap("[Timer]\nOnCalendar=weekly\n");
+    assert_eq!(
+        cron_backup_paths(&control)[0].0,
+        Some(inspectah_pipeline::render::configtree::StagedFileKind::ConfigFile)
+    );
+    assert!(declined_of(&control).is_empty());
     assert_eq!(
         render(&control).lines,
         [
-            "RUN systemctl mask -- \\".to_owned(),
+            "RUN systemctl enable -- \\".to_owned(),
             format!("    '{UNIT}'")
         ]
+    );
+    assert_eq!(
+        generated_declined_of(&control),
+        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
     );
 }
 
