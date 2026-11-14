@@ -338,3 +338,133 @@ fn a_withheld_scheduled_unit_is_not_enabled() {
         }
     }
 }
+
+// --- `/var` backing reads the staging decision --------------------------
+
+const JOB_FRAGMENT: &str = "/etc/tmpfiles.d/job.conf";
+const JOB_CACHE: &str = "/var/cache/job";
+const WORKER_STATE: &str = "/var/lib/worker";
+
+/// A snapshot whose one `/var` directory, `dir`, was created on the host
+/// by `backing`, with `files` as included config entries.
+fn var_snapshot(
+    files: &[&str],
+    dir: &str,
+    backing: inspectah_core::types::storage::VarDirBacking,
+) -> InspectionSnapshot {
+    use inspectah_core::types::storage::{StorageSection, VarDirectory};
+    let mut snap = units_snapshot(files, |_| {});
+    snap.storage = Some(StorageSection {
+        var_directories: vec![VarDirectory {
+            path: dir.into(),
+            backing: Some(backing),
+            mode: Some("0755".into()),
+            owner_uid: Some(0),
+            owner_gid: Some(0),
+            owner_name: Some("root".into()),
+            group_name: Some("root".into()),
+        }],
+        ..Default::default()
+    });
+    snap
+}
+
+/// The provisioning line `/var/<dir>` gets in the export's tmpfiles.d
+/// fragment, if any.
+fn provisioned(tree: &tempfile::TempDir, dir: &str) -> bool {
+    std::fs::read_to_string(
+        tree.path()
+            .join("config/usr/lib/tmpfiles.d/inspectah-var.conf"),
+    )
+    .is_ok_and(|conf| {
+        conf.lines()
+            .any(|l| l == format!("d {dir} 0755 root root -"))
+    })
+}
+
+/// Whether a `/var` directory's creator reaches the image is the stager's
+/// answer, by destination: a tmpfiles.d fragment or a unit file the
+/// stager withholds (a file under it needs its path as a directory) does
+/// not carry its directory, which the export then provisions on both
+/// routes and the refine reference view calls `Provision`. A unit file
+/// staged under another spelling of the path does carry it. Reversed
+/// control for each: the file staged under the declared spelling, with no
+/// conflict, carries the directory and nothing is provisioned.
+#[test]
+fn var_backing_follows_what_the_stager_writes() {
+    use inspectah_core::types::storage::VarDirBacking;
+    use inspectah_pipeline::render::var_dirs::EffectiveBacking;
+
+    let fragment = || VarDirBacking::Tmpfiles {
+        conf: JOB_FRAGMENT.into(),
+        line: format!("d {JOB_CACHE} 0755 root root -"),
+    };
+    let state = || VarDirBacking::StateDirectory {
+        declared_by: vec![WORKER_UNIT.into()],
+    };
+    let job_child = child_of(JOB_FRAGMENT);
+    let worker_child = child_of(WORKER_UNIT);
+    let lost = |creator: &str| EffectiveBacking::Provision {
+        lost: Some(creator.into()),
+    };
+    let cases = [
+        (
+            "withheld fragment",
+            var_snapshot(&[JOB_FRAGMENT, &job_child], JOB_CACHE, fragment()),
+            JOB_CACHE,
+            lost(JOB_FRAGMENT),
+        ),
+        (
+            "control: staged fragment",
+            var_snapshot(&[JOB_FRAGMENT], JOB_CACHE, fragment()),
+            JOB_CACHE,
+            EffectiveBacking::Carried,
+        ),
+        (
+            "withheld unit file",
+            var_snapshot(&[WORKER_UNIT, &worker_child], WORKER_STATE, state()),
+            WORKER_STATE,
+            // A declaring unit is named by its unit name.
+            lost("worker.service"),
+        ),
+        (
+            "unit file staged under another spelling",
+            var_snapshot(
+                &["/etc/systemd/./system//worker.service"],
+                WORKER_STATE,
+                state(),
+            ),
+            WORKER_STATE,
+            EffectiveBacking::Carried,
+        ),
+        (
+            "control: staged unit file",
+            var_snapshot(&[WORKER_UNIT], WORKER_STATE, state()),
+            WORKER_STATE,
+            EffectiveBacking::Carried,
+        ),
+    ];
+    for (label, snap, dir, outcome) in cases {
+        let session = session(&snap);
+        let reference = session.reference();
+        let view: Vec<_> = reference
+            .storage
+            .var_directories
+            .iter()
+            .map(|d| (d.path.as_str(), &d.outcome))
+            .collect();
+        assert_eq!(view, vec![(dir, &outcome)], "{label}: reference view");
+        let provisions = matches!(outcome, EffectiveBacking::Provision { .. });
+        for (route, tree) in [
+            ("scan export", render_export(&snap)),
+            ("refine export", export_session(&session)),
+        ] {
+            assert_eq!(
+                provisioned(&tree, dir),
+                provisions,
+                "{label}, {route}:\n{}",
+                containerfile(tree.path())
+            );
+        }
+    }
+}
