@@ -1073,19 +1073,57 @@ fn leaf_snapshot(
     snap
 }
 
-/// Whether the unit is a quoted operand of a `systemctl` line of the plan.
+/// Every `systemctl` instruction in `lines`: each non-comment instruction
+/// joined with its `\` continuation lines, kept when it runs `systemctl`.
+fn systemctl_instructions(lines: &[String]) -> Vec<String> {
+    let mut instructions = Vec::new();
+    let mut current = String::new();
+    for line in lines {
+        if current.is_empty() && line.trim_start().starts_with('#') {
+            continue;
+        }
+        let line = line.trim_end();
+        current.push_str(line.trim_end_matches('\\'));
+        current.push(' ');
+        if !line.ends_with('\\') {
+            let instruction = std::mem::take(&mut current);
+            if instruction.contains("systemctl") {
+                instructions.push(instruction);
+            }
+        }
+    }
+    if current.contains("systemctl") {
+        instructions.push(current);
+    }
+    instructions
+}
+
+/// Whether the unit is a quoted operand, after `--`, of a
+/// `RUN systemctl <verb> --` instruction of the plan.
 fn acted_on(lines: &[String], unit: &str) -> bool {
     let operand = format!("'{unit}'");
-    lines
+    systemctl_instructions(lines).iter().any(|i| {
+        i.strip_prefix("RUN systemctl ")
+            .and_then(|rest| rest.split_once(" -- "))
+            .is_some_and(|(_, operands)| operands.split_whitespace().any(|w| w == operand))
+    })
+}
+
+/// Whether the unit's name appears in no `systemctl` instruction of the
+/// plan, in any form: quoted, bare or inside another word. The absence
+/// half of [`acted_on`], so a regression that wrote a bare name fails it.
+fn in_no_systemctl_instruction(lines: &[String], unit: &str) -> bool {
+    systemctl_instructions(lines)
         .iter()
-        .any(|l| !l.starts_with('#') && l.split_whitespace().any(|w| w == operand))
+        .all(|i| !i.contains(unit))
 }
 
 /// Units owned by an auto package nothing included pulls in are omitted on
 /// the scan path as not carried, for enable and disable. A mask is carried
 /// whatever its package: § 10.2 rule 5, which holds the presence tiers,
 /// applies to `enable`, `disable` and `set-default`, since `mask` reads no
-/// `[Install]` and succeeds on an absent unit.
+/// `[Install]` and succeeds on an absent unit. The mask's control is the
+/// same unit of the same package enabled, which is omitted.
 #[test]
 fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() {
     let cases = [
@@ -1102,6 +1140,12 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
             Some(PresetDefault::Enable),
         ),
         ("kdump.service", "kexec-tools", UnitState::Masked, None),
+        (
+            "kdump.service",
+            "kexec-tools",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+        ),
     ];
     for (unit, owner, state, preset) in cases {
         let mut snap = leaf_snapshot(
@@ -1122,7 +1166,11 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
             assert!(plan.omissions.is_empty(), "{unit}: {:?}", plan.lines);
             continue;
         }
-        assert!(!acted_on(&plan.lines, unit), "{unit}: {:?}", plan.lines);
+        assert!(
+            in_no_systemctl_instruction(&plan.lines, unit),
+            "{unit}: {:?}",
+            plan.lines
+        );
         assert_eq!(plan.omissions.len(), 1, "{unit}");
         assert_eq!(
             plan.omissions[0].reason,
@@ -1138,6 +1186,54 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
             plan.lines.contains(&comment),
             "{unit}: missing {comment:?} in {:?}",
             plan.lines
+        );
+    }
+}
+
+/// The mask exemption under `PackageExcluded`: with `kexec-tools`
+/// excluded, `kdump.service` masked is carried, and the same unit of the
+/// same package enabled is omitted for the exclusion (the control).
+#[test]
+fn a_mask_is_carried_when_its_package_is_excluded_and_an_enable_is_not() {
+    for (state, preset) in [
+        (UnitState::Masked, None),
+        (UnitState::Enabled, Some(PresetDefault::Disable)),
+    ] {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["bash".into()]),
+            packages_added: vec![added("kexec-tools", "x86_64", FindingKind::excluded())],
+            ..Default::default()
+        });
+        snap.units = Some(UnitSection {
+            state_changes: vec![state_change(
+                "kdump.service",
+                state,
+                preset,
+                Some("kexec-tools"),
+            )],
+            ..Default::default()
+        });
+
+        let plan = render(&snap);
+        if state == UnitState::Masked {
+            assert!(
+                acted_on(&plan.lines, "kdump.service"),
+                "{state:?}: {:?}",
+                plan.lines
+            );
+            assert!(plan.omissions.is_empty(), "{state:?}: {:?}", plan.lines);
+            continue;
+        }
+        assert!(
+            in_no_systemctl_instruction(&plan.lines, "kdump.service"),
+            "{state:?}: {:?}",
+            plan.lines
+        );
+        assert_eq!(
+            plan.lines,
+            ["# Omitted: kdump.service (package 'kexec-tools' was excluded)"],
+            "{state:?}"
         );
     }
 }
@@ -1455,7 +1551,10 @@ fn a_dependency_of_a_manual_only_leaf_is_not_carried() {
             package: "dnf-plugins-core".into()
         }
     );
-    assert!(!acted_on(&plan.lines, "dnf-plugins-core.timer"));
+    assert!(in_no_systemctl_instruction(
+        &plan.lines,
+        "dnf-plugins-core.timer"
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1792,4 +1891,153 @@ fn rule_5_reads_a_path_spelled_two_ways_as_one_file() {
         render(&control).lines,
         ["RUN systemctl enable -- \\", "    'sshd.service'"]
     );
+}
+
+/// § 10.2 rule 5, the package half: the presence tiers are asked about the
+/// owner only for a `Vendor` or package-owned storage unit. A `Shadowed`
+/// unit whose shadow is staged keeps its command under each package reason
+/// the tiers give (excluded, not carried, not in the target image), since
+/// the image loads the staged copy; the `Vendor` twin of the same package
+/// is declined with that reason (the control).
+#[test]
+fn a_staged_shadow_needs_no_package_under_any_presence_reason() {
+    const OWNER: &str = "twinpkg";
+    const SHADOW: &str = "/etc/systemd/system/shadow.service";
+    let owned = |unit: &str, shadowed: bool| {
+        let file: UnitName = unit.to_owned().try_into().expect("a unit name");
+        let owning_package = Some(OWNER.to_owned());
+        let fragment = if shadowed {
+            UnitFragment::Shadowed {
+                file,
+                owning_package,
+            }
+        } else {
+            UnitFragment::Vendor {
+                file,
+                owning_package,
+            }
+        };
+        change_with(unit, fragment, UnitState::Enabled)
+    };
+    let changes = || vec![owned("shadow.service", true), owned("twin.service", false)];
+    let with_packages = |packages: Vec<PackageEntry>| {
+        let mut snap = units_snapshot(changes(), vec![(SHADOW, "[Unit]\n")]);
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["bash".into()]),
+            packages_added: packages,
+            ..Default::default()
+        });
+        snap
+    };
+    let mut not_carried = leaf_snapshot(
+        vec![
+            added("vim", "x86_64", FindingKind::included()),
+            added(OWNER, "x86_64", FindingKind::included()),
+        ],
+        &["vim.x86_64"],
+        &[&format!("{OWNER}.x86_64")],
+        serde_json::json!({ "vim.x86_64": [] }),
+        changes(),
+    );
+    not_carried.config = units_snapshot(vec![], vec![(SHADOW, "[Unit]\n")]).config;
+    apply_scan_package_defaults(&mut not_carried);
+    let package = OWNER.to_owned();
+    let cases = [
+        (
+            "excluded",
+            with_packages(vec![added(OWNER, "x86_64", FindingKind::excluded())]),
+            OmissionReason::PackageExcluded {
+                package: package.clone(),
+            },
+        ),
+        (
+            "not carried",
+            not_carried,
+            OmissionReason::NotCarried {
+                package: package.clone(),
+            },
+        ),
+        (
+            "not in the target image",
+            with_packages(vec![]),
+            OmissionReason::NotInTargetImage { package },
+        ),
+    ];
+    for (label, snap, reason) in cases {
+        let plan = plan_units(&snap, &staged_writes(&snap));
+        let planned: Vec<&str> = plan.planned.iter().map(|u| u.name().as_str()).collect();
+        assert_eq!(planned, ["shadow.service"], "{label}");
+        assert_eq!(
+            plan.declined,
+            [(
+                UnitName::try_from("twin.service".to_owned()).unwrap(),
+                UnitAction::Enable,
+                reason
+            )],
+            "{label}"
+        );
+        assert!(plan.advisories.is_empty(), "{label}: {:?}", plan.advisories);
+    }
+}
+
+/// T2's signature, checked in the source: `PlannedUnit` has no public
+/// field and nothing outside `plan_units` builds one. The `compile_fail`
+/// doctests on the type pass on any compile error and cannot see a
+/// constructor added later; this fails if the struct gains a `pub` field,
+/// its derives change (a `Default` or `Deserialize` derive is a
+/// constructor), any `impl` block for it holds a function without a
+/// `&self` receiver, a trait is implemented for it by hand (`From`,
+/// `Default`), or a public function returns one.
+#[test]
+fn planned_unit_has_no_public_field_or_constructor() {
+    const SOURCE: &str = include_str!("../src/render/unit_plan.rs");
+    const STRUCT: &str = "pub struct PlannedUnit {";
+    const DERIVES: &str = "#[derive(Debug, PartialEq, Eq)]";
+    let lines: Vec<&str> = SOURCE.lines().collect();
+
+    let at = lines
+        .iter()
+        .position(|l| *l == STRUCT)
+        .expect("the struct is declared at the top level");
+    assert_eq!(lines[at - 1], DERIVES, "the derives changed");
+    let fields: Vec<&str> = lines[at + 1..]
+        .iter()
+        .take_while(|l| **l != "}")
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .collect();
+    assert_eq!(fields, ["name: UnitName,", "action: UnitAction,"]);
+
+    let impls: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("impl") && l.contains("PlannedUnit"))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(!impls.is_empty(), "the accessors are in an impl block");
+    for start in impls {
+        assert_eq!(
+            lines[start], "impl PlannedUnit {",
+            "only an inherent impl block"
+        );
+        for line in lines[start + 1..].iter().take_while(|l| **l != "}") {
+            if line.contains("fn ") {
+                assert!(
+                    line.contains("(&self"),
+                    "a function with no receiver: {line}"
+                );
+            }
+        }
+    }
+
+    // Every function signature, from `fn ` to its body's `{`, over as many
+    // lines as it takes. `plan_units` returns a `UnitPlan`, the one route.
+    for (start, _) in SOURCE.match_indices("fn ") {
+        let signature = SOURCE[start..].split('{').next().unwrap_or_default();
+        let returns = signature.split_once("->").map_or("", |(_, r)| r);
+        assert!(
+            !returns.contains("PlannedUnit"),
+            "a function returns a PlannedUnit: {signature}"
+        );
+    }
 }

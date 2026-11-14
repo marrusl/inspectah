@@ -279,6 +279,12 @@ pub enum AdvisoryReason {
 /// [`plan_units`] is the only way to get one, so [`systemctl_lines`], which
 /// takes nothing else, cannot name a unit the plan did not pass.
 ///
+/// The two `compile_fail` blocks below pass on any compile error, since
+/// rustdoc on stable does not check the error code, and a struct literal
+/// cannot see a public constructor added later; the source check
+/// `planned_unit_has_no_public_field_or_constructor` in
+/// `tests/unit_plan_test.rs` pins both.
+///
 /// ```compile_fail,E0451
 /// use inspectah_core::types::units::{UnitAction, UnitName};
 /// use inspectah_pipeline::render::unit_plan::PlannedUnit;
@@ -481,6 +487,24 @@ fn rule_5_file(
         UnitFragment::Vendor { .. } | UnitFragment::Absent => {
             no_file_at(etc_unit_path(unit.name()), staged)
         }
+    }
+}
+
+/// Whether rule 5 asks the presence tiers about the unit's package
+/// (§ 10.2): only for a unit whose image file comes from that package, a
+/// `Vendor` unit or a package-owned storage unit. A `Shadowed` unit's one
+/// condition is its staged shadow, which the image loads with or without
+/// the package; a `Local` unit has no owner; `Absent` is reached only by a
+/// mask, which rule 5 does not apply to.
+fn needs_its_package(unit: &CarriedUnit) -> bool {
+    match unit {
+        CarriedUnit::PackagedStorage(_) => true,
+        CarriedUnit::Ordinary(ordinary) => match ordinary.fragment() {
+            UnitFragment::Vendor { .. } => true,
+            UnitFragment::Shadowed { .. } | UnitFragment::Local { .. } | UnitFragment::Absent => {
+                false
+            }
+        },
     }
 }
 
@@ -747,10 +771,11 @@ impl<'a> Presence<'a> {
 ///    5 does not apply to it and it is planned.
 /// 2. Rule 5, the row's own file ([`rule_5_file`]): the export stages the
 ///    unit file the row recorded and no other.
-/// 3. Rule 5, the package: the presence tiers ([`classify_service_presence`],
-///    unchanged; an aggregate applies Tier 2 alone). With no package section
-///    there is nothing to read and the unit is emitted: there is no separate
-///    path without one.
+/// 3. Rule 5, the package, for a `Vendor` or package-owned storage unit
+///    only ([`needs_its_package`]): the presence tiers
+///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
+///    alone). With no package section there is nothing to read and the unit
+///    is emitted: there is no separate path without one.
 /// 4. An `enable` of a unit the Scheduled Tasks section carries is left to
 ///    that section and recorded in `deferred`.
 ///
@@ -775,7 +800,11 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 plan.declined.push((name, action, reason));
                 continue;
             }
-            match presence.as_ref().map(|p| p.decide(sc)) {
+            let decision = presence
+                .as_ref()
+                .filter(|_| needs_its_package(sc.unit()))
+                .map(|p| p.decide(sc));
+            match decision {
                 Some(PresenceDecision::Omit(reason)) => {
                     plan.declined.push((name, action, reason));
                     continue;

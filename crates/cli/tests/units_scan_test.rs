@@ -624,22 +624,51 @@ fn unit_lines(containerfile: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether a `RUN systemctl <verb> --` line in `containerfile` names
-/// `unit` as one of its quoted operands.
-fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
-    let operand = format!("'{unit}'");
-    let mut current = None;
+/// Every `systemctl` instruction in `containerfile`: each non-comment
+/// instruction joined with its `\` continuation lines, kept when it runs
+/// `systemctl`, wherever in the file it is.
+fn systemctl_instructions(containerfile: &str) -> Vec<String> {
+    let mut instructions = Vec::new();
+    let mut current = String::new();
     for line in containerfile.lines() {
-        if let Some(rest) = line.strip_prefix("RUN systemctl ") {
-            current = rest.split_whitespace().next();
-        } else if !line.starts_with("    ") {
-            current = None;
+        if current.is_empty() && line.trim_start().starts_with('#') {
+            continue;
         }
-        if current == Some(verb) && line.split_whitespace().any(|w| w == operand) {
-            return true;
+        let line = line.trim_end();
+        current.push_str(line.trim_end_matches('\\'));
+        current.push(' ');
+        if !line.ends_with('\\') {
+            let instruction = std::mem::take(&mut current);
+            if instruction.contains("systemctl") {
+                instructions.push(instruction);
+            }
         }
     }
-    false
+    if current.contains("systemctl") {
+        instructions.push(current);
+    }
+    instructions
+}
+
+/// Whether a `RUN systemctl <verb> --` instruction in `containerfile`
+/// names `unit` as one of its quoted operands after `--`.
+fn acts(containerfile: &str, verb: &str, unit: &str) -> bool {
+    let prefix = format!("RUN systemctl {verb} -- ");
+    let operand = format!("'{unit}'");
+    systemctl_instructions(containerfile).iter().any(|i| {
+        i.strip_prefix(&prefix)
+            .is_some_and(|operands| operands.split_whitespace().any(|w| w == operand))
+    })
+}
+
+/// Whether `unit`'s name appears in no `systemctl` instruction of
+/// `containerfile`, whatever the verb and in any form: quoted, bare or
+/// inside another word. The absence half of [`acts`], so a regression that
+/// wrote a bare name fails it.
+fn in_no_systemctl_instruction(containerfile: &str, unit: &str) -> bool {
+    systemctl_instructions(containerfile)
+        .iter()
+        .all(|i| !i.contains(unit))
 }
 
 /// The `# Omitted:` line for `unit`, if any.
@@ -750,7 +779,10 @@ fn t6_an_excluded_owner_omits_the_socket_enable() {
         Some("# Omitted: cockpit.socket (package 'cockpit-ws' was excluded)"),
         "{excluded}"
     );
-    assert!(!acts(&excluded, "enable", "cockpit.socket"), "{excluded}");
+    assert!(
+        in_no_systemctl_instruction(&excluded, "cockpit.socket"),
+        "{excluded}"
+    );
 }
 
 /// Plan review focus 4: with no toggle changed, the scan export and a
@@ -767,6 +799,29 @@ fn the_scan_and_refine_exports_carry_the_same_unit_lines() {
     assert_eq!(
         scanned,
         ["RUN systemctl enable -- \\", "    'cockpit.socket'"],
+        "the scan carries the enable"
+    );
+    let refined = unit_lines(&containerfile_in(&export_session(&session(&snap))));
+    assert_eq!(scanned, refined);
+}
+
+/// Focus 4 on the common scan, with no baseline: a local unit's lines do
+/// not depend on any package's default, so the scan export and a refine
+/// export with no toggle carry the same unit lines.
+#[test]
+fn the_scan_and_refine_exports_carry_the_same_unit_lines_with_no_baseline() {
+    let snap = scan(t15_host());
+    assert!(snap.baseline.is_none(), "the scan has no baseline");
+    assert!(
+        snap.rpm
+            .as_ref()
+            .is_some_and(|rpm| rpm.baseline_package_names.is_none()),
+        "the package section records no baseline"
+    );
+    let scanned = unit_lines(&containerfile_in(&render_export(&snap)));
+    assert_eq!(
+        scanned,
+        ["RUN systemctl enable -- \\", "    'app.socket'"],
         "the scan carries the enable"
     );
     let refined = unit_lines(&containerfile_in(&export_session(&session(&snap))));
@@ -829,7 +884,10 @@ fn t5_a_local_unit_and_an_unowned_vendor_unit_render_differently() {
 
     // The local unit follows its file.
     let excluded = containerfile_in(&exported_after(&snap, &[(config_item(LOCAL_UNIT), false)]));
-    assert!(!acts(&excluded, "enable", "local.service"), "{excluded}");
+    assert!(
+        in_no_systemctl_instruction(&excluded, "local.service"),
+        "{excluded}"
+    );
     assert!(
         omitted(&excluded, "local.service").is_some_and(|l| l.ends_with(NOT_STAGED)),
         "{excluded}"
@@ -860,7 +918,10 @@ fn t5_a_local_unit_and_an_unowned_vendor_unit_render_differently() {
             ..Default::default()
         });
     let staged = containerfile_in(&export_session(&session(&imported)));
-    assert!(!acts(&staged, "enable", "orphan.service"), "{staged}");
+    assert!(
+        in_no_systemctl_instruction(&staged, "orphan.service"),
+        "{staged}"
+    );
     assert!(
         omitted(&staged, "orphan.service")
             .is_some_and(|l| l.ends_with(&evidence_changed(ORPHAN_UNIT))),
@@ -927,11 +988,17 @@ fn t15_the_socket_enable_follows_both_toggles() {
             let label = format!("{route}, file {file_in}, row {row_in}");
             let staged = tree.path().join("config").join(&APP_SOCKET[1..]).exists();
             assert_eq!(staged, file_in, "{label}");
-            assert_eq!(
-                acts(&containerfile, "enable", "app.socket"),
-                file_in && row_in,
-                "{label}:\n{containerfile}"
-            );
+            if file_in && row_in {
+                assert!(
+                    acts(&containerfile, "enable", "app.socket"),
+                    "{label}:\n{containerfile}"
+                );
+            } else {
+                assert!(
+                    in_no_systemctl_instruction(&containerfile, "app.socket"),
+                    "{label}:\n{containerfile}"
+                );
+            }
             let declined = omitted(&containerfile, "app.socket");
             assert_eq!(
                 declined.is_some(),
@@ -999,12 +1066,10 @@ fn t15_a_shadowed_unit_whose_shadow_is_excluded_gets_no_command() {
             path: SHADOW_UNIT.into(),
         };
         let excluded = containerfile_in(&exported_after(&snap, &[(shadow.clone(), false)]));
-        for any_verb in ["enable", "disable"] {
-            assert!(
-                !acts(&excluded, any_verb, "shadow.service"),
-                "{verb}: {any_verb}\n{excluded}"
-            );
-        }
+        assert!(
+            in_no_systemctl_instruction(&excluded, "shadow.service"),
+            "{verb}:\n{excluded}"
+        );
         assert!(
             omitted(&excluded, "shadow.service")
                 .is_some_and(|l| l.ends_with(&evidence_changed(SHADOW_UNIT))),
@@ -1024,6 +1089,97 @@ fn t15_a_shadowed_unit_whose_shadow_is_excluded_gets_no_command() {
             "{verb}:\n{restored}"
         );
     }
+}
+
+/// The package that owns both units of [`twin_package_host`].
+const TWIN_PACKAGE: &str = "twinpkg";
+
+/// Two vendor units of one listed package, `twinpkg`, both enabled against
+/// a `disable` preset, on a host scanned against a base image (so refine
+/// keeps the package included as the scan does). `shadow.service` also has
+/// a full copy under `/etc`, so it is recorded `Shadowed`; `twin.service`
+/// has none, so it is recorded `Vendor`.
+fn twin_package_host() -> UnitHost {
+    UnitHost::new()
+        .base_package("glibc")
+        .package(TWIN_PACKAGE)
+        .unit("shadow.service", "enabled")
+        .unit("twin.service", "enabled")
+        .preset("disable *")
+        .vendor_unit(
+            "shadow.service",
+            "[Service]\nExecStart=/usr/bin/shadow\n[Install]\nWantedBy=multi-user.target\n",
+            Some(TWIN_PACKAGE),
+        )
+        .etc_unit(
+            "shadow.service",
+            "[Service]\nExecStart=/usr/bin/shadow --local\n[Install]\nWantedBy=multi-user.target\n",
+        )
+        .vendor_unit(
+            "twin.service",
+            "[Service]\nExecStart=/usr/bin/twin\n[Install]\nWantedBy=multi-user.target\n",
+            Some(TWIN_PACKAGE),
+        )
+}
+
+/// § 10.2 rule 5: a `Shadowed` unit's one condition is its staged shadow.
+/// The image loads the `/etc` copy, so the command needs no package, and
+/// the presence tiers are asked only for a `Vendor` or package-owned
+/// storage unit. With the owner excluded through refine, the shadowed
+/// unit keeps its enable; the `Vendor` twin of the same package, under the
+/// same exclusion, is omitted for it (the control).
+#[test]
+fn a_shadowed_unit_keeps_its_enable_when_its_package_is_excluded() {
+    let snap = scan(twin_package_host());
+    assert!(
+        matches!(
+            fragment_of(&snap, "shadow.service"),
+            UnitFragment::Shadowed { owning_package: Some(p), .. } if p == TWIN_PACKAGE
+        ),
+        "{:?}",
+        fragment_of(&snap, "shadow.service")
+    );
+    assert!(
+        matches!(
+            fragment_of(&snap, "twin.service"),
+            UnitFragment::Vendor { owning_package: Some(p), .. } if p == TWIN_PACKAGE
+        ),
+        "{:?}",
+        fragment_of(&snap, "twin.service")
+    );
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "enable", "shadow.service"), "{scanned}");
+    assert!(acts(&scanned, "enable", "twin.service"), "{scanned}");
+
+    let tree = exported_after(
+        &snap,
+        &[(
+            ItemId::Package {
+                name: TWIN_PACKAGE.into(),
+                arch: "x86_64".into(),
+            },
+            false,
+        )],
+    );
+    let excluded = containerfile_in(&tree);
+    assert_eq!(
+        omitted(&excluded, "twin.service"),
+        Some("# Omitted: twin.service (package 'twinpkg' was excluded)"),
+        "{excluded}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&excluded, "twin.service"),
+        "{excluded}"
+    );
+    assert!(
+        tree.path()
+            .join("drop-ins")
+            .join(&SHADOW_UNIT[1..])
+            .is_file(),
+        "the shadow is still staged"
+    );
+    assert!(acts(&excluded, "enable", "shadow.service"), "{excluded}");
+    assert!(omitted(&excluded, "shadow.service").is_none(), "{excluded}");
 }
 
 /// A `Shadowed` unit whose `/etc` file cannot be read as text has no
@@ -1066,7 +1222,7 @@ fn a_shadow_that_could_not_be_read_declines_its_enable() {
     );
     let containerfile = containerfile_in(&render_export(&snap));
     assert!(
-        !acts(&containerfile, "enable", "blob.service"),
+        in_no_systemctl_instruction(&containerfile, "blob.service"),
         "{containerfile}"
     );
     assert!(
@@ -1211,7 +1367,7 @@ fn t18_d_a_shadow_with_two_variants_declines_the_command() {
         );
         let containerfile = containerfile_in(&tree);
         assert!(
-            !acts(&containerfile, "enable", "app.service"),
+            in_no_systemctl_instruction(&containerfile, "app.service"),
             "{containerfile}"
         );
         assert!(
