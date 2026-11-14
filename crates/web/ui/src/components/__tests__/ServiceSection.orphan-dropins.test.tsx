@@ -5,6 +5,7 @@ import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/with
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
   TriageTag,
 } from "../../api/types";
 
@@ -30,6 +31,8 @@ function makeService(
 ): ServiceDecisionDto {
   return {
     unit: "httpd.service",
+    kind: "service",
+    fragment: "vendor",
     triage: TRIAGE,
     include: true,
     current_state: "enabled",
@@ -52,6 +55,7 @@ function makeDropin(
 const defaultProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
+  mountFindings: [] as MountFindingDto[],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };

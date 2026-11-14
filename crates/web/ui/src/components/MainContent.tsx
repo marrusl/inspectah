@@ -710,6 +710,9 @@ export function MainContent({
   if (activeSection === "units") {
     const services = viewData?.unit_states ?? [];
     const dropins = viewData?.unit_dropins ?? [];
+    // No fallback for a view that lacks the field: the type requires it,
+    // and an empty default would hide a server that stopped sending it.
+    const mountFindings = viewData ? viewData.mount_findings : [];
     const shadowCount = dropins.filter(
       (d) => d.shadow_type === "full_shadow",
     ).length;
@@ -726,6 +729,10 @@ export function MainContent({
         <ServiceSection
           services={services}
           dropins={dropins}
+          mountFindings={mountFindings}
+          onNavigateToConfig={(configPath) =>
+            onNavigateToItem?.("config", `configs:${configPath}`)
+          }
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
           pendingGuard={serviceGuard}

@@ -235,6 +235,11 @@ export interface RefinedConfig {
   /** @deprecated Legacy attention tags; use triage instead. */
   attention?: AttentionTag[];
   triage: TriageTag;
+  /**
+   * Present when the export does not write the file this row offers
+   * (spec § 11.1). Only `/api/view` sets it.
+   */
+  withheld?: WithheldView;
 }
 
 export interface BaselineSummary {
@@ -450,11 +455,60 @@ export interface HealthResponse {
   session_is_sensitive: boolean;
 }
 
-// --- Service decision types (inspectah-web/src/handlers.rs) ---
+// --- Unit decision types (crates/web/src/web_types.rs) ---
 
-/** A classified service state change, projected for the view response. */
+/** Where a unit's file is on the source host (Rust: `FragmentView`). */
+export type UnitFragment = "vendor" | "local" | "shadowed" | "absent";
+
+/**
+ * Why the export writes no command for a unit row (Rust: `DeclinedView`).
+ * `text` is the Containerfile line after its marker and is shown as given;
+ * `renders` selects only how the row looks.
+ */
+export interface DeclinedView {
+  renders: "omitted" | "fixme" | "advisory";
+  /** The `OmissionReason` variant name. Not display copy. */
+  reason: string;
+  text: string;
+}
+
+/**
+ * Why the export does not write a file a row offered (Rust:
+ * `WithheldView`, tagged on `outcome`). `text` is shown as given.
+ */
+export type WithheldView =
+  | { outcome: "withheld"; why: string; text: string }
+  | { outcome: "refused"; rule: string; text: string };
+
+/**
+ * An administrator's mount, automount or swap unit (Rust:
+ * `MountFindingView`). No `include`: the row has no toggle.
+ */
+export interface MountFindingDto {
+  unit: string;
+  /** `mount`, `automount` or `swap`, lowercase as served. */
+  kind: string;
+  state: string | null;
+  mount_point: string | null;
+  fragment: UnitFragment;
+  /** The config row that holds the unit file and its toggle. */
+  unit_file_path: string | null;
+  /** The Containerfile's advisory lines, shown as given, one per line. */
+  advisories: string[];
+}
+
+/** A classified unit state change, projected for the view response. */
 export interface ServiceDecisionDto {
   unit: string;
+  /** The type suffix, lowercase as served (`service`, `socket`, ...). */
+  kind: string;
+  /** The template, when the unit is an instance. */
+  instance_of?: string;
+  fragment: UnitFragment;
+  /** The `/etc` unit file, for a local or shadowed fragment. */
+  unit_file_path?: string;
+  /** Present when the export writes no command for the row. */
+  declined?: DeclinedView;
   triage: TriageTag;
   include: boolean;
   locked?: boolean;
@@ -476,6 +530,10 @@ export interface DropInDecisionDto {
   shadow_type?: string | null;
   /** Rationale text for the shadow override. */
   shadow_rationale?: string | null;
+  /** The parent unit's kind, lowercase as served. */
+  kind?: string;
+  /** Present when the export does not write the file this row offers. */
+  withheld?: WithheldView;
 }
 
 // --- Sysctl panel types (crates/web/src/web_types.rs) ---
@@ -699,6 +757,8 @@ export interface ViewResponse extends RefinedView {
   version_changes: VersionChangeEntry[];
   unit_states: ServiceDecisionDto[];
   unit_dropins: DropInDecisionDto[];
+  /** The administrator's mount, automount and swap units. Always present. */
+  mount_findings: MountFindingDto[];
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
   /** The read-only sysctl panel. Always present. */

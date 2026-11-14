@@ -120,6 +120,8 @@ const MOCK_VIEW_DATA: ViewResponse = {
   unit_states: [
     {
       unit: "sshd.service",
+      kind: "service",
+      fragment: "vendor",
       triage: {
         triage: { mode: "single_host", baseline: null },
         primary_reason: "service_baseline_match",
@@ -130,6 +132,7 @@ const MOCK_VIEW_DATA: ViewResponse = {
     },
   ],
   unit_dropins: [],
+  mount_findings: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -409,6 +412,8 @@ describe("Sidebar", () => {
         unit_states: [
           {
             unit: "httpd.service",
+            kind: "service",
+            fragment: "vendor",
             triage: TRIAGE,
             include: true,
             current_state: "enabled",
@@ -428,6 +433,30 @@ describe("Sidebar", () => {
       expect(
         screen.queryByText("Services: 0 decisions remaining"),
       ).not.toBeInTheDocument();
+    });
+
+    it("does not count a mount finding, which has no toggle", () => {
+      // The count beside it above shows a row with a toggle is counted.
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+        mount_findings: [
+          {
+            unit: "srv.mount",
+            kind: "mount",
+            state: "enabled",
+            mount_point: "/srv",
+            fragment: "local",
+            unit_file_path: "/etc/systemd/system/srv.mount",
+            advisories: ["# Advisory: srv.mount is enabled on the source host."],
+          },
+        ],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+      expect(
+        screen.getByText("Services: 0 decisions remaining"),
+      ).toBeInTheDocument();
     });
   });
 

@@ -111,6 +111,7 @@ const VIEW = {
   version_changes: [],
   unit_states: [],
   unit_dropins: [],
+  mount_findings: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -157,6 +158,8 @@ const TUNED: TunedDecisionDto = {
 
 const SERVICE: ServiceDecisionDto = {
   unit: "httpd.service",
+  kind: "service",
+  fragment: "vendor",
   triage: {
     triage: { mode: "single_host", site: null },
     primary_reason: "service_non_default_state",

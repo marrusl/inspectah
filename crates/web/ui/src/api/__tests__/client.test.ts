@@ -129,6 +129,7 @@ const mockView: ViewResponse = {
   version_changes: [],
   unit_states: [],
   unit_dropins: [],
+  mount_findings: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },

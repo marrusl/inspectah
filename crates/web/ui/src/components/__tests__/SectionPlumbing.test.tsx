@@ -387,6 +387,8 @@ describe("MainContent: unit section", () => {
   const unitStates: ViewResponse["unit_states"] = [
     {
       unit: "kdump.service",
+      kind: "service",
+      fragment: "vendor",
       triage,
       include: true,
       current_state: "disabled",
@@ -422,6 +424,7 @@ describe("MainContent: unit section", () => {
           makeViewData({
             unit_states: unitStates,
             unit_dropins: [],
+            mount_findings: [],
           }) as ViewResponse
         }
         {...defaultProps}
@@ -441,6 +444,7 @@ describe("MainContent: unit section", () => {
           makeViewData({
             unit_states: unitStates,
             unit_dropins: unitDropins,
+            mount_findings: [],
           }) as ViewResponse
         }
         {...defaultProps}

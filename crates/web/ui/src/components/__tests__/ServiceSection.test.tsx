@@ -6,6 +6,7 @@ import { ServiceSectionWithGuard as ServiceSection } from "../../test-utils/with
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
   ViewResponse,
   TriageTag,
 } from "../../api/types";
@@ -41,6 +42,8 @@ function makeService(
 ): ServiceDecisionDto {
   return {
     unit: "httpd.service",
+    kind: "service",
+    fragment: "vendor",
     triage: makeTriage("site"),
     include: true,
     current_state: "enabled",
@@ -77,6 +80,7 @@ const MOCK_VIEW: ViewResponse = {
   version_changes: [],
   unit_states: [],
   unit_dropins: [],
+  mount_findings: [],
   quadlets: [],
   flatpaks: [],
   sysctl: { state: "unavailable", reason: "not collected" },
@@ -91,6 +95,7 @@ const MOCK_VIEW: ViewResponse = {
 const defaultProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
+  mountFindings: [] as MountFindingDto[],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };

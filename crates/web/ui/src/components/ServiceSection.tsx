@@ -3,6 +3,7 @@ import { Label } from "@patternfly/react-core";
 import type {
   ServiceDecisionDto,
   DropInDecisionDto,
+  MountFindingDto,
   ViewResponse,
   RefinementOp,
   TriageTag,
@@ -19,6 +20,13 @@ import {
 export interface ServiceSectionProps {
   services: ServiceDecisionDto[];
   dropins: DropInDecisionDto[];
+  /**
+   * The administrator's mount, automount and swap units. Rows with no
+   * toggle: they are not decisions.
+   */
+  mountFindings: MountFindingDto[];
+  /** Opens the config row at a path (a finding's unit file). */
+  onNavigateToConfig?: (path: string) => void;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /**
@@ -63,6 +71,41 @@ const LEVEL_BORDER: Record<string, string> = {
   universal: "none",
 };
 
+/**
+ * The ids an element's `aria-describedby` names, space-separated, or
+ * undefined when none renders, so no id dangles.
+ */
+function describedBy(...ids: (string | false | null | undefined)[]): string | undefined {
+  const present = ids.filter((id): id is string => !!id);
+  return present.length > 0 ? present.join(" ") : undefined;
+}
+
+/**
+ * A reason the server wrote, under its row. The text is shown as given:
+ * never composed, rephrased or parsed here.
+ */
+function RowNote({
+  id,
+  testId,
+  className,
+  text,
+}: {
+  id: string;
+  testId: string;
+  className?: string;
+  text: string;
+}) {
+  return (
+    <div
+      id={id}
+      data-testid={testId}
+      className={`inspectah-decision-row__helper-text inspectah-unit-note${className ? ` ${className}` : ""}`}
+    >
+      {text}
+    </div>
+  );
+}
+
 function badgeTextForTriage(triage: TriageTag): string | null {
   const level = triageBucketToAttention(triage);
   if (level === "routine") return null;
@@ -94,6 +137,7 @@ function DropInRow({
   const isShadow = di.shadow_type === "full_shadow";
   // The checkbox points at the rationale only when the rationale renders.
   const hasRationale = isShadow && !!di.shadow_rationale;
+  const withheldId = `withheld-dropin-${di.path}`;
 
   // Border-left priority: triage border wins if present, else shadow warning border
   let diBorder = LEVEL_BORDER[diBucket] ?? "none";
@@ -153,9 +197,10 @@ function DropInRow({
                 : `Toggle ${di.path}`
             }
             aria-disabled={parentExcluded}
-            aria-describedby={
-              hasRationale ? `shadow-rationale-dropin-${di.path}` : undefined
-            }
+            aria-describedby={describedBy(
+              hasRationale && `shadow-rationale-dropin-${di.path}`,
+              di.withheld && withheldId,
+            )}
             style={{ minWidth: 20, minHeight: 20 }}
           />
         </div>
@@ -217,6 +262,95 @@ function DropInRow({
           {di.shadow_rationale}
         </div>
       )}
+      {di.withheld && (
+        <RowNote
+          id={withheldId}
+          testId={withheldId}
+          className="inspectah-unit-note--withheld"
+          text={di.withheld.text}
+        />
+      )}
+    </div>
+  );
+}
+
+interface MountFindingRowProps {
+  finding: MountFindingDto;
+  onNavigateToConfig?: (path: string) => void;
+}
+
+/**
+ * An administrator's mount, automount or swap unit: what the host had and
+ * the export's advisory lines, as given. No toggle and no keyboard action:
+ * the export decides nothing here. The unit file is decided on its config
+ * row, which `unit_file_path` names.
+ */
+function MountFindingRow({ finding: f, onNavigateToConfig }: MountFindingRowProps) {
+  const advisoriesId = `mount-finding-advisories-${f.unit}`;
+  const path = f.unit_file_path;
+  return (
+    <div
+      role="row"
+      aria-label={f.unit}
+      aria-describedby={describedBy(f.advisories.length > 0 && advisoriesId)}
+      tabIndex={-1}
+      data-testid={`mount-finding-${f.unit}`}
+      className="inspectah-decision-row inspectah-mount-finding"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{f.unit}</span>
+          <span
+            className="inspectah-unit-kind"
+            data-testid={`mount-finding-kind-${f.unit}`}
+          >
+            {f.kind}
+          </span>
+          {f.state !== null && (
+            <span
+              className="inspectah-unit-state"
+              data-testid={`mount-finding-state-${f.unit}`}
+            >
+              {f.state}
+            </span>
+          )}
+          {f.mount_point !== null && (
+            <code
+              className="inspectah-mount-finding__where"
+              data-testid={`mount-finding-where-${f.unit}`}
+            >
+              {f.mount_point}
+            </code>
+          )}
+        </div>
+        {path !== null && (
+          <div role="gridcell" className="inspectah-decision-row__badge">
+            {onNavigateToConfig ? (
+              <a
+                href={`#configs:${path}`}
+                data-testid={`mount-finding-file-${f.unit}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigateToConfig(path);
+                }}
+              >
+                {path}
+              </a>
+            ) : (
+              <code data-testid={`mount-finding-file-${f.unit}`}>{path}</code>
+            )}
+          </div>
+        )}
+      </div>
+      {f.advisories.length > 0 && (
+        <div id={advisoriesId} className="inspectah-mount-finding__advisories">
+          {f.advisories.map((line, i) => (
+            <div key={i} data-testid="mount-finding-advisory">
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -224,6 +358,8 @@ function DropInRow({
 export function ServiceSection({
   services,
   dropins,
+  mountFindings,
+  onNavigateToConfig,
   onViewUpdate,
   onMutationError,
   pendingGuard,
@@ -278,7 +414,11 @@ export function ServiceSection({
     [sendInclude],
   );
 
-  if (services.length === 0 && dropins.length === 0) {
+  if (
+    services.length === 0 &&
+    dropins.length === 0 &&
+    mountFindings.length === 0
+  ) {
     return (
       <div className="inspectah-service-section" data-testid="service-section">
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
@@ -303,6 +443,11 @@ export function ServiceSection({
         const isPending = pendingKeys.has(serviceKey(svc.unit));
         const svcLocked = svc.locked === true;
         const borderLeft = LEVEL_BORDER[bucket] ?? "none";
+        // A locked row shows its reason in the badge; an unlocked one, such
+        // as a runtime updater excluded by default, under the row.
+        const attentionId = `attention-service-${svc.unit}`;
+        const attention = svcLocked ? null : (svc.attention_reason ?? null);
+        const declinedId = `declined-service-${svc.unit}`;
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -339,14 +484,22 @@ export function ServiceSection({
                         ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
                         : `Toggle ${svc.unit}`
                     }
-                    aria-describedby={
-                      svcLocked ? `locked-reason-service-${svc.unit}` : undefined
-                    }
+                    aria-describedby={describedBy(
+                      svcLocked && `locked-reason-service-${svc.unit}`,
+                      attention && attentionId,
+                      svc.declined && declinedId,
+                    )}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
                 </div>
                 <div role="gridcell" className="inspectah-decision-row__name">
                   <span>{svc.unit}</span>
+                  <span
+                    className="inspectah-unit-kind"
+                    data-testid={`service-kind-${svc.unit}`}
+                  >
+                    {svc.kind}
+                  </span>
                   {svc.owning_package && (
                     <span
                       style={{
@@ -392,6 +545,17 @@ export function ServiceSection({
                   </div>
                 )}
               </div>
+              {attention && (
+                <RowNote id={attentionId} testId={attentionId} text={attention} />
+              )}
+              {svc.declined && (
+                <RowNote
+                  id={declinedId}
+                  testId={declinedId}
+                  className={`inspectah-unit-declined inspectah-unit-declined--${svc.declined.renders}`}
+                  text={svc.declined.text}
+                />
+              )}
             </div>
 
             {/* Drop-in children */}
@@ -408,6 +572,14 @@ export function ServiceSection({
           </div>
         );
       })}
+
+      {mountFindings.map((f) => (
+        <MountFindingRow
+          key={f.unit}
+          finding={f}
+          onNavigateToConfig={onNavigateToConfig}
+        />
+      ))}
 
       {/* Drop-ins whose unit produced no state change: a unit sitting at
           its preset state never reaches `state_changes`, so without this

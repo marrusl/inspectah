@@ -156,6 +156,10 @@ export function DecisionItem({
   const toggleable = isToggleable(itemDisposition);
   const locked = isLocked(item);
   const reasonText = lockedReason(item);
+  // Why the export does not write this config row's file, as the server
+  // wrote it (spec § 11.1).
+  const withheld = item.type === "config" ? item.data.withheld : undefined;
+  const withheldId = `withheld-${id}`;
   const hasBeenToggled = useRef(false);
 
   // Derive effective attention level: triageTag takes priority over legacy level prop
@@ -284,13 +288,18 @@ export function DecisionItem({
       aria-rowindex={rowIndex}
       aria-label={name}
       aria-describedby={
-        itemDisposition.kind === "advisory"
-          ? `advisory-rationale-${id}`
-          : shadowOwner
-            ? `shadow-owner-explanation-${id}`
-            : locked
-              ? `locked-reason-${id}`
-              : undefined
+        [
+          itemDisposition.kind === "advisory"
+            ? `advisory-rationale-${id}`
+            : shadowOwner
+              ? `shadow-owner-explanation-${id}`
+              : locked
+                ? `locked-reason-${id}`
+                : null,
+          withheld ? withheldId : null,
+        ]
+          .filter((v): v is string => v !== null)
+          .join(" ") || undefined
       }
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
@@ -487,6 +496,15 @@ export function DecisionItem({
           }}
         >
           {shadowOwner.explanation}
+        </div>
+      )}
+      {withheld && (
+        <div
+          id={withheldId}
+          data-testid={withheldId}
+          className="inspectah-decision-row__helper-text inspectah-unit-note inspectah-unit-note--withheld"
+        >
+          {withheld.text}
         </div>
       )}
       {isExpanded && (

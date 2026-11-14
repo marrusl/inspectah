@@ -246,6 +246,7 @@
     }
   ],
   "unit_dropins": [],
+  "mount_findings": [],
   "quadlets": [],
   "flatpaks": [],
   "sysctl": {
