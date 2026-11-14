@@ -2927,3 +2927,252 @@ fn t18_b_a_runtime_updater_merges_excluded_and_can_be_included() {
     assert!(omitted(&included, UNIT).is_none(), "{included}");
     assert!(acts(&included, "enable", UPDATER_CONTROL), "{included}");
 }
+
+// ---------------------------------------------------------------------
+// § 12: a merged export is validated at render (T18 (a), (c)), and mount
+// findings merge by unit name.
+// ---------------------------------------------------------------------
+
+/// `host` scanned as the host named `hostname`, written and read back.
+fn named(host: UnitHost, hostname: &str) -> InspectionSnapshot {
+    reload(&scan(host.file("/etc/hostname", &format!("{hostname}\n"))))
+}
+
+/// The two hosts merged, written and read back.
+fn merged(a: InspectionSnapshot, b: InspectionSnapshot) -> InspectionSnapshot {
+    let (merged, _) = merge_snapshots(vec![a, b], None, None).expect("the two hosts merge");
+    let merged = reload(&merged);
+    assert!(merged.aggregate_meta.is_some(), "an aggregate");
+    merged
+}
+
+/// The package item for `name` as the host builder installs it.
+fn package_item(name: &str) -> ItemId {
+    ItemId::Package {
+        name: name.into(),
+        arch: "x86_64".into(),
+    }
+}
+
+/// T18 (a): one host with a package-owned enabled mount unit, one with an
+/// administrator's full copy of it in `/etc`, merged and taken through
+/// `RefineSession`. Both rows are kept: the state change from the first
+/// host, the finding and the config entry from the second. While the
+/// file's config row is included, the file is staged, no instruction
+/// names the unit and the advisory is present, whichever way the unit row
+/// is toggled (its toggle cascades to the unit's drop-ins). Excluding the
+/// file, with the unit row included, yields the enable.
+#[test]
+fn t18_a_a_package_unit_beside_another_hosts_copy_is_decided_by_the_file() {
+    const UNIT: &str = "var-lib-pkg.mount";
+    const PACKAGE: &str = "pkgmount";
+    let path = etc_path(UNIT);
+    let vendor = mount_file("/var/lib/pkg", None);
+    let package_host = named(owned_unit_host(UNIT, PACKAGE, "enabled", &vendor), "host-a");
+    let copy_host = named(
+        owned_unit_host(UNIT, PACKAGE, "enabled", &vendor)
+            .etc_unit(UNIT, &mount_file("/var/lib/pkg", Some("nofail"))),
+        "host-b",
+    );
+    assert!(
+        matches!(
+            change(&package_host, UNIT).unit(),
+            CarriedUnit::PackagedStorage(_)
+        ),
+        "host-a records a package-owned state change"
+    );
+    let copy_units = copy_host.units.as_ref().expect("a units section");
+    assert!(
+        copy_units
+            .state_changes
+            .iter()
+            .all(|c| c.unit().name().as_str() != UNIT),
+        "host-b records no state change for the unit"
+    );
+    assert!(
+        copy_units
+            .mount_findings
+            .iter()
+            .any(|f| f.unit.name().as_unit_name().as_str() == UNIT),
+        "host-b records a finding"
+    );
+
+    let merged = merged(package_host, copy_host);
+    let units = merged.units.as_ref().expect("a units section");
+    assert!(matches!(
+        change(&merged, UNIT).unit(),
+        CarriedUnit::PackagedStorage(_)
+    ));
+    assert_eq!(
+        units
+            .mount_findings
+            .iter()
+            .filter(|f| f.unit.name().as_unit_name().as_str() == UNIT)
+            .count(),
+        1,
+        "one merged finding"
+    );
+
+    let mut session = session(&merged);
+    for (item, include) in [(package_item(PACKAGE), true), (config_item(&path), true)] {
+        session
+            .apply(set_include(item, include))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+    for unit_included in [true, false, true] {
+        session
+            .apply(set_include(unit_item(UNIT), unit_included))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let tree = export_session(&session);
+        let containerfile = containerfile_in(&tree);
+        let step = format!("file included, unit row included {unit_included}");
+        assert!(staged_at(&tree, &path), "{step}: the file is staged");
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{step}:\n{containerfile}"
+        );
+        let advisory = advisory_for(&containerfile, UNIT);
+        assert_eq!(
+            advisory.first(),
+            Some(&advisory_fact(UNIT, "enabled")),
+            "{step}:\n{containerfile}"
+        );
+        assert!(
+            advisory.contains(&FILE_STAGED_LINE.to_owned()),
+            "{step}:\n{containerfile}"
+        );
+        if unit_included {
+            assert_eq!(
+                omitted(&containerfile, UNIT),
+                Some(
+                    format!(
+                        "# Omitted: {UNIT} (the export carries an administrator's unit file \
+                         for it ({path}))"
+                    )
+                    .as_str()
+                ),
+                "{step}:\n{containerfile}"
+            );
+        }
+    }
+
+    session
+        .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    let containerfile = containerfile_in(&tree);
+    assert!(!staged_at(&tree, &path), "the file is excluded");
+    assert!(acts(&containerfile, "enable", UNIT), "{containerfile}");
+    assert!(omitted(&containerfile, UNIT).is_none(), "{containerfile}");
+}
+
+/// T18 (c): a mask on one host and a local unit file of the same name on
+/// another. The merged row is the first host's mask (the two rows tie),
+/// and the local file is a config entry on one host of two. Through
+/// `RefineSession`: with the file included, T16's result, the mask
+/// declined with `MaskPathOccupied` and the file staged; excluding it
+/// brings the mask back.
+#[test]
+fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
+    const UNIT: &str = "kdump.service";
+    let path = etc_path(UNIT);
+    let masked = named(
+        owned_unit_host(UNIT, "kexec-tools", "masked", VENDOR_SERVICE),
+        "host-a",
+    );
+    let local = named(
+        UnitHost::new()
+            .unit(UNIT, "enabled")
+            .preset("disable *")
+            .etc_unit(UNIT, "[Service]\nExecStart=/usr/local/bin/kdump\n[Install]\nWantedBy=multi-user.target\n"),
+        "host-b",
+    );
+    assert!(
+        matches!(fragment_of(&local, UNIT), UnitFragment::Local { .. }),
+        "host-b records a local unit"
+    );
+    let merged = merged(masked, local);
+    assert_eq!(change(&merged, UNIT).current_state(), UnitState::Masked);
+
+    let mut session = session(&merged);
+    session
+        .apply(set_include(config_item(&path), true))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    let occupied = containerfile_in(&tree);
+    assert!(staged_at(&tree, &path), "the unit file is staged");
+    assert_eq!(
+        omitted(&occupied, UNIT),
+        Some(
+            format!(
+                "# Omitted: {UNIT} (the export also carries a unit file at {path}; exclude one \
+                 of the two)"
+            )
+            .as_str()
+        ),
+        "{occupied}"
+    );
+    assert!(in_no_systemctl_instruction(&occupied, UNIT), "{occupied}");
+
+    session
+        .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let tree = export_session(&session);
+    let freed = containerfile_in(&tree);
+    assert!(!staged_at(&tree, &path), "the file is excluded");
+    assert!(acts(&freed, "mask", UNIT), "{freed}");
+    assert!(omitted(&freed, UNIT).is_none(), "{freed}");
+}
+
+/// § 12: two hosts with the same administrator's mount unit merge to one
+/// finding counted on both, and the aggregate's Containerfile shows its
+/// advisory once, on the scan and the refine route. No instruction names
+/// the unit.
+#[test]
+fn an_aggregate_shows_a_shared_mount_advisory_once() {
+    const UNIT: &str = "srv.mount";
+    let host = |hostname| {
+        named(
+            UnitHost::new()
+                .unit(UNIT, "enabled")
+                .etc_unit(UNIT, &mount_file("/srv", Some("nofail"))),
+            hostname,
+        )
+    };
+    let merged = merged(host("host-a"), host("host-b"));
+    let findings = &merged
+        .units
+        .as_ref()
+        .expect("a units section")
+        .mount_findings;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(
+        findings[0].aggregate.as_ref().map(|a| (a.count, a.total)),
+        Some((2, 2))
+    );
+    for (route, containerfile) in both_routes(&merged) {
+        assert_eq!(
+            advisory_for(&containerfile, UNIT),
+            [
+                advisory_fact(UNIT, "enabled"),
+                FILE_STAGED_LINE.to_owned(),
+                var_symlink_line("/srv"),
+                carry_line("enable", UNIT),
+            ],
+            "{route}:\n{containerfile}"
+        );
+        let first = format!("# Advisory: {UNIT} is ");
+        assert_eq!(
+            containerfile
+                .lines()
+                .filter(|l| l.starts_with(&first))
+                .count(),
+            1,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
+}

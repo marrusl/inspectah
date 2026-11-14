@@ -142,7 +142,25 @@ impl AggregateMergeable for ConfigFileEntry {
 // Service types
 // ---------------------------------------------------------------------------
 
-use crate::types::units::{SystemdDropIn, UnitStateChange};
+use crate::types::units::{MountUnitFinding, SystemdDropIn, UnitStateChange};
+
+/// Identity on the unit name, as for a state change (§ 12). Hosts that
+/// disagree about a field collapse to one finding: [`merge_items`] keeps
+/// the whole finding the most hosts recorded, a tie going to the first host
+/// by hostname.
+impl AggregateMergeable for MountUnitFinding {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.unit.name().as_unit_name().as_str())
+    }
+
+    fn aggregate_mut(&mut self) -> &mut Option<AggregatePrevalence> {
+        &mut self.aggregate
+    }
+
+    /// A finding is reported, never carried, and has no include flag:
+    /// narrowing has nothing to set (§ 12).
+    fn set_include(&mut self, _val: bool) {}
+}
 
 impl AggregateMergeable for UnitStateChange {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -1546,14 +1564,17 @@ pub fn merge_service_sections(
         hostnames,
     );
     let inventory = merge_unit_inventory(&sections);
+    let mount_findings = merge_items(
+        collect_items(&sections, |s| &s.mount_findings),
+        total_hosts,
+        hostnames,
+    );
 
     Some(UnitSection {
         state_changes,
         inventory,
         drop_ins,
-        // Mount findings are merged by the fleet-merge task; until then an
-        // aggregate carries none.
-        mount_findings: Vec::new(),
+        mount_findings,
     })
 }
 

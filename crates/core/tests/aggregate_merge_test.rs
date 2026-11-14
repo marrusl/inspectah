@@ -3344,3 +3344,102 @@ fn a_runtime_updater_excluded_on_every_host_merges_excluded() {
     assert_eq!(updater.aggregate.as_ref().map(|a| a.count), Some(2));
     assert!(row("httpd.service").disposition.is_included());
 }
+
+/// An administrator's mount finding for `unit`, written in `/etc`.
+fn admin_mount_finding(
+    unit: &str,
+    state: Option<UnitState>,
+    mount_point: &str,
+    nofail: bool,
+) -> inspectah_core::types::units::MountUnitFinding {
+    use inspectah_core::types::units::{AdvisoryUnit, MountUnitFinding, UnitFragment, UnitSubject};
+    let name: inspectah_core::types::units::UnitName = unit.to_owned().try_into().unwrap();
+    let fragment = UnitFragment::Local { file: name.clone() };
+    MountUnitFinding {
+        unit: AdvisoryUnit::try_from(UnitSubject::new(name, fragment).expect("a subject"))
+            .expect("an administrator's storage unit"),
+        state_change: state.map(|s| (s, None)),
+        mount_point: Some(mount_point.into()),
+        nofail,
+        aggregate: None,
+    }
+}
+
+/// § 12: `mount_findings` merge by unit name, one row per name, its
+/// `aggregate` naming every host that recorded it. Hosts that disagree
+/// about a field keep one host's whole finding, as a state change does:
+/// the value the most hosts recorded, a tie going to the first host by
+/// hostname. A finding on some hosts only is still a row (it has no
+/// include flag to narrow), with its count.
+#[test]
+fn mount_findings_merge_to_one_row_per_unit_name() {
+    use UnitState::{Enabled, Masked};
+    let section = |findings| UnitSection {
+        mount_findings: findings,
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_service_sections(
+        vec![
+            Some(section(vec![
+                admin_mount_finding("srv.mount", Some(Enabled), "/srv", false),
+                admin_mount_finding("data.mount", Some(Enabled), "/data", true),
+                admin_mount_finding("opt.mount", Some(Masked), "/opt", true),
+            ])),
+            Some(section(vec![
+                admin_mount_finding("srv.mount", Some(Enabled), "/srv", true),
+                admin_mount_finding("opt.mount", None, "/opt/x", false),
+            ])),
+            Some(section(vec![admin_mount_finding(
+                "srv.mount",
+                Some(Enabled),
+                "/srv",
+                true,
+            )])),
+        ],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+    // Unit name, mount point, nofail, count and hosts of each merged row.
+    type Row<'a> = (&'a str, Option<&'a str>, bool, i32, Vec<String>);
+    let rows: Vec<Row<'_>> = result
+        .mount_findings
+        .iter()
+        .map(|f| {
+            let aggregate = f.aggregate.as_ref().expect("an aggregate row");
+            (
+                f.unit.name().as_unit_name().as_str(),
+                f.mount_point.as_deref(),
+                f.nofail,
+                aggregate.count,
+                aggregate.hosts.clone(),
+            )
+        })
+        .collect();
+    let hosts = |names: &[&str]| names.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            ("data.mount", Some("/data"), true, 1, hosts(&["h1"])),
+            // A tie between h1 and h2: h1's finding, both hosts counted.
+            ("opt.mount", Some("/opt"), true, 2, hosts(&["h1", "h2"])),
+            // h2 and h3 agree: their finding, every host counted.
+            (
+                "srv.mount",
+                Some("/srv"),
+                true,
+                3,
+                hosts(&["h1", "h2", "h3"])
+            ),
+        ]
+    );
+    let opt = &result.mount_findings[1];
+    assert_eq!(opt.state_change, Some((Masked, None)), "h1's whole finding");
+    assert!(
+        result
+            .mount_findings
+            .iter()
+            .all(|f| f.aggregate.as_ref().is_some_and(|a| a.total == 3))
+    );
+}
