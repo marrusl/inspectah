@@ -1347,6 +1347,14 @@ The invariant is met this way, and this is the contract for each row:
 - **Generated-timer row.** Applies, as above. Including a generated unit
   whose cron job is excluded is refused with `BadRequest`, naming both
   rows.
+- **One name from two cron sources.** Two cron jobs can generate units of
+  one name (an `/etc/crontab` line and a file under `/etc/cron.d`). The
+  name is one decision, and an operation applies to every record of it.
+  The row shows included while any of its records is included, which is
+  what the export carries: an included record still stages its files and
+  its `enable`. So `SetInclude(false)` stays available while any record is
+  included, even when one source's cron job is excluded and
+  `SetInclude(true)` would be refused.
 - **Cron-job row.** Applies, with a cascade: the cron job is the source of
   its generated units, so excluding it drops every unit generated from it
   and including it brings them back (a locked unit stays out). Refine's
@@ -2348,7 +2356,8 @@ view only; the fleet view is left as it is. (Mark Russell, 2026-11-14)**
 | `default_target` | `target`, `include`, `locked`, `declined`, or absent. |
 | `mount_findings[]` | `unit`, `kind`, `state`, `mount_point`, `fragment` (`local`, `shadowed`, `vendor` for an unowned one, or `absent` for a mask with no unit file), `unit_file_path` (the config row that holds the unit file and its toggle), and `advisories[]`, the same strings § 10.6 renders. No `include`: these rows have no toggle. No mount source: the row links to the config entry, which holds the scrubbed file (§ 6.5). |
 | `manual_links[]` | `relation` (`also` included), `parent`, `unit`, `cause` (`host_install_only` and `vendor_install_only` included), and `advisories[]`, the same strings § 10.9 renders. No `include`. An install-difference row whose `install_files` are not all staged stays in the list, as a withheld file's row does, with `advisories[]` empty and `not_applied` holding the excluded path, so the operator sees why the advisory left the Containerfile and that re-including the file brings it back. |
-| `scheduled_tasks` timers | Each row gains `unit` (`<name>.timer`) and `unit_row` (whether `unit_states` holds it), so the row can link to its control. No `include`. |
+| `scheduled_tasks` timers | Each collected timer row gains `unit` (`<name>.timer`) and `unit_row` (whether `unit_states` holds it), so the row can link to its control. No `include`: the timer's state is its unit row's. |
+| `generated_timers[]` | One per generated-timer name, always present: `name` (the `generated_timer_units` name, the key of `ItemId::GeneratedTimer`), `include`, `locked`, and `cron_job_excluded`, present only while an excluded cron job generates a unit of that name, holding that cron job's path. A generated scheduled row joins to its entry through the row's `generated_timer` field, the same join `declined_generated[]` uses. `include` is true while any record of the name is included (§ 8). `cron_job_excluded` is computed on the projected snapshot with the test the session uses to refuse `SetInclude(true)` on the row, so a row that is excluded and carries it is one the server will not include: the row says which cron job to include instead of offering a toggle that would be refused. |
 
 `declined` is computed by calling `plan_units` on the session's current
 snapshot, so the row shows what the export would do with the toggles as
@@ -2358,9 +2367,36 @@ of § 10.2). It is structured, so a refusal reaches a row whose
 `staged_writes` withholds is shown the same way on the row that offered
 it, a config entry or a drop-in found by path, as `withheld` with the
 `WithheldWhy` variant and its text. A declined generated unit is shown on
-its scheduled or flatpak row. An unmanaged file refused under
-`/etc/systemd/system` (§ 10.2) carries `withheld` on its own row in the
-unmanaged-files list, a field that row gains for it.
+its scheduled or flatpak row, through `declined_generated[]`. An unmanaged
+file refused under `/etc/systemd/system` (§ 10.2) carries `withheld` on
+its own row in the unmanaged-files list, a field that row gains for it.
+
+A scheduled row is identified by the record it describes, not by its
+name. In the sections response, which lists the reference rows (not
+`ViewResponse`), a scheduled row's `id` is its kind and its source:
+
+| Row | `id` |
+|---|---|
+| Cron job | `cron:<path>` |
+| Collected timer | `timer:<path>`, the timer file's path; `timer:<name>` when the snapshot records no path |
+| At job | `at:<file>` |
+| Generated unit | `generated:<index>:<name>`, `<index>` being its place in `generated_timer_units` |
+
+Names are not unique among scheduled rows. A shadowed timer's `/etc` and
+vendor descriptions share one; a collected timer can be named
+`generated:x.timer`, which a name-based id cannot tell from a generated
+row; and two lines of one cron file generate two units of one name and
+one source path, so only the index tells them apart. The kind ends at the
+first `:` and no kind contains one, and within a kind the source is
+unique, so no two rows share an id. Nothing joins on the id or parses it:
+a generated row carries `generated_timer`, its name, which keys its
+`generated_timers[]` entry, its `declined_generated[]` entry and its
+decision. The refine projection's `GenericRefItem` carries `scheduled`,
+the record a scheduled row describes, from which the id is built:
+`CronJob { path }`, `Timer { path, name }`, `AtJob { file }` or
+`GeneratedTimer { index, name }`, and `None` on every other section's
+row. The projection's own `id`s, and every other section's row ids, are
+unchanged.
 
 Two results of § 10.2 come from a toggle on a different row, and the unit
 row has to say so. Excluding a full shadow or an install drop-in
@@ -2375,12 +2411,15 @@ keeps its cascade to drop-ins and its membership check before it applies.
 `ItemId::DefaultTarget` is added; it toggles the recorded target and takes
 no target name of its own. `ItemId::SystemdTimer` is removed. `SetInclude`
 on a mount finding or a hand-made link does not exist, so there is nothing
-to refuse. `SetInclude` on a generated-timer row applies, and is refused
-with `BadRequest` when its cron job is excluded. On a cron-job row it
-applies to every unit generated from the cron job, and is refused with
-`NoopTarget` when the cron job generates none. On an at-job row it is
-refused with `BadRequest`. The bulk scheduling toggle sends neither
-refused kind (§ 8).
+to refuse. What the server does with each scheduled operation is § 8's
+contract; what single-host refine offers is narrower. A generated-timer
+row has its own include control, bound to `ItemId::GeneratedTimer`. It is
+shown unless the row is excluded and carries `cron_job_excluded`; then
+the row names the cron job to include instead. Cron-job and at-job rows
+have no per-row control and stay reference rows. The only route to a
+cron-job operation is the services-and-scheduling bulk toggle, which
+sends `CronJob` and `GeneratedTimer` operations and nothing for an at job
+or for a cron job that generates no unit (§ 8).
 
 The cascade from a unit row to its drop-ins is kept, full shadows
 included. It cannot produce an enable on an administrator's storage file:
@@ -2683,7 +2722,21 @@ Phase 3 (one control per fact):
   handlers, the scheduling bulk toggle sends the cron-job and
   generated-timer operations and no at-job operation and no cron-job
   operation for a cron job that generates nothing, and its exclude and
-  include change the staged tree and the plan.
+  include change the staged tree and the plan. Through the production
+  handlers, the view's `generated_timers[]` entry follows its row: an
+  exclude clears `include` and the enable from the preview, an include
+  restores both, and with the cron job excluded the entry carries
+  `cron_job_excluded` naming it and the include is refused. Two cron
+  sources generating one name, one of them excluded, in either record
+  order: one entry with `include` true and `cron_job_excluded` set, the
+  preview still carrying the unit; the exclude applies and the include
+  after it is refused. In the sections response, a cron job, a shadowed
+  timer's two files, a collected timer named `generated:cron-backup.timer`,
+  an at job and two generated units of one name from one cron file each
+  have the id § 11.1 gives, all distinct, and only the generated rows
+  carry `generated_timer`; a timer with no recorded path has
+  `timer:<name>`. The UI offers the generated row's toggle and
+  no control on a cron-job or at-job row.
 - **T36. An inventory name blocks a generated pair.** A package timer at
   its preset, in the inventory with no state change, and a generated cron
   pair of the same name: neither generated file is in the staged tree,
