@@ -56,6 +56,15 @@ function dropinKey(path: string): string {
   return JSON.stringify(["dropin", path]);
 }
 
+/**
+ * A link row's identity: its relation, parent and unit, JSON-encoded. A
+ * unit name can hold `-` (`a.service-b.service`), so joining the three
+ * with a separator could give two links one key or test id.
+ */
+function linkIdentity(link: ManualLinkView): string {
+  return JSON.stringify([link.relation, link.parent, link.unit]);
+}
+
 /** Guard key for the default target, whose op has no item_id key. */
 const DEFAULT_TARGET_KEY = JSON.stringify(["default_target"]);
 
@@ -459,7 +468,7 @@ function ManualLinkRow({ link }: { link: ManualLinkView }) {
         notApplied.length > 0 && notAppliedId,
       )}
       tabIndex={-1}
-      data-testid={`manual-link-${link.relation}-${link.parent}-${link.unit}`}
+      data-testid={`manual-link-${linkIdentity(link)}`}
       data-cause={causeName(link.cause)}
       className="inspectah-decision-row inspectah-manual-link"
     >
@@ -879,14 +888,15 @@ export function ServiceSection({
       ))}
 
       {manualLinks.map((link) => (
-        <ManualLinkRow
-          key={JSON.stringify([link.relation, link.parent, link.unit])}
-          link={link}
-        />
+        <ManualLinkRow key={linkIdentity(link)} link={link} />
       ))}
 
       {undeterminedInstalls.map((r) => (
-        <UndeterminedInstallRow key={r.unit} record={r} />
+        // Not the bare unit name: service and mount rows beside it use it.
+        <UndeterminedInstallRow
+          key={JSON.stringify(["undetermined", r.unit])}
+          record={r}
+        />
       ))}
 
       {/* Drop-ins whose unit produced no state change: a unit sitting at

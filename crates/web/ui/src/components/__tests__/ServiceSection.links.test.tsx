@@ -132,7 +132,8 @@ function describedBy(el: HTMLElement): string[] {
 }
 
 function linkRow(link: ManualLinkView): HTMLElement {
-  return screen.getByTestId(`manual-link-${link.relation}-${link.parent}-${link.unit}`);
+  const identity = JSON.stringify([link.relation, link.parent, link.unit]);
+  return screen.getByTestId(`manual-link-${identity}`);
 }
 
 describe("ServiceSection: hand-made links", () => {
@@ -237,6 +238,20 @@ describe("ServiceSection: hand-made links", () => {
     const described = describedBy(row);
     expect(described[0]).toBe(OMITTED_LINE);
     expect(described[1]).toContain(ADD);
+  });
+
+  it("gives two links a test id each when their names hold dashes", () => {
+    // Joined with "-", both triples read wants-a.service-b.service-c.service.
+    const first = makeLink({ parent: "a.service", unit: "b.service-c.service" });
+    const second = makeLink({ parent: "a.service-b.service", unit: "c.service" });
+    render(<ServiceSection {...baseProps} manualLinks={[first, second]} />);
+    const rows = screen
+      .getByTestId("service-section")
+      .querySelectorAll(".inspectah-manual-link");
+    expect(rows).toHaveLength(2);
+    const ids = [...rows].map((r) => r.getAttribute("data-testid"));
+    expect(new Set(ids).size).toBe(2);
+    expect(linkRow(first)).not.toBe(linkRow(second));
   });
 
   it("does not toggle a link from the keyboard", async () => {

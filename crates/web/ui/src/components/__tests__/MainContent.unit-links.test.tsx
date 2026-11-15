@@ -59,7 +59,9 @@ describe("MainContent: units section links, records and default target", () => {
       />,
     );
     expect(
-      screen.getByTestId("manual-link-wants-multi-user.target-backup.service"),
+      screen.getByTestId(
+        `manual-link-${JSON.stringify(["wants", "multi-user.target", "backup.service"])}`,
+      ),
     ).toBeInTheDocument();
     expect(screen.getByTestId("undetermined-install-need.service")).toBeInTheDocument();
     expect(screen.getByTestId("default-target")).toBeInTheDocument();
