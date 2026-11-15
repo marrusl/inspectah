@@ -9,9 +9,10 @@ use inspectah_core::baseline::{
 };
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
-    CarriedUnit, MountUnitFinding, StorageKind, SystemdDropIn, UnitAction, UnitFragment, UnitName,
-    UnitState, UnitStateChange,
+    CarriedUnit, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, UnitAction,
+    UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -236,6 +237,16 @@ pub enum OmissionReason {
     /// The target needs the unit, or needs it unmasked (§ 10.2 rule 3,
     /// § 10.3). Rendered as a FIXME, not an `# Omitted:` line.
     TargetNeedsUnit,
+    /// A drop-in that sets a timer's `Unit=` is not in the export, so the
+    /// unit it would start is not the recorded trigger (§ 10.2 rule 5).
+    /// `path` is that drop-in's recorded path.
+    TimerTriggerEvidenceChanged { path: String },
+    /// A timer's `Unit=` could not be resolved to a unit name (§ 10.2
+    /// rule 5).
+    TimerTriggerUnresolved,
+    /// A timer's trigger is a local unit whose file is not in the export,
+    /// and nothing else provides it (§ 10.2 rule 5).
+    TimerTriggerNotStaged { trigger: UnitName },
     /// A mask and a staged unit file claim one path: `systemctl mask`
     /// exits 1 on a regular file there (§ 10.2 rule 4).
     MaskPathOccupied { path: String },
@@ -274,6 +285,18 @@ impl OmissionReason {
                 format!("the export carries an administrator's unit file for it ({path})")
             }
             Self::TargetNeedsUnit => TARGET_NEEDS_UNIT.to_owned(),
+            Self::TimerTriggerEvidenceChanged { path } => format!(
+                "the drop-in {path} that sets its Unit= is not in the export, so the unit it \
+                 would start is not the one recorded"
+            ),
+            Self::TimerTriggerUnresolved => "its Unit= could not be resolved to a unit name, so \
+                 inspectah cannot tell whether that unit is in the image"
+                .to_owned(),
+            Self::TimerTriggerNotStaged { trigger } => format!(
+                "its unit {} is not in the export, and a timer whose unit is missing does not \
+                 start",
+                trigger.as_str()
+            ),
             Self::MaskPathOccupied { path } => {
                 format!("the export also carries a unit file at {path}; exclude one of the two")
             }
@@ -313,6 +336,9 @@ impl OmissionReason {
             Self::InstallEvidenceChanged { .. } => "InstallEvidenceChanged",
             Self::StorageFileStaged { .. } => "StorageFileStaged",
             Self::TargetNeedsUnit => "TargetNeedsUnit",
+            Self::TimerTriggerEvidenceChanged { .. } => "TimerTriggerEvidenceChanged",
+            Self::TimerTriggerUnresolved => "TimerTriggerUnresolved",
+            Self::TimerTriggerNotStaged { .. } => "TimerTriggerNotStaged",
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
         }
@@ -329,6 +355,9 @@ impl OmissionReason {
             | Self::InstallEvidenceChanged { .. }
             | Self::StorageFileStaged { .. }
             | Self::TargetNeedsUnit
+            | Self::TimerTriggerEvidenceChanged { .. }
+            | Self::TimerTriggerUnresolved
+            | Self::TimerTriggerNotStaged { .. }
             | Self::MaskPathOccupied { .. }
             | Self::GeneratedNameCollision { .. } => None,
         }
@@ -1024,6 +1053,134 @@ fn rule_5_file(
     }
 }
 
+/// Rule 5 asked of a timer's trigger (§ 10.2, "A timer's trigger is held
+/// to the same rule"), for an `enable` that passed the timer's own file
+/// and package. `Ok` for a unit that is not a timer. The timer's recorded
+/// descriptions are its local one when there is one (the `/etc` file is
+/// what loads), else its vendor one; each must pass, in order:
+///
+/// 1. every path in `trigger_drop_ins` is staged, else
+///    [`OmissionReason::TimerTriggerEvidenceChanged`];
+/// 2. the trigger is resolved, else
+///    [`OmissionReason::TimerTriggerUnresolved`]. A timer with no
+///    description records no trigger, which is read the same way;
+/// 3. the trigger is not a local unit whose file is unstaged with nothing
+///    else providing it ([`local_trigger_missing`]), else
+///    [`OmissionReason::TimerTriggerNotStaged`].
+fn timer_trigger_check(
+    snap: &InspectionSnapshot,
+    timer: &UnitName,
+    presence: Option<&Presence<'_>>,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    if timer.kind() != UnitKind::Ordinary(OrdinaryKind::Timer) {
+        return Ok(());
+    }
+    let stem = timer
+        .as_str()
+        .strip_suffix(".timer")
+        .expect("a timer's name ends in .timer");
+    let described: Vec<_> = snap
+        .scheduled_tasks
+        .iter()
+        .flat_map(|st| &st.systemd_timers)
+        .filter(|t| t.name == stem)
+        .collect();
+    let local: Vec<_> = described
+        .iter()
+        .copied()
+        .filter(|t| t.source == "local")
+        .collect();
+    let recorded = if local.is_empty() { described } else { local };
+    if recorded.is_empty() {
+        return Err(OmissionReason::TimerTriggerUnresolved);
+    }
+    for description in recorded {
+        if let Some(path) = description
+            .trigger_drop_ins
+            .iter()
+            .find(|path| !is_staged(staged, path))
+        {
+            return Err(OmissionReason::TimerTriggerEvidenceChanged { path: path.clone() });
+        }
+        let TimerTrigger::Unit(trigger) = &description.trigger else {
+            return Err(OmissionReason::TimerTriggerUnresolved);
+        };
+        if local_trigger_missing(snap, trigger, presence, staged) {
+            return Err(OmissionReason::TimerTriggerNotStaged {
+                trigger: trigger.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `trigger` is a local unit the image would lack: the snapshot
+/// holds it as a unit file under `/etc/systemd/system` with no vendor file
+/// of that name (a config entry at its path that shadows nothing, or a
+/// state change recorded `Local`), that file is not staged, and nothing
+/// else provides the unit. A staged generated unit of the name is a
+/// staged file at the path. A package in the image that owns the config
+/// entry provides it; one whose presence cannot be decided is taken to,
+/// as the presence tiers take an unproved absence. A vendor file is known
+/// from a state change recorded `Vendor` or `Shadowed`, or a drop-in row
+/// at the path, which is a full shadow.
+fn local_trigger_missing(
+    snap: &InspectionSnapshot,
+    trigger: &UnitName,
+    presence: Option<&Presence<'_>>,
+    staged: &StagedWrites<'_>,
+) -> bool {
+    let path = etc_unit_path(trigger);
+    if is_staged(staged, &path) {
+        return false;
+    }
+    let Ok(dest) = Destination::new(&path) else {
+        return false;
+    };
+    let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == dest);
+    let change = snap
+        .units
+        .iter()
+        .flat_map(|u| &u.state_changes)
+        .find(|sc| sc.unit().name() == trigger);
+    let vendor_file = change.is_some_and(|sc| match sc.unit() {
+        CarriedUnit::Ordinary(ordinary) => matches!(
+            ordinary.fragment(),
+            UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
+        ),
+        CarriedUnit::PackagedStorage(_) => true,
+    }) || snap
+        .units
+        .iter()
+        .flat_map(|u| &u.drop_ins)
+        .any(|d| at_dest(&d.path));
+    if vendor_file {
+        return false;
+    }
+    let entries: Vec<_> = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(|f| at_dest(&f.path) && f.shadowed_by.is_none())
+        .collect();
+    let packaged = entries.iter().any(|f| {
+        f.package.as_deref().is_some_and(|package| {
+            presence.is_none_or(|p| p.baseline_unavailable || p.target_packages.contains(package))
+        })
+    });
+    if packaged {
+        return false;
+    }
+    let local_change = change.is_some_and(|sc| {
+        matches!(
+            sc.unit(),
+            CarriedUnit::Ordinary(ordinary) if matches!(ordinary.fragment(), UnitFragment::Local { .. })
+        )
+    });
+    local_change || !entries.is_empty()
+}
+
 /// Whether rule 5 asks the presence tiers about the unit's package
 /// (§ 10.2): only for a unit whose image file comes from that package, a
 /// `Vendor` unit or a package-owned storage unit. A `Shadowed` unit's one
@@ -1365,14 +1522,14 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 .as_ref()
                 .filter(|_| needs_its_package(sc.unit()))
                 .map(|p| p.decide(sc));
-            match decision {
+            let advisory = match decision {
                 Some(PresenceDecision::Omit(reason)) => {
                     plan.declined.push((name, action, reason));
                     continue;
                 }
                 Some(PresenceDecision::Emit {
                     advisory_reasons: Some((owning_package, reasons)),
-                }) => plan.advisories.push(ServiceAdvisory {
+                }) => Some(ServiceAdvisory {
                     unit: name.clone(),
                     owning_package,
                     reasons,
@@ -1380,8 +1537,15 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                 Some(PresenceDecision::Emit {
                     advisory_reasons: None,
                 })
-                | None => {}
+                | None => None,
+            };
+            if action == UnitAction::Enable
+                && let Err(reason) = timer_trigger_check(snap, &name, presence.as_ref(), staged)
+            {
+                plan.declined.push((name, action, reason));
+                continue;
             }
+            plan.advisories.extend(advisory);
         }
         plan.planned.push(PlannedUnit { name, action });
     }

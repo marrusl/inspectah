@@ -1131,7 +1131,7 @@ fn storage_section(kind: StorageKind) -> &'static str {
 
 /// The characters systemd's unit file parser strips from the ends of a
 /// line, a key and a value.
-const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
+pub(crate) const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
 
 /// The characters that start a comment line in a unit file.
 const UNIT_FILE_COMMENT_STARTS: &[char] = &['#', ';'];
@@ -1172,7 +1172,7 @@ fn physical_lines(content: &str) -> Vec<&str> {
 /// space. A comment line is skipped wherever it is, inside a continuation
 /// too, so it neither ends nor continues one. A continuation still open at
 /// the end of the file is a line of its own.
-fn logical_lines(content: &str) -> Vec<String> {
+pub(crate) fn logical_lines(content: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut pending: Option<String> = None;
     for line in physical_lines(content) {

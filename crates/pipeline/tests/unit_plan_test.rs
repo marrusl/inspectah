@@ -1617,11 +1617,37 @@ fn units_snapshot(changes: Vec<UnitStateChange>, files: Vec<(&str, &str)>) -> In
             })
             .collect(),
     });
+    snap.scheduled_tasks = Some(timer_descriptions(&changes));
     snap.units = Some(UnitSection {
         state_changes: changes,
         ..Default::default()
     });
     snap
+}
+
+/// The scheduled section a scan records beside `changes`: a description of
+/// each timer, with its default trigger, the same-named service, so the
+/// trigger check of rule 5 reads what the scheduled inspector would have
+/// recorded for a timer that sets no `Unit=`.
+fn timer_descriptions(
+    changes: &[UnitStateChange],
+) -> inspectah_core::types::scheduled::ScheduledTaskSection {
+    use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer, TimerTrigger};
+    ScheduledTaskSection {
+        systemd_timers: changes
+            .iter()
+            .filter_map(|sc| sc.unit().name().as_str().strip_suffix(".timer"))
+            .map(|stem| SystemdTimer {
+                name: stem.to_owned(),
+                source: "local".into(),
+                trigger: TimerTrigger::Unit(
+                    format!("{stem}.service").try_into().expect("a unit name"),
+                ),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
 }
 
 /// § 10.1: one `RUN` per verb (enable, disable, mask), each unit
@@ -2258,18 +2284,18 @@ fn the_first_failing_rule_decides() {
 
 /// The generated `cron-backup` pair of one cron entry.
 fn with_generated_cron_backup(mut snap: InspectionSnapshot) -> InspectionSnapshot {
-    use inspectah_core::types::scheduled::{GeneratedTimerUnit, ScheduledTaskSection};
-    snap.scheduled_tasks = Some(ScheduledTaskSection {
-        generated_timer_units: vec![GeneratedTimerUnit {
+    use inspectah_core::types::scheduled::GeneratedTimerUnit;
+    snap.scheduled_tasks
+        .get_or_insert_default()
+        .generated_timer_units
+        .push(GeneratedTimerUnit {
             name: "cron-backup".into(),
             cron_expr: "0 2 * * *".into(),
             timer_content: "[Timer]\nOnCalendar=daily\n".into(),
             service_content: "[Service]\nExecStart=/usr/bin/backup\n".into(),
             disposition: FindingKind::included(),
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        });
     snap
 }
 

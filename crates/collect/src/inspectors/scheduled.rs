@@ -7,8 +7,9 @@ use inspectah_core::types::FindingKind;
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::scheduled::{
-    AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+    AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer, TimerTrigger,
 };
+use inspectah_core::types::units::UnitName;
 use inspectah_core::types::warnings::Warning;
 use std::collections::HashMap;
 use std::path::Path;
@@ -812,6 +813,7 @@ fn scan_systemd_timers(
             String::new()
         };
         let exec_start = parse_unit_field(&service_text, "ExecStart");
+        let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text);
 
         section.systemd_timers.push(SystemdTimer {
             name: name.to_string(),
@@ -820,9 +822,144 @@ fn scan_systemd_timers(
             description,
             source: source_label.to_string(),
             path: strip_leading_slash(&timer_path),
+            trigger,
+            trigger_drop_ins,
             ..Default::default()
         });
     }
+}
+
+/// The directories a timer's drop-ins are read from, in the order a
+/// drop-in of one file name overrides: the administrator's first.
+const TIMER_DROP_IN_DIRS: [&str; 2] = ["/etc/systemd/system", "/usr/lib/systemd/system"];
+
+/// The administrator's unit directory, whose drop-ins setting `Unit=` are
+/// recorded as the trigger's evidence.
+const ETC_TIMER_DROP_IN_DIR: &str = "/etc/systemd/system";
+
+/// Every `Unit=` value assigned in the `[Timer]` section of `content`, in
+/// order, read by logical line as systemd reads keys.
+fn timer_unit_assignments(content: &str) -> Vec<String> {
+    use super::units::{UNIT_FILE_WHITESPACE, logical_lines};
+    let mut in_timer = false;
+    let mut values = Vec::new();
+    for line in logical_lines(content) {
+        let line = line.trim_matches(UNIT_FILE_WHITESPACE);
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            in_timer = name == "Timer";
+            continue;
+        }
+        if !in_timer {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=')
+            && key.trim_matches(UNIT_FILE_WHITESPACE) == "Unit"
+        {
+            values.push(value.trim_matches(UNIT_FILE_WHITESPACE).to_owned());
+        }
+    }
+    values
+}
+
+/// `value` with the specifiers the `[Install]` reader expands, `%i`, `%I`,
+/// `%p` and `%N`, and `%%`, expanded for the timer `name` (its unit name
+/// without `.timer`), or `None` for any other specifier.
+fn expand_timer_specifiers(value: &str, name: &str) -> Option<String> {
+    let (prefix, instance) = match name.split_once('@') {
+        Some((prefix, instance)) => (prefix, instance),
+        None => (name, ""),
+    };
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next()? {
+            'i' => out.push_str(instance),
+            'I' => out.push_str(&unescape_unit_text(instance)?),
+            'p' => out.push_str(prefix),
+            'N' => out.push_str(name),
+            '%' => out.push('%'),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// systemd's unescaping of a unit name part: `-` is `/` and `\xNN` is
+/// that byte. `None` when an escape is malformed or the result is not
+/// UTF-8.
+fn unescape_unit_text(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        match b {
+            b'-' => {
+                bytes.push(b'/');
+                rest = tail;
+            }
+            b'\\' => {
+                let hex = tail.strip_prefix(b"x")?.get(..2)?;
+                bytes.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+                rest = &tail[3..];
+            }
+            other => {
+                bytes.push(other);
+                rest = tail;
+            }
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The trigger of the timer `name` whose own file reads `timer_text`, and
+/// the `/etc` drop-ins that assign its `Unit=` (§ 8). Drop-ins are
+/// `<name>.timer.d/*.conf` under each of [`TIMER_DROP_IN_DIRS`], applied
+/// after the file in file-name order, an `/etc` file overriding a vendor
+/// one of the same name; the last `Unit=` wins and an empty one resets
+/// it. With none, the trigger is `<name>.service`. A value with a
+/// specifier the reader does not expand, or that is not a unit name, is
+/// [`TimerTrigger::Unresolved`].
+fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTrigger, Vec<String>) {
+    let mut drop_ins: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    for dir in TIMER_DROP_IN_DIRS.iter().rev() {
+        let dir = format!("{dir}/{name}.timer.d");
+        let Ok(entries) = exec.read_dir(Path::new(&dir)) else {
+            continue;
+        };
+        for entry in entries.into_iter().filter(|e| e.ends_with(".conf")) {
+            drop_ins.insert(entry.clone(), format!("{dir}/{entry}"));
+        }
+    }
+    let mut assigned: Option<String> = None;
+    for value in timer_unit_assignments(timer_text) {
+        assigned = (!value.is_empty()).then_some(value);
+    }
+    let mut evidence = Vec::new();
+    for path in drop_ins.values() {
+        let content = exec.read_file(Path::new(path)).unwrap_or_default();
+        let values = timer_unit_assignments(&content);
+        if values.is_empty() {
+            continue;
+        }
+        if path.starts_with(&format!("{ETC_TIMER_DROP_IN_DIR}/")) {
+            evidence.push(path.clone());
+        }
+        for value in values {
+            assigned = (!value.is_empty()).then_some(value);
+        }
+    }
+    let unit = match assigned {
+        None => Some(format!("{name}.service")),
+        Some(value) => expand_timer_specifiers(&value, name),
+    };
+    let trigger = unit
+        .and_then(|unit| UnitName::try_from(unit).ok())
+        .map_or(TimerTrigger::Unresolved, TimerTrigger::Unit);
+    (trigger, evidence)
 }
 
 // ---------------------------------------------------------------------------
@@ -1366,6 +1503,97 @@ mod tests {
         assert!(
             service.contains("@reboot"),
             "service must reference @reboot origin for traceability"
+        );
+    }
+
+    /// T37, the collector half: `Unit=` is read from `[Timer]` by logical
+    /// line, the last assignment winning and an empty one resetting it,
+    /// and expanded for the timer's own name: `%i`, `%I`, `%p` and `%N`,
+    /// for a concrete instance timer and for a plain one. Any other
+    /// specifier, or a result that is not a unit name, is `Unresolved`.
+    #[test]
+    fn a_timers_unit_assignment_is_read_and_expanded() {
+        assert_eq!(
+            timer_unit_assignments(
+                "[Timer]\nUnit=a.service\n[Unit]\nUnit=b.service\n[Timer]\nUnit=\\\n c.service\n"
+            ),
+            ["a.service", "c.service"]
+        );
+        let resolved = |value: &str, name: &str| {
+            expand_timer_specifiers(value, name)
+                .and_then(|unit| UnitName::try_from(unit).ok())
+                .map(|unit| unit.as_str().to_owned())
+        };
+        for (value, name, expected) in [
+            ("worker@%i.service", "worker@a", Some("worker@a.service")),
+            (
+                "%p-run@%i.service",
+                "worker@a",
+                Some("worker-run@a.service"),
+            ),
+            ("%N.service", "worker@a", Some("worker@a.service")),
+            ("%N.service", "report", Some("report.service")),
+            ("%p.service", "report", Some("report.service")),
+            ("x@%I.service", "worker@db", Some("x@db.service")),
+            ("x@%I.service", "worker@a-b", None),
+            ("report-%H.service", "report", None),
+            ("report%", "report", None),
+        ] {
+            assert_eq!(
+                resolved(value, name).as_deref(),
+                expected,
+                "{value} for {name}"
+            );
+        }
+    }
+
+    /// T37, the collector half through the inspector: a drop-in under
+    /// `/etc` that assigns `Unit=` is recorded and wins over the timer's
+    /// own file; a vendor drop-in is applied and not recorded; a drop-in
+    /// that assigns nothing is not recorded; with no `Unit=` the trigger is
+    /// the same-named service.
+    #[test]
+    fn a_timers_trigger_and_its_drop_ins_are_recorded() {
+        let exec = MockExecutor::new()
+            .with_file(
+                "/etc/systemd/system/report.timer.d/10-unit.conf",
+                "[Timer]\nUnit=other.service\n",
+            )
+            .with_file(
+                "/etc/systemd/system/report.timer.d/20-calendar.conf",
+                "[Timer]\nOnCalendar=weekly\n",
+            )
+            .with_dir(
+                "/etc/systemd/system/report.timer.d",
+                vec!["10-unit.conf", "20-calendar.conf"],
+            )
+            .with_file(
+                "/usr/lib/systemd/system/report.timer.d/30-vendor.conf",
+                "[Timer]\nUnit=vendor.service\n",
+            )
+            .with_dir(
+                "/usr/lib/systemd/system/report.timer.d",
+                vec!["30-vendor.conf"],
+            );
+        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
+        assert_eq!(
+            timer_trigger(&exec, "report", "[Timer]\nOnCalendar=daily\n"),
+            (
+                unit("vendor.service"),
+                vec!["/etc/systemd/system/report.timer.d/10-unit.conf".to_owned()]
+            )
+        );
+        assert_eq!(
+            timer_trigger(&MockExecutor::new(), "plain", "[Timer]\nOnCalendar=daily\n"),
+            (unit("plain.service"), Vec::new())
+        );
+        assert_eq!(
+            timer_trigger(
+                &MockExecutor::new(),
+                "plain",
+                "[Timer]\nUnit=x.service\nUnit=\n"
+            ),
+            (unit("plain.service"), Vec::new())
         );
     }
 

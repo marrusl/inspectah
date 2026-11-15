@@ -413,6 +413,8 @@ mod tests {
             description: _, // scrubbed: the one free-text line a .timer has
             source: _,
             path: _,
+            trigger: _,          // identifier: a proved UnitName or `unresolved`
+            trigger_drop_ins: _, // identifiers: drop-in paths, no content
             aggregate: _,
         } = SystemdTimer::default();
 

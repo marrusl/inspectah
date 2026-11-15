@@ -399,8 +399,13 @@ fn a_collected_timer_is_a_description_only() {
             "name",
             "on_calendar",
             "path",
-            "source"
+            "source",
+            "trigger"
         ]
+    );
+    assert_eq!(
+        cleanup["trigger"],
+        serde_json::json!({"unit": "cleanup.service"})
     );
     assert_eq!(cleanup["source"], "local");
     assert_eq!(cleanup["path"], "etc/systemd/system/cleanup.timer");

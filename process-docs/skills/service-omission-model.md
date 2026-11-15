@@ -145,6 +145,19 @@ showed, and the build failed with no warning anywhere.
 - `UnitFileNotStaged`, `InstallEvidenceChanged { path }`,
   `StorageFileStaged { path }`, `TargetNeedsUnit` and
   `MaskPathOccupied { path }`: the rules above.
+- `TimerTriggerEvidenceChanged { path }`, `TimerTriggerUnresolved` and
+  `TimerTriggerNotStaged { trigger }`: rule 5 asked of a timer's trigger,
+  for an `enable` only, after the timer's own file and package, in that
+  order (`timer_trigger_check`). The plan reads the trigger the scheduled
+  inspector recorded on the timer's description (`SystemdTimer.trigger`,
+  `trigger_drop_ins`) and parses no unit file: a recorded drop-in that is
+  not staged means the recorded trigger may not be the image's, so the
+  check declines rather than re-resolve it. A timer with no description,
+  or an `unresolved` trigger, declines too: an unknown trigger is never
+  read as no local trigger. A local trigger is a unit file under
+  `/etc/systemd/system` with no vendor file (`local_trigger_missing`); a
+  staged file at its path, a generated one included, or a package in the
+  image that owns it, provides it.
 - `GeneratedNameCollision { name, reserved_by }`: a generated request
   whose files the stager withheld because a collected unit, `name`, has
   one file's name. A FIXME, with exclude advice for `Reservation::Row`

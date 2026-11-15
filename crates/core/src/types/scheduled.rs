@@ -1,5 +1,6 @@
 use super::FindingKind;
 use super::aggregate::AggregatePrevalence;
+use super::units::UnitName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -35,8 +36,33 @@ pub struct SystemdTimer {
     pub source: String,
     #[serde(default)]
     pub path: String,
+    /// The unit the timer starts, as the inspector resolved it from this
+    /// file and its drop-ins (§ 8).
+    #[serde(default)]
+    pub trigger: TimerTrigger,
+    /// Every drop-in under `/etc/systemd/system` that assigns `Unit=` in
+    /// the timer's `[Timer]` section, whether or not a later one overrides
+    /// it: the files that set `trigger`, besides the timer's own file.
+    /// Empty when no `/etc` drop-in assigns `Unit=`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_drop_ins: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<AggregatePrevalence>,
+}
+
+/// The unit a timer starts (§ 8): its `Unit=`, or the same-named
+/// `.service` when it sets none.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimerTrigger {
+    /// The unit the timer starts.
+    Unit(UnitName),
+    /// `Unit=` holds a value the inspector cannot make into a unit name.
+    /// Also what a description that records no trigger reads as, so a
+    /// snapshot that lacks the field is never read as having no trigger to
+    /// check.
+    #[default]
+    Unresolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

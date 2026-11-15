@@ -5943,3 +5943,255 @@ fn a_rescanned_flatpak_service_with_one_of_its_rows_excluded_stays_collected() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 8 and § 10.2 rule 5: a carried timer needs its trigger (T37).
+// ---------------------------------------------------------------------
+
+/// A local `report.timer` whose `[Timer]` adds `timer_extra`, enabled
+/// against a `disable` preset, and the local units `report.service` and
+/// `other.service`.
+fn t37_host(timer_extra: &str) -> UnitHost {
+    UnitHost::new()
+        .base_package("glibc")
+        .unit("report.timer", "enabled")
+        .unit("report.service", "static")
+        .unit("other.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "report.timer",
+            &format!(
+                "[Unit]\nDescription=Nightly report\n[Timer]\nOnCalendar=daily\n{timer_extra}\
+                 [Install]\nWantedBy=timers.target\n"
+            ),
+        )
+        .etc_unit(
+            "report.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/report\n",
+        )
+        .etc_unit(
+            "other.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/other\n",
+        )
+}
+
+/// The local description of `report.timer`.
+fn report_timer(snap: &InspectionSnapshot) -> &inspectah_core::types::scheduled::SystemdTimer {
+    snap.scheduled_tasks
+        .as_ref()
+        .and_then(|st| {
+            st.systemd_timers
+                .iter()
+                .find(|t| t.name == "report" && t.source == "local")
+        })
+        .expect("presence: report.timer's description")
+}
+
+fn trigger_unit(name: &str) -> inspectah_core::types::scheduled::TimerTrigger {
+    inspectah_core::types::scheduled::TimerTrigger::Unit(name.to_owned().try_into().unwrap())
+}
+
+/// The `TimerTriggerNotStaged` line for `report.timer` and `trigger`.
+fn trigger_not_staged(trigger: &str) -> String {
+    format!(
+        "# Omitted: report.timer (its unit {trigger} is not in the export, and a timer whose \
+         unit is missing does not start)"
+    )
+}
+
+/// T37: an enabled local timer whose trigger, the paired `report.service`
+/// or the `other.service` its `Unit=` names, has its config row excluded:
+/// no instruction names the timer, the `TimerTriggerNotStaged` line names
+/// the trigger, and the timer's refine row shows the reason. Including the
+/// trigger's row again brings the enable back. Presence and the positive
+/// control: the unchanged refine export enables the timer.
+#[test]
+fn t37_a_timer_whose_trigger_is_excluded_is_not_enabled() {
+    for (extra, trigger) in [
+        ("", "report.service"),
+        ("Unit=other.service\n", "other.service"),
+    ] {
+        let snap = scan(t37_host(extra));
+        let timer = report_timer(&snap);
+        assert_eq!(timer.trigger, trigger_unit(trigger), "{trigger}");
+        assert!(timer.trigger_drop_ins.is_empty(), "{trigger}");
+        let unchanged = containerfile_in(&exported_after(&snap, &[]));
+        assert!(acts(&unchanged, "enable", "report.timer"), "{unchanged}");
+
+        let excluded_op = (config_item(&etc_path(trigger)), false);
+        let tree = exported_after(&snap, std::slice::from_ref(&excluded_op));
+        let cf = containerfile_in(&tree);
+        assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+        assert_eq!(
+            omitted(&cf, "report.timer"),
+            Some(trigger_not_staged(trigger).as_str()),
+            "{cf}"
+        );
+        let mut refine = session(&snap);
+        refine
+            .apply(set_include(excluded_op.0.clone(), false))
+            .expect("applies");
+        let declined = declined_in(&refine, "report.timer").expect("a declined row");
+        assert_eq!(declined.reason, "TimerTriggerNotStaged");
+        assert_eq!(
+            format!("# Omitted: {}", declined.text),
+            trigger_not_staged(trigger)
+        );
+
+        let restored = containerfile_in(&exported_after(
+            &snap,
+            &[excluded_op.clone(), (excluded_op.0, true)],
+        ));
+        assert!(acts(&restored, "enable", "report.timer"), "{restored}");
+    }
+}
+
+/// T37, changed evidence: `report.timer` gets `Unit=other.service` from a
+/// drop-in under `/etc`. The drop-in is recorded in `trigger_drop_ins`.
+/// With it and `report.service` excluded, the enable is omitted as
+/// `TimerTriggerEvidenceChanged` naming the drop-in, although
+/// `other.service` is staged: in the image the timer would start
+/// `report.service`. With the drop-in included again the enable returns.
+#[test]
+fn t37_a_timer_whose_unit_drop_in_is_excluded_is_not_enabled() {
+    const DROP_IN: &str = "/etc/systemd/system/report.timer.d/unit.conf";
+    let snap = scan(t37_host("").file(DROP_IN, "[Timer]\nUnit=other.service\n"));
+    let timer = report_timer(&snap);
+    assert_eq!(timer.trigger, trigger_unit("other.service"));
+    assert_eq!(timer.trigger_drop_ins, [DROP_IN]);
+    let drop_in = ItemId::DropIn {
+        path: DROP_IN.into(),
+    };
+    let excluded = [
+        (drop_in.clone(), false),
+        (config_item(&etc_path("report.service")), false),
+    ];
+    let tree = exported_after(&snap, &excluded);
+    assert!(
+        !files_named(tree.path(), "other.service").is_empty(),
+        "other.service is staged"
+    );
+    let cf = containerfile_in(&tree);
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert_eq!(
+        omitted(&cf, "report.timer"),
+        Some(
+            format!(
+                "# Omitted: report.timer (the drop-in {DROP_IN} that sets its Unit= is not in \
+                 the export, so the unit it would start is not the one recorded)"
+            )
+            .as_str()
+        ),
+        "{cf}"
+    );
+
+    let mut restored = excluded.to_vec();
+    restored.push((drop_in, true));
+    let cf = containerfile_in(&exported_after(&snap, &restored));
+    assert!(acts(&cf, "enable", "report.timer"), "{cf}");
+}
+
+/// T37, an unresolved trigger: `Unit=` with a specifier the inspector does
+/// not expand records the trigger as `Unresolved`, and the enable is
+/// omitted as `TimerTriggerUnresolved`, through both exports.
+#[test]
+fn t37_a_timer_whose_unit_cannot_be_resolved_is_not_enabled() {
+    let snap = scan(t37_host("Unit=report-%H.service\n"));
+    assert_eq!(
+        report_timer(&snap).trigger,
+        inspectah_core::types::scheduled::TimerTrigger::Unresolved
+    );
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            in_no_systemctl_instruction(&cf, "report.timer"),
+            "{route}:\n{cf}"
+        );
+        assert_eq!(
+            omitted(&cf, "report.timer"),
+            Some(
+                "# Omitted: report.timer (its Unit= could not be resolved to a unit name, so \
+                 inspectah cannot tell whether that unit is in the image)"
+            ),
+            "{route}:\n{cf}"
+        );
+    }
+}
+
+/// T37, the triggers that pass: one a package in the image owns, one that
+/// is a full shadow with the shadow excluded (the vendor file loads), and
+/// one that is a staged generated service. Each timer is enabled through
+/// the refine export. A `disable` and a `mask` of a timer whose service is
+/// excluded pass too.
+#[test]
+fn t37_timers_whose_trigger_is_provided_are_carried() {
+    let packaged = scan(
+        t37_host("Unit=vendor.service\n")
+            .package("vendorpkg")
+            .unit("vendor.service", "static")
+            .vendor_unit(
+                "vendor.service",
+                "[Service]\nExecStart=/usr/bin/vendor\n",
+                Some("vendorpkg"),
+            ),
+    );
+    assert_eq!(
+        report_timer(&packaged).trigger,
+        trigger_unit("vendor.service")
+    );
+    let cf = containerfile_in(&exported_after(&packaged, &[]));
+    assert!(acts(&cf, "enable", "report.timer"), "packaged:\n{cf}");
+
+    let shadow = etc_path("site.service");
+    let shadowed = scan(
+        t37_host("Unit=site.service\n")
+            .package("sitepkg")
+            .unit("site.service", "static")
+            .vendor_unit(
+                "site.service",
+                "[Service]\nExecStart=/usr/bin/site\n",
+                Some("sitepkg"),
+            )
+            .etc_unit(
+                "site.service",
+                "[Service]\nExecStart=/usr/bin/site --local\n",
+            ),
+    );
+    let cf = containerfile_in(&exported_after(
+        &shadowed,
+        &[(ItemId::DropIn { path: shadow }, false)],
+    ));
+    assert!(acts(&cf, "enable", "report.timer"), "shadowed:\n{cf}");
+
+    let generated = scan(with_cron_backup(t37_host("Unit=cron-backup.service\n")));
+    let cf = containerfile_in(&exported_after(&generated, &[]));
+    assert!(acts(&cf, "enable", CRON_BACKUP_TIMER), "generated:\n{cf}");
+    assert!(acts(&cf, "enable", "report.timer"), "generated:\n{cf}");
+
+    // A local timer has no `disable` (a local unit is a state change only
+    // when enabled), so the `disable` case is a shadowed vendor timer.
+    let disabled = scan(
+        shadowed_timer_host("disabled", "enable")
+            .unit("site.service", "static")
+            .etc_unit("site.service", "[Service]\nExecStart=/usr/bin/site\n"),
+    );
+    let cf = containerfile_in(&exported_after(
+        &disabled,
+        &[(config_item(&etc_path("site.service")), false)],
+    ));
+    assert!(acts(&cf, "disable", "site.timer"), "disable:\n{cf}");
+
+    let masked = scan(
+        UnitHost::new()
+            .unit("report.timer", "masked")
+            .unit("report.service", "static")
+            .preset("disable *")
+            .mask("report.timer")
+            .etc_unit("report.service", "[Service]\nExecStart=/usr/bin/report\n"),
+    );
+    let cf = containerfile_in(&exported_after(
+        &masked,
+        &[(config_item(&etc_path("report.service")), false)],
+    ));
+    assert!(acts(&cf, "mask", "report.timer"), "mask:\n{cf}");
+}
