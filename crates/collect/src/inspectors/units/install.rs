@@ -98,6 +98,8 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// `RequiredBy=` value, any `UpheldBy=`, a specifier the reader does not
 /// expand and a value that is not a [`UnitName`] each make the section
 /// [`InstallRead::Undetermined`], with the first such reason in load order.
+/// A reason, once found, stands even if a later reset clears the value
+/// that caused it.
 pub(crate) fn read_install(
     name: &UnitName,
     fragment: &str,
@@ -603,6 +605,27 @@ mod tests {
                 "[Install]\nWantedBy=dev-sda.device\n",
                 &[],
                 undetermined(InstallUnknown::ForeignName, false),
+            ),
+            (
+                "a later reset does not undo a specifier decline",
+                "a.service",
+                "[Install]\nWantedBy=%H.target\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n")],
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "a later reset does not undo a foreign-name decline",
+                "a.service",
+                "[Install]\nWantedBy=dev-sda.device\n",
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nWantedBy=\n")],
+                undetermined(InstallUnknown::ForeignName, false),
+            ),
+            (
+                "an empty Also= in an undetermined section assigns Also=",
+                "a.service",
+                "[Install]\nUpheldBy=multi-user.target\nAlso=\n",
+                &[],
+                undetermined(InstallUnknown::UpheldBy, true),
             ),
             (
                 "no section is absent",
