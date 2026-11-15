@@ -3062,6 +3062,44 @@ mod unit_rows {
         );
     }
 
+    /// § 11.1: a unit row carries `also[]`, each member's name and links,
+    /// and `install_drop_ins[]`, from its state change. A row with neither
+    /// has two empty lists.
+    #[test]
+    fn a_unit_row_carries_its_also_members_and_install_drop_ins() {
+        use inspectah_core::types::units::{AlsoMember, MemberLinks};
+        use inspectah_refine::projection::AlsoView;
+        const DROP_IN: &str = "/etc/systemd/system/m.service.d/10-install.conf";
+        let mut owner = change(
+            "m.service",
+            vendor("m.service", Some("m")),
+            UnitState::Enabled,
+        );
+        owner.also = vec![AlsoMember {
+            unit: name("m.socket"),
+            links: MemberLinks::Unlinked,
+            vendor_drop_ins: vec!["10-vendor.conf".into()],
+        }];
+        owner.install_drop_ins = vec![DROP_IN.into()];
+        let plain = change(
+            "plain.service",
+            vendor("plain.service", Some("plain")),
+            UnitState::Enabled,
+        );
+        let session = RefineSession::new(snapshot(vec![owner, plain], vec![], vec![]));
+        let owner_row = row(&session, "m.service");
+        assert_eq!(
+            owner_row.also,
+            [AlsoView {
+                unit: name("m.socket"),
+                links: MemberLinks::Unlinked,
+            }]
+        );
+        assert_eq!(owner_row.install_drop_ins, [DROP_IN]);
+        let plain_row = row(&session, "plain.service");
+        assert!(plain_row.also.is_empty() && plain_row.install_drop_ins.is_empty());
+    }
+
     /// A mount finding row: no `include` key at all, its fields, the config
     /// row that holds its file, and § 10.6's lines, which the preview
     /// carries too. A finding with no recorded state has `state: null`.

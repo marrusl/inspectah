@@ -26,8 +26,8 @@ use inspectah_pipeline::render::unit_plan::{
 };
 
 use super::types::{
-    ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders, DeclinedView,
-    DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, ManualLinkView,
+    AlsoView, ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders,
+    DeclinedView, DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, ManualLinkView,
     MountFindingView, NotCarriedRow, RepoGroup, UndeterminedInstallView, UnitStateView,
     UnmanagedWithheldView, WithheldView,
 };
@@ -231,6 +231,15 @@ fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<Un
                 fragment,
                 unit_file_path,
                 owning_package: entry.unit().owning_package().map(str::to_owned),
+                also: entry
+                    .also
+                    .iter()
+                    .map(|member| AlsoView {
+                        unit: member.unit.clone(),
+                        links: member.links,
+                    })
+                    .collect(),
+                install_drop_ins: entry.install_drop_ins.clone(),
                 include: entry.disposition.is_included(),
                 locked: entry.locked,
                 triage,

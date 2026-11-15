@@ -436,10 +436,8 @@ pub(crate) enum InstallDifference {
 /// name), and the names each assigns in `Also=`. Order and spelling of the
 /// sections do not matter.
 ///
-/// The `Also=` names are compared as written: a template is not yet read
-/// as its `DefaultInstance=`, as § 7.4 asks, until the `Also=` walk of
-/// § 7.3 supplies that mapping. The two readings differ only when one side
-/// names a template and the other names its default instance directly.
+/// The `Also=` names are compared as given: the caller maps a template to
+/// its `DefaultInstance=` on both sides first, as § 7.4 asks.
 pub(crate) fn compare_install(
     effective: Option<&InstallSection>,
     vendor: &InstallRead,

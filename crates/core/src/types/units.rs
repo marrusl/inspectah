@@ -828,6 +828,42 @@ impl std::fmt::Display for UnitAction {
     }
 }
 
+/// What the links on the source host say about a unit that `enable` or
+/// `disable` on another unit also acts on (§ 7.3 of the units spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberLinks {
+    /// Every link its `[Install]` names is present, and it names at least
+    /// one. `enable` would add nothing. Links made by hand may sit beside
+    /// them.
+    Installed,
+    /// Its `[Install]` names at least one link and no link under
+    /// `/etc/systemd/system` names the unit. `disable` would remove
+    /// nothing.
+    Unlinked,
+    /// It has no link of its own to make (no `[Install]`, only `Also=`, or
+    /// no unit file on the source host) and no link names it. Neither verb
+    /// changes it.
+    Inert,
+    /// Anything else: some of its links, only links made by hand, a mask,
+    /// or an `[Install]` that could not be read. Neither verb reproduces
+    /// the host.
+    Other,
+}
+
+/// One unit an `enable` or `disable` on the owning row also acts on
+/// (§ 6.3 of the units spec).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlsoMember {
+    pub unit: UnitName,
+    pub links: MemberLinks,
+    /// File names of the vendor drop-ins that apply to the member (§ 7.2).
+    /// Names only, each one path component ending in `.conf`, checked on
+    /// load with the state change that holds the member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_drop_ins: Vec<String>,
+}
+
 /// A unit whose state on the source host differs from what the image would
 /// have. The fragment inside `unit` says where the unit file came from and
 /// which package owns it.
@@ -862,6 +898,11 @@ pub struct UnitStateChange {
     current_state: UnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
+    /// Every unit `Also=` reaches from this one, the unit itself left out,
+    /// in the order the walk reached them (§ 7.3). Empty for most units.
+    /// Recorded only: the plan decides from it (§ 10.2 rule 7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<AlsoMember>,
     /// Drop-ins under `/etc/systemd/system` that apply to the unit and are
     /// install files: they hold an `[Install]` section or carry a vendor
     /// drop-in's file name. Each is checked as a destination when the plan
@@ -891,6 +932,8 @@ struct UnitStateChangeWire {
     #[serde(deserialize_with = "require_explicit_null")]
     default_state: Option<PresetDefault>,
     #[serde(default)]
+    also: Vec<AlsoMember>,
+    #[serde(default)]
     install_drop_ins: Vec<String>,
     #[serde(default)]
     vendor_drop_ins: Vec<String>,
@@ -910,11 +953,13 @@ impl TryFrom<UnitStateChangeWire> for UnitStateChange {
         if let Some(name) = wire
             .vendor_drop_ins
             .iter()
+            .chain(wire.also.iter().flat_map(|member| &member.vendor_drop_ins))
             .find(|name| !is_drop_in_file_name(name))
         {
             return Err(UnitStateChangeError::VendorDropInName { name: name.clone() });
         }
         let mut change = Self::new(wire.unit, wire.current_state, wire.default_state)?;
+        change.also = wire.also;
         change.install_drop_ins = wire.install_drop_ins;
         change.vendor_drop_ins = wire.vendor_drop_ins;
         change.disposition = wire.disposition;
@@ -944,7 +989,8 @@ pub enum UnitStateChangeError {
     )]
     AbsentNotMasked { unit: UnitName, state: UnitState },
     /// A vendor drop-in is recorded by its file name alone: one path
-    /// component ending in `.conf`.
+    /// component ending in `.conf`. The rule holds for the state change's
+    /// own list and for each `also` member's.
     #[error(
         "vendor_drop_ins holds {name:?}: a vendor drop-in is recorded as one file name \
          ending in .conf"
@@ -1073,6 +1119,7 @@ impl UnitStateChange {
             unit,
             current_state,
             default_state,
+            also: Vec::new(),
             install_drop_ins: Vec::new(),
             vendor_drop_ins: Vec::new(),
             disposition: FindingKind::included(),
@@ -1280,11 +1327,12 @@ mod tests {
                 unit: _,             // exempt: a proved name, fragment and package name
                 current_state: _,    // exempt: enabled, disabled or masked
                 default_state: _,    // exempt: enable or disable
+                also: _, // names and links: `AlsoMember` is classified in the pipeline guard
                 install_drop_ins: _, // identifiers: drop-in paths, no content
-                vendor_drop_ins: _,  // identifiers: file names, no content
-                disposition: _,      // decision
-                locked: _,           // decision
-                aggregate: _,        // fleet counts
+                vendor_drop_ins: _, // identifiers: file names, no content
+                disposition: _, // decision
+                locked: _, // decision
+                aggregate: _, // fleet counts
                 attention_reason: _, // generated prose, never file content
             } = change;
         }

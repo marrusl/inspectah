@@ -12,8 +12,9 @@ use inspectah_core::types::finding::{AdvisoryType, FindingKind, ShadowType};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLinkCause, OrdinaryKind,
-    PresetDefault, UnitAction, UnitFragment, UnitKind, UnitName, UnitSection, UnitState,
+    AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLinkCause, MemberLinks,
+    OrdinaryKind, PresetDefault, UnitAction, UnitFragment, UnitKind, UnitName, UnitSection,
+    UnitState,
 };
 use inspectah_core::types::warnings::Warning;
 
@@ -4801,4 +4802,414 @@ fn t30_other_presets_and_controls() {
         UnitAction::Disable
     );
     assert_eq!(findings(&section), []);
+}
+
+// ---------------------------------------------------------------------
+// § 7.3 "`Also=` members" and § 7.4 "An owner at its preset whose member
+// is off" (T24's `Also=` reset, T25 (l), T39's owner cases).
+// ---------------------------------------------------------------------
+
+/// The attention note of an owner at its preset whose member is off.
+const MEMBER_OFF_NOTE: &str = "A unit it enables through Also= is not enabled on the source host.";
+
+/// A unit file wanted by `multi-user.target` whose `[Install]` also holds
+/// `extra` (`Also=...`, `DefaultInstance=...`).
+fn wants_with(extra: &str) -> String {
+    format!("[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n{extra}")
+}
+
+/// A host listing `units` under `preset`, with each `(name, text)` of
+/// `files` a vendor unit file and each unit of `linked` linked from
+/// `multi-user.target.wants` under `/etc`.
+fn also_host(
+    units: &[(&str, &str)],
+    preset: &str,
+    files: &[(&str, &str)],
+    linked: &[&str],
+) -> MockExecutor {
+    let mut exec = unlinked_host(units, preset);
+    for (name, text) in files {
+        exec = exec.with_file(&format!("{VENDOR}/{name}"), text);
+    }
+    for unit in linked {
+        exec = with_link_in(exec, ETC, "multi-user.target.wants", unit);
+    }
+    exec
+}
+
+/// The `also` list of `unit`'s state change, as names and links.
+fn also_of<'a>(section: &'a UnitSection, unit: &str) -> Vec<(&'a str, MemberLinks)> {
+    section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == unit)
+        .unwrap_or_else(|| panic!("{unit} should be a state change"))
+        .also
+        .iter()
+        .map(|m| (m.unit.as_str(), m.links))
+        .collect()
+}
+
+/// § 7.3: a chain `a`, `b`, `c` records `b` and `c` on `a`, in the order
+/// the walk reaches them, and `a` itself is left out though `c` names it.
+#[test]
+fn an_also_chain_records_every_unit_it_reaches() {
+    let exec = also_host(
+        &[("a.service", "enabled"), ("b.service", "enabled")],
+        "disable *\n",
+        &[
+            ("a.service", &wants_with("Also=b.service\n")),
+            ("b.service", &wants_with("Also=c.service\n")),
+            ("c.service", &wants_with("Also=a.service\n")),
+        ],
+        &["a.service", "b.service"],
+    );
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        also_of(&section, "a.service"),
+        [
+            ("b.service", MemberLinks::Installed),
+            ("c.service", MemberLinks::Unlinked)
+        ]
+    );
+    assert_eq!(
+        also_of(&section, "b.service"),
+        [
+            ("c.service", MemberLinks::Unlinked),
+            ("a.service", MemberLinks::Installed)
+        ]
+    );
+}
+
+/// § 6.3 and § 7.3: each `MemberLinks` value from a planted link set.
+/// `Unlinked` and `Inert` count every link under `/etc`, so a member with
+/// a hand-made link is `Other` whatever its `[Install]`; vendor links
+/// complete an install and never start one.
+#[test]
+fn each_member_links_value_comes_from_the_links() {
+    let two_targets = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
+                       WantedBy=multi-user.target graphical.target\n";
+    let members = [
+        ("installed.service", WANTS_MULTI_USER),
+        ("unlinked.service", WANTS_MULTI_USER),
+        ("vendor-linked.service", WANTS_MULTI_USER),
+        ("elsewhere.service", WANTS_MULTI_USER),
+        ("partial.service", two_targets),
+        ("inert.service", NO_INSTALL),
+        ("hand-made.service", NO_INSTALL),
+        ("also-only.service", "[Install]\nAlso=unlinked.service\n"),
+        ("masked.service", WANTS_MULTI_USER),
+    ];
+    let also: Vec<&str> = members
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(["missing.service"])
+        .collect();
+    let owner = wants_with(&format!("Also={}\n", also.join(" ")));
+    let mut files = vec![("owner.service", owner.as_str())];
+    files.extend(members);
+    let mut exec = also_host(
+        &[("owner.service", "enabled")],
+        "disable *\n",
+        &files,
+        &["owner.service", "installed.service", "partial.service"],
+    );
+    exec = with_link_in(
+        exec,
+        VENDOR,
+        "multi-user.target.wants",
+        "vendor-linked.service",
+    );
+    exec = with_link_in(exec, ETC, "rescue.target.wants", "elsewhere.service");
+    exec = with_link_in(exec, ETC, "multi-user.target.wants", "hand-made.service");
+    exec = exec
+        .with_dir_entry(ETC, "masked.service")
+        .with_link(&format!("{ETC}/masked.service"), "/dev/null");
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [
+            ("installed.service", MemberLinks::Installed),
+            ("unlinked.service", MemberLinks::Unlinked),
+            ("vendor-linked.service", MemberLinks::Unlinked),
+            ("elsewhere.service", MemberLinks::Other),
+            ("partial.service", MemberLinks::Other),
+            ("inert.service", MemberLinks::Inert),
+            ("hand-made.service", MemberLinks::Other),
+            ("also-only.service", MemberLinks::Inert),
+            ("masked.service", MemberLinks::Other),
+            ("missing.service", MemberLinks::Inert),
+        ]
+    );
+}
+
+/// T24: an empty `Also=` in an `/etc` drop-in never clears, so the
+/// fragment's member stays in `also`, and the drop-in is an install file.
+#[test]
+fn t24_an_empty_also_leaves_the_member_in_also() {
+    let dir = format!("{ETC}/owner.service.d");
+    let exec = also_host(
+        &[("owner.service", "enabled")],
+        "disable *\n",
+        &[
+            ("owner.service", &wants_with("Also=helper.service\n")),
+            ("helper.service", WANTS_MULTI_USER),
+        ],
+        &["owner.service"],
+    );
+    let exec = with_drop_in(
+        exec.with_dir_entry(ETC, "owner.service.d"),
+        &dir,
+        "10-also.conf",
+        "[Install]\nAlso=\n",
+    );
+    let (section, _) = scan(&exec);
+    let change = section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == "owner.service")
+        .expect("the owner's state change");
+    assert_eq!(change.install_drop_ins, [format!("{dir}/10-also.conf")]);
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [("helper.service", MemberLinks::Unlinked)]
+    );
+}
+
+/// T25 (l): `Also=` naming a template is recorded as its
+/// `DefaultInstance=`, read and linked as that instance; with no
+/// `DefaultInstance=`, it is `Other` under the template's name.
+#[test]
+fn t25_l_an_also_template_is_its_default_instance() {
+    let host = |template: &str, linked: &[&str]| {
+        also_host(
+            &[("owner.service", "enabled")],
+            "disable *\n",
+            &[
+                ("owner.service", &wants_with("Also=t@.service\n")),
+                ("t@.service", template),
+            ],
+            linked,
+        )
+    };
+    let with_default = wants_with("DefaultInstance=x\n");
+    let (section, _) = scan(&host(&with_default, &["owner.service"]));
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [("t@x.service", MemberLinks::Unlinked)]
+    );
+    let (section, _) = scan(&host(&with_default, &["owner.service", "t@x.service"]));
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [("t@x.service", MemberLinks::Installed)]
+    );
+    let (section, _) = scan(&host(WANTS_MULTI_USER, &["owner.service"]));
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [("t@.service", MemberLinks::Other)]
+    );
+}
+
+/// § 6.3: a member's vendor drop-in names are recorded on its entry.
+#[test]
+fn a_members_vendor_drop_ins_are_recorded() {
+    let exec = also_host(
+        &[("owner.service", "enabled")],
+        "disable *\n",
+        &[
+            ("owner.service", &wants_with("Also=helper.service\n")),
+            ("helper.service", WANTS_MULTI_USER),
+        ],
+        &["owner.service"],
+    );
+    let exec = with_drop_in(
+        exec,
+        &format!("{VENDOR}/helper.service.d"),
+        "10-vendor.conf",
+        "[Service]\nNice=5\n",
+    );
+    let (section, _) = scan(&exec);
+    let change = section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == "owner.service")
+        .expect("the owner's state change");
+    assert_eq!(change.also.len(), 1, "{:?}", change.also);
+    assert_eq!(change.also[0].vendor_drop_ins, ["10-vendor.conf"]);
+}
+
+/// T39's owner cases, collector half (§ 7.4, "An owner at its preset whose
+/// member is off"). A vendor `m.service` with `Also=m.socket`, enabled
+/// under `enable m.service` with its link, and `m.socket` under
+/// `disable *`: with `m.socket` unlinked, `m.service` is an `Enabled` row
+/// with `m.socket` `Unlinked` and the attention note, and `m.socket`, in
+/// the inventory as `Disabled`, has no row; with `m.socket` linked, and
+/// with an `Inert` member, the owner is in the inventory and has no row.
+#[test]
+fn t39_an_owner_at_its_preset_whose_member_is_off() {
+    let socket = "[Socket]\nListenStream=/run/m.sock\n\n[Install]\nWantedBy=sockets.target\n";
+    let preset = "enable m.service\ndisable *\n";
+    let host = |also: &str, socket_listed: &str| {
+        also_host(
+            &[("m.service", "enabled"), ("m.socket", socket_listed)],
+            preset,
+            &[
+                ("m.service", &wants_with(also)),
+                ("m.socket", socket),
+                ("m-helper.service", NO_INSTALL),
+            ],
+            &["m.service"],
+        )
+    };
+
+    let (section, _) = scan(&host("Also=m.socket\n", "disabled"));
+    assert_eq!(
+        entry_of(&section, "m.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        change_of(&section, "m.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        also_of(&section, "m.service"),
+        [("m.socket", MemberLinks::Unlinked)]
+    );
+    let owner = section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == "m.service")
+        .expect("the owner's row");
+    assert_eq!(owner.attention_reason.as_deref(), Some(MEMBER_OFF_NOTE));
+    assert_eq!(
+        entry_of(&section, "m.socket"),
+        Some((UnitState::Disabled, Some(PresetDefault::Disable)))
+    );
+    assert_eq!(change_of(&section, "m.socket"), None);
+
+    // The stock control: `m.socket` linked as the package left it.
+    let linked = with_link_in(
+        host("Also=m.socket\n", "enabled"),
+        ETC,
+        "sockets.target.wants",
+        "m.socket",
+    );
+    let (section, _) = scan(&linked);
+    assert_eq!(
+        entry_of(&section, "m.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(change_of(&section, "m.service"), None);
+
+    // The `Inert` control: a member with no `[Install]` and no link.
+    let (section, _) = scan(&host("Also=m-helper.service\n", "disabled"));
+    assert_eq!(
+        entry_of(&section, "m.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(change_of(&section, "m.service"), None);
+}
+
+/// T39's owner case for an instance member, collector half: a vendor
+/// `p.service` with `Also=t@two.service`, enabled under `enable p.service`
+/// with its link, the package shipping only `t@.service` under
+/// `disable *`. With no link for `t@two`, `p.service` is an `Enabled` row
+/// with `t@two.service` `Unlinked`, resolved through `t@.service`; with
+/// `t@two` linked, the owner is in the inventory and has no row.
+#[test]
+fn t39_an_owner_whose_instance_member_is_off() {
+    let host = |linked: &[&str]| {
+        also_host(
+            &[("p.service", "enabled"), ("t@.service", "indirect")],
+            "enable p.service\ndisable *\n",
+            &[
+                ("p.service", &wants_with("Also=t@two.service\n")),
+                ("t@.service", WANTS_MULTI_USER),
+            ],
+            linked,
+        )
+    };
+    let (section, _) = scan(&host(&["p.service"]));
+    assert_eq!(
+        entry_of(&section, "p.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        change_of(&section, "p.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        also_of(&section, "p.service"),
+        [("t@two.service", MemberLinks::Unlinked)]
+    );
+
+    let (section, _) = scan(&host(&["p.service", "t@two.service"]));
+    assert_eq!(
+        entry_of(&section, "p.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(change_of(&section, "p.service"), None);
+}
+
+/// § 7.4 with § 7.3's template rule, a T30 case: the package's
+/// `app.service` names `Also=t@.service`, whose `DefaultInstance=` is `x`,
+/// and a full shadow names `Also=t@x.service`, the same unit. Under an
+/// `enable` preset with the unit and `t@x` linked, the two sections are
+/// equal: no row and no finding. Control: a shadow naming `t@y.service`
+/// differs, with one `Also` finding each way, named as instances.
+#[test]
+fn t30_an_also_template_compares_as_its_default_instance() {
+    const VENDOR_ALSO: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
+                               WantedBy=multi-user.target\nAlso=t@.service\n";
+    let template = wants_with("DefaultInstance=x\n");
+    let host = |shadow: &'static str| {
+        let case = T30 {
+            shadow: Some(shadow),
+            links: &["multi-user.target.wants"],
+            ..T30::new("an Also= template", VENDOR_ALSO)
+        };
+        let exec = case
+            .host("enable app.service\ndisable *\n")
+            .with_file(&format!("{VENDOR}/t@.service"), &template);
+        let exec = with_link_in(exec, ETC, "multi-user.target.wants", "t@x.service");
+        (case, exec)
+    };
+
+    let (case, exec) = host(
+        "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlso=t@x.service\n",
+    );
+    let (section, _) = scan(&exec);
+    case.assert_collected(&section);
+    assert_eq!(
+        entry_of(&section, APP),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(change_of(&section, APP), None);
+    assert_eq!(findings(&section), []);
+
+    let (case, exec) = host(
+        "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlso=t@y.service\n",
+    );
+    let (section, _) = scan(&exec);
+    case.assert_collected(&section);
+    assert_eq!(change_of(&section, APP), None);
+    assert_eq!(
+        findings(&section),
+        [
+            (
+                LinkRelation::Also,
+                APP,
+                "t@y.service",
+                ManualLinkCause::HostInstallOnly,
+                vec![APP_SHADOW]
+            ),
+            (
+                LinkRelation::Also,
+                APP,
+                "t@x.service",
+                ManualLinkCause::VendorInstallOnly,
+                vec![APP_SHADOW]
+            ),
+        ]
+    );
 }

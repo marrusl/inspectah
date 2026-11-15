@@ -11,8 +11,8 @@ use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::storage::VarDirBacking;
 use inspectah_core::types::units::{
-    InstallUnknown, LinkRelation, ManualLinkCause, PresetDefault, SystemdDropIn, UnitName,
-    UnitState,
+    InstallUnknown, LinkRelation, ManualLinkCause, MemberLinks, PresetDefault, SystemdDropIn,
+    UnitName, UnitState,
 };
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
@@ -165,6 +165,14 @@ pub enum WithheldView {
     Refused { rule: String, text: String },
 }
 
+/// One `Also=` member of a unit state row (§ 11.1): its name and what the
+/// links on the source host say about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlsoView {
+    pub unit: UnitName,
+    pub links: MemberLinks,
+}
+
 /// One unit state change as refine shows it (§ 11.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UnitStateView {
@@ -181,6 +189,11 @@ pub struct UnitStateView {
     /// shadowed fragment.
     pub unit_file_path: Option<String>,
     pub owning_package: Option<String>,
+    /// Every unit `Also=` reaches from this one, with what its links say
+    /// (§ 11.1).
+    pub also: Vec<AlsoView>,
+    /// The row's install drop-ins under `/etc/systemd/system` (§ 11.1).
+    pub install_drop_ins: Vec<String>,
     pub include: bool,
     pub locked: bool,
     pub triage: TriageTag,

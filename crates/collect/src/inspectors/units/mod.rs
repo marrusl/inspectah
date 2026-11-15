@@ -11,21 +11,23 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    AdminStorageFragment, AdvisoryUnit, Classified, ManualLink, MountUnitFinding, PresetDefault,
-    StorageKind, SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UndeterminedInstall,
-    UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange,
-    UnitSubject, holds_install_section, logical_lines,
+    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, ManualLink, MountUnitFinding,
+    PresetDefault, StorageKind, SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES,
+    UndeterminedInstall, UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection,
+    UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
+mod also;
 mod install;
 mod links;
 mod resolve;
 
 use install::{
-    DropInRoot, DropInSource, InstallRead, drop_in_dirs, read_install, read_vendor_install,
+    DropInRoot, DropInSource, InstallRead, InstallSection, drop_in_dirs, read_install,
+    read_vendor_install,
 };
 use links::{HostLinks, InstallDifference};
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
@@ -469,6 +471,10 @@ fn build_state_changes(
     for subject in listed {
         let warn =
             |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
+        // § 7.4's comparison found the `/etc` files change the package's
+        // `[Install]` other than by adding links, which its own findings
+        // report.
+        let mut differs = false;
         let (fragment, state, evidence, additive) = match resolve::resolve(exec, &subject.name) {
             Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => (
                 fragment,
@@ -497,14 +503,21 @@ fn build_state_changes(
                         let mut found =
                             links::link_findings(&subject.name, read, host_links, &install_files);
                         let difference = install_difference(
+                            exec,
                             &subject.name,
                             &fragment,
                             &evidence,
                             found.state,
                             &install_files,
                             rules,
+                            read_failures,
                         );
                         if let Some(difference) = difference {
+                            differs = matches!(
+                                difference,
+                                InstallDifference::NotAdditive { .. }
+                                    | InstallDifference::VendorUndetermined { .. }
+                            );
                             additive = links::apply_install_difference(
                                 &mut found,
                                 &subject.name,
@@ -606,9 +619,36 @@ fn build_state_changes(
         // An additive unit is an `Enabled` state change whatever its
         // preset says (§ 7.4).
         let state_change = additive || is_state_change(&candidate, &fragment);
+        // § 7.4, "An owner at its preset whose member is off": a packaged
+        // unit enabled under an `enable` preset has no row of its own, and
+        // the image's package install enables every member with it.
+        let at_preset = !state_change
+            && !differs
+            && candidate.state == UnitState::Enabled
+            && candidate.default_state == Some(PresetDefault::Enable)
+            && matches!(
+                fragment,
+                UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
+            );
+        let named = match &evidence.read {
+            Some(InstallRead::Known(section)) if state_change || at_preset => {
+                section.also.as_slice()
+            }
+            _ => &[],
+        };
+        let members = also::also_members(exec, &candidate.name, named, host_links, read_failures);
+        let member_off = at_preset && members.iter().any(also::is_off);
+        let state_change = state_change || member_off;
         if state_change || is_enabled_storage(&candidate) {
             fragments.push(fragment);
-            found.push((candidate, state_change, evidence, additive));
+            found.push(Found {
+                candidate,
+                state_change,
+                evidence,
+                additive,
+                members,
+                member_off,
+            });
         }
     }
     for ((file, line), units) in unknown_lines {
@@ -619,8 +659,17 @@ fn build_state_changes(
 
     let mut state_changes = Vec::new();
     let mut mount_findings = Vec::new();
-    for ((candidate, state_change, evidence, additive), fragment) in
-        found.into_iter().zip(fragments)
+    for (
+        Found {
+            candidate,
+            state_change,
+            evidence,
+            additive,
+            members,
+            member_off,
+        },
+        fragment,
+    ) in found.into_iter().zip(fragments)
     {
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
@@ -662,6 +711,12 @@ fn build_state_changes(
                 if additive {
                     change.attention_reason = Some(ADDS_LINKS_REASON.to_owned());
                 }
+                // § 7.4: a unit it enables through `Also=` is off on the
+                // host.
+                if member_off {
+                    change.attention_reason = Some(MEMBER_OFF_REASON.to_owned());
+                }
+                change.also = members;
                 // § 10.3: the plan refuses this command, and refine shows
                 // why in the plan's own words.
                 let name = change.unit().name().as_str();
@@ -691,6 +746,27 @@ fn build_state_changes(
 /// unit's `/etc` files add links the package's unit does not make.
 const ADDS_LINKS_REASON: &str = "Its /etc files add links the package's unit does not make.";
 
+/// The attention note of an owner at its preset that is a row because a
+/// unit its `Also=` reaches is `Unlinked` or `Other` (§ 7.4 of the units
+/// spec, "An owner at its preset whose member is off").
+const MEMBER_OFF_REASON: &str =
+    "A unit it enables through Also= is not enabled on the source host.";
+
+/// A unit kept for a state change or as an enabled storage unit, with what
+/// [`build_state_changes`] read for it.
+struct Found {
+    candidate: Candidate,
+    state_change: bool,
+    evidence: InstallEvidence,
+    /// An additive row (§ 7.4).
+    additive: bool,
+    /// Every unit `Also=` reaches from it (§ 7.3), for a state change or an
+    /// owner at its preset.
+    members: Vec<AlsoMember>,
+    /// An owner at its preset made a row by a member that is off (§ 7.4).
+    member_off: bool,
+}
+
 /// § 7.4's comparison of `name`'s effective `[Install]` with its
 /// package's, when the test applies: a `Vendor` or `Shadowed` fragment, an
 /// install file under `/etc` (`install_files`), a preset of `enable`, and
@@ -698,13 +774,16 @@ const ADDS_LINKS_REASON: &str = "Its /etc files add links the package's unit doe
 /// section names no link (a `WantedBy=` reset with nothing added, or a
 /// shadow with no `[Install]`). `None` when it does not apply, or when the
 /// package's section could not be read as text.
+#[allow(clippy::too_many_arguments)] // the scan's state, read once by the caller
 fn install_difference(
+    exec: &dyn Executor,
     name: &UnitName,
     fragment: &UnitFragment,
     evidence: &InstallEvidence,
     state: Option<UnitState>,
     install_files: &[String],
     rules: &[PresetRule],
+    read_failures: &mut Vec<String>,
 ) -> Option<InstallDifference> {
     let packaged = matches!(
         fragment,
@@ -731,7 +810,22 @@ fn install_difference(
         return None;
     }
     let vendor = evidence.vendor_read.as_ref()?;
-    Some(links::compare_install(effective, vendor))
+    // § 7.4 compares the `Also=` names with a template standing for its
+    // `DefaultInstance=` (§ 7.3), on both sides.
+    let mut as_named = |section: &InstallSection| InstallSection {
+        also: section
+            .also
+            .iter()
+            .map(|named| also::also_name(exec, named, read_failures).unwrap_or_else(|t| t))
+            .collect(),
+        ..section.clone()
+    };
+    let effective = effective.map(&mut as_named);
+    let vendor = match vendor {
+        InstallRead::Known(section) => InstallRead::Known(as_named(section)),
+        other => other.clone(),
+    };
+    Some(links::compare_install(effective.as_ref(), &vendor))
 }
 
 /// The install files of a unit under `/etc/systemd/system` (§ 10.2 of the

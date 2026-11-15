@@ -309,7 +309,8 @@ mod tests {
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
         use inspectah_core::types::units::{
-            ManualLink, MountUnitFinding, SystemdDropIn, UndeterminedInstall, UnitInventoryEntry,
+            AlsoMember, ManualLink, MountUnitFinding, SystemdDropIn, UndeterminedInstall,
+            UnitInventoryEntry,
         };
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
@@ -362,6 +363,15 @@ mod tests {
         // same rule: no `..`, every field classified. The unit types nested
         // in it and in `MountUnitFinding` are classified field by field
         // there too (`every_field_of_a_nested_unit_type_is_classified`).
+
+        // `units.state_changes[].also[]`: names and what the links say.
+        fn _classify_also_member(member: AlsoMember) {
+            let AlsoMember {
+                unit: _,            // exempt: a proved unit name
+                links: _,           // exempt: installed, unlinked, inert or other
+                vendor_drop_ins: _, // identifiers: file names, no content
+            } = member;
+        }
 
         // `units.inventory[]`. No `Default`, so the pattern sits in a
         // function that is never called, as the sysctl ones below.
