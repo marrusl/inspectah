@@ -135,8 +135,7 @@ pub enum DeclinedRenders {
     Omitted,
     /// A `# FIXME:` line (§ 10.3).
     Fixme,
-    /// An advisory block. § 10.2 rule 7 renders a declined command this
-    /// way; no reason the plan gives today does.
+    /// An advisory block: how § 10.2 rule 7 renders a declined command.
     Advisory,
 }
 

@@ -5242,7 +5242,17 @@ fn t30_an_also_template_compares_as_its_default_instance() {
     );
     let (section, _) = scan(&exec);
     case.assert_collected(&section);
-    assert_eq!(change_of(&section, APP), None);
+    // The owner check applies where the comparison differs too: the
+    // shadow's member `t@y.service` has no link, so the unit is an
+    // `Enabled` row beside its findings.
+    assert_eq!(
+        change_of(&section, APP),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        also_of(&section, APP),
+        [("t@y.service", MemberLinks::Unlinked)]
+    );
     assert_eq!(
         findings(&section),
         [

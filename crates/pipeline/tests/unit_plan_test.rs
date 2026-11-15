@@ -4,8 +4,8 @@ use inspectah_core::types::aggregate::AggregateSnapshotMeta;
 use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::units::{
-    AdvisoryUnit, CarriedUnit, MountUnitFinding, PresetDefault, SystemdDropIn, UnitAction,
-    UnitFragment, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
+    AdvisoryUnit, AlsoMember, CarriedUnit, MountUnitFinding, PresetDefault, SystemdDropIn,
+    UnitAction, UnitFragment, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
 };
 use inspectah_pipeline::render::comment::LINE_TERMINATORS;
 use inspectah_pipeline::render::configtree::staged_writes;
@@ -13,9 +13,9 @@ use inspectah_pipeline::render::containerfile::render_containerfile;
 use inspectah_pipeline::render::not_carried::apply_scan_package_defaults;
 use inspectah_pipeline::render::not_carried::not_carried_packages;
 use inspectah_pipeline::render::unit_plan::{
-    AdvisoryReason, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan, declined_line,
-    effective_target_packages, is_package_installable, mount_advisory_lines, plan_units,
-    pulled_in_by_included, unit_state_lines,
+    AdvisoryReason, AlsoWhy, DeclinedMarker, OmissionReason, ServiceAdvisory, UnitPlan,
+    declined_line, effective_target_packages, is_package_installable, mount_advisory_lines,
+    plan_units, pulled_in_by_included, unit_state_lines,
 };
 
 // ---------------------------------------------------------------------------
@@ -916,6 +916,22 @@ fn a_declined_command_renders_from_one_line_function() {
             DeclinedMarker::Omitted,
             format!("rhcd.service ({RHC_NOT_CARRIED})"),
         ),
+        (
+            name("bundle.service"),
+            UnitAction::Enable,
+            OmissionReason::AlsoMember {
+                member: name("helper.service"),
+                why: AlsoWhy::RowNotCarried,
+                verb: UnitAction::Enable,
+                named: vec![name("helper.service")],
+                add: Vec::new(),
+            },
+            DeclinedMarker::Advisory,
+            "bundle.service is enabled on the source host. Not carried: systemctl enable on it \
+             also enables helper.service (named by Also=), whose own row is not carried with \
+             this command."
+                .to_owned(),
+        ),
     ];
     for (unit, action, reason, marker, text) in cases {
         let line = declined_line(&unit, action, &reason);
@@ -924,6 +940,7 @@ fn a_declined_command_renders_from_one_line_function() {
         let prefix = match marker {
             DeclinedMarker::Fixme => "# FIXME: ",
             DeclinedMarker::Omitted => "# Omitted: ",
+            DeclinedMarker::Advisory => "# Advisory: ",
         };
         assert_eq!(line.comment(), format!("{prefix}{text}"), "{unit:?}");
         let plan = UnitPlan {
@@ -3940,4 +3957,461 @@ fn rule_5_declines_a_recorded_install_drop_in_with_two_variants() {
         rule_5_outcome(&two, "app.service"),
         Err(OmissionReason::InstallEvidenceChanged { path: listed })
     );
+}
+
+// ---------------------------------------------------------------------------
+// § 10.2 rule 7, `Also=` members (T25 (h) and (i), and the line rules)
+// ---------------------------------------------------------------------------
+
+/// An `Also=` member recorded with `links`.
+fn also_member(unit: &str, links: inspectah_core::types::units::MemberLinks) -> AlsoMember {
+    AlsoMember {
+        unit: unit.to_owned().try_into().expect("a unit name"),
+        links,
+        vendor_drop_ins: Vec::new(),
+    }
+}
+
+/// A vendor `unit` in `state` whose `also` list is `also`.
+fn owner(unit: &str, state: UnitState, also: Vec<AlsoMember>) -> UnitStateChange {
+    let mut change = change_with(unit, vendor(unit), state);
+    change.also = also;
+    change
+}
+
+/// A drop-in row at `path` for `unit`, holding `content`, included or not.
+fn drop_in_row(unit: &str, path: &str, content: &str, included: bool) -> SystemdDropIn {
+    SystemdDropIn {
+        unit: unit.into(),
+        path: path.into(),
+        content: content.into(),
+        disposition: if included {
+            FindingKind::included()
+        } else {
+            FindingKind::excluded()
+        },
+        ..Default::default()
+    }
+}
+
+/// `snap` with `rows` added to its drop-in rows.
+fn with_drop_in_rows(mut snap: InspectionSnapshot, rows: Vec<SystemdDropIn>) -> InspectionSnapshot {
+    snap.units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .extend(rows);
+    snap
+}
+
+/// The `(member, why)` of `unit`'s rule 7 decline, if any.
+fn also_why(snap: &InspectionSnapshot, unit: &str) -> Option<(String, AlsoWhy)> {
+    declined_of(snap)
+        .into_iter()
+        .find_map(|(name, _, reason)| match reason {
+            OmissionReason::AlsoMember { member, why, .. } if name == unit => {
+                Some((member.as_str().to_owned(), why))
+            }
+            _ => None,
+        })
+}
+
+/// The section's lines from the first that starts with `first`, through
+/// the indented lines after it.
+fn block_at(lines: &[String], first: &str) -> Vec<String> {
+    let mut rest = lines.iter().skip_while(|l| !l.starts_with(first));
+    let Some(head) = rest.next() else {
+        return Vec::new();
+    };
+    std::iter::once(head)
+        .chain(rest.take_while(|l| l.starts_with("#   ")))
+        .cloned()
+        .collect()
+}
+
+/// § 10.2's header and footer around the lines to add.
+const ALSO_HEADER: &str = "#   To reproduce the source host, add after the configuration COPY:";
+const ALSO_FOOTER: &str =
+    "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.";
+
+/// T25 (i): `mask` does not follow `Also=`, so a mask on a unit with
+/// members in any state is carried.
+#[test]
+fn t25_i_a_mask_on_a_unit_with_members_is_carried() {
+    use inspectah_core::types::units::MemberLinks::{Inert, Installed, Other, Unlinked};
+    let snap = units_snapshot(
+        vec![owner(
+            "bundle.service",
+            UnitState::Masked,
+            vec![
+                also_member("a.service", Installed),
+                also_member("b.service", Unlinked),
+                also_member("c.service", Inert),
+                also_member("d.service", Other),
+            ],
+        )],
+        vec![],
+    );
+    let rendered = render(&snap);
+    assert!(rendered.omissions.is_empty(), "{:?}", rendered.omissions);
+    assert!(
+        acted_on(&rendered.lines, "bundle.service"),
+        "{:?}",
+        rendered.lines
+    );
+}
+
+/// § 10.2 rule 7's line rules, on hand-built rows. Under `enable`:
+/// - several `Unlinked` members: the reason names the first, the first
+///   line names every one, joined with commas and `and`, in the plural,
+///   and each has a `disable` line;
+/// - an `Other` member first and an `Unlinked` one after: the first line
+///   names only the `Other` one, and the `Unlinked` one keeps its line;
+/// - two `Other` members: one line naming both, no lines to add.
+///
+/// Under `disable`, `Installed` members get the `enable` line, and every
+/// member `Unlinked` or `Inert` is carried.
+#[test]
+fn rule_7_line_rules() {
+    use inspectah_core::types::units::MemberLinks::{Inert, Installed, Other, Unlinked};
+    let plan_of = |state, also| {
+        let snap = units_snapshot(vec![owner("bundle.service", state, also)], vec![]);
+        let lines = render(&snap).lines;
+        (also_why(&snap, "bundle.service"), lines)
+    };
+    let head = |verb: &str, named: &str, clause: &str| {
+        format!(
+            "# Advisory: bundle.service is {verb}d on the source host. Not carried: systemctl \
+             {verb} on it also {verb}s {named} (named by Also=), {clause}."
+        )
+    };
+    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- '{unit}'");
+
+    let (why, lines) = plan_of(
+        UnitState::Enabled,
+        vec![
+            also_member("a.service", Installed),
+            also_member("b.service", Unlinked),
+            also_member("d.service", Unlinked),
+            also_member("e.service", Unlinked),
+        ],
+    );
+    assert_eq!(
+        why,
+        Some(("b.service".into(), AlsoWhy::LinksDiffer(Unlinked)))
+    );
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [
+            head(
+                "enable",
+                "b.service, d.service and e.service",
+                "which are not enabled there"
+            ),
+            ALSO_HEADER.to_owned(),
+            add("enable", "bundle.service"),
+            add("disable", "b.service"),
+            add("disable", "d.service"),
+            add("disable", "e.service"),
+            ALSO_FOOTER.to_owned(),
+        ]
+    );
+    assert!(!acted_on(&lines, "bundle.service"), "{lines:?}");
+
+    let (why, lines) = plan_of(
+        UnitState::Enabled,
+        vec![
+            also_member("c.service", Other),
+            also_member("b.service", Unlinked),
+        ],
+    );
+    assert_eq!(why, Some(("c.service".into(), AlsoWhy::LinksDiffer(Other))));
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [
+            head(
+                "enable",
+                "c.service",
+                "whose links there neither command reproduces"
+            ),
+            ALSO_HEADER.to_owned(),
+            add("enable", "bundle.service"),
+            add("disable", "b.service"),
+            ALSO_FOOTER.to_owned(),
+        ]
+    );
+
+    let (_, lines) = plan_of(
+        UnitState::Enabled,
+        vec![
+            also_member("c.service", Other),
+            also_member("f.service", Other),
+        ],
+    );
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [head(
+            "enable",
+            "c.service and f.service",
+            "whose links there neither command reproduces"
+        )]
+    );
+
+    let (why, lines) = plan_of(
+        UnitState::Disabled,
+        vec![
+            also_member("a.service", Installed),
+            also_member("b.service", Unlinked),
+            also_member("g.service", Installed),
+        ],
+    );
+    assert_eq!(
+        why,
+        Some(("a.service".into(), AlsoWhy::LinksDiffer(Installed)))
+    );
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [
+            head(
+                "disable",
+                "a.service and g.service",
+                "which are enabled there"
+            ),
+            ALSO_HEADER.to_owned(),
+            add("disable", "bundle.service"),
+            add("enable", "a.service"),
+            add("enable", "g.service"),
+            ALSO_FOOTER.to_owned(),
+        ]
+    );
+
+    let (why, lines) = plan_of(
+        UnitState::Disabled,
+        vec![
+            also_member("b.service", Unlinked),
+            also_member("c.service", Inert),
+        ],
+    );
+    assert_eq!(why, None);
+    assert!(acted_on(&lines, "bundle.service"), "{lines:?}");
+}
+
+/// § 10.2 rule 7, condition 2 in the plural: two members whose rows are
+/// excluded are named together; two instance members with no row are
+/// named together. Condition 1 decides before condition 2, and condition 2
+/// before condition 3.
+#[test]
+fn rule_7_conditions_in_order_and_in_the_plural() {
+    use inspectah_core::types::units::MemberLinks::{Installed, Unlinked};
+    let head = |named: &str, clause: &str| {
+        format!(
+            "# Advisory: bundle.service is enabled on the source host. Not carried: systemctl \
+             enable on it also enables {named} (named by Also=), {clause}."
+        )
+    };
+    let mut h1 = change_with("h1.service", vendor("h1.service"), UnitState::Enabled);
+    h1.disposition = FindingKind::excluded();
+    let mut h2 = change_with("h2.service", vendor("h2.service"), UnitState::Enabled);
+    h2.disposition = FindingKind::excluded();
+    let snap = units_snapshot(
+        vec![
+            owner(
+                "bundle.service",
+                UnitState::Enabled,
+                vec![
+                    also_member("h1.service", Installed),
+                    also_member("h2.service", Installed),
+                    also_member("t@one.service", Installed),
+                ],
+            ),
+            h1,
+            h2,
+        ],
+        vec![],
+    );
+    assert_eq!(
+        also_why(&snap, "bundle.service"),
+        Some(("h1.service".into(), AlsoWhy::RowNotCarried))
+    );
+    assert_eq!(
+        block_at(&render(&snap).lines, "# Advisory: bundle.service"),
+        [head(
+            "h1.service and h2.service",
+            "whose own rows are not carried with this command"
+        )]
+    );
+
+    let snap = units_snapshot(
+        vec![owner(
+            "bundle.service",
+            UnitState::Enabled,
+            vec![
+                also_member("t@one.service", Installed),
+                also_member("t@two.service", Installed),
+            ],
+        )],
+        vec![],
+    );
+    assert_eq!(
+        also_why(&snap, "bundle.service"),
+        Some(("t@one.service".into(), AlsoWhy::NeedsOwnRow))
+    );
+    assert_eq!(
+        block_at(&render(&snap).lines, "# Advisory: bundle.service"),
+        [head(
+            "t@one.service and t@two.service",
+            "instances with no row here to check their configuration"
+        )]
+    );
+
+    // Condition 1 first: an `Unlinked` member after an instance with no
+    // row, and an install file on the owner.
+    let snap = with_drop_in_rows(
+        units_snapshot(
+            vec![owner(
+                "bundle.service",
+                UnitState::Enabled,
+                vec![
+                    also_member("t@one.service", Installed),
+                    also_member("c.service", Unlinked),
+                ],
+            )],
+            vec![],
+        ),
+        vec![drop_in_row(
+            "c.service",
+            "/etc/systemd/system/c.service.d/10-install.conf",
+            "[Install]\nWantedBy=multi-user.target\n",
+            true,
+        )],
+    );
+    assert_eq!(
+        also_why(&snap, "bundle.service"),
+        Some(("c.service".into(), AlsoWhy::LinksDiffer(Unlinked)))
+    );
+    // Condition 2 before condition 3.
+    let snap = with_drop_in_rows(
+        units_snapshot(
+            vec![owner(
+                "bundle.service",
+                UnitState::Enabled,
+                vec![
+                    also_member("c.service", Installed),
+                    also_member("t@one.service", Installed),
+                ],
+            )],
+            vec![],
+        ),
+        vec![drop_in_row(
+            "c.service",
+            "/etc/systemd/system/c.service.d/10-install.conf",
+            "[Install]\nWantedBy=multi-user.target\n",
+            true,
+        )],
+    );
+    assert_eq!(
+        also_why(&snap, "bundle.service"),
+        Some(("t@one.service".into(), AlsoWhy::NeedsOwnRow))
+    );
+}
+
+/// T25 (h): which staged or excluded files are install files for rule 7.
+/// A drop-in with `[Install]` in the type-wide `service.d` or in a
+/// dash-prefix directory is not one, and the `enable` is carried; the same
+/// file in the unit's own `.d`, recorded on the row so rule 5 passes, is
+/// `InstallFile`. In a member's `.d`, a drop-in whose `[Install]` holds
+/// `Also = x`, an assignment continued over two lines, or an empty
+/// `WantedBy=` is an install file each time, included or excluded.
+#[test]
+fn t25_h_install_files_for_rule_7() {
+    use inspectah_core::types::units::MemberLinks::Installed;
+    const INSTALL: &str = "[Install]\nWantedBy=multi-user.target\n";
+    let base = |extra: Vec<String>| {
+        let mut row = owner(
+            "a-b.service",
+            UnitState::Enabled,
+            vec![also_member("helper.service", Installed)],
+        );
+        row.install_drop_ins = extra;
+        units_snapshot(vec![row], vec![])
+    };
+    for path in [
+        "/etc/systemd/system/service.d/10-site.conf",
+        "/etc/systemd/system/a-.service.d/10-site.conf",
+    ] {
+        let snap = with_drop_in_rows(
+            base(Vec::new()),
+            vec![drop_in_row("a-b.service", path, INSTALL, true)],
+        );
+        assert_eq!(also_why(&snap, "a-b.service"), None, "{path}");
+        assert!(
+            acted_on(&render(&snap).lines, "a-b.service"),
+            "{path}: {:?}",
+            render(&snap).lines
+        );
+    }
+    let own = "/etc/systemd/system/a-b.service.d/10-site.conf";
+    let snap = with_drop_in_rows(
+        base(vec![own.to_owned()]),
+        vec![drop_in_row("a-b.service", own, INSTALL, true)],
+    );
+    assert_eq!(
+        also_why(&snap, "a-b.service"),
+        Some((
+            "helper.service".into(),
+            AlsoWhy::InstallFile { path: own.into() }
+        ))
+    );
+    assert_eq!(
+        block_at(&render(&snap).lines, "# Advisory: a-b.service"),
+        [
+            format!(
+                "# Advisory: a-b.service is enabled on the source host. Not carried: {own} sets \
+                 [Install] for a-b.service, so the units systemctl enable reaches through Also= \
+                 in the image may not be the ones recorded."
+            ),
+            "#   After reading that file, add after the configuration COPY:".to_owned(),
+            "#     RUN systemctl enable -- 'a-b.service'".to_owned(),
+        ]
+    );
+
+    let member_file = "/etc/systemd/system/helper.service.d/10-x.conf";
+    for content in [
+        "[Install]\nAlso = x.service\n",
+        "[Install]\nWantedBy=multi-user.target \\\n  graphical.target\n",
+        "[Install]\nWantedBy=\n",
+    ] {
+        for included in [true, false] {
+            let snap = with_drop_in_rows(
+                base(Vec::new()),
+                vec![drop_in_row(
+                    "helper.service",
+                    member_file,
+                    content,
+                    included,
+                )],
+            );
+            assert_eq!(
+                also_why(&snap, "a-b.service"),
+                Some((
+                    "helper.service".into(),
+                    AlsoWhy::InstallFile {
+                        path: member_file.into()
+                    }
+                )),
+                "{content:?} included {included}"
+            );
+        }
+    }
+    // The control: a `[Service]` drop-in under a name of its own.
+    let snap = with_drop_in_rows(
+        base(Vec::new()),
+        vec![drop_in_row(
+            "helper.service",
+            member_file,
+            "[Service]\nNice=5\n",
+            true,
+        )],
+    );
+    assert_eq!(also_why(&snap, "a-b.service"), None);
 }

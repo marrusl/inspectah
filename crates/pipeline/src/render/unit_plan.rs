@@ -11,9 +11,10 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
-    CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause, MountUnitFinding,
-    OrdinaryKind, StorageKind, SystemdDropIn, UndeterminedInstall, UnitAction, UnitFragment,
-    UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section,
+    AlsoMember, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
+    MemberLinks, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, UndeterminedInstall,
+    UnitAction, UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
+    holds_install_section,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -270,6 +271,34 @@ pub enum OmissionReason {
     /// yet carried (§ 15 of the units spec, phase 4), so every instance
     /// row is omitted with this reason until they are.
     InstanceNotCarriedYet,
+    /// The command would also act on `member` (§ 10.2 rule 7). An
+    /// advisory ([`also_advisory_lines`]). `member` is the first member in
+    /// `also` order that fails the first failing condition, or for
+    /// [`AlsoWhy::InstallFile`] on the unit's own file, its first member.
+    /// The other fields are what the advisory's text needs: the command's
+    /// `verb`; `named`, every unit the first line names (the members that
+    /// fail as `member` does, or the unit whose install file it is); and
+    /// `add`, the members given a line of the opposite verb.
+    AlsoMember {
+        member: UnitName,
+        why: AlsoWhy,
+        verb: UnitAction,
+        named: Vec<UnitName>,
+        add: Vec<UnitName>,
+    },
+}
+
+/// Why rule 7 of § 10.2 makes a command an advisory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AlsoWhy {
+    /// The member's links on the source are not what the verb produces.
+    LinksDiffer(MemberLinks),
+    /// The member has a row the plan does not carry with this verb.
+    RowNotCarried,
+    /// The member has no row and is an instance or a protected unit.
+    NeedsOwnRow,
+    /// The unit or the member has an install file in the snapshot.
+    InstallFile { path: String },
 }
 
 impl OmissionReason {
@@ -332,6 +361,9 @@ impl OmissionReason {
                  or their shared name consistent",
                 name = name.as_str()
             ),
+            Self::AlsoMember {
+                why, verb, named, ..
+            } => also_reason_text(why, *verb, named),
         }
     }
 
@@ -353,6 +385,7 @@ impl OmissionReason {
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
             Self::InstanceNotCarriedYet => "InstanceNotCarriedYet",
+            Self::AlsoMember { .. } => "AlsoMember",
         }
     }
 
@@ -372,7 +405,8 @@ impl OmissionReason {
             | Self::TimerTriggerNotStaged { .. }
             | Self::MaskPathOccupied { .. }
             | Self::GeneratedNameCollision { .. }
-            | Self::InstanceNotCarriedYet => None,
+            | Self::InstanceNotCarriedYet
+            | Self::AlsoMember { .. } => None,
         }
     }
 }
@@ -665,6 +699,9 @@ pub enum DeclinedMarker {
     Omitted,
     /// `# FIXME:`, for a command the target refuses (§ 10.3).
     Fixme,
+    /// `# Advisory:`, the first line of rule 7's block (§ 10.2), for a
+    /// command whose `Also=` members the evidence does not match.
+    Advisory,
 }
 
 impl DeclinedMarker {
@@ -673,6 +710,7 @@ impl DeclinedMarker {
         match self {
             Self::Omitted => "# Omitted: ",
             Self::Fixme => "# FIXME: ",
+            Self::Advisory => "# Advisory: ",
         }
     }
 }
@@ -697,10 +735,21 @@ impl DeclinedLine {
 /// marker and the text are chosen, for the Containerfile and refine alike.
 /// [`OmissionReason::TargetNeedsUnit`] is a FIXME with § 10.3's sentence
 /// ([`target_needs_unit_text`]); [`OmissionReason::GeneratedNameCollision`]
-/// is a FIXME naming the unit, then its text in parentheses; every other
-/// reason is an `# Omitted:` line in that form.
+/// is a FIXME naming the unit, then its text in parentheses;
+/// [`OmissionReason::AlsoMember`] is the first line of rule 7's block
+/// ([`also_advisory_lines`]); every other reason is an `# Omitted:` line in
+/// that form.
 pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedLine {
     match reason {
+        OmissionReason::AlsoMember { .. } => DeclinedLine {
+            marker: DeclinedMarker::Advisory,
+            text: format!(
+                "{} is {} {ALSO_NOT_CARRIED} {}",
+                name.as_str(),
+                state_word(action),
+                reason.describe()
+            ),
+        },
         OmissionReason::TargetNeedsUnit => DeclinedLine {
             marker: DeclinedMarker::Fixme,
             text: target_needs_unit_text(name.as_str(), action),
@@ -731,9 +780,10 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
 }
 
 /// The unit state section's lines for `plan`, in § 10.1's order: a line per
-/// declined command ([`declined_line`]), a line per excluded runtime
-/// updater ([`excluded_updater_line`]), then [`systemctl_lines`], then the
-/// comment-only blocks one after another: the mount advisories
+/// declined command ([`declined_line`]) other than rule 7's, a line per
+/// excluded runtime updater ([`excluded_updater_line`]), then
+/// [`systemctl_lines`], then the comment-only blocks one after another:
+/// rule 7's ([`also_advisory_lines`]), the mount advisories
 /// ([`UnitPlan::mount_advisories`]), the hand-made link advisories
 /// ([`UnitPlan::link_advisories`]) and the undetermined install blocks
 /// ([`UnitPlan::undetermined_advisories`]). Each block starts with its `# Advisory:` line, so
@@ -747,6 +797,7 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     let mut lines: Vec<String> = plan
         .declined
         .iter()
+        .filter(|(_, _, reason)| !matches!(reason, OmissionReason::AlsoMember { .. }))
         .map(|(name, action, reason)| {
             escape_comment_text(&declined_line(name, *action, reason).comment())
         })
@@ -757,6 +808,14 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
     lines.extend(systemctl_lines(&plan.planned));
+    // Rule 7's blocks (§ 10.1's order). An install file's path comes from
+    // the snapshot, so each line is escaped.
+    lines.extend(
+        plan.declined
+            .iter()
+            .flat_map(|(name, action, reason)| also_advisory_lines(name, *action, reason))
+            .map(|line| escape_comment_text(&line)),
+    );
     // A mount point comes from a host file, and an install file's path
     // from a directory listing: escaped here, as above.
     lines.extend(
@@ -775,6 +834,166 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             continue;
         }
         lines.extend(advisory.lines.iter().map(|line| escape_comment_text(line)));
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// § 10.2 rule 7, the `Also=` advisory
+// ---------------------------------------------------------------------------
+
+/// Rule 7's first line, between the unit's state and the reason.
+const ALSO_NOT_CARRIED: &str = "on the source host. Not carried:";
+
+/// After the members a rule 7 first line names.
+const ALSO_NAMED_BY: &str = "(named by Also=)";
+
+/// The clause for members not enabled under an `enable`: one, then more.
+const ALSO_NOT_ENABLED: [&str; 2] = ["which is not enabled there", "which are not enabled there"];
+
+/// The clause for members enabled under a `disable`: one, then more.
+const ALSO_ENABLED: [&str; 2] = ["which is enabled there", "which are enabled there"];
+
+/// The clause for members whose links neither verb reproduces.
+const ALSO_NEITHER: &str = "whose links there neither command reproduces";
+
+/// The clause for members whose own rows the plan does not carry with the
+/// command: one, then more.
+const ALSO_ROW_NOT_CARRIED: [&str; 2] = [
+    "whose own row is not carried with this command",
+    "whose own rows are not carried with this command",
+];
+
+/// The clause for instance members with no row under an `enable`: one,
+/// then more.
+const ALSO_INSTANCE_NEEDS_ROW: [&str; 2] = [
+    "an instance with no row here to check its configuration",
+    "instances with no row here to check their configuration",
+];
+
+/// The clause for protected members with no row under a `disable`.
+const ALSO_IMAGE_NEEDS: &str = "which the image needs";
+
+/// An `InstallFile` reason, between the file and the unit it belongs to.
+const ALSO_INSTALL_FILE_SETS: &str = "sets [Install] for";
+
+/// An `InstallFile` reason, after the unit, before the verb.
+const ALSO_INSTALL_FILE_UNITS: &str = "so the units systemctl";
+
+/// An `InstallFile` reason, after the verb.
+const ALSO_INSTALL_FILE_REST: &str =
+    "reaches through Also= in the image may not be the ones recorded.";
+
+/// The header of the lines to add for a links mismatch.
+const ALSO_TO_REPRODUCE: &str =
+    "#   To reproduce the source host, add after the configuration COPY:";
+
+/// The footer of the lines to add for a links mismatch.
+const ALSO_EACH_FOLLOWS: &str =
+    "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.";
+
+/// The header of an `InstallFile` advisory's one line to add.
+const ALSO_AFTER_READING: &str = "#   After reading that file, add after the configuration COPY:";
+
+/// The state a command reproduces: `enabled` for `enable`.
+fn state_word(action: UnitAction) -> &'static str {
+    match action {
+        UnitAction::Enable => "enabled",
+        UnitAction::Disable => "disabled",
+        UnitAction::Mask => "masked",
+    }
+}
+
+/// `names` as a list: `a`, `a and b`, `a, b and c`.
+fn name_list(names: &[UnitName]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.as_str().to_owned(),
+        [rest @ .., last] => format!(
+            "{} and {}",
+            rest.iter()
+                .map(UnitName::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+            last.as_str()
+        ),
+    }
+}
+
+/// The singular or the plural of a clause, by how many members it names.
+fn number(clause: [&'static str; 2], named: &[UnitName]) -> &'static str {
+    if named.len() > 1 {
+        clause[1]
+    } else {
+        clause[0]
+    }
+}
+
+/// [`OmissionReason::AlsoMember`]'s text: rule 7's first line after
+/// `Not carried: ` (§ 10.2).
+fn also_reason_text(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> String {
+    let clause = match why {
+        AlsoWhy::InstallFile { path } => {
+            return format!(
+                "{path} {ALSO_INSTALL_FILE_SETS} {}, {ALSO_INSTALL_FILE_UNITS} {verb} \
+                 {ALSO_INSTALL_FILE_REST}",
+                name_list(named)
+            );
+        }
+        AlsoWhy::LinksDiffer(MemberLinks::Unlinked) => number(ALSO_NOT_ENABLED, named),
+        AlsoWhy::LinksDiffer(MemberLinks::Installed) => number(ALSO_ENABLED, named),
+        AlsoWhy::LinksDiffer(MemberLinks::Other | MemberLinks::Inert) => ALSO_NEITHER,
+        AlsoWhy::RowNotCarried => number(ALSO_ROW_NOT_CARRIED, named),
+        AlsoWhy::NeedsOwnRow => match verb {
+            UnitAction::Enable => number(ALSO_INSTANCE_NEEDS_ROW, named),
+            UnitAction::Disable | UnitAction::Mask => ALSO_IMAGE_NEEDS,
+        },
+    };
+    format!(
+        "systemctl {verb} on it also {verb}s {} {ALSO_NAMED_BY}, {clause}.",
+        name_list(named)
+    )
+}
+
+/// One line to add: `RUN systemctl <verb> -- '<unit>'`, as a comment.
+fn line_to_add(verb: UnitAction, unit: &UnitName) -> String {
+    format!(
+        "#     RUN systemctl {verb} -- {}",
+        single_quote(unit.as_str())
+    )
+}
+
+/// Rule 7's block for a declined command (§ 10.2), unescaped; empty for
+/// any other reason. The first line is [`declined_line`]'s. A links
+/// mismatch adds the unit's own command and the opposite verb for each
+/// member in `add`, between a header and a footer, when there is any such
+/// member; an `InstallFile` advisory adds the unit's own command; the
+/// other reasons add no line.
+pub fn also_advisory_lines(
+    name: &UnitName,
+    action: UnitAction,
+    reason: &OmissionReason,
+) -> Vec<String> {
+    let OmissionReason::AlsoMember { why, add, .. } = reason else {
+        return Vec::new();
+    };
+    let mut lines = vec![declined_line(name, action, reason).comment()];
+    match why {
+        AlsoWhy::LinksDiffer(_) if !add.is_empty() => {
+            let opposite = match action {
+                UnitAction::Enable => UnitAction::Disable,
+                UnitAction::Disable | UnitAction::Mask => UnitAction::Enable,
+            };
+            lines.push(ALSO_TO_REPRODUCE.to_owned());
+            lines.push(line_to_add(action, name));
+            lines.extend(add.iter().map(|member| line_to_add(opposite, member)));
+            lines.push(ALSO_EACH_FOLLOWS.to_owned());
+        }
+        AlsoWhy::InstallFile { .. } => {
+            lines.push(ALSO_AFTER_READING.to_owned());
+            lines.push(line_to_add(action, name));
+        }
+        AlsoWhy::LinksDiffer(_) | AlsoWhy::RowNotCarried | AlsoWhy::NeedsOwnRow => {}
     }
     lines
 }
@@ -1913,6 +2132,9 @@ impl<'a> Presence<'a> {
 ///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
 ///    alone). With no package section there is nothing to read and the unit
 ///    is emitted: there is no separate path without one.
+/// 6. Rule 7 ([`rule_7_also`]), `enable` and `disable` with `Also=`
+///    members, once every row's result under the rules above is known:
+///    the command becomes an advisory unless its members agree.
 ///
 /// Every other command is planned. Each mount finding gets its § 10.6
 /// advisory lines against `staged`, in `mount_advisories`. The enables of
@@ -1937,6 +2159,9 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .filter(|name| is_runtime_updater(name.as_str()))
         .cloned()
         .collect();
+    // The rows that pass rules 1 to 6, with their presence advisories. Rule
+    // 7 reads every row's result, so it runs once all are known.
+    let mut passed: Vec<(&UnitStateChange, PlannedUnit, Option<ServiceAdvisory>)> = Vec::new();
     for sc in units
         .state_changes
         .iter()
@@ -1995,9 +2220,31 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             plan.declined.push((name, action, reason));
             continue;
         }
-        plan.advisories.extend(advisory);
-        plan.planned.push(PlannedUnit { name, action });
+        passed.push((sc, PlannedUnit { name, action }, advisory));
     }
+    let rows: BTreeMap<&UnitName, &UnitStateChange> = units
+        .state_changes
+        .iter()
+        .map(|sc| (sc.unit().name(), sc))
+        .collect();
+    let carried: BTreeMap<&UnitName, UnitAction> = passed
+        .iter()
+        .map(|(_, planned, _)| (&planned.name, planned.action))
+        .collect();
+    let mut also_declined = Vec::new();
+    for (sc, planned, advisory) in &passed {
+        match rule_7_also(snap, staged, sc, planned.action, &rows, &carried) {
+            Ok(()) => {
+                plan.advisories.extend(advisory.clone());
+                plan.planned.push(PlannedUnit {
+                    name: planned.name.clone(),
+                    action: planned.action,
+                });
+            }
+            Err(reason) => also_declined.push((planned.name.clone(), planned.action, reason)),
+        }
+    }
+    plan.declined.extend(also_declined);
     plan.mount_advisories = units
         .mount_findings
         .iter()
@@ -2040,6 +2287,174 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         })
         .collect();
     plan
+}
+
+// ---------------------------------------------------------------------------
+// Rule 7, `Also=` members
+// ---------------------------------------------------------------------------
+
+/// Rule 7 (§ 10.2) on a single host, for a row that passed rules 1 to 6:
+/// an `enable` or `disable` whose `also` list is not empty is carried only
+/// when three conditions hold, and the first that fails gives the
+/// [`AlsoWhy`]. `rows` is every state change by name, and `carried` every
+/// row that passed rules 1 to 6, with its verb.
+///
+/// 1. Every member's links match the verb: `Installed` or `Inert` for
+///    `enable`, `Unlinked` or `Inert` for `disable`.
+/// 2. A member with a row is carried with the same verb; a member with no
+///    row is not an instance under `enable` nor a protected unit under
+///    `disable`.
+/// 3. Neither the unit nor any member has an install file in the snapshot
+///    ([`install_file_in_snapshot`]), staged or excluded.
+///
+/// The reason names the first member, in `also` order, that fails the
+/// condition, and lists every member failing it the same way.
+fn rule_7_also(
+    snap: &InspectionSnapshot,
+    staged: &StagedWrites<'_>,
+    sc: &UnitStateChange,
+    action: UnitAction,
+    rows: &BTreeMap<&UnitName, &UnitStateChange>,
+    carried: &BTreeMap<&UnitName, UnitAction>,
+) -> Result<(), OmissionReason> {
+    if action == UnitAction::Mask || sc.also.is_empty() {
+        return Ok(());
+    }
+    let declined = |member: &UnitName, why: AlsoWhy, named: Vec<UnitName>, add: Vec<UnitName>| {
+        OmissionReason::AlsoMember {
+            member: member.clone(),
+            why,
+            verb: action,
+            named,
+            add,
+        }
+    };
+    let (matching, opposite) = match action {
+        UnitAction::Enable => (MemberLinks::Installed, MemberLinks::Unlinked),
+        UnitAction::Disable | UnitAction::Mask => (MemberLinks::Unlinked, MemberLinks::Installed),
+    };
+    let members_where = |test: &dyn Fn(&AlsoMember) -> bool| -> Vec<UnitName> {
+        sc.also
+            .iter()
+            .filter(|m| test(m))
+            .map(|m| m.unit.clone())
+            .collect()
+    };
+
+    // Condition 1.
+    if let Some(first) = sc
+        .also
+        .iter()
+        .find(|m| m.links != matching && m.links != MemberLinks::Inert)
+    {
+        let named = members_where(&|m| m.links == first.links);
+        let add = members_where(&|m| m.links == opposite);
+        return Err(declined(
+            &first.unit,
+            AlsoWhy::LinksDiffer(first.links),
+            named,
+            add,
+        ));
+    }
+
+    // Condition 2.
+    let own_rule = |m: &AlsoMember| -> Option<AlsoWhy> {
+        if rows.contains_key(&m.unit) {
+            return (carried.get(&m.unit) != Some(&action)).then_some(AlsoWhy::RowNotCarried);
+        }
+        let needs_row = match action {
+            UnitAction::Enable => m.unit.instance().is_some(),
+            UnitAction::Disable | UnitAction::Mask => target_needs_unit(m.unit.as_str(), action),
+        };
+        needs_row.then_some(AlsoWhy::NeedsOwnRow)
+    };
+    if let Some((first, why)) = sc.also.iter().find_map(|m| own_rule(m).map(|why| (m, why))) {
+        let named = members_where(&|m| own_rule(m).as_ref() == Some(&why));
+        return Err(declined(&first.unit, why, named, Vec::new()));
+    }
+
+    // Condition 3.
+    let own = install_file_in_snapshot(snap, staged, sc.unit().name(), &sc.vendor_drop_ins)
+        .map(|path| (sc.unit().name(), &sc.also[0].unit, path));
+    let file = own.or_else(|| {
+        sc.also.iter().find_map(|m| {
+            let mut vendor = m.vendor_drop_ins.clone();
+            if let Some(row) = rows.get(&m.unit) {
+                vendor.extend(row.vendor_drop_ins.iter().cloned());
+            }
+            install_file_in_snapshot(snap, staged, &m.unit, &vendor)
+                .map(|path| (&m.unit, &m.unit, path))
+        })
+    });
+    if let Some((of, member, path)) = file {
+        return Err(declined(
+            member,
+            AlsoWhy::InstallFile { path },
+            vec![of.clone()],
+            Vec::new(),
+        ));
+    }
+    Ok(())
+}
+
+/// The first file the snapshot holds, staged or excluded, that is an
+/// install file for `name` (§ 10.2 "Install files"): a unit file at
+/// `/etc/systemd/system/<name>` or, for an instance, at its template's
+/// name; or a `.conf` directly in one of [`install_drop_in_dirs`] that
+/// holds an `[Install]` section or has one of `vendor_drop_ins`' file
+/// names. Config entries, then drop-in rows, then the files the export
+/// writes, each by [`Destination`]; a path that does not parse is none.
+fn install_file_in_snapshot(
+    snap: &InspectionSnapshot,
+    staged: &StagedWrites<'_>,
+    name: &UnitName,
+    vendor_drop_ins: &[String],
+) -> Option<String> {
+    let template = name.instance().map(|parts| parts.template());
+    let unit_files: Vec<Destination> = std::iter::once(etc_unit_path(name))
+        .chain(template.map(|t| format!("{ETC_UNIT_DIR}/{}", t.as_str())))
+        .filter_map(|path| Destination::new(&path).ok())
+        .collect();
+    let dirs: Vec<Destination> = install_drop_in_dirs(name)
+        .iter()
+        .filter_map(|dir| Destination::new(dir).ok())
+        .collect();
+    let is_install_file = |path: &str, content: &str| {
+        let Ok(dest) = Destination::new(path) else {
+            return false;
+        };
+        unit_files.contains(&dest)
+            || dirs.iter().any(|dir| {
+                dest.as_str()
+                    .strip_prefix(dir.as_str())
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .is_some_and(|file| {
+                        !file.contains('/')
+                            && file.ends_with(DROP_IN_FILE_SUFFIX)
+                            && (holds_install_section(content)
+                                || vendor_drop_ins.iter().any(|vendor| vendor == file))
+                    })
+            })
+    };
+    let config = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .map(|f| (f.path.as_str(), f.content.as_str()));
+    let drop_ins = snap
+        .units
+        .iter()
+        .flat_map(|u| &u.drop_ins)
+        .map(|d| (d.path.as_str(), d.content.as_str()));
+    let writes = staged
+        .writes
+        .iter()
+        .map(|(dest, write)| (dest.as_str(), write.content.as_ref()));
+    config
+        .chain(drop_ins)
+        .chain(writes)
+        .find(|(path, content)| is_install_file(path, content))
+        .map(|(path, _)| path.to_owned())
 }
 
 /// The unit whose `[Install]` a link's `install_files` belong to: `unit`

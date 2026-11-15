@@ -190,6 +190,7 @@ fn declined_view(name: &UnitName, action: UnitAction, reason: &OmissionReason) -
         renders: match line.marker {
             DeclinedMarker::Omitted => DeclinedRenders::Omitted,
             DeclinedMarker::Fixme => DeclinedRenders::Fixme,
+            DeclinedMarker::Advisory => DeclinedRenders::Advisory,
         },
         reason: reason.name().to_owned(),
         text: line.text,

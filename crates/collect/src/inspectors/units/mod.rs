@@ -471,10 +471,6 @@ fn build_state_changes(
     for subject in listed {
         let warn =
             |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
-        // § 7.4's comparison found the `/etc` files change the package's
-        // `[Install]` other than by adding links, which its own findings
-        // report.
-        let mut differs = false;
         let (fragment, state, evidence, additive) = match resolve::resolve(exec, &subject.name) {
             Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => (
                 fragment,
@@ -513,11 +509,6 @@ fn build_state_changes(
                             read_failures,
                         );
                         if let Some(difference) = difference {
-                            differs = matches!(
-                                difference,
-                                InstallDifference::NotAdditive { .. }
-                                    | InstallDifference::VendorUndetermined { .. }
-                            );
                             additive = links::apply_install_difference(
                                 &mut found,
                                 &subject.name,
@@ -621,9 +612,10 @@ fn build_state_changes(
         let state_change = additive || is_state_change(&candidate, &fragment);
         // § 7.4, "An owner at its preset whose member is off": a packaged
         // unit enabled under an `enable` preset has no row of its own, and
-        // the image's package install enables every member with it.
+        // the image's package install enables every member with it. This
+        // holds where the comparison differs too: the unit's findings name
+        // the changed values, and the row names the member that is off.
         let at_preset = !state_change
-            && !differs
             && candidate.state == UnitState::Enabled
             && candidate.default_state == Some(PresetDefault::Enable)
             && matches!(

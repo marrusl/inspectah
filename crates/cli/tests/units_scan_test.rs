@@ -8948,3 +8948,705 @@ fn a_masked_instance_is_one_state_change_omitted_for_now() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 rule 7, `Also=` members, on a single host (T25 (a) to (h) and
+// (k), T31's additive row with a member, T39's owner cases).
+// ---------------------------------------------------------------------
+
+/// The owner of the rule 7 hosts.
+const BUNDLE: &str = "bundle.service";
+
+/// [`WANTED_UNIT`] with `also` (`Also=...` lines) added to its `[Install]`.
+fn wanted_with(also: &str) -> String {
+    format!("{WANTED_UNIT}{also}")
+}
+
+/// A host whose [`INSTALL_PACKAGE`] ships every `(name, text)` of
+/// `vendor`, with each `(name, state)` of `listed` listed by systemctl
+/// (listed `enabled`, a unit gets the links `enable` makes) under
+/// `presets`, then `disable *`. Scanned against a base image so refine
+/// keeps the package included.
+fn rule7_host(presets: &[&str], listed: &[(&str, &str)], vendor: &[(&str, &str)]) -> UnitHost {
+    let mut host = UnitHost::new()
+        .base_package("glibc")
+        .package(INSTALL_PACKAGE);
+    for (name, state) in listed {
+        host = host.unit(name, state);
+    }
+    for rule in presets {
+        host = host.preset(rule);
+    }
+    host = host.preset("disable *");
+    for (name, text) in vendor {
+        host = host.vendor_unit(name, text, Some(INSTALL_PACKAGE));
+    }
+    host
+}
+
+/// § 10.2's first line of rule 7's advisory for `unit`, whose command is
+/// `verb`, naming `named` with `clause`.
+fn also_head(unit: &str, verb: &str, named: &str, clause: &str) -> String {
+    format!(
+        "# Advisory: {unit} is {verb}d on the source host. Not carried: systemctl {verb} on it \
+         also {verb}s {named} (named by Also=), {clause}."
+    )
+}
+
+/// The clause for members that are not enabled under an `enable`.
+const NOT_ENABLED: &str = "which is not enabled there";
+/// The clause for a member whose links neither verb reproduces.
+const NEITHER: &str = "whose links there neither command reproduces";
+/// The clause for a member whose own row the plan does not carry.
+const ROW_NOT_CARRIED: &str = "whose own row is not carried with this command";
+
+/// § 10.2's lines to add, between their header and footer: `unit`'s own
+/// command, then each `(verb, member)`.
+fn also_lines(verb: &str, unit: &str, members: &[(&str, &str)]) -> Vec<String> {
+    let mut lines =
+        vec!["#   To reproduce the source host, add after the configuration COPY:".to_owned()];
+    lines.push(format!("#     RUN systemctl {verb} -- '{unit}'"));
+    for (member_verb, member) in members {
+        lines.push(format!("#     RUN systemctl {member_verb} -- '{member}'"));
+    }
+    lines.push(
+        "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled."
+            .to_owned(),
+    );
+    lines
+}
+
+/// The `InstallFile` block for `unit`'s `verb`, naming `path` and the
+/// unit `of` whose install file it is.
+fn install_file_block(unit: &str, verb: &str, path: &str, of: &str) -> Vec<String> {
+    vec![
+        format!(
+            "# Advisory: {unit} is {verb}d on the source host. Not carried: {path} sets \
+             [Install] for {of}, so the units systemctl {verb} reaches through Also= in the \
+             image may not be the ones recorded."
+        ),
+        "#   After reading that file, add after the configuration COPY:".to_owned(),
+        format!("#     RUN systemctl {verb} -- '{unit}'"),
+    ]
+}
+
+/// The refine row's `declined` for a rule 7 block whose first line is
+/// `head`.
+fn also_declined(head: &str) -> inspectah_refine::projection::DeclinedView {
+    inspectah_refine::projection::DeclinedView {
+        renders: inspectah_refine::projection::DeclinedRenders::Advisory,
+        reason: "AlsoMember".into(),
+        text: head
+            .strip_prefix("# Advisory: ")
+            .expect("an advisory line")
+            .to_owned(),
+    }
+}
+
+/// Asserts, on both routes, that `unit` gets exactly `block` and that no
+/// `systemctl` instruction names `unit` or any of `quiet`, then that
+/// `unit`'s refine row declines with the block's first line.
+fn assert_also_advisory(snap: &InspectionSnapshot, unit: &str, block: &[String], quiet: &[&str]) {
+    for (route, containerfile) in both_routes(snap) {
+        assert_eq!(
+            advisory_for(&containerfile, unit),
+            block,
+            "{route}:\n{containerfile}"
+        );
+        for name in std::iter::once(&unit).chain(quiet) {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, name),
+                "{route}: {name}:\n{containerfile}"
+            );
+        }
+    }
+    assert_eq!(
+        declined_in(&session(snap), unit),
+        Some(also_declined(&block[0]))
+    );
+}
+
+/// Asserts, on both routes, that `unit`'s `verb` is carried with no rule 7
+/// block, and that its refine row declines nothing.
+fn assert_also_carried(snap: &InspectionSnapshot, unit: &str, verb: &str, label: &str) {
+    for (route, containerfile) in both_routes(snap) {
+        assert!(
+            acts(&containerfile, verb, unit),
+            "{label} {route}:\n{containerfile}"
+        );
+        assert!(
+            advisory_for(&containerfile, unit).is_empty(),
+            "{label} {route}:\n{containerfile}"
+        );
+    }
+    assert_eq!(declined_in(&session(snap), unit), None, "{label}");
+}
+
+/// T39's owner cases, render half (§ 7.4, "An owner at its preset whose
+/// member is off"). `m.service`, at its `enable` preset, with `m.socket`
+/// unlinked: the plan declines the owner's `enable` with
+/// `LinksDiffer(Unlinked)`, and the Containerfile holds § 10.2's advisory
+/// with the owner's `enable` and the member's `disable`, and no `systemctl`
+/// instruction names either. The stock control, `m.socket` linked: no owner
+/// row, and only `m.socket`'s own `enable` against its `disable` preset,
+/// carried. The `Inert` control: no row and no advisory.
+#[test]
+fn t39_an_owner_whose_member_is_off_is_an_advisory() {
+    let socket = "[Socket]\nListenStream=/run/m.sock\n\n[Install]\nWantedBy=sockets.target\n";
+    let host = |also: &str, socket_state: &str| {
+        rule7_host(
+            &["enable m.service"],
+            &[("m.service", "enabled"), ("m.socket", socket_state)],
+            &[
+                ("m.service", &wanted_with(also)),
+                ("m.socket", socket),
+                ("m-helper.service", NO_INSTALL_UNIT),
+            ],
+        )
+    };
+
+    let snap = scan(host("Also=m.socket\n", "disabled"));
+    let block = [
+        "# Advisory: m.service is enabled on the source host. Not carried: systemctl enable on it \
+         also enables m.socket (named by Also=), which is not enabled there.",
+        "#   To reproduce the source host, add after the configuration COPY:",
+        "#     RUN systemctl enable -- 'm.service'",
+        "#     RUN systemctl disable -- 'm.socket'",
+        "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.",
+    ]
+    .map(str::to_owned);
+    assert_also_advisory(&snap, "m.service", &block, &["m.socket"]);
+
+    let stock = scan(host("Also=m.socket\n", "enabled"));
+    assert_eq!(changes_named(&stock, "m.service"), 0);
+    assert_also_carried(&stock, "m.socket", "enable", "stock");
+    for (route, containerfile) in both_routes(&stock) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "m.service")
+                && advisory_for(&containerfile, "m.service").is_empty(),
+            "stock {route}:\n{containerfile}"
+        );
+    }
+
+    let inert = scan(host("Also=m-helper.service\n", "disabled"));
+    assert_eq!(changes_named(&inert, "m.service"), 0);
+    for (route, containerfile) in both_routes(&inert) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "m.service")
+                && advisory_for(&containerfile, "m.service").is_empty(),
+            "inert {route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T39's owner case for an instance member, render half: `p.service` with
+/// `Also=t@two.service`, the package shipping only `t@.service`, and no
+/// link for `t@two`: rule 7's advisory naming `t@two.service`, with
+/// `p.service`'s `enable` and `t@two.service`'s `disable`, and no
+/// `systemctl` instruction naming either. The control, `t@two` linked: no
+/// owner row, no advisory, and no `systemctl` instruction naming either
+/// (the linked instance's own row is omitted by the phase 4 placeholder).
+#[test]
+fn t39_an_owner_whose_instance_member_is_off_is_an_advisory() {
+    let host = |linked: bool| {
+        let host = rule7_host(
+            &["enable p.service"],
+            &[("p.service", "enabled"), (T_TEMPLATE, "indirect")],
+            &[
+                ("p.service", &wanted_with("Also=t@two.service\n")),
+                (T_TEMPLATE, &t_template(None)),
+            ],
+        );
+        if linked {
+            instance_link(
+                host,
+                "/etc/systemd/system",
+                "multi-user.target",
+                "t@two.service",
+                T_TEMPLATE_PATH,
+            )
+        } else {
+            host
+        }
+    };
+    let snap = scan(host(false));
+    let mut block = vec![also_head(
+        "p.service",
+        "enable",
+        "t@two.service",
+        NOT_ENABLED,
+    )];
+    block.extend(also_lines(
+        "enable",
+        "p.service",
+        &[("disable", "t@two.service")],
+    ));
+    assert_also_advisory(&snap, "p.service", &block, &["t@two.service"]);
+
+    let control = scan(host(true));
+    assert_eq!(changes_named(&control, "p.service"), 0);
+    for (route, containerfile) in both_routes(&control) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "p.service")
+                && in_no_systemctl_instruction(&containerfile, "t@two.service")
+                && advisory_for(&containerfile, "p.service").is_empty(),
+            "control {route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T25 (a): a packaged unit with three members, all `Installed`, nothing
+/// in `/etc` but links: the `enable` is carried, with equal unit lines on
+/// the two routes. It stays carried with a `[Service]`-only drop-in on the
+/// unit and on a member. One member `Unlinked`: the advisory with the
+/// `enable` line and a `disable` line for that member.
+#[test]
+fn t25_a_every_member_installed_is_carried_and_one_unlinked_is_advised() {
+    let host = |c_state: &str| {
+        let presets: &[&str] = if c_state == "enabled" {
+            &["enable a.service", "enable b.service", "enable c.service"]
+        } else {
+            &["enable a.service", "enable b.service"]
+        };
+        rule7_host(
+            presets,
+            &[
+                (BUNDLE, "enabled"),
+                ("a.service", "enabled"),
+                ("b.service", "enabled"),
+                ("c.service", c_state),
+            ],
+            &[
+                (BUNDLE, &wanted_with("Also=a.service b.service c.service\n")),
+                ("a.service", WANTED_UNIT),
+                ("b.service", WANTED_UNIT),
+                ("c.service", WANTED_UNIT),
+            ],
+        )
+    };
+    let snap = scan(host("enabled"));
+    assert_also_carried(&snap, BUNDLE, "enable", "(a)");
+    let [(_, scanned), (_, refined)] = both_routes(&snap);
+    assert_eq!(unit_lines(&scanned), unit_lines(&refined));
+
+    let with_overrides = scan(
+        host("enabled")
+            .file(&etc_drop_in(BUNDLE, "20-own.conf"), SERVICE_DROP_IN)
+            .file(&etc_drop_in("a.service", "20-own.conf"), SERVICE_DROP_IN),
+    );
+    assert_also_carried(&with_overrides, BUNDLE, "enable", "(a) overrides");
+
+    // `c.service` unlinked, at its `disable *` preset, so with no row.
+    let snap = scan(host("disabled"));
+    let mut block = vec![also_head(BUNDLE, "enable", "c.service", NOT_ENABLED)];
+    block.extend(also_lines("enable", BUNDLE, &[("disable", "c.service")]));
+    assert_also_advisory(&snap, BUNDLE, &block, &["c.service"]);
+}
+
+/// T25 (b): a `disable` with every member `Unlinked` is carried. A member
+/// with no `[Install]` and a hand-made link is `Other`: an advisory with no
+/// line to add.
+#[test]
+fn t25_b_a_disable_with_members() {
+    let host = |also: &str| {
+        rule7_host(
+            &["enable bundle.service"],
+            &[
+                (BUNDLE, "disabled"),
+                ("x.service", "disabled"),
+                ("y.service", "disabled"),
+            ],
+            &[
+                (BUNDLE, &wanted_with(also)),
+                ("x.service", WANTED_UNIT),
+                ("y.service", WANTED_UNIT),
+                ("z.service", NO_INSTALL_UNIT),
+            ],
+        )
+    };
+    let snap = scan(host("Also=x.service y.service\n"));
+    assert_also_carried(&snap, BUNDLE, "disable", "(b)");
+
+    let snap = scan(wants_link(
+        host("Also=x.service z.service\n"),
+        "multi-user.target",
+        "z.service",
+    ));
+    let block = vec![also_head(BUNDLE, "disable", "z.service", NEITHER)];
+    assert_also_advisory(&snap, BUNDLE, &block, &["z.service", "x.service"]);
+}
+
+/// T25 (c): a member that is an instance with its own row, which this
+/// phase omits: `RowNotCarried`, and no line to add.
+#[test]
+fn t25_c_an_instance_member_with_its_own_row_is_not_carried() {
+    let host = rule7_host(
+        &[],
+        &[(BUNDLE, "enabled"), (T_TEMPLATE, "indirect")],
+        &[
+            (BUNDLE, &wanted_with("Also=t@two.service\n")),
+            (T_TEMPLATE, &t_template(None)),
+        ],
+    );
+    let snap = scan(instance_link(
+        host,
+        "/etc/systemd/system",
+        "multi-user.target",
+        "t@two.service",
+        T_TEMPLATE_PATH,
+    ));
+    assert_eq!(changes_named(&snap, "t@two.service"), 1);
+    let block = vec![also_head(
+        BUNDLE,
+        "enable",
+        "t@two.service",
+        ROW_NOT_CARRIED,
+    )];
+    assert_also_advisory(&snap, BUNDLE, &block, &["t@two.service"]);
+}
+
+/// T25 (d): a member whose row the operator excluded: an advisory; the
+/// row included again: carried, with the member's own `enable`.
+#[test]
+fn t25_d_a_member_whose_row_is_excluded() {
+    let snap = scan(rule7_host(
+        &[],
+        &[(BUNDLE, "enabled"), ("helper.service", "enabled")],
+        &[
+            (BUNDLE, &wanted_with("Also=helper.service\n")),
+            ("helper.service", WANTED_UNIT),
+        ],
+    ));
+    assert_also_carried(&snap, BUNDLE, "enable", "(d) both included");
+    assert_also_carried(&snap, "helper.service", "enable", "(d) member");
+
+    let head = also_head(BUNDLE, "enable", "helper.service", ROW_NOT_CARRIED);
+    let excluded = [(unit_item("helper.service"), false)];
+    let containerfile = containerfile_in(&exported_after(&snap, &excluded));
+    assert_eq!(
+        advisory_for(&containerfile, BUNDLE),
+        std::slice::from_ref(&head),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, BUNDLE),
+        "{containerfile}"
+    );
+    assert_eq!(
+        declined_in(&session_after(&snap, &excluded), BUNDLE),
+        Some(also_declined(&head))
+    );
+
+    let restored = [
+        (unit_item("helper.service"), false),
+        (unit_item("helper.service"), true),
+    ];
+    let containerfile = containerfile_in(&exported_after(&snap, &restored));
+    assert!(
+        acts(&containerfile, "enable", BUNDLE) && advisory_for(&containerfile, BUNDLE).is_empty(),
+        "{containerfile}"
+    );
+    assert_eq!(declined_in(&session_after(&snap, &restored), BUNDLE), None);
+}
+
+/// T25 (e): a member with no row that is an instance (`enable`) or a
+/// `bootc-*` unit (`disable`): `NeedsOwnRow`, and no line to add.
+#[test]
+fn t25_e_a_member_with_no_row_that_needs_its_own() {
+    let snap = scan(rule7_host(
+        &["enable t@two.service"],
+        &[(BUNDLE, "enabled"), ("t@two.service", "enabled")],
+        &[
+            (BUNDLE, &wanted_with("Also=t@two.service\n")),
+            ("t@two.service", &t_template(None)),
+        ],
+    ));
+    assert_eq!(changes_named(&snap, "t@two.service"), 0);
+    let block = vec![also_head(
+        BUNDLE,
+        "enable",
+        "t@two.service",
+        "an instance with no row here to check its configuration",
+    )];
+    assert_also_advisory(&snap, BUNDLE, &block, &["t@two.service"]);
+
+    let snap = scan(rule7_host(
+        &["enable bundle.service"],
+        &[(BUNDLE, "disabled"), ("bootc-x.service", "disabled")],
+        &[
+            (BUNDLE, &wanted_with("Also=bootc-x.service\n")),
+            ("bootc-x.service", WANTED_UNIT),
+        ],
+    ));
+    assert_eq!(changes_named(&snap, "bootc-x.service"), 0);
+    let block = vec![also_head(
+        BUNDLE,
+        "disable",
+        "bootc-x.service",
+        "which the image needs",
+    )];
+    assert_also_advisory(&snap, BUNDLE, &block, &["bootc-x.service"]);
+}
+
+/// T25 (f): a member with no unit file is `Inert`, and the `enable` is
+/// carried.
+#[test]
+fn t25_f_a_member_with_no_unit_file_is_carried() {
+    let snap = scan(rule7_host(
+        &[],
+        &[(BUNDLE, "enabled")],
+        &[(BUNDLE, &wanted_with("Also=missing.service\n"))],
+    ));
+    assert_also_carried(&snap, BUNDLE, "enable", "(f)");
+}
+
+/// T25 (g): a chain `a`, `b`, `c` with `c` `Unlinked`: `enable a` and
+/// `enable b` are both advisories naming `c`.
+#[test]
+fn t25_g_a_chain_names_its_unlinked_end_from_each_owner() {
+    let snap = scan(rule7_host(
+        &[],
+        &[("a.service", "enabled"), ("b.service", "enabled")],
+        &[
+            ("a.service", &wanted_with("Also=b.service\n")),
+            ("b.service", &wanted_with("Also=c.service\n")),
+            ("c.service", WANTED_UNIT),
+        ],
+    ));
+    for unit in ["a.service", "b.service"] {
+        let mut block = vec![also_head(unit, "enable", "c.service", NOT_ENABLED)];
+        block.extend(also_lines("enable", unit, &[("disable", "c.service")]));
+        assert_also_advisory(
+            &snap,
+            unit,
+            &block,
+            &["a.service", "b.service", "c.service"],
+        );
+    }
+}
+
+/// T25 (h), install evidence, each with the unit otherwise carried.
+/// - A packaged unit whose vendor file has `Also=bootc-x.timer`, recorded
+///   `Shadowed` with an empty list because the shadow drops the key, the
+///   shadow excluded: no `enable` and no `disable` (rule 5).
+/// - A member recorded `Inert`, with an imported full shadow of it that
+///   adds `WantedBy=` staged: `InstallFile`.
+/// - A member with no row whose `/etc` drop-in supplies its `WantedBy=`,
+///   the drop-in included and excluded: `InstallFile` both times.
+/// - A staged local unit that sets `Also=`, and a local mount unit as a
+///   member: `InstallFile`.
+#[test]
+fn t25_h_install_evidence() {
+    // The shadow that drops `Also=`.
+    let shadowed = scan(
+        rule7_host(
+            &[],
+            &[(BUNDLE, "enabled")],
+            &[
+                (BUNDLE, &wanted_with("Also=bootc-x.timer\n")),
+                (
+                    "bootc-x.timer",
+                    "[Timer]\nOnCalendar=daily\n\n[Install]\nWantedBy=timers.target\n",
+                ),
+            ],
+        )
+        .etc_unit(BUNDLE, WANTED_UNIT),
+    );
+    assert!(change(&shadowed, BUNDLE).also.is_empty());
+    assert_also_carried(&shadowed, BUNDLE, "enable", "(h) shadow included");
+    let shadow = format!("/etc/systemd/system/{BUNDLE}");
+    let excluded = containerfile_in(&exported_after(
+        &shadowed,
+        &[(drop_in_item(&shadow), false)],
+    ));
+    assert!(in_no_systemctl_instruction(&excluded, BUNDLE), "{excluded}");
+    assert!(
+        omitted(&excluded, BUNDLE).is_some_and(|l| l.ends_with(&evidence_changed(&shadow))),
+        "{excluded}"
+    );
+
+    // An `Inert` member and an imported full shadow of it.
+    let inert = scan(rule7_host(
+        &[],
+        &[(BUNDLE, "enabled")],
+        &[
+            (BUNDLE, &wanted_with("Also=helper.service\n")),
+            ("helper.service", NO_INSTALL_UNIT),
+        ],
+    ));
+    assert_also_carried(&inert, BUNDLE, "enable", "(h) inert member");
+    let helper_shadow = "/etc/systemd/system/helper.service";
+    let imported = with_config_entry(&inert, helper_shadow, WANTED_UNIT);
+    let block = install_file_block(BUNDLE, "enable", helper_shadow, "helper.service");
+    assert_also_advisory(&imported, BUNDLE, &block, &[]);
+
+    // A member's `WantedBy=` from its own `/etc` drop-in, linked, and not
+    // listed, so with no row.
+    let drop_in = etc_drop_in("helper.service", "10-install.conf");
+    let snap = scan(
+        wants_link(
+            rule7_host(
+                &[],
+                &[(BUNDLE, "enabled")],
+                &[
+                    (BUNDLE, &wanted_with("Also=helper.service\n")),
+                    ("helper.service", NO_INSTALL_UNIT),
+                ],
+            ),
+            "multi-user.target",
+            "helper.service",
+        )
+        .file(&drop_in, INSTALL_DROP_IN),
+    );
+    assert_eq!(
+        change(&snap, BUNDLE).also[0].links,
+        inspectah_core::types::units::MemberLinks::Installed
+    );
+    assert_eq!(changes_named(&snap, "helper.service"), 0);
+    let block = install_file_block(BUNDLE, "enable", &drop_in, "helper.service");
+    assert_also_advisory(&snap, BUNDLE, &block, &[]);
+    let ops = [(drop_in_item(&drop_in), false)];
+    let containerfile = containerfile_in(&exported_after(&snap, &ops));
+    assert_eq!(
+        advisory_for(&containerfile, BUNDLE),
+        block,
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, BUNDLE),
+        "{containerfile}"
+    );
+    assert_eq!(
+        declined_in(&session_after(&snap, &ops), BUNDLE),
+        Some(also_declined(&block[0]))
+    );
+
+    // A staged local unit that sets `Also=`.
+    let local = "/etc/systemd/system/local.service";
+    let snap = scan(
+        rule7_host(
+            &["enable helper.service"],
+            &[("local.service", "enabled"), ("helper.service", "enabled")],
+            &[("helper.service", WANTED_UNIT)],
+        )
+        .etc_unit("local.service", &wanted_with("Also=helper.service\n")),
+    );
+    let block = install_file_block("local.service", "enable", local, "local.service");
+    assert_also_advisory(&snap, "local.service", &block, &[]);
+
+    // A local mount unit as a member.
+    let mount = "/etc/systemd/system/srv-data.mount";
+    let snap = scan(
+        rule7_host(
+            &[],
+            &[(BUNDLE, "enabled"), ("srv-data.mount", "enabled")],
+            &[(BUNDLE, &wanted_with("Also=srv-data.mount\n"))],
+        )
+        .etc_unit("srv-data.mount", &mount_file("/srv/data", None)),
+    );
+    let block = install_file_block(BUNDLE, "enable", mount, "srv-data.mount");
+    assert_also_advisory(&snap, BUNDLE, &block, &[]);
+}
+
+/// T25 (k), second half: an `/etc` drop-in that holds only `[Service]`,
+/// with the file name of a member's vendor drop-in that has `[Install]`,
+/// is an install file of the member: `InstallFile`.
+#[test]
+fn t25_k_a_members_file_named_like_its_vendor_drop_in() {
+    const VENDOR: &str = "/usr/lib/systemd/system/helper.service.d/10-members.conf";
+    let hiding = etc_drop_in("helper.service", "10-members.conf");
+    let snap = scan(
+        rule7_host(
+            &["enable helper.service"],
+            &[(BUNDLE, "enabled"), ("helper.service", "enabled")],
+            &[
+                (BUNDLE, &wanted_with("Also=helper.service\n")),
+                ("helper.service", WANTED_UNIT),
+            ],
+        )
+        .file(VENDOR, "[Install]\nWantedBy=multi-user.target\n")
+        .file(&hiding, SERVICE_DROP_IN),
+    );
+    let block = install_file_block(BUNDLE, "enable", &hiding, "helper.service");
+    assert_also_advisory(&snap, BUNDLE, &block, &[]);
+}
+
+/// T31 with § 7.4: T30 (b)'s additive unit with `Also=helper.service`, the
+/// helper `Installed`: since the unit has an install file, rule 7 makes the
+/// command an advisory (`InstallFile`), and no `enable` is carried.
+#[test]
+fn t31_an_additive_row_with_a_member_is_an_advisory() {
+    let drop_in = etc_drop_in(DIFF_UNIT, "10-extra.conf");
+    let host = wants_link(
+        wants_link(
+            diff_host(DIFF_UNIT, &wanted_with("Also=helper.service\n"), "enabled"),
+            "multi-user.target",
+            DIFF_UNIT,
+        ),
+        "extra.target",
+        DIFF_UNIT,
+    )
+    .unit("helper.service", "enabled")
+    .preset("enable helper.service")
+    .vendor_unit("helper.service", WANTED_UNIT, Some(INSTALL_PACKAGE))
+    .file(&drop_in, "[Install]\nWantedBy=extra.target\n");
+    let snap = scan(host);
+    assert_eq!(
+        change(&snap, DIFF_UNIT).install_drop_ins,
+        [drop_in.as_str()]
+    );
+    let block = install_file_block(DIFF_UNIT, "enable", &drop_in, DIFF_UNIT);
+    assert_also_advisory(&snap, DIFF_UNIT, &block, &["helper.service"]);
+}
+
+/// § 7.4's owner check where the comparison is not additive (a provisional
+/// ruling): a full shadow replacing `WantedBy=multi-user.target` with
+/// `graphical.target` and keeping `Also=helper.service`, the helper
+/// unlinked. The unit gets both install-difference blocks and rule 7's
+/// advisory, and no `systemctl` instruction names the unit or the helper.
+#[test]
+fn a_not_additive_owner_whose_member_is_off_gets_both_advisories() {
+    let vendor = wanted_with("Also=helper.service\n");
+    let shadow = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=graphical.target\n\
+                  Also=helper.service\n";
+    let snap = scan(
+        wants_link(
+            diff_host(DIFF_UNIT, &vendor, "enabled"),
+            "graphical.target",
+            DIFF_UNIT,
+        )
+        .unit("helper.service", "disabled")
+        .vendor_unit("helper.service", WANTED_UNIT, Some(INSTALL_PACKAGE))
+        .etc_unit(DIFF_UNIT, shadow),
+    );
+    assert_eq!(change(&snap, DIFF_UNIT).current_state(), UnitState::Enabled);
+    let mut block = vec![also_head(
+        DIFF_UNIT,
+        "enable",
+        "helper.service",
+        NOT_ENABLED,
+    )];
+    block.extend(also_lines(
+        "enable",
+        DIFF_UNIT,
+        &[("disable", "helper.service")],
+    ));
+    assert_also_advisory(&snap, DIFF_UNIT, &block, &["helper.service"]);
+    let wants = format!("/etc/systemd/system/multi-user.target.wants/{DIFF_UNIT}");
+    for (route, containerfile) in both_routes(&snap) {
+        for line in host_only_block("graphical.target", DIFF_UNIT)
+            .into_iter()
+            .chain(vendor_only_block(
+                &format!("multi-user.target.wants/{DIFF_UNIT}"),
+                DIFF_UNIT,
+                &wants,
+            ))
+        {
+            assert_eq!(
+                count_lines(&containerfile, &line),
+                1,
+                "{route}: {line}\n{containerfile}"
+            );
+        }
+    }
+}
