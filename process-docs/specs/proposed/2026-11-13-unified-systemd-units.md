@@ -730,8 +730,8 @@ pub struct ManualLink {
 }
 
 /// A unit whose `[Install]` on the source host is `Undetermined` and
-/// whose `/etc` install files change it, or that has no link and assigns
-/// `Also=`, so no `disable` can be carried for it (§ 7.3). One per unit,
+/// whose `/etc` install files change it, or that assigns `Also=`, so its
+/// members cannot be listed or checked (§ 7.3). One per unit,
 /// whether or not the unit has a link, since the image's links can differ
 /// from the host's with no link on either side to report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -809,10 +809,10 @@ what the image would have; where its file lives; and which package owns it.
    read only to decide whether an install is complete (§ 7.3) and never
    become a row.
 5. The effective unit for each name the other sources produce (§ 7.2).
-6. The instances the presets say a package install would link, derived
-   from sources 1, 2 and 5 and checked against source 3, so a disabled
-   template-backed instance is found (§ 7.5). Nothing more is read from
-   the host for them.
+6. The instances a package install would link, derived from the presets
+   and from the `Also=` of enabled units, from sources 1, 2 and 5, and
+   checked against source 3, so a disabled template-backed instance is
+   found (§ 7.5). Nothing more is read from the host for them.
 
 Source 1 cannot answer what the links answer (all measured). An enabled
 instance has no row and shows only as its template reading `indirect`. A
@@ -1062,7 +1062,7 @@ three sets:
 | `Known` with nothing expected (only `Also=`, or lists a drop-in reset to empty), or `Absent` | (nothing is expected) | None. The unit has no enablement of its own. § 7.4 still compares a vendor unit's section with the package's. | A `ManualLink`, cause `StaticUnit`, except a link § 7.4 finds the package install makes in the image too, which produces nothing. |
 | `Undetermined`, not assigning `Also=` | No link to `U` under `/etc/systemd/system` | `Disabled`. `disable` removes every link to `U` under `/etc` and does not need the expected set, so an absent set of links is `Disabled` whatever the section would expect. | (none) |
 | `Undetermined`, assigning `Also=` | No link to `U` under `/etc/systemd/system` | None. A `disable` would also act on members the collector could not list. One `UndeterminedInstall` record (§ 6.6), with or without an `/etc` install file. | (none) |
-| `Undetermined` | Some link to `U` under `/etc/systemd/system` | None. No state change is recorded. When the unit has an install file under `/etc` (§ 10.2), one `UndeterminedInstall` record (§ 6.6). | A `ManualLink`, cause `Undetermined` with its reason. |
+| `Undetermined` | Some link to `U` under `/etc/systemd/system` | None. No state change is recorded. When the unit has an install file under `/etc` (§ 10.2), or assigns `Also=`, one `UndeterminedInstall` record (§ 6.6). | A `ManualLink`, cause `Undetermined` with its reason. |
 
 The install state, not systemd's word, is what § 7.4 compares with the
 preset and what `inventory` records. Three points about the table:
@@ -1093,6 +1093,13 @@ preset and what `inventory` records. Three points about the table:
 Every row that does not end in `Enabled` or `Disabled` falls on the
 advisory side on purpose: an advisory costs the operator one line, and a
 carried enable for links the host lacked changes what the image starts.
+
+**`Disabled` means no installation link under `/etc`, nothing more.** It
+says the administrator's links are absent, which is what `disable`
+reproduces. A carried `disable` does not stop the unit from starting
+through a link a package ships under `/usr/lib`, or as a dependency of
+another unit, on the host or in the image; neither is changed by the
+export.
 
 Only `/etc` produces rows. Links a generator makes live under `/run`, which
 is why `serial-getty@ttyS0.service` on a host with a serial console is not
@@ -1282,7 +1289,9 @@ preset t@two.service` applies rules that name it or list it (measured). A
 package that ships only `t@.service` presets the template, and a preset
 of the template ignores rules that name an instance (measured). The
 snapshot does not record which names a scriptlet passes, so the rule
-takes the name the shipped file suggests; § 17 states what that misses.
+takes the name the shipped file suggests. That is an assumption until the
+stock scriptlets are read (§ 13 R5, open), and § 17 states what it
+misses.
 
 *An instance with its own unit file,* `t@i.service`, rules in file order:
 
@@ -1399,6 +1408,31 @@ switch off a unit the base image has enabled. Suppressing them would also
 need the collector to know which enables came from an install, which the
 host does not record. Run R4 reviews both classes.
 
+**An owner at its preset whose member is off.** A unit with a `Vendor`
+or `Shadowed` fragment that is `Enabled` under an `enable` preset has no
+row by the rules above, so nothing checks its `Also=`. The image's
+package install enables it, and through its `Also=` every member,
+whatever the member's own preset says. So the collector walks `Also=`
+from such a unit as § 7.3 walks it for a state change, and when the walk
+records a member that is an instance (§ 7.5's third kind of candidate)
+with `MemberLinks` `Unlinked` or `Other`, the owner becomes an `Enabled`
+state change whatever the preset says, with its `also` list and an
+`attention_reason` saying that a unit it enables through `Also=` is not
+enabled on the source host. Rule 7 of § 10.2 then finds a member that
+does not match `enable` and makes the command an advisory,
+`AlsoWhy::LinksDiffer`, so the row never carries a line of its own. The
+advisory's lines are the owner's `enable`, which the image already has,
+and the member's `disable`, which is what the image needs. A member that
+is `Installed` or `Inert` leaves the owner with no row, as before.
+
+The same loss exists for a member that is not an instance: a
+`multipathd.socket` enabled through `multipathd.service`'s `Also=`
+against a `disable` preset, which the administrator then disables, is
+`Disabled` at its preset and has no row, and the image's package install
+enables it again. This section does not cover it: the decision above is
+for instances, and widening the owner check to every member is not
+decided (§ 17).
+
 The name gate becomes: the name parses as a `UnitName` and is not a D-Bus
 activation alias. The alias test narrows to the `dbus-org.` prefix, which
 is what the comment at `services.rs:26-27` describes, so
@@ -1437,9 +1471,27 @@ the links under `/etc/systemd/system`. One with no expected link there is
 and renders `disable`. A candidate with its own unit file is already
 listed by source 1 and is not derived twice. This reads nothing new from
 the host: the preset files (source 2), the links (source 3) and the
-template's unit file, which source 1 lists and source 5 resolves. It is
-built in phase 5, with carried instances (§ 15). Until then such an
-instance is not collected, and phase 4 says nothing about it.
+template's unit file, which source 1 lists and source 5 resolves.
+
+**Instances named by an enabled unit's `Also=` are candidates too. (Mark
+Russell, 2026-11-15)** A package install that enables a unit enables
+every unit its `Also=` names, an instance whose package ships only the
+template included, whatever that instance's own preset says. So for each
+unit that is `Enabled` (§ 7.3) and whose effective `[Install]` is
+`Known`, every instance its `Also=` reaches is a candidate, followed
+through each member's effective unit until no new name appears, as
+`enable` and `disable` follow it at build (measured). Each candidate's
+install state is read as above; one with no link is `Disabled`. Its own
+preset is usually `disable`, so it gets no row of its own; what reports
+it is the owner's `Also=` check (§ 7.4, "An owner at its preset whose
+member is off"). An owner whose section is `Undetermined` has no
+readable `Also=`, so it derives no candidate; § 7.3 gives it an
+`UndeterminedInstall` whenever it assigns `Also=`, which says its members
+could not be checked.
+
+Both kinds of candidate are built in phase 5, with carried instances
+(§ 15). Until then such an instance is not collected, and phase 4 says
+nothing about it.
 
 **Instances tied to one host's devices are never carried.** An instance of
 `systemd-cryptsetup@.service` or `systemd-fsck@.service` names a volume or
@@ -2234,7 +2286,8 @@ Russell, 2026-11-13)** The merge does not keep every host's file paths
 
 In a single-host export, a command on `U` with a non-empty `also` list is
 carried only when all three conditions hold. Each is one pass over data
-already in hand, and nothing follows `Also=` at render.
+already in hand, and nothing follows `Also=` at render. When more than
+one fails, the first in this order gives the `AlsoWhy`.
 
 1. **Every member's links match the verb.** For `enable`, each member is
    `Installed` or `Inert`. For `disable`, each is `Unlinked` or `Inert`.
@@ -2647,9 +2700,9 @@ or not the unit has a link, beside any per-link `Undetermined` advisories:
 ```
 
 `<cause>` is the record's reason in the words above. A record with no
-install file ends the first line at `(<cause>)`, and adds `It has no link
-on the source host, and a disable would also act on the units its Also=
-names.` A preset-enabled
+install file ends the first line at `(<cause>)`, and adds `It assigns
+Also=, so the units it names are enabled or disabled with it in the
+image, and inspectah could not list them to check.` A preset-enabled
 packaged unit whose only relation is `RequiredBy=`, reset by a drop-in,
 has no link on the host and so no per-link advisory; this block is what
 tells the operator that the image's package install linked it anyway.
@@ -3365,7 +3418,20 @@ Phase 4 (the `/etc/systemd/system` scan):
   `enable t@.service two three` is `EnableInstances` with `two` and
   `three`; `enable t@two.service`, `enable t@.service` and `disable
   t@.service x` are `Plain`; a line whose first word is neither verb is
-  `Unknown` with its file and line.
+  `Unknown` with its file and line. An owner's `Also=`: a vendor
+  `p.service` with `WantedBy=multi-user.target` and
+  `Also=t@two.service`, enabled under `enable p.service` with its link,
+  the package shipping only `t@.service` (`WantedBy=multi-user.target`)
+  under `disable *`, and no link for `t@two`: `t@two` is collected with
+  inventory state `Disabled` and no row of its own; `p.service` is an
+  `Enabled` state change with the attention note, `t@two` in its `also`
+  as `Unlinked`; the plan declines it with `AlsoWhy::LinksDiffer`; the
+  Containerfile holds rule 7's advisory naming `t@two.service`, with
+  `RUN systemctl enable -- 'p.service'` and `RUN systemctl disable --
+  't@two.service'` as the lines to add, and no `systemctl` instruction
+  names either unit. The control: the same host with
+  `multi-user.target.wants/t@two.service` linked: `t@two` is `Installed`,
+  `p.service` has no row and the Containerfile names neither.
 - **T40. An undetermined section with `/etc` files and no link.** A
   vendor unit enabled by an `enable` preset whose only relation is
   `RequiredBy=a.target`, with an `/etc` drop-in holding `RequiredBy=` and
@@ -3383,7 +3449,8 @@ Phase 4 (the `/etc/systemd/system` scan):
   host: no state change and the per-link advisories. The same unit
   with `Also=helper.service` added and no link: no state change, and one
   `UndeterminedInstall` with no files, rendering the block without the
-  file clause. With the drop-in excluded: the unit's `# Omitted:` line
+  file clause; with `Also=helper.service` and one link: the per-link
+  advisories and the same record. With the drop-in excluded: the unit's `# Omitted:` line
   naming it, and the row's `not_applied` with its path. The control: the
   vendor unit with no `/etc` file has no record.
 - **T41. A partly excluded set of install files.** A vendor unit enabled
@@ -3631,8 +3698,10 @@ T27, T30 to T34 and T39 to T41.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
-(§ 7.5); the instances derived from the presets, so a disabled
-template-backed instance is found (§ 7.1 source 6, § 7.5); rule 6 of
+(§ 7.5); the instances derived from the presets and from enabled units'
+`Also=`, so a disabled template-backed instance is found (§ 7.1 source
+6, § 7.5), and the check of an owner at its preset whose member is off
+(§ 7.4); rule 6 of
 § 10.2 and `InstanceConfigNotStaged`; the attention
 notes for unredacted and flagged configuration; and the data advisory
 (§ 10.8). The placeholder omission from phase 4 is removed. Tests T28,
@@ -3789,6 +3858,14 @@ Other objections worth weighing:
   can hide the `enable` an administrator-enabled instance needs, with no
   comment. No stock preset file was searched for the list form, so how
   often a host meets it is unknown.
+- **An owner's `Also=` is checked only for instance members, and only as
+  an advisory.** A disabled instance that an enabled owner's package
+  install would enable again gets an advisory whose two lines the operator
+  must add by hand, one of them an `enable` the image already has; every
+  enabled owner at its preset is now walked, which can surface owners on a
+  stock host whose members are linked by hand (run R4 reviews them); and
+  the same loss for a member that is not an instance, `multipathd.socket`
+  disabled under `multipathd.service`, stays silent (§ 7.4).
 - **A preset line inspectah cannot read is reported only in the scan's
   diagnostics.** The lookup stops there with no preset, where systemd
   skips the line, and the units it decided get no state change. The
