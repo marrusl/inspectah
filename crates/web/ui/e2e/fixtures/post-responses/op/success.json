@@ -258,6 +258,8 @@
   "unit_dropins": [],
   "mount_findings": [],
   "quadlets": [],
+  "declined_generated": [],
+  "generated_timers": [],
   "flatpaks": [],
   "sysctl": {
     "as_written": [],
