@@ -750,7 +750,8 @@ read from a host file has one of three answers:
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
-| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`. A value that does not parse is not recorded, and the timer is then treated as having no local trigger. |
+| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`, or the marker `unresolved` when the value cannot be made into one. The raw value is not stored. |
+| `SystemdTimer.trigger_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
 | `attention_reason`, advisory strings | Generated | Built from the fields above and fixed text only. Never from file content. |
 
@@ -1307,7 +1308,8 @@ unit. The same rule is why the kernel section stops enabling
 What changes in scheduled:
 
 - `SystemdTimer` becomes a description: `name`, `on_calendar`, `exec_start`,
-  `description`, `source`, `path`, `trigger`, `aggregate`. It loses
+  `description`, `source`, `path`, `trigger`, `trigger_drop_ins`,
+  `aggregate`. It loses
   `disposition` and `locked`, since it controls nothing, and
   `timer_content` and
   `service_content`, since the local file's content is already in
@@ -1346,10 +1348,47 @@ whatever its row said. With one writer, the operator can exclude the
 service and keep the timer, and systemd refuses to start a timer whose
 trigger unit did not load (read from the systemd 252 and 257 sources, not
 measured: § 13 run R5). The scheduled inspector therefore records each
-timer's trigger on its description, `trigger`: the `Unit=` value when the
-timer sets one, the same-named `.service` otherwise. § 10.2 rule 5 omits
-the timer's `enable` when that trigger is a local unit whose file is not
-staged.
+timer's trigger on its description, and § 10.2 rule 5 omits the timer's
+`enable` when that trigger is a local unit whose file is not staged.
+
+```rust
+#[serde(rename_all = "snake_case")]
+pub enum TimerTrigger {
+    /// The unit the timer starts.
+    Unit(UnitName),
+    /// `Unit=` holds a value the inspector cannot make into a unit name.
+    Unresolved,
+}
+// on SystemdTimer:
+pub trigger: TimerTrigger,
+/// Drop-ins under `/etc/systemd/system` that assign `Unit=` for this
+/// timer.
+pub trigger_drop_ins: Vec<String>,
+```
+
+**The trigger is declined on changed evidence. (Mark Russell,
+2026-11-14)** The recorded name is only true while the files that set it
+are in the export. A local `report.timer` with a drop-in holding
+`[Timer] Unit=other.service` records `other.service`; with that drop-in
+excluded the image's timer starts `report.service`, which the record
+never checked. So the inspector records the files that set the trigger
+beside its name, and the plan omits the `enable` when one of them is not
+staged. The plan does not read unit files to find the trigger again.
+
+- **What the list holds.** `trigger_drop_ins` is every drop-in under
+  `/etc/systemd/system` that applies to the timer and assigns `Unit=` in
+  `[Timer]`, whether or not a later one overrides it. The timer's own
+  file is not listed: rule 5 already requires a local or shadowed timer's
+  file to be staged, and a second entry would report one exclusion twice.
+  When the trigger is the default, the same-named `.service`, and no
+  drop-in assigns `Unit=`, the list is empty. A vendor drop-in arrives
+  with its package and is not listed.
+- **Specifiers.** In a `Unit=` value the inspector expands `%i`, `%I`,
+  `%p` and `%N`, the set the `[Install]` reader expands (§ 7.2), for a
+  concrete instance timer and for a plain one. Any other specifier, or a
+  result that is not a unit name this model admits, makes the trigger
+  `Unresolved`. A value that cannot be resolved is never read as "no
+  local trigger".
 
 ## 9. Snapshot schema
 
@@ -1580,10 +1619,17 @@ lands on disk.**
   and it would be a second writer of a unit path that no rule above
   sees: it could replace a unit whose command was just planned, or put a
   zero-length file where rule 1 withheld one. The entry is tested by
-  `Destination`. A refused entry is not extracted into the export and
-  gets no `COPY`, the Containerfile names it in a FIXME that says a unit
-  file belongs under Configuration Files, and its refine row shows
-  `withheld`.
+  `Destination`, and the refusal covers every path below the directory,
+  a file in a `.d` or `.wants` directory included. One shared decision
+  withholds the entry, and only that entry, before a scan bundles its
+  payload, before refine extracts it, and before render: it is not in the
+  export and gets no `COPY`, and the Containerfile names it in a FIXME
+  that says a unit file belongs under Configuration Files. Nothing else
+  under the directory changes owner: drop-ins, shadows, local unit files
+  and links are handled as § 7.7 says. Two types grow for it, neither of
+  which has the field today: the withheld record gains an unmanaged
+  source kind beside `StagedFileKind`, and the unmanaged row of the view
+  response gains `withheld` (§ 11.1), which the UI shows.
 - **Never the machine-id.** The image keeps the base's zero-length
   `/etc/machine-id`, which is what makes first boot keep the rendered unit
   state (§ 10.1). inspectah never stages the source host's machine-id and
@@ -1621,15 +1667,19 @@ the Containerfile comes from anywhere else.
    Russell, 2026-11-14)** A package's unit at its preset has no row and
    is only in the inventory, and a generated `cron-*` pair that took its
    name would replace it in the image just the same. Such a pair is
-   withheld, both files, and its FIXME says the name belongs to a unit the
-   host already has, that there is no row to exclude, and that the job is
-   carried by writing its timer under another name. Nowhere else does
-   this spec widen "collected unit": § 10.1 and § 10.7 mean the units
-   that have a row. A known case is not designed around: a host built
-   from an
-   inspectah image has a local, enabled `flatpak-provision.service`, so a
-   rescan of it carries the collected copy and withholds the generated
-   one until the operator excludes the collected row and its file.
+   withheld, both files. The collision reason carries the conflicting
+   name and where the reservation came from, a row or the inventory, so
+   the two FIXMEs can differ. For a row it says to exclude the collected
+   unit and its file, as before, and the flatpak case below is unchanged.
+   For an inventory name there is no row to exclude, and it says the name
+   belongs to a unit the host already has and that the job is carried by
+   writing its timer and its service under another name, with the pairing
+   or `Unit=` kept consistent. Nowhere else does this spec widen
+   "collected unit": § 10.1 and § 10.7 mean the units that have a row. A
+   known case is not designed around: a host built from an inspectah
+   image has a local, enabled `flatpak-provision.service`, so a rescan of
+   it carries the collected copy and withholds the generated one until
+   the operator excludes the collected row and its file.
 
 **The kernel and boot section's own `RUN systemctl enable tuned.service` is
 removed; `tuned.service` is enabled or not through its own unit row. (Mark
@@ -1654,7 +1704,7 @@ fails decides.
 | 2 | **Storage units act only on a package's file.** If the export stages a unit file at the name of a `PackagedStorage` unit, the administrator's file is what the image would load. | `enable`, `disable`, `mask` on a storage kind | Omitted: `the export carries an administrator's unit file for it (<path>)`. The mount advisory (§ 10.6) is rendered for the staged file. |
 | 3 | **Units the target needs are not switched off** (§ 10.3). | `disable` and `mask` on a protected unit; `mask` on `tmp.mount` | A FIXME line, no command. |
 | 4 | **A mask needs the path free.** `systemctl mask` makes a link at `/etc/systemd/system/<name>`, after every `COPY` (§ 10.7), and exits 1 when a regular file is there (measured). | `mask` when a unit file is staged at the name | Omitted: `the export also carries a unit file at <path>; exclude one of the two`. |
-| 5 | **The command acts on the file the row was recorded from, and its package is in the image.** See below. | `enable`, `disable`, `set-default`; the package half also `mask` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, `TimerTriggerNotStaged`, or the package reason the presence tiers give today. |
+| 5 | **The command acts on the file the row was recorded from, and its package is in the image.** See below. | `enable`, `disable`, `set-default`; the package half also `mask` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, one of the three `TimerTrigger` reasons, or the package reason the presence tiers give today. |
 | 6 | **An instance needs its configuration** (§ 10.8). | `enable` on an instance | Omitted, naming the path. |
 | 7 | **`Also=` members match, and nothing in `/etc` changes what `Also=` means.** See below. | `enable`, `disable` with a non-empty `also` list | An advisory, no command. |
 
@@ -1725,20 +1775,46 @@ in `staged_writes` by construction. `disable` on an absent unit exits 1 on
 RHEL 9 (0 on RHEL 10), as `enable` does on both (all measured).
 
 **A timer's trigger is held to the same rule.** After the timer's own
-file and package pass, an `enable` on a timer asks the same two questions
-of its recorded trigger (§ 8). The enable is omitted as
-`TimerTriggerNotStaged` when the snapshot holds the trigger as a local
-unit, a unit file under `/etc/systemd/system` with no vendor file of that
-name, that file is not in `staged_writes`, and nothing else provides the
-unit: no generated unit of that name is staged, and no package in the
-image owns it. A trigger the base image or an included package ships, and
-one that is a full shadow, pass, since the vendor file loads. The line
-reads `# Omitted: report.timer (its service report.service is not in the
-export, and a timer whose unit is missing does not start)`. The check
-sits here, and not as a rule of its own, because it is rule 5's question
-asked of a second unit, and it comes after the timer's own file so that a
-timer whose file is missing is reported for that. `disable` and `mask` on
-a timer need no trigger.
+file and package pass, an `enable` on a timer is checked against its
+recorded trigger (§ 8), in three steps. Each omits the `enable` with an
+`# Omitted:` line.
+
+1. **The evidence is unchanged.** Every path in `trigger_drop_ins` is in
+   `staged_writes`, each read through `Destination`, and one that does
+   not parse fails. This is rule 5's own test, none of the recorded files
+   missing, asked of the files that set `Unit=`. It has its own reason,
+   `TimerTriggerEvidenceChanged`, because `InstallEvidenceChanged`'s text
+   is about `[Install]`: `the drop-in <path> that sets its Unit= is not in
+   the export, so the unit it would start is not the one recorded`.
+2. **The trigger is known.** A trigger recorded `Unresolved` is
+   `TimerTriggerUnresolved`: `its Unit= could not be resolved to a unit
+   name, so inspectah cannot tell whether that unit is in the image`.
+3. **The trigger is in the image.** `TimerTriggerNotStaged` when the
+   snapshot holds the trigger as a local unit, a unit file under
+   `/etc/systemd/system` with no vendor file of that name, that file is
+   not in the final `staged_writes`, and nothing else provides the unit:
+   no generated unit of that name is staged, and no package in the image
+   owns it. A trigger the base image or an included package ships, and
+   one that is a full shadow, pass, since the vendor file loads. The line
+   reads `# Omitted: report.timer (its unit report.service is not in the
+   export, and a timer whose unit is missing does not start)`. It says
+   unit, since `Unit=` may name any kind.
+
+The check sits here, and not as a rule of its own, because it is rule 5's
+question asked of a second unit, and it comes after the timer's own file
+so that a timer whose file is missing is reported for that. `disable` and
+`mask` on a timer need no trigger. Passing it is not being carried: rules
+6 and 7 still apply, and every gate is computed again each time a row is
+included or excluded.
+
+What step 3 can and cannot know: it reads recorded config ownership,
+fragment and shadow evidence, and the staged generated files. It does not
+prove what a target base supplies. So it can omit a timer that would have
+worked, when the trigger is provided by an alias, by a template behind an
+excluded concrete instance, by an implicit mount, or by a generator at
+boot. Each such omission carries its `# Omitted:` line. Step 1 checks
+only for a recorded file that is missing: a drop-in from another host of
+a fleet that assigns `Unit=` is not seen.
 
 **A mask follows the package check. (Mark Russell, 2026-11-14)** `mask`
 reads no `[Install]`, so the file and drop-in halves of this rule do not
@@ -1849,12 +1925,19 @@ TargetNeedsUnit,
 /// A timer's trigger unit is local and its file is not in the export
 /// (rule 5).
 TimerTriggerNotStaged { trigger: UnitName },
+/// A drop-in that sets a timer's `Unit=` is not in the export (rule 5).
+TimerTriggerEvidenceChanged { path: String },
+/// A timer's `Unit=` could not be resolved to a unit name (rule 5).
+TimerTriggerUnresolved,
 /// A mask and a unit file claim one path (rule 4).
 MaskPathOccupied { path: String },
 /// A unit inspectah generates has a collected unit's name. A FIXME.
-GeneratedNameCollision,
+GeneratedNameCollision { name: UnitName, reserved_by: Reservation },
 /// The command would also act on `member` (rule 7). An advisory.
 AlsoMember { member: UnitName, why: AlsoWhy },
+
+/// Where a name that blocks a generated unit came from.
+pub enum Reservation { Row, Inventory }
 
 pub enum AlsoWhy {
     /// The member's links on the source are not what the verb produces.
@@ -2220,7 +2303,9 @@ of § 10.2). It is structured, so a refusal reaches a row whose
 `staged_writes` withholds is shown the same way on the row that offered
 it, a config entry or a drop-in found by path, as `withheld` with the
 `WithheldWhy` variant and its text. A declined generated unit is shown on
-its scheduled or flatpak row.
+its scheduled or flatpak row. An unmanaged file refused under
+`/etc/systemd/system` (§ 10.2) carries `withheld` on its own row in the
+unmanaged-files list, a field that row gains for it.
 
 Two results of § 10.2 come from a toggle on a different row, and the unit
 row has to say so. Excluding a full shadow or an install drop-in
@@ -2543,13 +2628,22 @@ Phase 3 (one control per fact):
   staged and enabled.
 - **T37. A timer whose trigger is not in the export.** A local enabled
   timer whose paired local service's config row is excluded: no `enable`
-  for the timer, the `TimerTriggerNotStaged` line naming the service, and
+  for the timer, the `TimerTriggerNotStaged` line naming the unit, and
   the reason on the timer's refine row; the service row included again:
-  the enable returns. The same with `Unit=other.service`. A timer whose
-  trigger a package in the image owns, one whose trigger is a full
-  shadow with the shadow excluded, and one whose trigger is a staged
-  generated service: carried. A `disable` and a `mask` on a timer with
-  its service excluded: carried.
+  the enable returns. The same with `Unit=other.service`. A local
+  `report.timer` with a drop-in holding `[Timer] Unit=other.service`:
+  the drop-in is in `trigger_drop_ins`; with it and `report.service`
+  excluded, `TimerTriggerEvidenceChanged` naming the drop-in and no
+  enable, although `other.service` is staged; with it included again,
+  the enable returns. A timer whose `Unit=` holds a specifier the
+  inspector does not expand: `trigger` is `unresolved`,
+  `TimerTriggerUnresolved`, and no enable. An instance timer with
+  `Unit=worker@%i.service`: the trigger is the expanded name. These pass
+  the trigger check, and are carried when no later rule declines them: a
+  timer whose trigger a package in the image owns, one whose trigger is a
+  full shadow with the shadow excluded, and one whose trigger is a
+  staged generated service. A `disable` and a `mask` on a timer with its
+  service excluded pass it too.
 - **T38. An unmanaged file under `/etc/systemd/system` is refused.** An
   imported snapshot whose unmanaged-files section offers
   `/etc/systemd/system/x.service`, and one spelled with an interior `.`:
@@ -2827,11 +2921,15 @@ or fedora44 VMs for them.**
   The expected result is one new link and the existing ones untouched. If
   `enable` fails, or changes the existing links, the additive case stops
   being a row and becomes a `HostInstallOnly` advisory per added link.
-  A timer enabled in an image that lacks its service file: whether the
-  timer starts, and what the journal says, on each release. The
-  `TimerTriggerNotStaged` omission rests on systemd refusing it, which
-  was read from source. And in each bootc base, after `dnf install
-  tuned`: what `systemctl is-enabled tuned.service` reads. The removal of
+  A timer enabled in an image that lacks its service file, recorded so
+  that a rejected start job can be told from a failed or degraded
+  system: the build-time result of `enable` and the links it made, and
+  after boot the trigger's load state, the timer's state, the journal
+  line, the failed units and the overall system state. The
+  `TimerTriggerNotStaged` omission rests on systemd refusing the start,
+  which was read from source. And in each bootc base, after `dnf install
+  tuned`: what `systemctl is-enabled tuned.service` reads, recorded
+  apart from which preset rule, if any, names the unit. The removal of
   the kernel section's enable (§ 10.2) rests on the stock preset enabling
   the unit, which is known from a package-mode fixture and has not been
   verified on either base.
@@ -3091,9 +3189,15 @@ Other objections worth weighing:
   an error where it used to appear to work. Counting inventory names
   withholds a generated cron job whenever any package unit at its preset
   has its name, and the operator cannot exclude that unit: the job has to
-  be renamed by hand. Declining a timer's `enable` when its local service
+  be renamed by hand. Declining a timer's `enable` when its local trigger
   is excluded rests on systemd behavior read from source; if a timer in
-  that state does start, the line is omitted for nothing. And refusing an
+  that state does start, the line is omitted for nothing. The check also
+  omits a working timer whose trigger an alias, a template, an implicit
+  mount or a boot generator would have provided, since it cannot see
+  those, and it does not notice another fleet host's drop-in that sets
+  `Unit=`. Excluding a generated timer does not exclude the cron entry
+  it came from: if cron is carried and running, the job still runs, and
+  carrying both can run it twice. And refusing an
   unmanaged file under `/etc/systemd/system` drops a file an imported
   snapshot asked for, with a FIXME, when routing it through
   `staged_writes` would have carried it.
