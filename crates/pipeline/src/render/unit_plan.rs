@@ -959,6 +959,13 @@ const ALSO_TO_REPRODUCE: &str =
 const ALSO_EACH_FOLLOWS: &str =
     "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.";
 
+/// The header of the lines to add for a links mismatch they cannot
+/// reproduce: a member is `Other`, or a line is withheld. It takes the
+/// place of [`ALSO_TO_REPRODUCE`], and no footer follows (Mark Russell,
+/// 2026-11-15).
+const ALSO_PARTIAL: &str = "#   These lines do not reproduce the source host. Check each unit, \
+     then add after the configuration COPY:";
+
 /// The header of an `InstallFile` advisory's one line to add.
 const ALSO_AFTER_READING: &str = "#   After reading that file, add after the configuration COPY:";
 
@@ -1070,16 +1077,23 @@ fn line_to_add(verb: UnitAction, unit: &UnitName) -> String {
 /// Rule 7's block for a declined command (§ 10.2), unescaped; empty for
 /// any other reason. The first line is [`declined_line`]'s. A links
 /// mismatch adds the unit's own command and the opposite verb for each
-/// member in `add`, between a header and a footer, when there is any such
-/// member; an `InstallFile` advisory adds the unit's own command, and a
-/// `FleetAggregate` advisory adds it after what to check first; the other
-/// reasons add no line.
+/// member in `add`, when there is any such member, except a verb § 10.3
+/// refuses for that member ([`target_needs_unit`]): that member gets a line
+/// saying the image needs it instead. The lines sit between a header and a
+/// footer that say they reproduce the source host, unless a member is
+/// `Other` or a line is withheld: then [`ALSO_PARTIAL`] heads them and no
+/// footer follows. An `InstallFile` advisory adds the unit's own command,
+/// and a `FleetAggregate` advisory adds it after what to check first; the
+/// other reasons add no line.
 pub fn also_advisory_lines(
     name: &UnitName,
     action: UnitAction,
     reason: &OmissionReason,
 ) -> Vec<String> {
-    let OmissionReason::AlsoMember { why, add, .. } = reason else {
+    let OmissionReason::AlsoMember {
+        why, further, add, ..
+    } = reason
+    else {
         return Vec::new();
     };
     let mut lines = vec![declined_line(name, action, reason).comment()];
@@ -1089,10 +1103,32 @@ pub fn also_advisory_lines(
                 UnitAction::Enable => UnitAction::Disable,
                 UnitAction::Disable | UnitAction::Mask => UnitAction::Enable,
             };
-            lines.push(ALSO_TO_REPRODUCE.to_owned());
+            let (withheld, suggested): (Vec<&UnitName>, Vec<&UnitName>) = add
+                .iter()
+                .partition(|member| target_needs_unit(member.as_str(), opposite));
+            let other = AlsoWhy::LinksDiffer(MemberLinks::Other);
+            let reproduces = withheld.is_empty()
+                && *why != other
+                && further.as_deref().is_none_or(|(why, _)| *why != other);
+            lines.push(
+                if reproduces {
+                    ALSO_TO_REPRODUCE
+                } else {
+                    ALSO_PARTIAL
+                }
+                .to_owned(),
+            );
             lines.push(line_to_add(action, name));
-            lines.extend(add.iter().map(|member| line_to_add(opposite, member)));
-            lines.push(ALSO_EACH_FOLLOWS.to_owned());
+            lines.extend(suggested.iter().map(|member| line_to_add(opposite, member)));
+            lines.extend(withheld.iter().map(|member| {
+                format!(
+                    "#   No {opposite} line for {}: {TARGET_NEEDS_UNIT}.",
+                    member.as_str()
+                )
+            }));
+            if reproduces {
+                lines.push(ALSO_EACH_FOLLOWS.to_owned());
+            }
         }
         AlsoWhy::InstallFile { .. } => {
             lines.push(ALSO_AFTER_READING.to_owned());

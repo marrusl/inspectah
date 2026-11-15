@@ -4046,6 +4046,12 @@ const ALSO_HEADER: &str = "#   To reproduce the source host, add after the confi
 const ALSO_FOOTER: &str =
     "#   Each command follows Also= in its turn. Check the result with systemctl is-enabled.";
 
+/// The header in their place when the lines cannot reproduce the source
+/// host: a member is `Other`, or a line is withheld (Mark Russell,
+/// 2026-11-15).
+const ALSO_PARTIAL_HEADER: &str = "#   These lines do not reproduce the source host. Check each \
+     unit, then add after the configuration COPY:";
+
 /// T25 (i): `mask` does not follow `Also=`, so a mask on a unit with
 /// members in any state is carried.
 #[test]
@@ -4078,7 +4084,9 @@ fn t25_i_a_mask_on_a_unit_with_members_is_carried() {
 ///   line names every one, joined with commas and `and`, in the plural,
 ///   and each has a `disable` line;
 /// - an `Other` member first and an `Unlinked` one after: the first line
-///   names only the `Other` one, and the `Unlinked` one keeps its line;
+///   names only the `Other` one, and the `Unlinked` one keeps its line,
+///   under the header that says the lines do not reproduce the source
+///   host, with no footer;
 /// - two `Other` members: one line naming both, no lines to add.
 ///
 /// Under `disable`, `Installed` members get the `enable` line, and every
@@ -4147,11 +4155,33 @@ fn rule_7_line_rules() {
                 "whose links there neither command reproduces, and b.service, which is not \
                  enabled there"
             ),
-            ALSO_HEADER.to_owned(),
+            ALSO_PARTIAL_HEADER.to_owned(),
             add("enable", "bundle.service"),
             add("disable", "b.service"),
-            ALSO_FOOTER.to_owned(),
         ]
+    );
+
+    let (_, lines) = plan_of(
+        UnitState::Enabled,
+        vec![
+            also_member("b.service", Unlinked),
+            also_member("c.service", Other),
+        ],
+    );
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [
+            head(
+                "enable",
+                "b.service",
+                "which is not enabled there, and c.service, whose links there neither command \
+                 reproduces"
+            ),
+            ALSO_PARTIAL_HEADER.to_owned(),
+            add("enable", "bundle.service"),
+            add("disable", "b.service"),
+        ],
+        "an Other member after the Unlinked one"
     );
 
     let (_, lines) = plan_of(
@@ -4207,6 +4237,61 @@ fn rule_7_line_rules() {
     );
     assert_eq!(why, None);
     assert!(acted_on(&lines, "bundle.service"), "{lines:?}");
+}
+
+/// Rule 7's lines never suggest disabling a protected unit (§ 10.3's
+/// list, `target_needs_unit`): an enabled owner with an `Unlinked`
+/// `bootc-x.timer` names it and says the image needs it, with no `disable`
+/// line, under the header that says the lines do not reproduce the source
+/// host and with no footer. The ordinary `Unlinked` member beside it keeps
+/// its `disable` line. Control: the ordinary member alone gets the full
+/// recipe with its header and footer.
+#[test]
+fn rule_7_never_suggests_disabling_a_protected_member() {
+    use inspectah_core::types::units::MemberLinks::Unlinked;
+    let plan_of = |also| {
+        let snap = units_snapshot(
+            vec![owner("bundle.service", UnitState::Enabled, also)],
+            vec![],
+        );
+        render(&snap).lines
+    };
+    let add = |verb: &str, unit: &str| format!("#     RUN systemctl {verb} -- '{unit}'");
+
+    let control = plan_of(vec![also_member("b.service", Unlinked)]);
+    assert_eq!(
+        block_at(&control, "# Advisory: bundle.service")[1..],
+        [
+            ALSO_HEADER.to_owned(),
+            add("enable", "bundle.service"),
+            add("disable", "b.service"),
+            ALSO_FOOTER.to_owned(),
+        ]
+    );
+
+    let lines = plan_of(vec![
+        also_member("bootc-x.timer", Unlinked),
+        also_member("b.service", Unlinked),
+    ]);
+    assert_eq!(
+        block_at(&lines, "# Advisory: bundle.service"),
+        [
+            "# Advisory: bundle.service is enabled on the source host. Not carried: systemctl \
+             enable on it also enables bootc-x.timer and b.service (named by Also=), which are \
+             not enabled there."
+                .to_owned(),
+            ALSO_PARTIAL_HEADER.to_owned(),
+            add("enable", "bundle.service"),
+            add("disable", "b.service"),
+            "#   No disable line for bootc-x.timer: the image needs this unit.".to_owned(),
+        ]
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|l| !(l.contains("disable") && l.contains("'bootc-x.timer'"))),
+        "{lines:?}"
+    );
 }
 
 /// § 10.2 rule 7, condition 2 in the plural: two members whose rows are
