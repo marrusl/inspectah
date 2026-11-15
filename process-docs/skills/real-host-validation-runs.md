@@ -1424,6 +1424,152 @@ on both releases. Each mount unit was a tmpfs with
   probe for this case has to be read over ssh, or carried by a preset
   file that enables it.
 
+### Measured, 2026-11-14: the small systemd facts phase 4 relies on
+
+Run R5 of the units spec. No inspectah build: every case is a unit planted
+by hand. RHEL 9.8 (systemd 252-67.el9_8.6) and RHEL 10.2 (systemd
+257-23.el10_2.2), both aarch64, guests reverted to their clean snapshots.
+Each base image carries the same systemd build as its guest. Unless a line
+names one release, both gave the same result. Where each case ran:
+
+- the search path and `systemd-fsck@`: the package-mode guest, with systemd
+  as PID 1;
+- the `[Install]` reads, `disable`, `preset` and `tuned`: `podman run --rm`
+  of `rhel-bootc:9.8` and `:10.2`, with no manager, as in a `RUN` step;
+- the additive sequence: `podman build`;
+- the timer: an image built, installed with `bootc install
+  to-existing-root` and booted, read over root ssh.
+
+**An empty `[Install]` key in a drop-in resets it, except `Also=`.** With
+`WantedBy=multi-user.target` in the unit (under `/etc` or `/usr/lib`) and
+an `/etc` drop-in holding only `WantedBy=`, `enable` prints the "no
+installation config" text, exits 0 and makes no link, and `is-enabled`
+reads `static`. `WantedBy=` followed by `WantedBy=graphical.target` links
+`graphical.target.wants` only. An empty `Alias=` drops the alias link. An
+empty `Also=` resets nothing: the member was still enabled. `RequiredBy=`
+was not tried.
+
+**`enable` reads `[Install]` only from the unit's own `.d` and, for an
+instance, its template's `.d`.** A vendor drop-in holding
+`WantedBy=multi-user.target` in `/usr/lib/systemd/system/service.d/`
+(type-wide) or in `r5px-.service.d/` for `r5px-a.service` (dash prefix)
+made no link: `static`, "no installation config". The same file in
+`<unit>.service.d/` or `<template>@.service.d/` linked the unit. In those
+two directories, an `/etc` drop-in with the same file name and no
+`[Install]` hides the vendor one, and `enable` makes no link. An `/etc`
+file of that name in the type-wide directory does not hide a vendor
+drop-in in the unit's own directory.
+
+**The search path is the documented order.** `systemd-analyze
+unit-paths` prints `/etc/systemd/system.control`,
+`/run/systemd/system.control`, `/run/systemd/transient`,
+`/run/systemd/generator.early`, `/etc/systemd/system`,
+`/etc/systemd/system.attached`, `/run/systemd/system`,
+`/run/systemd/system.attached`, `/run/systemd/generator`,
+`/usr/local/lib/systemd/system`, `/usr/lib/systemd/system`,
+`/run/systemd/generator.late`. Planted pairs agreed with it:
+`FragmentPath` was `/run` over `/usr/lib`, `/usr/local/lib` over
+`/usr/lib`, `/etc` over `/run` and over `/usr/local/lib`, and `/run` over
+`/usr/local/lib`.
+
+**A concrete instance file beats its template wherever each one sits.**
+`r5ci@site.service` under `/usr/lib` loaded over a template
+`r5ci@.service` under `/etc`, `/run/systemd/system` or
+`/usr/local/lib/systemd/system`. `enable` linked the instance to the
+`/usr/lib` file, and the unit ran that file's `ExecStart`. The 2026-11-13
+section has the reverse placement.
+
+**`disable` exits 0 when an `Also=` member is absent from the image, on
+both releases.** `enable` of a unit naming an absent member prints `Failed
+to enable auxiliary unit ..., ignoring.` and exits 0. `disable` of it
+removes its own link, prints nothing about the member and exits 0, with or
+without a prior `enable`. A present member beside the absent one is linked
+and removed as usual. Only an absent unit named on the command line fails,
+and only on RHEL 9 (exit 1; RHEL 10 prints the error and exits 0).
+
+**`systemctl preset` and template instances.** Each template had
+`DefaultInstance=one`.
+
+| Rule | `preset` on | Link |
+|---|---|---|
+| `enable t@.service` | `t@.service` | `t@one` |
+| `enable t@.service` | `t@one.service` or `t@two.service` | none |
+| `enable t@two.service` | `t@two.service` | `t@two` |
+| `enable t@two.service` | `t@.service` | none |
+| `enable t@.service two three` | `t@.service` | `t@two` and `t@three`, not `t@one` |
+| `enable t@.service two three` | `t@two.service` | `t@two` |
+| `enable t@.service two three` | `t@one.service` | none |
+| `disable t@.service` | `t@one.service`, an enabled instance | link removed |
+
+A bare template rule reaches the default instance only through a preset of
+the template, which is what a package scriptlet and `preset-all` do. Preset
+on the instance name does nothing, even when it is the default instance.
+`list-unit-files` shows the template's preset as `enabled` for the bare rule
+and the list form, and `disabled` for an instance rule. Stock rules: both
+bases have `90-systemd.preset: enable getty@.service`, and RHEL 9.8 also
+has `90-default.preset: enable getty@tty1.service`.
+
+**`systemd-fsck@` has no link; `systemd-cryptsetup@` was not measured.**
+Both guests have `/boot/efi` as vfat with fsck pass `2`, and `/`, `/boot`
+and `/home` as xfs with pass `0`. The instance for the EFI partition is
+`loaded active exited`, `static`, from the template under `/usr/lib`, and
+is pulled in only by `Requires=` in the generated
+`/run/systemd/generator/boot-efi.mount`. No link names it under
+`/etc/systemd`, `/run/systemd` or `/usr/lib/systemd/system`, and the
+template has no `[Install]`. Neither guest has an encrypted volume
+(`/etc/crypttab` is empty), so the cryptsetup case was not run.
+
+**The additive sequence gives one new link and leaves the existing one
+alone.** From each base, `dnf install -y rsyslog` linked
+`multi-user.target.wants/rsyslog.service` by its preset (`enable
+rsyslog.*`). Then, in two separate images:
+
+- a `COPY` of `/etc/systemd/system/rsyslog.service.d/50-extra.conf`
+  holding `WantedBy=extra.target`, then `systemctl enable rsyslog.service`:
+  exit 0, one new link `extra.target.wants/rsyslog.service` to the
+  `/usr/lib` file;
+- a `COPY` of a full shadow (the vendor file with `WantedBy=extra.target`
+  added), then `enable`: exit 0, one new link to the `/etc` file.
+
+In both images the package's link kept its target (`/usr/lib/...`) and its
+mtime. `enable` also printed `added as a dependency to a non-existent unit
+extra.target`, which is a notice, not an error. The unit has no alias
+(`Alias=syslog.service` ships commented out), so an existing alias link was
+not part of the test.
+
+**systemd refuses to start a timer whose service is not in the image, and
+nothing records it as a failure.** The image carried
+`/etc/systemd/system/r5t.timer` (`OnBootSec=15s`,
+`WantedBy=timers.target`) and no `r5t.service`. At build time `systemctl
+enable r5t.timer` exited 0 with no warning and made one link,
+`timers.target.wants/r5t.timer`. After the boot on each release:
+
+- `r5t.service` `LoadState=not-found`;
+- `r5t.timer` `loaded`, `inactive (dead)`, `Result=success`, `Trigger:
+  n/a`, `is-enabled` `enabled`;
+- the journal for the timer: `Refusing to start, unit r5t.service to
+  trigger not loaded.`, then `Failed to start ...`;
+- `systemctl --failed` empty, `is-system-running` `running`.
+
+A control timer with its service present in the same image fired and ran
+the service. So the start job is rejected and the host is not degraded. The
+two journal lines are the only trace.
+
+**`tuned` is enabled by preset in both bases.** Neither base has `tuned`.
+After `dnf install -y tuned` (2.28.0-1 on both), `is-enabled tuned.service`
+reads `enabled` and `list-unit-files` reads `enabled enabled`, with the
+link `multi-user.target.wants/tuned.service`. The rule that names it is
+`90-default.preset: enable tuned.service` (line 122 on 9.8, 213 on 10.2),
+ahead of `99-default-disable.preset: disable *`.
+
+**Traps from this run.**
+
+- A probe `RUN` whose last command fails fails the build, even after
+  `( probe ); echo "rc=$?"` wrappers on the earlier commands. End the step
+  with `; true` when its last line is an `ls` expected to miss.
+- A `podman pull` of a base image can die mid-blob with `unexpected EOF`
+  from the CDN. `podman pull --retry 5` completed it on the second try.
+
 ## A redaction test that checks for the secret proves nothing about the file
 
 The auth scrubber doubled the quotes around every URL it rewrote, so a
