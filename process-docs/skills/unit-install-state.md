@@ -70,11 +70,19 @@ from the listing.** `install_evidence` makes the section
 `Undetermined(Unreadable)` with `assigns_also` true, so the unit has no
 install state, its `/etc` links are `Undetermined` findings, it always
 gets an `UndeterminedInstall` record, and a warning names the files
-(`unreadable_install_warning`, with a `paths` field). Such a unit is put in
-`reported`, so the storage pass never records it as "not enabled".
-(Mark Russell, 2026-11-15.) The listing's word is still kept on the
-degraded path where no preset rule could be read (`partial_inventory`);
-that is an open point for the spec owner, not a rule to copy.
+(`unreadable_install_warning`, with a `paths` field). (Mark Russell,
+2026-11-15.) The listing's word is still kept on the degraded path where
+no preset rule could be read (`partial_inventory`); that is an open point
+for the spec owner, not a rule to copy.
+
+**An undetermined section keeps its unit out of the storage pass.**
+`build_state_changes` puts every unit whose section is `Undetermined`, for
+any reason (`Specifier`, `UpheldBy`, `Unreadable` and the rest), in
+`reported`, so `etc_storage_findings` never records it as a storage unit
+that is "not enabled": its enablement is unknown, and its
+`UndeterminedInstall` record and block are what the export says about
+it. An `/etc` storage unit's own file is one of its install files, so an
+undetermined section there always has a record and never a state.
 
 ## The `[Install]` reader
 

@@ -452,9 +452,9 @@ struct UnitFindings {
 /// read of the links, for every unit whose section was read, with an
 /// install state or not. A unit with no install state has no inventory
 /// entry. A unit that cannot be resolved or classified is reported through
-/// `warnings`; a unit file that could not be read goes to `read_failures`. The names refused by the search path
-/// or unreadable go to `reported`, so the storage pass does not report
-/// them again.
+/// `warnings`; a unit file that could not be read goes to `read_failures`. The names refused by the search path,
+/// unreadable, or with an undetermined `[Install]` section go to
+/// `reported`, so the storage pass does not report them again.
 fn build_state_changes(
     exec: &dyn Executor,
     listed: Vec<Listed>,
@@ -496,8 +496,11 @@ fn build_state_changes(
                 };
                 if !evidence.unreadable.is_empty() {
                     warnings.push(unreadable_install_warning(warn, &evidence.unreadable));
-                    // Its state is not known, so the storage pass must not
-                    // record it as a unit that is not enabled.
+                }
+                // An undetermined section, an unreadable one included, leaves
+                // the state unknown, so the storage pass must not record the
+                // unit as one that is not enabled. Its record says why.
+                if matches!(evidence.read, Some(InstallRead::Undetermined { .. })) {
                     reported.insert(subject.name.clone());
                 }
                 let mut additive = false;
@@ -1038,7 +1041,8 @@ fn unit_text(exec: &dyn Executor, path: &str) -> Result<Option<String>, String> 
 /// local or a full copy over a vendor file. Such a unit is not enabled (an
 /// enabled one was a candidate) and not masked (its file is no mask), so
 /// its finding records no state. `recorded` holds the names that already
-/// have a finding, or were already reported as refused or unreadable.
+/// have a finding, or were already reported as refused, unreadable or
+/// undetermined.
 ///
 /// A listing error is left to [`collect_drop_ins`], which reads the same
 /// directory and reports it. A unit file that could not be read goes to

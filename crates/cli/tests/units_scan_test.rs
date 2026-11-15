@@ -2960,6 +2960,127 @@ fn an_unread_swap_unit_file_gets_no_nofail_line() {
     }
 }
 
+/// An `/etc` storage unit whose `[Install]` cannot be relied on, with a
+/// link to it under `/etc/systemd/system`, has no known enablement: one
+/// with `%I` in `WantedBy=` (`Specifier`) and one assigning `UpheldBy=`.
+/// Each keeps its undetermined record and block, and gets no mount
+/// finding, so nothing says it is not enabled. Controls on the same host
+/// and routes: the readable section with the same link is an enabled
+/// finding, and the readable section with no link is still recorded by the
+/// storage pass as not enabled. The snapshot, the refine view, the scan
+/// export and a refine export.
+#[test]
+fn an_undetermined_storage_unit_is_never_said_to_be_not_enabled() {
+    const SPECIFIER: &str = "srv-spec.mount";
+    const UPHELD: &str = "srv-upheld.mount";
+    const LINKED: &str = "srv-linked.mount";
+    const UNLINKED: &str = "srv-unlinked.mount";
+    let unit_file = |mount_point: &str, install: &str| {
+        format!("[Mount]\nWhat=/dev/vdb\nWhere={mount_point}\n[Install]\n{install}")
+    };
+    let wants_link = |unit: &str| format!("/etc/systemd/system/local-fs.target.wants/{unit}");
+    let mut host = advisory_host();
+    for (unit, mount_point, install) in [
+        (
+            SPECIFIER,
+            "/srv/spec",
+            "WantedBy=local-fs.target %I.target\n",
+        ),
+        (
+            UPHELD,
+            "/srv/upheld",
+            "WantedBy=local-fs.target\nUpheldBy=local-fs.target\n",
+        ),
+        (LINKED, "/srv/linked", "WantedBy=local-fs.target\n"),
+    ] {
+        host = host
+            .unit(unit, "enabled")
+            .etc_unit(unit, &unit_file(mount_point, install))
+            .link(&wants_link(unit), &etc_path(unit));
+    }
+    let snap = scan(host.unit(UNLINKED, "disabled").etc_unit(
+        UNLINKED,
+        &unit_file("/srv/unlinked", "WantedBy=local-fs.target\n"),
+    ));
+
+    let units = snap.units.as_ref().expect("a units section");
+    let finding = |unit: &str| {
+        units
+            .mount_findings
+            .iter()
+            .find(|f| f.unit.name().as_unit_name().as_str() == unit)
+            .map(|f| f.state_change.map(|(state, _)| state))
+    };
+    assert_eq!(finding(LINKED), Some(Some(UnitState::Enabled)), "control");
+    assert_eq!(finding(UNLINKED), Some(None), "control: the storage pass");
+    let undetermined = [
+        (SPECIFIER, InstallUnknown::Specifier),
+        (UPHELD, InstallUnknown::UpheldBy),
+    ];
+    for (unit, reason) in undetermined {
+        assert!(
+            units
+                .undetermined_installs
+                .iter()
+                .any(|r| r.unit.as_str() == unit
+                    && r.reason == reason
+                    && r.install_files == [etc_path(unit)]),
+            "{unit}: {:?}",
+            units.undetermined_installs
+        );
+        assert_eq!(finding(unit), None, "{unit}: no mount finding");
+    }
+
+    let refine = session(&snap);
+    let decisions = refine.decisions();
+    let mount_row = |unit: &str| {
+        decisions
+            .mount_findings
+            .iter()
+            .any(|r| r.unit.as_str() == unit)
+    };
+    assert!(mount_row(LINKED) && mount_row(UNLINKED), "control rows");
+    for (unit, _) in undetermined {
+        assert!(!mount_row(unit), "{unit}: no mount row");
+        assert!(
+            decisions
+                .undetermined_installs
+                .iter()
+                .any(|r| r.unit.as_str() == unit),
+            "{unit}: the undetermined row"
+        );
+    }
+
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            advisory_for(&containerfile, LINKED).first(),
+            Some(&advisory_fact(LINKED, "enabled")),
+            "{route}, control:\n{containerfile}"
+        );
+        assert_eq!(
+            advisory_for(&containerfile, UNLINKED).first(),
+            Some(&advisory_fact(UNLINKED, "not enabled")),
+            "{route}, control:\n{containerfile}"
+        );
+        for (unit, _) in undetermined {
+            assert!(
+                !containerfile.contains(&format!("{unit} is not enabled")),
+                "{route}: {unit}:\n{containerfile}"
+            );
+            assert!(
+                containerfile.contains(&format!(
+                    "# Advisory: {unit} is not carried: its [Install] section"
+                )),
+                "{route}: {unit}'s block:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route}: {unit}:\n{containerfile}"
+            );
+        }
+    }
+}
+
 /// T8: a `tmp.mount` with a full copy in `/etc` over the vendor file gets
 /// the advisory with the `tmp.mount` line, and its file is a config entry
 /// whose toggle, through `RefineSession` alone, removes and restores the
