@@ -1002,11 +1002,10 @@ fn in_no_systemctl_instruction(lines: &[String], unit: &str) -> bool {
 }
 
 /// Units owned by an auto package nothing included pulls in are omitted on
-/// the scan path as not carried, for enable and disable. A mask is carried
-/// whatever its package: § 10.2 rule 5, which holds the presence tiers,
-/// applies to `enable`, `disable` and `set-default`, since `mask` reads no
-/// `[Install]` and succeeds on an absent unit. The mask's control is the
-/// same unit of the same package enabled, which is omitted.
+/// the scan path as not carried, for enable, disable and mask: § 10.2 rule
+/// 5's package half applies to `mask` through the same presence tiers
+/// ("A mask follows the package check"). The carried side of a mask is
+/// T34's included-package and in-baseline controls.
 #[test]
 fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() {
     let cases = [
@@ -1044,11 +1043,6 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
         apply_scan_package_defaults(&mut snap);
 
         let plan = render(&snap);
-        if state == UnitState::Masked {
-            assert!(acted_on(&plan.lines, unit), "{unit}: {:?}", plan.lines);
-            assert!(plan.omissions.is_empty(), "{unit}: {:?}", plan.lines);
-            continue;
-        }
         assert!(
             in_no_systemctl_instruction(&plan.lines, unit),
             "{unit}: {:?}",
@@ -1073,11 +1067,12 @@ fn units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path() 
     }
 }
 
-/// The mask exemption under `PackageExcluded`: with `kexec-tools`
-/// excluded, `kdump.service` masked is carried, and the same unit of the
-/// same package enabled is omitted for the exclusion (the control).
+/// § 10.2 rule 5 under `PackageExcluded`: with `kexec-tools` excluded and
+/// not in the baseline, `kdump.service` is omitted for the exclusion
+/// whether it is masked or enabled. A mask follows the package check as an
+/// `enable` does; the carried side is T34's controls.
 #[test]
-fn a_mask_is_carried_when_its_package_is_excluded_and_an_enable_is_not() {
+fn a_mask_and_an_enable_are_omitted_when_their_package_is_excluded() {
     for (state, preset) in [
         (UnitState::Masked, None),
         (UnitState::Enabled, Some(PresetDefault::Disable)),
@@ -1099,15 +1094,6 @@ fn a_mask_is_carried_when_its_package_is_excluded_and_an_enable_is_not() {
         });
 
         let plan = render(&snap);
-        if state == UnitState::Masked {
-            assert!(
-                acted_on(&plan.lines, "kdump.service"),
-                "{state:?}: {:?}",
-                plan.lines
-            );
-            assert!(plan.omissions.is_empty(), "{state:?}: {:?}", plan.lines);
-            continue;
-        }
         assert!(
             in_no_systemctl_instruction(&plan.lines, "kdump.service"),
             "{state:?}: {:?}",
@@ -3490,4 +3476,144 @@ fn t33_the_stager_never_writes_the_machine_id() {
         staged.writes
     );
     assert!(staged.withheld.is_empty(), "control: {:?}", staged.withheld);
+}
+
+// ---------------------------------------------------------------------------
+// § 10.2 rule 5 "A mask follows the package check" (T34)
+// ---------------------------------------------------------------------------
+
+/// A snapshot with the baseline `baseline`, one added package `owner` with
+/// `disposition`, and `changes`, and the config entries `files`.
+fn mask_snapshot(
+    baseline: &[&str],
+    owner: &str,
+    disposition: FindingKind,
+    changes: Vec<UnitStateChange>,
+    files: Vec<(&str, &str)>,
+) -> InspectionSnapshot {
+    let mut snap = units_snapshot(changes, files);
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(baseline.iter().map(|s| s.to_string()).collect()),
+        packages_added: vec![added(owner, "x86_64", disposition)],
+        ..Default::default()
+    });
+    snap
+}
+
+/// T34 at the plan: a masked vendor unit whose owning package is excluded
+/// and not in the baseline gets no `mask` and an `# Omitted:` line with the
+/// package reason. Carried: the package included; excluded and in the
+/// baseline; no known owner; an `Absent` fragment. Rules 3 and 4 decide
+/// first: a protected unit whose package is excluded gets rule 3's FIXME,
+/// and a mask whose path a staged file occupies, package excluded, is
+/// `MaskPathOccupied`.
+#[test]
+fn t34_a_mask_follows_its_package() {
+    const UNIT: &str = "kdump.service";
+    const OWNER: &str = "kexec-tools";
+    let masked =
+        |unit: &str, fragment: UnitFragment| change_with(unit, fragment, UnitState::Masked);
+    let mask_line = |unit: &str| {
+        vec![
+            "RUN systemctl mask -- \\".to_owned(),
+            format!("    '{unit}'"),
+        ]
+    };
+
+    let excluded = mask_snapshot(
+        &["bash"],
+        OWNER,
+        FindingKind::excluded(),
+        vec![masked(UNIT, owned(UNIT, OWNER))],
+        vec![],
+    );
+    let lines = render(&excluded).lines;
+    assert_eq!(
+        lines,
+        [format!(
+            "# Omitted: {UNIT} (package '{OWNER}' was excluded)"
+        )]
+    );
+    assert!(in_no_systemctl_instruction(&lines, UNIT));
+    assert_eq!(
+        declined_of(&excluded),
+        [(
+            UNIT.to_owned(),
+            UnitAction::Mask,
+            OmissionReason::PackageExcluded {
+                package: OWNER.into()
+            }
+        )]
+    );
+
+    for (label, baseline, disposition, fragment) in [
+        (
+            "package included",
+            vec!["bash"],
+            FindingKind::included(),
+            owned(UNIT, OWNER),
+        ),
+        (
+            "excluded and in the baseline",
+            vec!["bash", OWNER],
+            FindingKind::excluded(),
+            owned(UNIT, OWNER),
+        ),
+        (
+            "no known owner",
+            vec!["bash"],
+            FindingKind::excluded(),
+            vendor(UNIT),
+        ),
+        (
+            "absent",
+            vec!["bash"],
+            FindingKind::excluded(),
+            UnitFragment::Absent,
+        ),
+    ] {
+        let snap = mask_snapshot(
+            &baseline,
+            OWNER,
+            disposition,
+            vec![masked(UNIT, fragment)],
+            vec![],
+        );
+        assert_eq!(render(&snap).lines, mask_line(UNIT), "{label}");
+        assert!(declined_of(&snap).is_empty(), "{label}");
+    }
+
+    const PROTECTED: &str = "ostree-remount.service";
+    let protected = mask_snapshot(
+        &["bash"],
+        "ostree",
+        FindingKind::excluded(),
+        vec![masked(PROTECTED, owned(PROTECTED, "ostree"))],
+        vec![],
+    );
+    assert_eq!(
+        declined_of(&protected),
+        [(
+            PROTECTED.to_owned(),
+            UnitAction::Mask,
+            OmissionReason::TargetNeedsUnit
+        )]
+    );
+
+    const PATH: &str = "/etc/systemd/system/kdump.service";
+    let occupied = mask_snapshot(
+        &["bash"],
+        OWNER,
+        FindingKind::excluded(),
+        vec![masked(UNIT, owned(UNIT, OWNER))],
+        vec![(PATH, "[Service]\nExecStart=/bin/true\n")],
+    );
+    assert_eq!(
+        declined_of(&occupied),
+        [(
+            UNIT.to_owned(),
+            UnitAction::Mask,
+            OmissionReason::MaskPathOccupied { path: PATH.into() }
+        )]
+    );
 }

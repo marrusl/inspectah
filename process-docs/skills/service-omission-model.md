@@ -67,12 +67,19 @@ each included state change. The first that fails declines the command.
 | 2 | Rule 3: no `disable` or `mask` of a unit on `TARGET_NEEDED_UNITS` (`bootc-*`, `ostree-*`, `systemd-remount-fs.service`), and no `mask` of `TMP_MOUNT` (`tmp.mount`). Both constants are in `crates/core/src/baseline.rs`. | `disable`, `mask` | `TargetNeedsUnit` (a FIXME) |
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
-| 5 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | `enable`, `disable` | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
+| 5 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 
-A `mask` that passes rule 4 is planned. It reads no `[Install]` and
-succeeds on an absent unit, so rule 5 does not apply to it, and the
-presence tiers do not either: a mask of a unit whose package is excluded
-is carried.
+**A mask follows the package check.** `mask` reads no `[Install]`, so
+rule 5's file half (order 4) does not apply to it, but the package half
+(order 5) does, through the same presence tiers, unchanged: a mask of a
+`Vendor` or `PackagedStorage` unit whose package is not in the image is
+omitted with the tiers' reason, so the host's mask stays visible as an
+`# Omitted:` line. Rules 3 and 4 run first, so a protected unit or
+`tmp.mount` keeps its FIXME and an occupied path keeps
+`MaskPathOccupied` whatever the package. An `Absent` mask (no unit file)
+and a mask with no known owner are carried (Tier 1). On a fleet, Tier 2
+reads the representative host's owner, so a mask of a package the merge
+excludes by prevalence is omitted until the package is included.
 
 The presence tiers run only for `Vendor` and `PackagedStorage`, whose
 image file comes from the package. A `Shadowed` unit's one condition is

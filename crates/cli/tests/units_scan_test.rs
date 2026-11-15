@@ -3522,7 +3522,10 @@ fn t18_a_case(package_hostname: &str, copy_hostname: &str) {
 /// and the local file is a config entry on one host of two. Through
 /// `RefineSession`: with the file included, T16's result, the mask
 /// declined with `MaskPathOccupied` and the file staged; excluding it
-/// brings the mask back.
+/// brings the mask back. The mask follows its package (§ 10.2 rule 5,
+/// T34): `kexec-tools` is on one host of two, so the merge excludes it,
+/// and with the file excluded the mask is omitted for the package until
+/// the package is included too.
 #[test]
 fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
     const UNIT: &str = "kdump.service";
@@ -3565,6 +3568,15 @@ fn t18_c_a_mask_beside_another_hosts_unit_file_is_t16() {
 
     session
         .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let package_out = containerfile_in(&export_session(&session));
+    assert_eq!(
+        omitted(&package_out, UNIT),
+        Some("# Omitted: kdump.service (package 'kexec-tools' was excluded)"),
+        "{package_out}"
+    );
+    session
+        .apply(set_include(package_item("kexec-tools"), true))
         .unwrap_or_else(|e| panic!("{e:?}"));
     let tree = export_session(&session);
     let freed = containerfile_in(&tree);
@@ -4028,8 +4040,10 @@ fn t15_a_vendor_row_shows_another_rows_unit_file() {
 
 /// On an aggregate, the view shows what the merged export renders: T18
 /// (c)'s pair of hosts, the mask row declined with `MaskPathOccupied`
-/// while the other host's unit file is included, and not once it is
-/// excluded.
+/// while the other host's unit file is included. Once it is excluded the
+/// mask follows its package (§ 10.2 rule 5): `kexec-tools` is on one host
+/// of two, so the merge excludes it and the row shows `PackageExcluded`;
+/// with the package included the row is not declined.
 #[test]
 fn an_aggregate_row_shows_the_merged_exports_reason() {
     const UNIT: &str = "kdump.service";
@@ -4063,6 +4077,13 @@ fn an_aggregate_row_shows_the_merged_exports_reason() {
     );
     refine
         .apply(set_include(config_item(&path), false))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        declined_in(&refine, UNIT).map(|d| d.reason),
+        Some("PackageExcluded".to_owned())
+    );
+    refine
+        .apply(set_include(package_item("kexec-tools"), true))
         .unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(declined_in(&refine, UNIT), None);
     assert!(acts(
@@ -6468,4 +6489,79 @@ fn t33_an_unmanaged_machine_id_is_withheld() {
         !views.iter().any(|v| v.path == MACHINE_INFO),
         "control: {views:?}"
     );
+}
+
+// ---------------------------------------------------------------------
+// § 10.2 rule 5 "A mask follows the package check" (T34).
+// ---------------------------------------------------------------------
+
+/// T34 through the scan and refine: a vendor unit masked on a host whose
+/// package `maskpkg` owns it, scanned against a base image that does not
+/// ship the package. The scan export carries the mask. Excluding the
+/// package through `RefineSession` gives no `mask`, an `# Omitted:` line
+/// with the package reason, and the row's `declined` with the same reason;
+/// including it again brings the mask back. A masked protected unit whose
+/// package is excluded keeps rule 3's FIXME.
+#[test]
+fn t34_a_mask_follows_its_package_through_the_scan_and_refine() {
+    const UNIT: &str = "maskme.service";
+    const OWNER: &str = "maskpkg";
+    let snap = scan(owned_unit_host(UNIT, OWNER, "masked", VENDOR_SERVICE));
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Masked);
+    assert!(
+        matches!(
+            fragment_of(&snap, UNIT),
+            UnitFragment::Vendor { owning_package: Some(p), .. } if p == OWNER
+        ),
+        "{:?}",
+        fragment_of(&snap, UNIT)
+    );
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "mask", UNIT), "presence: {scanned}");
+
+    let omitted_line = format!("# Omitted: {UNIT} (package '{OWNER}' was excluded)");
+    let mut refine = session(&snap);
+    refine
+        .apply(set_include(package_item(OWNER), false))
+        .expect("excluding the package is a decision the session takes");
+    let excluded = containerfile_in(&export_session(&refine));
+    assert_eq!(
+        omitted(&excluded, UNIT),
+        Some(omitted_line.as_str()),
+        "{excluded}"
+    );
+    assert!(in_no_systemctl_instruction(&excluded, UNIT), "{excluded}");
+    let declined = declined_in(&refine, UNIT).expect("the row is declined");
+    assert_eq!(declined.reason, "PackageExcluded", "{declined:?}");
+    assert_eq!(
+        format!("# Omitted: {}", declined.text),
+        omitted_line,
+        "{declined:?}"
+    );
+
+    refine
+        .apply(set_include(package_item(OWNER), true))
+        .expect("including the package again is a decision the session takes");
+    let included = containerfile_in(&export_session(&refine));
+    assert!(acts(&included, "mask", UNIT), "{included}");
+    assert!(declined_in(&refine, UNIT).is_none());
+
+    const PROTECTED: &str = "bootc-fetch-apply-updates.service";
+    let snap = scan(owned_unit_host(
+        PROTECTED,
+        "bootc",
+        "masked",
+        VENDOR_SERVICE,
+    ));
+    let mut refine = session(&snap);
+    refine
+        .apply(set_include(package_item("bootc"), false))
+        .expect("excluding the package is a decision the session takes");
+    let cf = containerfile_in(&export_session(&refine));
+    assert_eq!(
+        fixme_for(&cf, PROTECTED),
+        Some(protected_fixme(PROTECTED, "masked").as_str()),
+        "{cf}"
+    );
+    assert!(omitted(&cf, PROTECTED).is_none(), "{cf}");
 }

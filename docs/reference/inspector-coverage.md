@@ -148,7 +148,7 @@ A command the export cannot reproduce is left out with a `# Omitted:` line namin
 | A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
 | A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |
 
-A shadowed unit's command depends on its shadow, not on its package, and a mask does not depend on its package's state; the rules in the table above, and the rule for units the image needs, still apply to both. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
+A shadowed unit's command depends on its shadow, not on its package; the rules in the table above, and the rule for units the image needs, still apply to it. A mask follows its package like an `enable`: the mask of a vendor unit whose package is excluded, not carried, or not in the target image is left out with the package reason. The rule for units the image needs and the staged-file rule are checked first. A mask with no unit file, or of a unit no package owns, is carried. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
 
 #### Mount findings
 

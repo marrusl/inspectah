@@ -1185,8 +1185,9 @@ fn local_trigger_missing(
 /// (§ 10.2): only for a unit whose image file comes from that package, a
 /// `Vendor` unit or a package-owned storage unit. A `Shadowed` unit's one
 /// condition is its staged shadow, which the image loads with or without
-/// the package; a `Local` unit has no owner; `Absent` is reached only by a
-/// mask, which rule 5 does not apply to.
+/// the package; a `Local` unit has no owner; `Absent`, reached only by a
+/// mask on a name with no unit file, has no owner either, so its mask is
+/// carried.
 fn needs_its_package(unit: &CarriedUnit) -> bool {
     match unit {
         CarriedUnit::PackagedStorage(_) => true,
@@ -1464,14 +1465,14 @@ impl<'a> Presence<'a> {
 /// 2. Rule 3 ([`rule_3_target_needs_unit`]), `disable` and `mask`: a unit
 ///    the target needs is not switched off (§ 10.3).
 /// 3. Rule 4 ([`rule_4_mask_path`]), `mask` only: the mask's path must be
-///    free of a staged unit file. A `mask` that passes is planned: it reads
-///    no `[Install]` and succeeds on an absent unit, so rule 5 does not
-///    apply to it.
+///    free of a staged unit file.
 /// 4. Rule 5, the row's own file ([`rule_5_file`]), `enable` and
 ///    `disable`: the export stages the unit file the row recorded and no
-///    other.
-/// 5. Rule 5, the package, for a `Vendor` or package-owned storage unit
-///    only ([`needs_its_package`]): the presence tiers
+///    other. A `mask` reads no `[Install]`, so this half does not apply to
+///    it.
+/// 5. Rule 5, the package, every verb, `mask` included, for a `Vendor` or
+///    package-owned storage unit only ([`needs_its_package`]): the presence
+///    tiers
 ///    ([`classify_service_presence`], unchanged; an aggregate applies Tier 2
 ///    alone). With no package section there is nothing to read and the unit
 ///    is emitted: there is no separate path without one.
@@ -1513,40 +1514,43 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             plan.declined.push((name, action, reason));
             continue;
         }
-        if action != UnitAction::Mask {
-            if let Err(reason) = rule_5_file(snap, sc.unit(), staged) {
-                plan.declined.push((name, action, reason));
-                continue;
-            }
-            let decision = presence
-                .as_ref()
-                .filter(|_| needs_its_package(sc.unit()))
-                .map(|p| p.decide(sc));
-            let advisory = match decision {
-                Some(PresenceDecision::Omit(reason)) => {
-                    plan.declined.push((name, action, reason));
-                    continue;
-                }
-                Some(PresenceDecision::Emit {
-                    advisory_reasons: Some((owning_package, reasons)),
-                }) => Some(ServiceAdvisory {
-                    unit: name.clone(),
-                    owning_package,
-                    reasons,
-                }),
-                Some(PresenceDecision::Emit {
-                    advisory_reasons: None,
-                })
-                | None => None,
-            };
-            if action == UnitAction::Enable
-                && let Err(reason) = timer_trigger_check(snap, &name, presence.as_ref(), staged)
-            {
-                plan.declined.push((name, action, reason));
-                continue;
-            }
-            plan.advisories.extend(advisory);
+        // `mask` reads no `[Install]`, so the file half of rule 5 does not
+        // apply to it; the package half does (§ 10.2 "A mask follows the
+        // package check").
+        if action != UnitAction::Mask
+            && let Err(reason) = rule_5_file(snap, sc.unit(), staged)
+        {
+            plan.declined.push((name, action, reason));
+            continue;
         }
+        let decision = presence
+            .as_ref()
+            .filter(|_| needs_its_package(sc.unit()))
+            .map(|p| p.decide(sc));
+        let advisory = match decision {
+            Some(PresenceDecision::Omit(reason)) => {
+                plan.declined.push((name, action, reason));
+                continue;
+            }
+            Some(PresenceDecision::Emit {
+                advisory_reasons: Some((owning_package, reasons)),
+            }) => Some(ServiceAdvisory {
+                unit: name.clone(),
+                owning_package,
+                reasons,
+            }),
+            Some(PresenceDecision::Emit {
+                advisory_reasons: None,
+            })
+            | None => None,
+        };
+        if action == UnitAction::Enable
+            && let Err(reason) = timer_trigger_check(snap, &name, presence.as_ref(), staged)
+        {
+            plan.declined.push((name, action, reason));
+            continue;
+        }
+        plan.advisories.extend(advisory);
         plan.planned.push(PlannedUnit { name, action });
     }
     plan.mount_advisories = units
