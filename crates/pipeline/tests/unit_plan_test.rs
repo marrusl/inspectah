@@ -2327,6 +2327,7 @@ fn generated_declined_of(snap: &InspectionSnapshot) -> Vec<(String, OmissionReas
 /// generated timer is planned the same way and nothing is declined.
 #[test]
 fn a_masked_unit_withholds_a_generated_unit_of_its_name() {
+    use inspectah_pipeline::render::configtree::StagedFileKind;
     const UNIT: &str = "cron-backup.timer";
     const PATH: &str = "/etc/systemd/system/cron-backup.timer";
     let masked = || {
@@ -2370,6 +2371,32 @@ fn a_masked_unit_withholds_a_generated_unit_of_its_name() {
     );
     assert_eq!(render(&control).lines, mask_lines);
     assert!(generated_declined_of(&control).is_empty());
+
+    // The same generated timer with the collision removed, the mask row and
+    // its file excluded: the generated pair is staged and its request
+    // planned, so the collision, not the request, made the difference.
+    let mut released = with_generated_cron_backup(masked());
+    for sc in &mut released.units.as_mut().expect("units").state_changes {
+        sc.disposition = FindingKind::excluded();
+    }
+    for f in &mut released.config.as_mut().expect("config").files {
+        f.disposition = FindingKind::excluded();
+    }
+    assert_eq!(
+        cron_backup_paths(&released),
+        [
+            (Some(StagedFileKind::GeneratedUnit), vec![]),
+            (Some(StagedFileKind::GeneratedUnit), vec![])
+        ]
+    );
+    assert!(generated_declined_of(&released).is_empty());
+    assert!(
+        plan_units(&released, &staged_writes(&released))
+            .scheduled
+            .iter()
+            .any(|p| p.name().as_str() == UNIT),
+        "the generated request is planned"
+    );
 }
 
 /// An imported `Local` row, a zero-length config entry at its path, and a

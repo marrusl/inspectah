@@ -4268,6 +4268,12 @@ fn t19_an_enabled_local_timer_is_enabled_from_the_unit_state_section() {
         "{containerfile}"
     );
 
+    // The refine route with no operation carries the enable: the control
+    // for the omission below, on the same route.
+    let unchanged = containerfile_in(&exported_after(&snap, &[]));
+    assert!(acts(&unchanged, "enable", "report.timer"), "{unchanged}");
+    assert!(omitted(&unchanged, "report.timer").is_none(), "{unchanged}");
+
     let excluded = containerfile_in(&exported_after(
         &snap,
         &[(config_item(REPORT_TIMER), false)],
@@ -5679,4 +5685,261 @@ fn t38_an_unmanaged_file_under_the_unit_directory_is_withheld() {
         !views.iter().any(|v| v.path == T38_OPT),
         "control: the /opt row is not withheld"
     );
+}
+
+// ---------------------------------------------------------------------
+// The generated-name collision across routes, hosts and partial
+// exclusions.
+// ---------------------------------------------------------------------
+
+/// A local `cron-backup.timer`, enabled, on one host and the cron file that
+/// generates `cron-backup` on the other, merged in both hostname orders.
+/// Narrowing excludes each host's own rows. With the timer's unit row, its
+/// config row and the cron job included in refine, the collected timer
+/// wins whichever host is first: its file is staged with the host's
+/// content, neither generated file is, the generated request is declined
+/// with exactly one FIXME naming the timer, and the timer is enabled from
+/// the unit state section. Control, on the same merged fleet and route:
+/// with only the cron job included, the generated pair is staged and
+/// enabled with no FIXME.
+#[test]
+fn a_local_and_a_generated_timer_of_one_name_on_two_hosts_in_both_orders() {
+    let local = || {
+        UnitHost::new()
+            .unit(CRON_BACKUP_TIMER, "enabled")
+            .preset("disable *")
+            .etc_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER)
+    };
+    let cron = || with_cron_backup(UnitHost::new().preset("disable *"));
+    for (local_name, cron_name) in [("host-a", "host-b"), ("host-b", "host-a")] {
+        let label = format!("local on {local_name}");
+        let fleet = merged(named(local(), local_name), named(cron(), cron_name));
+        assert!(
+            matches!(
+                fragment_of(&fleet, CRON_BACKUP_TIMER),
+                UnitFragment::Local { .. }
+            ),
+            "{label}: presence: the local timer's row"
+        );
+        assert!(
+            fleet.scheduled_tasks.as_ref().is_some_and(|st| st
+                .generated_timer_units
+                .iter()
+                .any(|u| u.name == CRON_BACKUP)),
+            "{label}: presence: the generated unit"
+        );
+
+        let tree = exported_after(
+            &fleet,
+            &[
+                (unit_item(CRON_BACKUP_TIMER), true),
+                (config_item(&etc_path(CRON_BACKUP_TIMER)), true),
+                (cron_item(CRON_ROW), true),
+            ],
+        );
+        let cf = containerfile_in(&tree);
+        let timers = files_named(tree.path(), CRON_BACKUP_TIMER);
+        assert_eq!(timers.len(), 1, "{label}: {timers:?}");
+        assert_eq!(
+            std::fs::read_to_string(&timers[0]).unwrap(),
+            HOST_CRON_BACKUP_TIMER,
+            "{label}: the host's timer is staged"
+        );
+        assert!(
+            files_named(tree.path(), CRON_BACKUP_SERVICE).is_empty(),
+            "{label}: no generated service"
+        );
+        assert_eq!(
+            generated_fixmes(&cf, CRON_BACKUP_TIMER),
+            [row_collision_fixme(CRON_BACKUP_TIMER).as_str()],
+            "{label}:\n{cf}"
+        );
+        assert!(
+            unit_lines(&cf)
+                .iter()
+                .any(|l| l.contains("'cron-backup.timer'")),
+            "{label}:\n{cf}"
+        );
+
+        let control = exported_after(&fleet, &[(cron_item(CRON_ROW), true)]);
+        assert_eq!(generated_carriage(&control), PAIR_CARRIED, "{label}");
+        assert!(
+            generated_fixmes(&containerfile_in(&control), CRON_BACKUP_TIMER).is_empty(),
+            "{label}"
+        );
+    }
+}
+
+/// A shadowed `site.timer` on two hosts with different `/etc` content:
+/// with the shadow row included, the timer's enable is declined with
+/// `InstallEvidenceChanged`, since the row may have been recorded from the
+/// other variant. Presence first: a shadow is staged. Control: the same
+/// content on both hosts is one variant, and the enable is carried through
+/// the same route.
+#[test]
+fn a_timer_shadow_with_two_variants_declines_the_enable() {
+    let host = |hostname: &str, on_calendar: &str| {
+        named(
+            UnitHost::new()
+                .unit("site.timer", "enabled")
+                .preset("disable site.timer")
+                .vendor_unit(
+                    "site.timer",
+                    "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
+                    Some("sitepkg"),
+                )
+                .etc_unit(
+                    "site.timer",
+                    &format!(
+                        "[Timer]\nOnCalendar={on_calendar}\n[Install]\nWantedBy=timers.target\n"
+                    ),
+                ),
+            hostname,
+        )
+    };
+    let path = etc_path("site.timer");
+    let shadow = ItemId::DropIn { path: path.clone() };
+
+    let variants = merged(host("host-a", "hourly"), host("host-b", "weekly"));
+    let tree = exported_after(&variants, &[(shadow.clone(), true)]);
+    assert!(
+        staged_at_drop_ins(&tree, &path),
+        "presence: a shadow is staged"
+    );
+    let cf = containerfile_in(&tree);
+    assert!(in_no_systemctl_instruction(&cf, "site.timer"), "{cf}");
+    assert!(
+        omitted(&cf, "site.timer").is_some_and(|l| l.ends_with(&evidence_changed(&path))),
+        "{cf}"
+    );
+
+    let same = merged(host("host-a", "hourly"), host("host-b", "hourly"));
+    let control = containerfile_in(&exported_after(&same, &[(shadow, true)]));
+    assert!(acts(&control, "enable", "site.timer"), "{control}");
+    assert!(omitted(&control, "site.timer").is_none(), "{control}");
+}
+
+/// An imported snapshot whose shadow of a vendor `cron-backup.timer` is
+/// zero-length, beside the generated `cron-backup`. Through the scan
+/// export, the refine export and the view: nothing lands at either
+/// generated path (the zero-length shadow is withheld as a mask and the
+/// generated pair for the collision), the generated request is declined
+/// with exactly one FIXME naming the timer, and the timer's enable is
+/// omitted as `InstallEvidenceChanged`, which its unit row shows. Control:
+/// the shadow with content is staged and the enable carried, with the
+/// generated request declined all the same.
+#[test]
+fn an_imported_zero_length_timer_shadow_beside_a_generated_timer() {
+    let path = etc_path(CRON_BACKUP_TIMER);
+    let scanned = scan(with_cron_backup(
+        UnitHost::new()
+            .base_package("glibc")
+            .package("backuppkg")
+            .unit(CRON_BACKUP_TIMER, "enabled")
+            .preset("disable *")
+            .vendor_unit(
+                CRON_BACKUP_TIMER,
+                "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n",
+                Some("backuppkg"),
+            )
+            .etc_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER),
+    ));
+    assert!(
+        matches!(
+            fragment_of(&scanned, CRON_BACKUP_TIMER),
+            UnitFragment::Shadowed { .. }
+        ),
+        "presence: the shadowed row"
+    );
+    let mut imported = scanned.clone();
+    let shadow = imported
+        .units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .iter_mut()
+        .find(|d| d.path == path)
+        .expect("presence: the shadow's drop-in row");
+    shadow.content = String::new();
+
+    for (route, tree) in both_exports(&imported) {
+        let cf = containerfile_in(&tree);
+        for name in [CRON_BACKUP_TIMER, CRON_BACKUP_SERVICE] {
+            assert!(
+                files_named(tree.path(), name).is_empty(),
+                "{route}: {name} lands"
+            );
+        }
+        assert_eq!(
+            generated_fixmes(&cf, CRON_BACKUP_TIMER),
+            [row_collision_fixme(CRON_BACKUP_TIMER).as_str()],
+            "{route}:\n{cf}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&cf, CRON_BACKUP_TIMER),
+            "{route}:\n{cf}"
+        );
+        assert!(
+            omitted(&cf, CRON_BACKUP_TIMER).is_some_and(|l| l.ends_with(&evidence_changed(&path))),
+            "{route}:\n{cf}"
+        );
+    }
+    assert_eq!(
+        declined_in(&session(&imported), CRON_BACKUP_TIMER),
+        Some(evidence_declined(CRON_BACKUP_TIMER, &path))
+    );
+
+    for (route, tree) in both_exports(&scanned) {
+        let cf = containerfile_in(&tree);
+        assert!(
+            staged_at_drop_ins(&tree, &path),
+            "{route}: the shadow is staged"
+        );
+        assert!(acts(&cf, "enable", CRON_BACKUP_TIMER), "{route}:\n{cf}");
+        assert_eq!(
+            generated_fixmes(&cf, CRON_BACKUP_TIMER),
+            [row_collision_fixme(CRON_BACKUP_TIMER).as_str()],
+            "{route}:\n{cf}"
+        );
+    }
+}
+
+/// § 10.2's flatpak rescan case, the two partial exclusions: with only the
+/// collected unit row excluded, or only its config row, the collected name
+/// still holds a row, so the generated service is withheld with exactly one
+/// FIXME and no `COPY`. The control, both excluded, is
+/// `a_rescanned_flatpak_provisioning_service_keeps_the_collected_copy`.
+#[test]
+fn a_rescanned_flatpak_service_with_one_of_its_rows_excluded_stays_collected() {
+    const COLLECTED: &str =
+        "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target\n";
+    let snap = with_flatpak_app(scan(
+        UnitHost::new()
+            .unit(FLATPAK_PROVISION, "enabled")
+            .preset("disable *")
+            .etc_unit(FLATPAK_PROVISION, COLLECTED),
+    ));
+    let path = etc_path(FLATPAK_PROVISION);
+    for (label, op) in [
+        ("unit row excluded", (unit_item(FLATPAK_PROVISION), false)),
+        ("config row excluded", (config_item(&path), false)),
+    ] {
+        let tree = exported_after(&snap, &[op]);
+        let cf = containerfile_in(&tree);
+        let prefix = format!("# FIXME: {FLATPAK_PROVISION} (inspectah generates this unit, ");
+        assert_eq!(
+            cf.lines().filter(|l| l.starts_with(&prefix)).count(),
+            1,
+            "{label}:\n{cf}"
+        );
+        assert!(
+            collision_fixme(&cf, FLATPAK_PROVISION).is_some(),
+            "{label}:\n{cf}"
+        );
+        assert!(!cf.contains(FLATPAK_PROVISION_COPY), "{label}:\n{cf}");
+        assert!(
+            !tree.path().join("flatpak").join(FLATPAK_PROVISION).exists(),
+            "{label}: the generated service is staged"
+        );
+    }
 }
