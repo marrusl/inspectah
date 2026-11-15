@@ -15,6 +15,7 @@ use inspectah_core::types::units::{
     AdminStorageFragment, CarriedUnit, OrdinaryKind, PresetDefault, UnitAction, UnitFragment,
     UnitKind, UnitName, UnitSection, UnitState,
 };
+use inspectah_core::types::warnings::Warning;
 
 /// Standard fixture: `systemctl list-unit-files` output.
 const SYSTEMCTL_FIXTURE: &str =
@@ -1454,6 +1455,32 @@ fn row_and_warnings(exec: &MockExecutor, unit: &str) -> (bool, Vec<String>) {
     (row, warnings)
 }
 
+/// The structured warnings a scan of `exec` produces.
+fn scan_warnings(exec: &MockExecutor) -> Vec<Warning> {
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    UnitsInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("the scan succeeds")
+        .warnings
+}
+
+/// Whether `warnings` holds the search-path warning for `unit` and
+/// `path`: the message names both, and the warning's fields carry both.
+fn has_search_path_warning(warnings: &[Warning], unit: &str, path: &str) -> bool {
+    warnings.iter().any(|w| {
+        w.message.contains(unit)
+            && w.message.contains(path)
+            && w.extra.get("unit") == Some(&serde_json::json!(unit))
+            && w.extra.get("path") == Some(&serde_json::json!(path))
+    })
+}
+
 /// T24, the search path: a file on systemd's search path that this
 /// collector does not read, and that changes what loads or what `enable`
 /// does, makes the unit unsupported: a warning naming the unit and the
@@ -1532,7 +1559,81 @@ fn a_file_the_search_path_loads_in_place_refuses_the_unit() {
                 .any(|w| w.contains("unit app.service ") && w.contains(path)),
             "{label}: a warning naming the unit and {path}: {warnings:?}"
         );
+        let warnings = scan_warnings(&refused);
+        assert!(
+            has_search_path_warning(&warnings, "app.service", path),
+            "{label}: the warning's fields carry the unit and {path}: {warnings:?}"
+        );
     }
+}
+
+/// With no file in the two directories read, a file for the name anywhere
+/// on the search path is what systemd loads: the warning names that path
+/// in place of the no-file warning, and there is no state change. Control:
+/// the same listing with no file anywhere gives the no-file warning.
+#[test]
+fn a_unit_found_only_elsewhere_on_the_search_path_names_that_path() {
+    let path = "/usr/local/lib/systemd/system/app.service";
+    let control = listing_mock(&[("app.service", "enabled")]);
+    let warnings = scan_warnings(&control);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.message.contains("app.service") && w.message.contains("no unit file")),
+        "{warnings:?}"
+    );
+    assert!(!has_search_path_warning(&warnings, "app.service", path));
+
+    let exec = listing_mock(&[("app.service", "enabled")]).with_file(path, UNIT_FILE);
+    let (row, _) = row_and_warnings(&exec, "app.service");
+    assert!(!row, "no state change");
+    let warnings = scan_warnings(&exec);
+    assert!(
+        has_search_path_warning(&warnings, "app.service", path),
+        "{warnings:?}"
+    );
+}
+
+/// An `/etc` storage unit with no state change (listed `disabled`, at its
+/// preset) is a mount finding of its
+/// own (§ 6.5), so the search path refuses it there too: a copy under
+/// `/etc/systemd/system.control` outranks it, and the scan warns naming
+/// the unit and the path and records no finding. Control: the same file
+/// without the copy is a finding.
+#[test]
+fn the_search_path_refuses_an_etc_storage_unit_with_a_warning() {
+    let path = "/etc/systemd/system.control/data.mount";
+    let host = || {
+        listing_mock(&[("data.mount", "disabled")])
+            .with_dir("/etc/systemd/system", vec!["data.mount"])
+            .with_file(
+                "/etc/systemd/system/data.mount",
+                "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
+            )
+    };
+    let has_finding = |exec: &MockExecutor| {
+        scan(exec)
+            .0
+            .mount_findings
+            .iter()
+            .any(|f| f.unit.name().as_unit_name().as_str() == "data.mount")
+    };
+
+    let control = host();
+    assert!(has_finding(&control), "the control is a finding");
+    assert!(!has_search_path_warning(
+        &scan_warnings(&control),
+        "data.mount",
+        path
+    ));
+
+    let refused = host().with_file(path, "[Mount]\nWhat=/dev/sdc1\nWhere=/data\n");
+    assert!(!has_finding(&refused), "no finding");
+    let warnings = scan_warnings(&refused);
+    assert!(
+        has_search_path_warning(&warnings, "data.mount", path),
+        "{warnings:?}"
+    );
 }
 
 /// T24, what the search path does not change: a drop-in with `[Install]`

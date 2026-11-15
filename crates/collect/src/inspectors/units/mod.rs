@@ -311,13 +311,7 @@ fn build_state_changes(
                 "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
             )),
             Ok(Resolved::Unsupported { path }) => {
-                let mut warning = warn(&format!(
-                    "{path} is on the systemd search path, outside the two unit \
-                     directories this scan reads, and changes what loads or what \
-                     enable does; the unit's state is not carried"
-                ));
-                warning.extra.insert("path".into(), serde_json::json!(path));
-                warnings.push(warning);
+                warnings.push(search_path_warning(warn, path));
             }
             // Today's warning for a `linked` unit.
             Err(ResolveError::Linked { .. }) => warnings.push(service_warning(
@@ -419,6 +413,10 @@ fn etc_storage_findings(
             Ok(Resolved::File {
                 fragment: fragment @ (UnitFragment::Local { .. } | UnitFragment::Shadowed { .. }),
             }) => fragments.push((name, fragment)),
+            Ok(Resolved::Unsupported { path }) => warnings.push(search_path_warning(
+                |detail| etc_unit_file_warning(&name, detail),
+                path,
+            )),
             // A mask, an alias or a link elsewhere: not a unit file here.
             Ok(_) | Err(ResolveError::Linked { .. }) => {}
             Err(ResolveError::Read { path, error }) => {
@@ -434,12 +432,7 @@ fn etc_storage_findings(
     for (name, fragment) in names.into_iter().zip(fragments) {
         // The name is the file's and the owner is never empty, so neither
         // check below refuses in practice; a refusal is still reported.
-        let warn = |detail: &str| Warning {
-            inspector: "units".into(),
-            message: format!("unit file {ETC_UNIT_DIR}/{} - {detail}", name.as_str()),
-            severity: Some(WarningSeverity::Warning),
-            extra: std::collections::HashMap::from([("unit".into(), serde_json::json!(name))]),
-        };
+        let warn = |detail: &str| etc_unit_file_warning(&name, detail);
         let unit = UnitSubject::new(name.clone(), fragment)
             .map_err(|e| e.to_string())
             .and_then(|subject| AdvisoryUnit::try_from(subject).map_err(|e| e.to_string()));
@@ -455,6 +448,29 @@ fn etc_storage_findings(
         }
     }
     findings
+}
+
+/// A structured warning about the unit file `name` under
+/// `/etc/systemd/system`.
+fn etc_unit_file_warning(name: &UnitName, detail: &str) -> Warning {
+    Warning {
+        inspector: "units".into(),
+        message: format!("unit file {ETC_UNIT_DIR}/{} - {detail}", name.as_str()),
+        severity: Some(WarningSeverity::Warning),
+        extra: std::collections::HashMap::from([("unit".into(), serde_json::json!(name))]),
+    }
+}
+
+/// The warning for a unit the search path refuses (§ 7.1 of the units
+/// spec), built by `warn` from the detail, with `path` among its fields.
+fn search_path_warning(warn: impl FnOnce(&str) -> Warning, path: String) -> Warning {
+    let mut warning = warn(&format!(
+        "{path} is on the systemd search path, outside the two unit \
+         directories this scan reads, and changes what loads or what \
+         enable does; the unit's state is not carried"
+    ));
+    warning.extra.insert("path".into(), serde_json::json!(path));
+    warning
 }
 
 /// Inspects systemd unit state for every unit kind: enabled, disabled or
