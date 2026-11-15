@@ -355,8 +355,10 @@ impl UnitHost {
 
     /// The links `enable` makes for `name`, as (dependency directory
     /// suffix or `None` for an alias, parent or alias name), read from its
-    /// unit file and then its own `.d` drop-ins in file-name order, with
-    /// an empty `WantedBy=` or `Alias=` clearing the values before it.
+    /// unit file and then its own `.d` drop-ins (non-hidden `.conf` files)
+    /// in file-name order. An empty `WantedBy=`, `Alias=` or `RequiredBy=`
+    /// clears the values before it; an empty `RequiredBy=` after a value is
+    /// not modeled as the `Undetermined` section the scan reads.
     fn install_links(&self, name: &str) -> Vec<(Option<&'static str>, String)> {
         let mut texts = vec![
             self.files
@@ -368,9 +370,14 @@ impl UnitHost {
         for root in [VENDOR_UNIT_DIR, ETC_UNIT_DIR] {
             let prefix = format!("{root}/{name}.d/");
             for (path, text) in &self.files {
-                if let Some(file) = path.strip_prefix(&prefix) {
-                    drop_ins.insert(file.to_owned(), text.clone());
-                }
+                // The drop-ins systemd reads: `.conf` files, not hidden.
+                let Some(file) = path
+                    .strip_prefix(&prefix)
+                    .filter(|file| file.ends_with(".conf") && !file.starts_with('.'))
+                else {
+                    continue;
+                };
+                drop_ins.insert(file.to_owned(), text.clone());
             }
         }
         texts.extend(drop_ins.into_values());
