@@ -1383,13 +1383,17 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
             dir: DependencyDir::Upholds,
             ..
         } => format!(
-            "#   An .upholds link starts {unit} as soon as it exists and restarts it whenever \
-             it stops, so adding it for a unit that exits produces a restart loop. A RHEL 9 \
-             target does not honor it. To add it, put Upholds={unit} in a drop-in for {parent}."
+            "#   An .upholds link starts {unit} while {parent} is active and restarts it \
+             whenever it stops, so adding it for a unit that becomes inactive after it exits, \
+             such as a oneshot service without RemainAfterExit=yes, produces a restart loop. A \
+             RHEL 9 target does not honor it. To add it, put Upholds={unit} in a drop-in for \
+             {parent}."
         ),
         LinkName::Alias { .. } => format!(
-            "#   No systemctl verb but enable makes an alias link. To carry it, add \
-             Alias={parent} in a drop-in for {unit}, or make the link in the Containerfile."
+            "#   No systemctl verb but enable makes an alias link. To carry it, make the link \
+             in the Containerfile after the configuration COPY, or add Alias={parent} in a \
+             drop-in for {unit} and run systemctl enable on {unit} after that COPY, which also \
+             makes every other link its [Install] section and Also= name: check those first."
         ),
     };
     vec![first, second]

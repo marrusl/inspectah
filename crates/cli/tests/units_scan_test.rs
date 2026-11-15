@@ -7190,9 +7190,11 @@ fn t23_link_advisory_table() {
                  the source host (the unit's [Install] section does not name \
                  backup-alias.service). Not carried."
                     .to_owned(),
-                "#   No systemctl verb but enable makes an alias link. To carry it, add \
-                 Alias=backup-alias.service in a drop-in for backup.service, or make the link \
-                 in the Containerfile."
+                "#   No systemctl verb but enable makes an alias link. To carry it, make the \
+                 link in the Containerfile after the configuration COPY, or add \
+                 Alias=backup-alias.service in a drop-in for backup.service and run systemctl \
+                 enable on backup.service after that COPY, which also makes every other link \
+                 its [Install] section and Also= name: check those first."
                     .to_owned(),
             ],
         ),
@@ -7246,9 +7248,10 @@ fn t23_an_upholds_link_is_advised_and_never_carried() {
                  .upholds link).";
     let expected = [
         first.to_owned(),
-        "#   An .upholds link starts watch.service as soon as it exists and restarts it \
-         whenever it stops, so adding it for a unit that exits produces a restart loop. A \
-         RHEL 9 target does not honor it. To add it, put Upholds=watch.service in a drop-in \
+        "#   An .upholds link starts watch.service while multi-user.target is active and \
+         restarts it whenever it stops, so adding it for a unit that becomes inactive after it \
+         exits, such as a oneshot service without RemainAfterExit=yes, produces a restart loop. \
+         A RHEL 9 target does not honor it. To add it, put Upholds=watch.service in a drop-in \
          for multi-user.target."
             .to_owned(),
     ];
