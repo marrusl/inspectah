@@ -206,7 +206,7 @@ A full shadow that has no state change gets no unit row, in the scan or in `refi
 
 **One decision per file.** The same path can appear in Configuration Files (from the `/etc` walk) and in Service Drop-ins. The Service Drop-ins row owns the decision. The Configuration Files entry for that path is marked Inventory with the note "controlled in Service Drop-ins", and `refine` refuses to toggle it. This avoids two checkboxes over one file, where one could be on and the other off. Sysctl files need no such handling: the Kernel/Boot inspector records them for its explanation and offers no decision over them.
 
-**Drop-ins for units at their preset state.** A unit at its preset state has no state change, so it has no parent unit row. In `refine`, its drop-ins appear in a separate group headed "Other drop-in overrides", with the note that the unit is at its preset state, so the drop-in is the whole decision.
+**Drop-ins with no unit-state row.** A unit with no state change, such as one at its preset state, has no parent unit row. In `refine`, its drop-ins appear in a separate group headed "Other drop-in overrides", with the note "These overrides have no unit-state decision row." Each drop-in row there is the decision for its file.
 
 ---
 
