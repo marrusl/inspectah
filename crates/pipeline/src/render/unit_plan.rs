@@ -788,6 +788,10 @@ pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
 /// <unit>`, which take the place of the path and of the `is a link` after
 /// it. With relation `Also` there is no link: `<parent>` names `<unit>` in
 /// `Also=`.
+///
+/// The `Also` wording here is a placeholder, not § 10.9's text, and no
+/// finding reaches it yet: the install-comparison advisory task replaces
+/// it, and the `None` second line for `Also`, with § 10.9's `Also` text.
 enum LinkName<'a> {
     Path(String),
     Alias { alias: &'a str, unit: &'a str },
@@ -904,7 +908,9 @@ pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
             "#   No systemctl verb but enable makes an alias link. To carry it, add \
              Alias={parent} in a drop-in for {unit}, or make the link in the Containerfile."
         )),
-        // Not a link: there is nothing to make.
+        // Not a link: there is nothing to make. Placeholder, unreachable
+        // today: the install-comparison advisory task replaces it with
+        // § 10.9's `Also` text.
         LinkRelation::Also => None,
     };
     std::iter::once(first).chain(second).collect()
