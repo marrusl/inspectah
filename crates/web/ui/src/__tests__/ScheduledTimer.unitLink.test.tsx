@@ -16,6 +16,11 @@ import { emptyView } from "../test-utils/emptyView";
 
 const TIMER_UNIT = "backup.timer";
 const UNROWED_UNIT = "cleanup.timer";
+/**
+ * A valid unit name holding a literal backslash, as systemd escapes a
+ * dash. In a CSS selector the backslash would start an escape.
+ */
+const ESCAPED_UNIT = "backup\\x2djob.timer";
 
 const UNIT_ROW: ServiceDecisionDto = {
   unit: TIMER_UNIT,
@@ -29,6 +34,11 @@ const UNIT_ROW: ServiceDecisionDto = {
   include: true,
   locked: false,
   current_state: "enabled",
+};
+
+const ESCAPED_UNIT_ROW: ServiceDecisionDto = {
+  ...UNIT_ROW,
+  unit: ESCAPED_UNIT,
 };
 
 const SECTIONS: ReferenceSection[] = [
@@ -50,6 +60,15 @@ const SECTIONS: ReferenceSection[] = [
         detail: null,
         searchable_text: "backup daily timer",
         unit: TIMER_UNIT,
+        unit_row: true,
+      },
+      {
+        id: "backup\\x2djob",
+        title: "backup\\x2djob",
+        subtitle: "hourly",
+        detail: null,
+        searchable_text: "backup\\x2djob hourly timer",
+        unit: ESCAPED_UNIT,
         unit_row: true,
       },
       {
@@ -104,7 +123,7 @@ beforeEach(() => {
   const routes: Record<string, unknown> = {
     "/api/health": HEALTH,
     "/api/groups": GROUPS,
-    "/api/view": emptyView({ unit_states: [UNIT_ROW] }),
+    "/api/view": emptyView({ unit_states: [UNIT_ROW, ESCAPED_UNIT_ROW] }),
     "/api/snapshot/sections": SECTIONS,
     "/api/viewed": { ids: [] },
     "/api/ops": [],
@@ -145,7 +164,7 @@ async function openScheduledTasks() {
 describe("scheduled timer row", () => {
   it("offers no include control on any scheduled row", async () => {
     const list = await openScheduledTasks();
-    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
     expect(within(list).queryAllByRole("checkbox")).toHaveLength(0);
     expect(within(list).queryAllByRole("switch")).toHaveLength(0);
   });
@@ -165,6 +184,18 @@ describe("scheduled timer row", () => {
     ).toBeInTheDocument();
     // The app reveals and focuses the row it was sent to.
     const row = await screen.findByTestId(`service-item-${TIMER_UNIT}`);
+    await waitFor(() => expect(row).toHaveFocus());
+  });
+
+  it("opens a unit row whose name holds a backslash", async () => {
+    const list = await openScheduledTasks();
+    await userEvent.click(
+      within(list).getByRole("link", { name: ESCAPED_UNIT }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Services" }),
+    ).toBeInTheDocument();
+    const row = await screen.findByTestId(`service-item-${ESCAPED_UNIT}`);
     await waitFor(() => expect(row).toHaveFocus());
   });
 });
