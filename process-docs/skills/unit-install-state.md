@@ -168,7 +168,7 @@ directory. A drop-in there that cannot be decoded counts as a hit.
 - **`UndeterminedInstall`**, one per unit, for an `Undetermined` section
   that assigns `Also=` or has an install file under `/etc`. Such a unit has
   no state and no row, so the record is what keeps it from disappearing
-  silently.
+  silently. The section can be the package's: see the comparison below.
 
 The advisory text for both is § 10.9's, built in
 `crates/pipeline/src/render/unit_plan.rs` (`manual_link_lines`,
@@ -188,7 +188,14 @@ and `compare_install` compares link sets and `Also=` name sets, never
 text. `Same` does nothing, so an unchanged shadow is a no-op. `Additive`
 makes an `Enabled` row with an attention note. `NotAdditive` makes one
 finding per difference, and a link the host has is never advised for
-removal. A `static` unit with `/etc` files passes the name gate so that
+removal. `VendorUndetermined` (the package's section has an `UpheldBy=`,
+a specifier and the rest) is handled as an effective-side `Undetermined`
+section with an `/etc` install file: no state, one `UndeterminedInstall`
+with the package section's reason and the `/etc` install files, whether
+or not the host has a link, each `/etc` link an `Undetermined` finding,
+and the unit kept out of the storage pass (Mark Russell, 2026-11-15).
+The record has no field saying which side could not be read; the block's
+text is the same for both. A `static` unit with `/etc` files passes the name gate so that
 this comparison can run. `Also=` names are compared after `also_name` maps
 a template to its `DefaultInstance=` on both sides.
 

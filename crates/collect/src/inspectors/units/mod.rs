@@ -528,6 +528,11 @@ fn build_state_changes(
                                 &install_files,
                             );
                         }
+                        // A package section that cannot be relied on leaves
+                        // the state unknown too (Mark Russell, 2026-11-15).
+                        if found.undetermined.is_some() {
+                            reported.insert(subject.name.clone());
+                        }
                         manual_links.extend(found.manual_links);
                         undetermined_installs.extend(found.undetermined);
                         found.state

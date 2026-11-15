@@ -4797,7 +4797,8 @@ fn t30_an_unchanged_install_section_is_no_row() {
 
 /// T30 (d), (f), (g), (i), (j), the first and third cases of (k), the
 /// second case of (l), and (m): no state change, and one finding per
-/// difference with its relation, cause and the `/etc` install file.
+/// difference with its relation, cause and the `/etc` install file; (i)
+/// also has its undetermined record.
 #[test]
 fn t30_changed_links_are_install_difference_findings() {
     use LinkRelation::{Alias, Also, Wants};
@@ -4909,8 +4910,22 @@ fn t30_changed_links_are_install_difference_findings() {
                 (relation, parent, unit, cause, files)
             })
             .collect();
+        // A package section that cannot be relied on, (i), also gets the
+        // unit's record naming the `/etc` file (Mark Russell, 2026-11-15).
+        let record = expected.iter().find_map(|(.., cause, _)| match cause {
+            ManualLinkCause::Undetermined { reason } => Some((*reason, vec![file.clone()])),
+            _ => None,
+        });
         assert_eq!(findings(&section), expected, "{name}");
-        assert!(section.undetermined_installs.is_empty(), "{name}");
+        assert_eq!(
+            section
+                .undetermined_installs
+                .iter()
+                .map(|r| (r.reason, r.install_files.clone()))
+                .collect::<Vec<_>>(),
+            record.into_iter().collect::<Vec<_>>(),
+            "{name}"
+        );
     }
 }
 

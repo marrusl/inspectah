@@ -1343,9 +1343,12 @@ pub struct ManualLink {
 
 /// A unit whose `[Install]` on the source host is `Undetermined` and whose
 /// `/etc` install files change it, or that assigns `Also=`, so its members
-/// cannot be listed or checked (§ 6.6, § 7.3 of the units spec). One per
-/// unit, whether or not the unit has a link, since the image's links can
-/// differ from the host's with no link on either side to report.
+/// cannot be listed or checked (§ 6.6, § 7.3 of the units spec). The
+/// section is the effective one or, for a unit at its `enable` preset whose
+/// `/etc` files change it, the one its package alone provides (§ 7.4; Mark
+/// Russell, 2026-11-15). One per unit, whether or not the unit has a link,
+/// since the image's links can differ from the host's with no link on
+/// either side to report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UndeterminedInstall {
     pub unit: UnitName,

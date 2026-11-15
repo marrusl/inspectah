@@ -489,9 +489,13 @@ fn only_in<T: Clone + PartialEq>(side: &[T], other: &[T]) -> Vec<T> {
 ///   `Also`, with the same two causes, for a name only one side assigns.
 ///   A `StaticUnit` link the package's section makes is dropped: the
 ///   package install makes it in the image too, so it produces nothing.
-/// - `VendorUndetermined`: each of the unit's links under `/etc` is an
-///   `Undetermined` finding with the package section's reason, in place of
-///   what [`link_findings`] reported for it.
+/// - `VendorUndetermined`: as for an effective section that cannot be
+///   relied on, the unit has no install state and one
+///   [`UndeterminedInstall`] with the package section's reason and
+///   `install_files`, whether or not it has a link (Mark Russell,
+///   2026-11-15), and each of its links under `/etc` is an `Undetermined`
+///   finding with that reason, in place of what [`link_findings`] reported
+///   for it.
 pub(crate) fn apply_install_difference(
     found: &mut LinkFindings,
     unit: &UnitName,
@@ -552,6 +556,13 @@ pub(crate) fn apply_install_difference(
             false
         }
         InstallDifference::VendorUndetermined { reason } => {
+            found.state = None;
+            found.undetermined = Some(UndeterminedInstall {
+                unit: unit.clone(),
+                reason,
+                install_files: install_files.to_vec(),
+                aggregate: None,
+            });
             found.manual_links = links
                 .admin(unit)
                 .iter()

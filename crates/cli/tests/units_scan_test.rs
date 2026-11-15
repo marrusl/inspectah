@@ -7884,6 +7884,168 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
     }
 }
 
+/// A package `[Install]` that cannot be relied on, under an `/etc` shadow
+/// that can (Mark Russell, 2026-11-15): the vendor unit's `UpheldBy=`, at
+/// its `enable` preset. With a shadow that names no link and no link on the
+/// host, and with a shadow naming `multi-user.target` and that link, the
+/// unit has one record naming the shadow, the block on both routes and in
+/// refine's `undetermined_installs`, no state change and no `systemctl`
+/// line; with the link, the per-link `Undetermined` finding stays, as on the
+/// effective side. Control: the `UpheldBy=` in the shadow itself, the
+/// effective side, gives the same record, block and finding.
+#[test]
+fn a_vendor_side_undetermined_section_has_its_record() {
+    const UPHELD: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
+    const NO_INSTALL: &str = "[Service]\nExecStart=/bin/true\n";
+    let wants = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+    let undetermined = ManualLinkCause::Undetermined {
+        reason: InstallUnknown::UpheldBy,
+    };
+    let expected = [
+        format!(
+            "# Advisory: {DIFF_UNIT} is not carried: its [Install] section on the source host \
+             cannot be relied on (enabling the unit would also make an .upholds link), and \
+             these files under /etc/systemd/system change it: {DIFF_SHADOW}."
+        ),
+        undetermined_second_line(DIFF_UNIT),
+    ];
+    let link_line = format!(
+        "# Advisory: multi-user.target.wants/{DIFF_UNIT} is not carried: the unit's [Install] \
+         section cannot be relied on (enabling the unit would also make an .upholds link)."
+    );
+    // (case, the package's file, the shadow, the listed state, a link)
+    for (case, vendor, shadow, state, linked) in [
+        ("vendor side, no link", UPHELD, NO_INSTALL, "static", false),
+        ("vendor side, linked", UPHELD, wants, "enabled", true),
+        (
+            "effective side, linked (control)",
+            wants,
+            UPHELD,
+            "enabled",
+            true,
+        ),
+    ] {
+        let host = diff_host(DIFF_UNIT, vendor, state).etc_unit(DIFF_UNIT, shadow);
+        let host = if linked {
+            wants_link(host, "multi-user.target", DIFF_UNIT)
+        } else {
+            host
+        };
+        let snap = scan(host);
+        let units = snap.units.as_ref().expect("a units section");
+        assert_eq!(changes_named(&snap, DIFF_UNIT), 0, "{case}");
+        assert!(
+            !units.inventory.iter().any(|e| e.unit.as_str() == DIFF_UNIT),
+            "{case}: no state: {:?}",
+            units.inventory
+        );
+        assert_eq!(
+            units
+                .undetermined_installs
+                .iter()
+                .map(|r| (r.unit.as_str(), r.reason, r.install_files.clone()))
+                .collect::<Vec<_>>(),
+            [(
+                DIFF_UNIT,
+                InstallUnknown::UpheldBy,
+                vec![DIFF_SHADOW.to_owned()]
+            )],
+            "{case}"
+        );
+        let expected_links: Vec<(&str, ManualLinkCause)> = if linked {
+            vec![("multi-user.target", undetermined)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            links_of(&snap)
+                .iter()
+                .map(|l| (l.parent.as_str(), l.cause))
+                .collect::<Vec<_>>(),
+            expected_links,
+            "{case}"
+        );
+
+        let refine = session(&snap);
+        let rows = &refine.decisions().undetermined_installs;
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.unit.as_str(), r.reason, r.install_files.clone()))
+                .collect::<Vec<_>>(),
+            [(
+                DIFF_UNIT,
+                InstallUnknown::UpheldBy,
+                vec![DIFF_SHADOW.to_owned()]
+            )],
+            "{case}"
+        );
+        assert_eq!(rows[0].advisories, expected, "{case}");
+
+        for (route, containerfile) in both_routes(&snap) {
+            assert_eq!(
+                block_from(&containerfile, &expected[0]),
+                expected,
+                "{route} {case}:\n{containerfile}"
+            );
+            assert_eq!(
+                containerfile.lines().any(|l| l == link_line),
+                linked,
+                "{route} {case}: the per-link advisory:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+                "{route} {case}:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// A shadowed mount unit whose package section cannot be relied on is kept
+/// out of the storage pass, as an effective-side one is: it has the record
+/// and no mount finding, so nothing says it is not enabled. Control: the
+/// same shadow over a package section that can be relied on is a storage
+/// unit with no state.
+#[test]
+fn a_vendor_side_undetermined_storage_unit_is_never_said_to_be_not_enabled() {
+    const UNIT: &str = "srv-pkg.mount";
+    let shadow = "[Mount]\nWhat=/dev/vdb\nWhere=/srv/pkg\n";
+    for (vendor_install, undetermined) in [
+        ("WantedBy=local-fs.target\n", false),
+        ("WantedBy=local-fs.target\nUpheldBy=local-fs.target\n", true),
+    ] {
+        let vendor = format!("{shadow}[Install]\n{vendor_install}");
+        let snap = scan(
+            diff_host(UNIT, &vendor, "static")
+                .preset(&format!("enable {UNIT}"))
+                .etc_unit(UNIT, shadow),
+        );
+        let units = snap.units.as_ref().expect("a units section");
+        let finding = units
+            .mount_findings
+            .iter()
+            .find(|f| f.unit.name().as_unit_name().as_str() == UNIT)
+            .map(|f| f.state_change.map(|(state, _)| state));
+        let records: Vec<&str> = units
+            .undetermined_installs
+            .iter()
+            .map(|r| r.unit.as_str())
+            .collect();
+        if undetermined {
+            assert_eq!(finding, None, "no mount finding");
+            assert_eq!(records, [UNIT]);
+            for (route, containerfile) in both_routes(&snap) {
+                assert!(
+                    !containerfile.contains(&format!("{UNIT} is not enabled")),
+                    "{route}:\n{containerfile}"
+                );
+            }
+        } else {
+            assert_eq!(finding, Some(None), "control: the storage pass");
+            assert!(records.is_empty(), "control: {records:?}");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // § 7.4 and § 10.9: a unit at its preset whose `/etc` files change
 // `[Install]`, rendered (T31, T32, T41, T40's excluded file).
