@@ -52,6 +52,18 @@ pub struct DecisionProjection {
     /// the include flag its `SetInclude` sets (§ 8): the one control of the
     /// units generated under that name.
     pub generated_timers: Vec<GeneratedTimerView>,
+    /// The included unmanaged-file rows whose file the export does not
+    /// write, by the row's own `path` (§ 10.2, § 11.1): a file under
+    /// `/etc/systemd/system`, withheld as `UnmanagedUnitPath`.
+    pub unmanaged_withheld: Vec<UnmanagedWithheldView>,
+}
+
+/// An unmanaged-file row's `withheld` (§ 11.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnmanagedWithheldView {
+    /// The unmanaged row's `path`, as the row records it.
+    pub path: String,
+    pub withheld: WithheldView,
 }
 
 /// A generated-timer row's decision (§ 8, § 11.1). Two cron entries of one

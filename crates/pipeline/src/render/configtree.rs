@@ -142,6 +142,11 @@ pub enum WithheldWhy {
         unit: UnitName,
         reserved_by: Reservation,
     },
+    /// An unmanaged file offered a path under `/etc/systemd/system`
+    /// ([`unmanaged_unit_path`]). The unmanaged-files section copies its
+    /// files after the unit state section, outside this decision, so it
+    /// would be a second writer of a unit path.
+    UnmanagedUnitPath,
 }
 
 /// How the collected unit a generated unit's name collides with is known
@@ -166,6 +171,7 @@ impl WithheldWhy {
             Self::ZeroLengthUnitFile => "ZeroLengthUnitFile",
             Self::Conflict { .. } => "Conflict",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
+            Self::UnmanagedUnitPath => "UnmanagedUnitPath",
         }
     }
 
@@ -203,8 +209,30 @@ impl WithheldWhy {
                  over it",
                 unit.as_str()
             ),
+            Self::UnmanagedUnitPath => UNMANAGED_UNIT_PATH.to_owned(),
         }
     }
+}
+
+/// [`WithheldWhy::UnmanagedUnitPath`]'s text.
+const UNMANAGED_UNIT_PATH: &str = "an unmanaged file is not written under /etc/systemd/system, \
+     where the export writes unit files only from their own rows; a unit file belongs under \
+     Configuration Files";
+
+/// The one decision on an unmanaged file's path (§ 10.2 "No other writer
+/// under `/etc/systemd/system`"): whether it is `/etc/systemd/system` or
+/// any path below it, a file in a `.d` or `.wants` directory included,
+/// read as a [`Destination`] so every spelling of one path is one answer.
+/// Such a file is withheld: the scan does not bundle it, refine does not
+/// extract it, and the Containerfile copies or links nothing for it. A
+/// path that is not a `Destination` is not under the directory; the
+/// unmanaged section refuses it on its own test.
+pub fn unmanaged_unit_path(path: &str) -> bool {
+    Destination::new(path).is_ok_and(|dest| {
+        dest.as_str()
+            .strip_prefix(ETC_UNIT_DIR)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
 }
 
 /// One file the export writes: what offered it, and its content, borrowed
@@ -528,6 +556,10 @@ pub enum StagedFileKind {
     /// The kernel arguments file inspectah generates from the host's
     /// cmdline, at [`KARGS_PATH`].
     KargsFile,
+    /// An unmanaged file. Never staged here: the unmanaged-files section
+    /// copies its own. It is only ever withheld, as
+    /// [`WithheldWhy::UnmanagedUnitPath`].
+    UnmanagedFile,
 }
 
 impl StagedFileKind {
@@ -542,6 +574,7 @@ impl StagedFileKind {
             Self::GeneratedUnit => "generated unit",
             Self::FlatpakService => "flatpak provisioning service",
             Self::KargsFile => "kernel arguments file",
+            Self::UnmanagedFile => "unmanaged file",
         }
     }
 
@@ -874,6 +907,11 @@ fn generated_name_collisions(
 ///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
 ///    section offered it (§ 10.2 rule 1).
 ///
+/// An included unmanaged file whose path is under `/etc/systemd/system`
+/// ([`unmanaged_unit_path`]) is listed in `withheld` as
+/// `UnmanagedUnitPath`. It is not one of this decision's offers: the
+/// unmanaged-files section writes its own files, and leaves that one out.
+///
 /// Everything else is written. [`write_config_tree`] writes `writes` and
 /// nothing else, and [`unstaged_files`] names `withheld` and `refused` in
 /// the Containerfile, so the export and the Containerfile read one
@@ -900,6 +938,23 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
 
     let collected = collected_unit_paths(snap, &resolved);
     let collisions = generated_name_collisions(&generated_unit_groups(snap), &collected);
+
+    // An unmanaged file under the unit directory is withheld by name; the
+    // unmanaged-files section skips it on the same decision.
+    out.withheld.extend(
+        snap.unmanaged_files
+            .iter()
+            .flat_map(|section| &section.items)
+            .filter(|file| file.disposition.is_included() && unmanaged_unit_path(&file.path))
+            .filter_map(|file| Destination::new(&file.path).ok())
+            .map(|dest| {
+                (
+                    dest,
+                    StagedFileKind::UnmanagedFile,
+                    WithheldWhy::UnmanagedUnitPath,
+                )
+            }),
+    );
 
     let mut by_dest: BTreeMap<Destination, Vec<(StagedFileKind, Cow<'_, str>)>> = BTreeMap::new();
     for (dest, kind, content) in resolved {

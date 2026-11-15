@@ -28,7 +28,7 @@ use inspectah_pipeline::render::unit_plan::{
 use super::types::{
     ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders, DeclinedView,
     DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, MountFindingView,
-    NotCarriedRow, RepoGroup, UnitStateView, WithheldView,
+    NotCarriedRow, RepoGroup, UnitStateView, UnmanagedWithheldView, WithheldView,
 };
 use crate::types::{RefinedDropIn, RefinedServiceState};
 
@@ -53,6 +53,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let config_withheld = config_withheld_views(&snap, &withheld);
     let declined_generated = declined_generated_views(&plan);
     let generated_timers = generated_timer_views(&snap);
+    let unmanaged_withheld = unmanaged_withheld_views(&snap, &withheld);
 
     // Classify containers → tuple of (quadlets, flatpaks)
     let (quadlets, flatpaks) = classify_containers(&snap);
@@ -107,7 +108,29 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         not_carried_notice,
         declined_generated,
         generated_timers,
+        unmanaged_withheld,
     }
+}
+
+/// One view per included unmanaged-file row whose file the export
+/// withholds, by the row's own path.
+fn unmanaged_withheld_views(
+    snap: &InspectionSnapshot,
+    withheld: &WithheldIndex<'_>,
+) -> Vec<UnmanagedWithheldView> {
+    snap.unmanaged_files
+        .iter()
+        .flat_map(|section| &section.items)
+        .filter(|file| file.disposition.is_included())
+        .filter_map(|file| {
+            withheld
+                .view(StagedFileKind::UnmanagedFile, &file.path)
+                .map(|withheld| UnmanagedWithheldView {
+                    path: file.path.clone(),
+                    withheld,
+                })
+        })
+        .collect()
 }
 
 /// One view per generated-timer name, in the scheduled section's order,

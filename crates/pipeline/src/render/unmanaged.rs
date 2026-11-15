@@ -2,7 +2,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
 use std::collections::BTreeMap;
 
-use super::configtree::validate_path;
+use super::configtree::{unmanaged_unit_path, validate_path};
 use super::language_packages::sanitize_for_comment;
 use super::safety::{CopyToken, has_line_break_or_control};
 
@@ -102,10 +102,12 @@ pub fn unmanaged_file_lines(snap: &InspectionSnapshot) -> Vec<String> {
         _ => return Vec::new(),
     };
 
+    // A file under `/etc/systemd/system` is withheld, and the
+    // configuration section names it in a FIXME (`staged_writes`).
     let included: Vec<&UnmanagedFile> = section
         .items
         .iter()
-        .filter(|f| f.disposition.is_included())
+        .filter(|f| f.disposition.is_included() && !unmanaged_unit_path(&f.path))
         .collect();
 
     if included.is_empty() {

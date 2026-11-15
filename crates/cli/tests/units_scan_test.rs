@@ -5497,3 +5497,186 @@ fn a_generated_timer_declined_for_its_service_names_the_service() {
         "{cf}"
     );
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 "No other writer under /etc/systemd/system": an unmanaged file
+// there is withheld by name (T38).
+// ---------------------------------------------------------------------
+
+/// The unit the T38 host masks, at whose path an unmanaged zero-length
+/// file is offered.
+const T38_MASKED: &str = "masked.service";
+/// An unmanaged file outside the unit directory, the control.
+const T38_OPT: &str = "/opt/app/bin/tool";
+
+/// T38's unmanaged entries: each path under `/etc/systemd/system` with the
+/// payload the source tarball holds for it, the `/opt` control last. One
+/// entry is spelled with an interior `.`, one sits in a `.d` directory,
+/// one is a `.wants` link, and one is zero-length at a masked unit's path.
+const T38_FILES: [(&str, &str); 5] = [
+    (
+        "/etc/systemd/system/x.service",
+        "[Service]\nExecStart=/usr/bin/x\n",
+    ),
+    (
+        "/etc/systemd/./system/y.service",
+        "[Service]\nExecStart=/usr/bin/y\n",
+    ),
+    (
+        "/etc/systemd/system/sshd.service.d/override.conf",
+        "[Service]\nRestart=always\n",
+    ),
+    ("/etc/systemd/system/masked.service", ""),
+    (T38_OPT, "#!/bin/sh\n"),
+];
+const T38_LINK: &str = "/etc/systemd/system/multi-user.target.wants/x.service";
+
+/// An imported snapshot of a host that masks [`T38_MASKED`], whose
+/// unmanaged-files section offers [`T38_FILES`] and [`T38_LINK`].
+fn t38_snapshot() -> InspectionSnapshot {
+    use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
+    let mut snap = scan(UnitHost::new().unit(T38_MASKED, "masked").mask(T38_MASKED));
+    let mut items: Vec<UnmanagedFile> = T38_FILES
+        .iter()
+        .map(|(path, content)| UnmanagedFile {
+            path: (*path).into(),
+            size: content.len() as u64,
+            file_type: FileType::Config,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        })
+        .collect();
+    items.push(UnmanagedFile {
+        path: T38_LINK.into(),
+        file_type: FileType::Symlink,
+        link_target: "/etc/systemd/system/x.service".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    });
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        total_count: items.len(),
+        items,
+        ..Default::default()
+    });
+    snap
+}
+
+/// A refine session over `snap`'s scan tarball with each of [`T38_FILES`]
+/// in its `unmanaged/` payload, at the normal spelling of its path, and
+/// [`T38_LINK`] as a link: what an imported tarball can hold. The session
+/// exports from that tarball, which lives as long as the returned
+/// directory.
+fn t38_session(snap: &InspectionSnapshot) -> (RefineSession, tempfile::TempDir) {
+    let tree = render_export(snap);
+    for (path, content) in T38_FILES {
+        let normal = path.replace("/./", "/");
+        let at = tree
+            .path()
+            .join("unmanaged")
+            .join(normal.trim_start_matches('/'));
+        std::fs::create_dir_all(at.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(&at, content).expect("the payload writes");
+    }
+    let link = tree
+        .path()
+        .join("unmanaged")
+        .join(T38_LINK.trim_start_matches('/'));
+    std::fs::create_dir_all(link.parent().expect("a parent")).expect("mkdir");
+    std::os::unix::fs::symlink("/etc/systemd/system/x.service", &link).expect("the link");
+    let packed = tempfile::tempdir().expect("tempdir");
+    let tarball = packed.path().join("scan.tar.gz");
+    inspectah_pipeline::render::tarball::create_tarball(tree.path(), &tarball, "t38-host")
+        .expect("the tarball packs");
+    let mut session =
+        inspectah_refine::tarball::from_tarball(&tarball).expect("refine opens the tarball");
+    session.set_tarball_path(tarball);
+    (session, packed)
+}
+
+/// The FIXME for an unmanaged file at `path` withheld under the unit
+/// directory.
+fn unmanaged_unit_path_fixme(path: &str) -> String {
+    format!(
+        "# FIXME: unmanaged file {path} not copied: an unmanaged file is not written under \
+         /etc/systemd/system, where the export writes unit files only from their own rows; a \
+         unit file belongs under Configuration Files"
+    )
+}
+
+/// T38: an imported snapshot and tarball whose unmanaged-files section
+/// offers files under `/etc/systemd/system`. Through the refine export,
+/// none of them is extracted (`unmanaged/etc` holds nothing), no `COPY`
+/// or `ln` names one, the Containerfile holds one FIXME per entry by its
+/// destination, and refine's decisions show each row `withheld` with
+/// `UnmanagedUnitPath`. The scan export writes the same lines. The
+/// masked unit is still masked, so the zero-length file at its path does
+/// not reach the image. Control: the `/opt` file in the same snapshot is
+/// extracted and copied.
+#[test]
+fn t38_an_unmanaged_file_under_the_unit_directory_is_withheld() {
+    let snap = t38_snapshot();
+    let (refine, _source) = t38_session(&snap);
+    let tree = export_session(&refine);
+    let cf = containerfile_in(&tree);
+
+    let opt = tree
+        .path()
+        .join("unmanaged")
+        .join(T38_OPT.trim_start_matches('/'));
+    assert!(opt.exists(), "control: the /opt file is extracted");
+    assert!(
+        cf.lines()
+            .any(|l| l == format!("COPY unmanaged{T38_OPT} {T38_OPT}")),
+        "control: the /opt file is copied:\n{cf}"
+    );
+
+    assert!(
+        !tree.path().join("unmanaged/etc").exists(),
+        "nothing under the unit directory is extracted"
+    );
+    let withheld: Vec<String> = T38_FILES
+        .iter()
+        .map(|(path, _)| *path)
+        .filter(|path| *path != T38_OPT)
+        .chain([T38_LINK])
+        .map(|path| path.replace("/./", "/"))
+        .collect();
+    for route_cf in [&cf, &containerfile_in(&render_export(&snap))] {
+        for path in &withheld {
+            assert!(
+                route_cf
+                    .lines()
+                    .any(|l| *l == unmanaged_unit_path_fixme(path)),
+                "{path}:\n{route_cf}"
+            );
+        }
+        assert!(
+            route_cf
+                .lines()
+                .filter(|l| !l.starts_with('#'))
+                .all(|l| !l.contains("unmanaged/etc") && !l.contains("ln -sf")),
+            "{route_cf}"
+        );
+    }
+    assert!(acts(&cf, "mask", T38_MASKED), "{cf}");
+
+    let views = &refine.decisions().unmanaged_withheld;
+    for (path, _) in T38_FILES.iter().filter(|(p, _)| *p != T38_OPT) {
+        let view = views
+            .iter()
+            .find(|v| v.path == *path)
+            .unwrap_or_else(|| panic!("no withheld view for {path}: {views:?}"));
+        assert!(
+            matches!(
+                &view.withheld,
+                inspectah_refine::projection::WithheldView::Withheld { why, .. }
+                    if why == "UnmanagedUnitPath"
+            ),
+            "{view:?}"
+        );
+    }
+    assert!(
+        !views.iter().any(|v| v.path == T38_OPT),
+        "control: the /opt row is not withheld"
+    );
+}
