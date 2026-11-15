@@ -1,3 +1,4 @@
+use super::units::specifiers::expand_unit_specifiers;
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
@@ -861,59 +862,6 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
     values
 }
 
-/// `value` with the specifiers the `[Install]` reader expands, `%i`, `%I`,
-/// `%p` and `%N`, and `%%`, expanded for the timer `name` (its unit name
-/// without `.timer`), or `None` for any other specifier.
-pub(crate) fn expand_timer_specifiers(value: &str, name: &str) -> Option<String> {
-    let (prefix, instance) = match name.split_once('@') {
-        Some((prefix, instance)) => (prefix, instance),
-        None => (name, ""),
-    };
-    let mut out = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(c) = chars.next() {
-        if c != '%' {
-            out.push(c);
-            continue;
-        }
-        match chars.next()? {
-            'i' => out.push_str(instance),
-            'I' => out.push_str(&unescape_unit_text(instance)?),
-            'p' => out.push_str(prefix),
-            'N' => out.push_str(name),
-            '%' => out.push('%'),
-            _ => return None,
-        }
-    }
-    Some(out)
-}
-
-/// systemd's unescaping of a unit name part: `-` is `/` and `\xNN` is
-/// that byte. `None` when an escape is malformed or the result is not
-/// UTF-8.
-fn unescape_unit_text(text: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(text.len());
-    let mut rest = text.as_bytes();
-    while let Some((&b, tail)) = rest.split_first() {
-        match b {
-            b'-' => {
-                bytes.push(b'/');
-                rest = tail;
-            }
-            b'\\' => {
-                let hex = tail.strip_prefix(b"x")?.get(..2)?;
-                bytes.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
-                rest = &tail[3..];
-            }
-            other => {
-                bytes.push(other);
-                rest = tail;
-            }
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
 /// The trigger of the timer `name` whose own file reads `timer_text`, and
 /// the `/etc` drop-ins that assign its `Unit=` (§ 8). Drop-ins are
 /// `<name>.timer.d/*.conf` under each of [`TIMER_DROP_IN_DIRS`], applied
@@ -954,7 +902,7 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
     }
     let unit = match assigned {
         None => Some(format!("{name}.service")),
-        Some(value) => expand_timer_specifiers(&value, name),
+        Some(value) => expand_unit_specifiers(&value, name),
     };
     let trigger = unit
         .and_then(|unit| UnitName::try_from(unit).ok())
@@ -1520,7 +1468,7 @@ mod tests {
             ["a.service", "c.service"]
         );
         let resolved = |value: &str, name: &str| {
-            expand_timer_specifiers(value, name)
+            expand_unit_specifiers(value, name)
                 .and_then(|unit| UnitName::try_from(unit).ok())
                 .map(|unit| unit.as_str().to_owned())
         };

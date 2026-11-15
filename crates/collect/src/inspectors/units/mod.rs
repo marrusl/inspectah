@@ -24,6 +24,7 @@ mod also;
 mod install;
 mod links;
 mod resolve;
+pub(crate) mod specifiers;
 
 use install::{
     DropInRoot, DropInSource, InstallRead, InstallSection, drop_in_dirs, read_install,

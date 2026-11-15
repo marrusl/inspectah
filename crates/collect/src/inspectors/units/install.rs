@@ -7,7 +7,7 @@
 //! directories [`drop_in_dirs`] names under both unit directories and
 //! reads the files; nothing here touches the host.
 
-use crate::inspectors::scheduled::expand_timer_specifiers;
+use super::specifiers::expand_unit_specifiers;
 use inspectah_core::types::units::{InstallUnknown, UNIT_FILE_WHITESPACE, UnitName, logical_lines};
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -213,7 +213,7 @@ impl<'a> Reader<'a> {
             "RequiredBy" => self.extend(value, |s| &mut s.required_by),
             "UpheldBy" => self.decline(InstallUnknown::UpheldBy),
             "DefaultInstance" if value.is_empty() => self.section.default_instance = None,
-            "DefaultInstance" => match expand_timer_specifiers(value, self.stem) {
+            "DefaultInstance" => match expand_unit_specifiers(value, self.stem) {
                 Some(instance) => self.section.default_instance = Some(instance),
                 None => self.decline(InstallUnknown::Specifier),
             },
@@ -225,7 +225,7 @@ impl<'a> Reader<'a> {
     /// `list` picks, once.
     fn extend(&mut self, value: &str, list: fn(&mut InstallSection) -> &mut Vec<UnitName>) {
         for word in value.split(UNIT_FILE_WHITESPACE).filter(|w| !w.is_empty()) {
-            let Some(expanded) = expand_timer_specifiers(word, self.stem) else {
+            let Some(expanded) = expand_unit_specifiers(word, self.stem) else {
                 self.decline(InstallUnknown::Specifier);
                 continue;
             };
