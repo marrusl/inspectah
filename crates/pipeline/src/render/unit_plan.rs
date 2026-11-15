@@ -279,12 +279,11 @@ pub enum OmissionReason {
     /// what the advisory's text needs: the command's `verb`; `named`, the
     /// units the first line names first (the members that fail as `member`
     /// does, the unit whose install file it is, or every member in a fleet
-    /// aggregate);
-    /// `further`, the members failing the same condition the other way it
-    /// can fail (each condition fails at most two ways: under `enable`,
-    /// `Unlinked` or `Other`; under `disable`, `Installed` or `Other`;
-    /// `RowNotCarried` or `NeedsOwnRow`), with that reason; and `add`, the
-    /// members given a line of the opposite verb.
+    /// aggregate); `further`, the members failing the same condition the
+    /// other way it can fail (each condition fails at most two ways: under
+    /// `enable`, `Unlinked` or `Other`; under `disable`, `Installed` or
+    /// `Other`; `RowNotCarried` or `NeedsOwnRow`), with that reason; and
+    /// `add`, the members given a line of the opposite verb.
     AlsoMember {
         member: UnitName,
         why: AlsoWhy,
@@ -2363,8 +2362,8 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
 /// `disable` whose `also` list is not empty is never carried in a fleet
 /// aggregate ([`AlsoWhy::FleetAggregate`], naming every member), and on a
 /// single host is carried only when three conditions hold, the first that
-/// fails giving the [`AlsoWhy`]. `rows` is every state change by name, and `carried` every
-/// row that passed rules 1 to 6, with its verb.
+/// fails giving the [`AlsoWhy`]. `rows` is every state change by name, and
+/// `carried` every row that passed rules 1 to 6, with its verb.
 ///
 /// 1. Every member's links match the verb: `Installed` or `Inert` for
 ///    `enable`, `Unlinked` or `Inert` for `disable`.

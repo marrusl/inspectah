@@ -174,6 +174,17 @@ impl UnitHost {
         self.file(&path, content)
     }
 
+    /// A regular file anywhere, listed in its directory, that `owner`'s
+    /// RPM database entry lists, as a package that ships a file under
+    /// `/etc` records it.
+    pub fn owned_file(mut self, path: &str, content: &str, owner: &str) -> Self {
+        self.rpm_owned
+            .entry(owner.into())
+            .or_default()
+            .push(path.into());
+        self.file(path, content)
+    }
+
     /// `systemctl mask`: a link from `/etc/systemd/system/<name>` to
     /// `/dev/null`.
     pub fn mask(self, name: &str) -> Self {

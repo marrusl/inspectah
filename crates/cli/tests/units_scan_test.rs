@@ -9751,8 +9751,9 @@ fn assert_fleet_advisory(
 /// T25 (j), through the real collector and merge. Host A: a vendor
 /// `bundle.service` enabled against a `disable` preset with
 /// `Also=helper.timer`, the helper `Inert`. Host B: the package ships
-/// `helper.timer` and an `/etc` drop-in for it with an `[Install]`
-/// section, no `bundle` unit, and no row for the helper. Host A alone: the
+/// `helper.timer` and an unmodified `/etc` drop-in for it with an
+/// `[Install]` section, owned by the package, no `bundle` unit, and no row
+/// for the helper. Host A alone: the
 /// enable is carried. Merged, with the bundle row included: the
 /// `FleetAggregate` advisory. The same with a host B that has no drop-in,
 /// where nothing else would stop the enable.
@@ -9773,9 +9774,10 @@ fn t25_j_a_fleet_aggregate_advises_every_command_with_members() {
     let host_b = |drop_in: bool| {
         let host = rule7_host(&[], &[], &[(HELPER, HELPER_TIMER)]);
         if drop_in {
-            host.file(
+            host.owned_file(
                 &etc_drop_in(HELPER, "10-install.conf"),
                 "[Install]\nWantedBy=timers.target\n",
+                INSTALL_PACKAGE,
             )
         } else {
             host
@@ -9831,4 +9833,82 @@ fn an_owner_row_from_one_host_is_a_fleet_advisory() {
     );
     let block = fleet_block("m.service", "enable", "m.socket");
     assert_fleet_advisory(&fleet, "m.service", &block, &[], collected.as_deref());
+}
+
+/// § 12 for the other verbs (T25 (j)'s fleet rule, `disable` and `mask`).
+/// Two hosts, each with a vendor `bundle.service` disabled against an
+/// `enable` preset, with `Also=c.service` and `c.service` `Unlinked`: the
+/// fleet block in its `disable` form. Each host alone carries the
+/// `disable`. A masked `bundle.service` whose row records a member: the
+/// `mask` is carried on the aggregate, as on a single host (T25 (i)).
+#[test]
+fn a_fleet_aggregate_advises_a_disable_and_carries_a_mask() {
+    let host = || {
+        rule7_host(
+            &["enable bundle.service"],
+            &[(BUNDLE, "disabled")],
+            &[
+                (BUNDLE, &wanted_with("Also=c.service\n")),
+                ("c.service", WANTED_UNIT),
+            ],
+        )
+    };
+    let alone = scan(host());
+    assert_eq!(
+        change(&alone, BUNDLE).also[0].links,
+        inspectah_core::types::units::MemberLinks::Unlinked
+    );
+    assert_also_carried(&alone, BUNDLE, "disable", "one host");
+    let fleet = merged(named(host(), "host-a"), named(host(), "host-b"));
+    let block = fleet_block(BUNDLE, "disable", "c.service");
+    assert_fleet_advisory(&fleet, BUNDLE, &block, &["c.service"], None);
+
+    let masked = || {
+        rule7_host(
+            &[],
+            &[(BUNDLE, "masked")],
+            &[
+                (BUNDLE, &wanted_with("Also=c.service\n")),
+                ("c.service", WANTED_UNIT),
+            ],
+        )
+        .mask(BUNDLE)
+    };
+    let mut fleet = merged(named(masked(), "host-a"), named(masked(), "host-b"));
+    // The collector reads no `Also=` for a mask, so the member is put on
+    // the merged row: rule 7 has to leave a mask alone whatever it holds.
+    let row = fleet
+        .units
+        .as_mut()
+        .expect("a units section")
+        .state_changes
+        .iter_mut()
+        .find(|c| c.unit().name().as_str() == BUNDLE)
+        .expect("the mask row");
+    assert_eq!(
+        row.current_state(),
+        inspectah_core::types::units::UnitState::Masked
+    );
+    assert!(row.also.is_empty(), "{row:?}");
+    row.also = change(&alone, BUNDLE).also.clone();
+    let routes = [
+        ("scan", containerfile_in(&render_export(&fleet))),
+        (
+            "refine",
+            containerfile_in(&exported_after(
+                &fleet,
+                &[(package_item(INSTALL_PACKAGE), true)],
+            )),
+        ),
+    ];
+    for (route, containerfile) in routes {
+        assert!(
+            acts(&containerfile, "mask", BUNDLE),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            advisory_for(&containerfile, BUNDLE).is_empty(),
+            "{route}:\n{containerfile}"
+        );
+    }
 }
