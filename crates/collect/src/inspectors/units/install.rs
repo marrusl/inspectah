@@ -84,9 +84,13 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// Load order: the unit file first, then one drop-in per file name, in
 /// file-name order across every directory of [`drop_in_dirs`] and both
 /// roots, not one root at a time. Of the drop-ins that share a file name,
-/// the one under `/etc` is read over a vendor one, and within one root the
-/// unit's own `.d` over its template's. The second half is assumed, not
-/// measured: one file name is one key across the two directories.
+/// the first in systemd's search order is read: every directory of the
+/// instance's own name before every directory of its template's, and
+/// within each, the one under `/etc` before the vendor one. So a vendor
+/// file in the instance's `.d` hides an `/etc` file of its name in the
+/// template's. That order was read from systemd's source (252 and 257:
+/// the search order in `install.c`, the first file of a name kept in
+/// `conf-files.c`) and not measured on RHEL 9 or 10.
 ///
 /// An empty `WantedBy=` or `Alias=` clears every value of that key before
 /// it; an empty `Also=` clears nothing. An empty `RequiredBy=` after a
@@ -101,12 +105,12 @@ pub(crate) fn read_install(
     drop_ins: &[(DropInSource, &str)],
 ) -> InstallRead {
     let dirs = drop_in_dirs(name);
-    let mut selected: BTreeMap<&str, ((DropInRoot, usize), &str)> = BTreeMap::new();
+    let mut selected: BTreeMap<&str, ((usize, DropInRoot), &str)> = BTreeMap::new();
     for (source, text) in drop_ins {
         let Some(dir_rank) = dirs.iter().position(|dir| *dir == source.dir) else {
             continue;
         };
-        let rank = (source.root, dir_rank);
+        let rank = (dir_rank, source.root);
         match selected.entry(source.file_name.as_str()) {
             Entry::Vacant(slot) => {
                 slot.insert((rank, text));
@@ -440,7 +444,7 @@ mod tests {
                 wanted(&["multi-user.target"]),
             ),
             (
-                "an /etc file in the template's .d replaces a vendor one in the instance's",
+                "a vendor file in the instance's .d hides an /etc one of its name in the template's",
                 "t@x.service",
                 WANTS_MULTI_USER,
                 &[
@@ -449,6 +453,46 @@ mod tests {
                         "t@x.service.d",
                         "10-a.conf",
                         "[Install]\nWantedBy=own.target\n",
+                    ),
+                    (
+                        Etc,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=etc.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "the same placement given in the other order",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Etc,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=etc.target\n",
+                    ),
+                    (
+                        Vendor,
+                        "t@x.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=own.target\n",
+                    ),
+                ],
+                wanted(&["multi-user.target", "own.target"]),
+            ),
+            (
+                "an /etc file replaces a vendor file of its name in the template's .d",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                &[
+                    (
+                        Vendor,
+                        "t@.service.d",
+                        "10-a.conf",
+                        "[Install]\nWantedBy=vendor.target\n",
                     ),
                     (
                         Etc,

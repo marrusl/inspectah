@@ -63,10 +63,13 @@ the spec owner, not rules to copy.
 
 `read_install` reads the unit file, then one drop-in per file name across
 every directory of `drop_in_dirs` and both roots, in file-name order. Of
-drop-ins that share a file name, the `/etc` one wins over the vendor one
-(measured), and within one root the unit's own `.d` wins over its
-template's (assumed, not measured: one file name is one key across the
-two directories).
+drop-ins that share a file name, the first in systemd's search order wins:
+every directory of the instance's own name before every directory of its
+template's, and the `/etc` one before the vendor one within each. So a
+vendor file in `t@x.service.d` hides an `/etc` file of its name in
+`t@.service.d`. Within one directory name the `/etc` file winning was
+measured; the order across the two names was read from systemd's source
+(252 and 257) and still needs a real-host run.
 
 - **Resets, as measured on RHEL 9 and 10:** an empty `WantedBy=` or
   `Alias=` clears the values before it; an empty `Also=` clears nothing.
