@@ -676,6 +676,8 @@ fn scheduled_timer_state() -> Arc<AppState> {
             source: "0 2 * * * root /usr/local/bin/backup.sh".into(),
             ..Default::default()
         }],
+        // The unit the cron job generates, which its operation carries.
+        generated_timer_units: vec![generated_backup()],
         systemd_timers: vec![
             SystemdTimer {
                 name: "backup".into(),
@@ -695,6 +697,20 @@ fn scheduled_timer_state() -> Arc<AppState> {
     Arc::new(AppState {
         session: Arc::new(Mutex::new(RefineSession::new(snap))),
     })
+}
+
+/// The unit the scheduled inspector generates from [`TIMER_CRON_PATH`].
+fn generated_backup() -> inspectah_core::types::scheduled::GeneratedTimerUnit {
+    inspectah_core::types::scheduled::GeneratedTimerUnit {
+        name: "cron-backup".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: TIMER_CRON_PATH.into(),
+        timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00\n[Install]\nWantedBy=timers.target\n"
+            .into(),
+        service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/backup.sh\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    }
 }
 
 /// T20 through the production handlers: a scheduled timer row names its
@@ -786,6 +802,105 @@ async fn the_scheduling_group_toggle_emits_no_timer_operation() {
         !kinds.contains(&serde_json::json!("SystemdTimer")),
         "{kinds:?}"
     );
+}
+
+/// A scheduled section with the cron job of [`scheduled_timer_state`] and
+/// its generated unit, a cron job whose file holds no entry, and an at job.
+fn scheduled_bulk_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![
+            CronJob {
+                path: TIMER_CRON_PATH.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+            CronJob {
+                path: QUIET_CRON_PATH.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            },
+        ],
+        generated_timer_units: vec![generated_backup()],
+        at_jobs: vec![inspectah_core::types::scheduled::AtJob {
+            file: "var/spool/at/a0000101b2c3d4".into(),
+            command: "/usr/local/bin/one-off".into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// A cron job whose file holds no entry, so it generates no unit.
+const QUIET_CRON_PATH: &str = "/etc/cron.d/quiet";
+
+/// What the projected snapshot of `state` exports of `cron-backup`: whether
+/// its timer and service are staged, and whether the plan enables the
+/// timer from the scheduled section.
+fn generated_backup_exported(state: &AppState) -> (bool, bool, bool) {
+    use inspectah_pipeline::render::configtree::staged_writes;
+    use inspectah_pipeline::render::unit_plan::plan_units;
+    let snap = state.session.lock().unwrap().snapshot_projected();
+    let staged = staged_writes(&snap);
+    let at = |name: &str| {
+        staged
+            .writes
+            .keys()
+            .any(|d| d.as_str() == format!("/etc/systemd/system/{name}"))
+    };
+    let enabled = plan_units(&snap, &staged)
+        .scheduled
+        .iter()
+        .any(|p| p.name().as_str() == "cron-backup.timer");
+    (at("cron-backup.timer"), at("cron-backup.service"), enabled)
+}
+
+/// § 8 through the production handler: the services and scheduling group
+/// toggle emits the operations that change the export, a cron job that
+/// generates a unit and the generated-timer row, and none that would be
+/// refused, the at job and the cron job that generates nothing. Excluding
+/// drops the generated pair and its enable from what the export stages and
+/// plans; including again restores them. Presence first.
+#[tokio::test]
+async fn the_scheduling_group_toggle_carries_and_drops_generated_units() {
+    use inspectah_refine::types::ItemId;
+    let state = scheduled_bulk_state();
+    assert_eq!(generated_backup_exported(&state), (true, true, true));
+
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let items = timeline_items(&state);
+    assert_eq!(
+        items,
+        [
+            ItemId::CronJob {
+                path: TIMER_CRON_PATH.into()
+            },
+            ItemId::GeneratedTimer {
+                name: "cron-backup".into()
+            },
+        ],
+        "{items:?}"
+    );
+    assert_eq!(generated_backup_exported(&state), (false, false, false));
+
+    let (status, body) = post_json(
+        &app(state.clone()),
+        "/api/batch-toggle/services-scheduling",
+        serde_json::json!({"include": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(generated_backup_exported(&state), (true, true, true));
 }
 
 /// A request naming the removed timer operation is refused with the
@@ -992,7 +1107,12 @@ async fn a_generated_scheduled_row_has_its_own_id() {
     let (_, sections) = get_json(&app(scheduled_timer_state()), "/api/snapshot/sections").await;
     assert_eq!(
         scheduled_ids(&sections),
-        [TIMER_CRON_PATH, "backup", "cleanup"],
+        [
+            TIMER_CRON_PATH,
+            "backup",
+            "cleanup",
+            "generated:cron-backup"
+        ],
         "cron and collected timer rows keep their ids"
     );
 }

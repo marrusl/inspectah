@@ -935,24 +935,22 @@ pub async fn batch_toggle_group(
             }
             // Scheduled tasks
             if let Some(ref sched) = snap.scheduled_tasks {
+                // A cron job that generates no unit, and an at job, carry
+                // nothing into the image, so their operations are refused
+                // (§ 8) and the toggle leaves them out.
                 for cron in &sched.cron_jobs {
-                    if cron.disposition.is_advisory() || cron.locked {
+                    if cron.disposition.is_advisory()
+                        || cron.locked
+                        || !sched
+                            .generated_timer_units
+                            .iter()
+                            .any(|u| u.generated_from(&cron.path))
+                    {
                         continue;
                     }
                     ops.push(inspectah_refine::types::RefinementOp::SetInclude {
                         item_id: inspectah_refine::types::ItemId::CronJob {
                             path: cron.path.clone(),
-                        },
-                        include: payload.include,
-                    });
-                }
-                for at_job in &sched.at_jobs {
-                    if at_job.disposition.is_advisory() || at_job.locked {
-                        continue;
-                    }
-                    ops.push(inspectah_refine::types::RefinementOp::SetInclude {
-                        item_id: inspectah_refine::types::ItemId::AtJob {
-                            file: at_job.file.clone(),
                         },
                         include: payload.include,
                     });

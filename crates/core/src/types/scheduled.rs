@@ -78,6 +78,16 @@ pub struct GeneratedTimerUnit {
     pub aggregate: Option<AggregatePrevalence>,
 }
 
+impl GeneratedTimerUnit {
+    /// Whether this unit was generated from the cron job recorded at
+    /// `cron_path`. Both paths are recorded without their leading `/` by
+    /// the scheduled inspector; an imported snapshot may spell either with
+    /// one, so the comparison ignores it.
+    pub fn generated_from(&self, cron_path: &str) -> bool {
+        self.source_path.trim_start_matches('/') == cron_path.trim_start_matches('/')
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScheduledTaskSection {
     #[serde(default)]

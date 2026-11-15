@@ -27,8 +27,8 @@ use inspectah_pipeline::render::unit_plan::{
 
 use super::types::{
     ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders, DeclinedView,
-    DropInView, FragmentView, GeneratedRowView, MountFindingView, NotCarriedRow, RepoGroup,
-    UnitStateView, WithheldView,
+    DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, MountFindingView,
+    NotCarriedRow, RepoGroup, UnitStateView, WithheldView,
 };
 use crate::types::{RefinedDropIn, RefinedServiceState};
 
@@ -52,6 +52,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let mount_findings = mount_finding_views(&snap, &plan);
     let config_withheld = config_withheld_views(&snap, &withheld);
     let declined_generated = declined_generated_views(&plan);
+    let generated_timers = generated_timer_views(&snap);
 
     // Classify containers → tuple of (quadlets, flatpaks)
     let (quadlets, flatpaks) = classify_containers(&snap);
@@ -105,7 +106,29 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         not_carried,
         not_carried_notice,
         declined_generated,
+        generated_timers,
     }
+}
+
+/// One view per generated-timer name, in the scheduled section's order,
+/// with the include flag of the projected snapshot.
+fn generated_timer_views(snap: &InspectionSnapshot) -> Vec<GeneratedTimerView> {
+    let mut views: Vec<GeneratedTimerView> = Vec::new();
+    for unit in snap
+        .scheduled_tasks
+        .iter()
+        .flat_map(|st| &st.generated_timer_units)
+    {
+        if views.iter().any(|v| v.name == unit.name) {
+            continue;
+        }
+        views.push(GeneratedTimerView {
+            name: unit.name.clone(),
+            include: unit.disposition.is_included(),
+            locked: unit.locked,
+        });
+    }
+    views
 }
 
 /// One view per generated unit's request the plan declined, with the row

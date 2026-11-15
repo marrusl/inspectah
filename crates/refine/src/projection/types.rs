@@ -48,6 +48,25 @@ pub struct DecisionProjection {
     /// Every request for a unit inspectah generates that the plan does not
     /// write, for the scheduled or flatpak row that asked for it (§ 11.1).
     pub declined_generated: Vec<DeclinedGeneratedView>,
+    /// One row per generated-timer name in the scheduled section, with
+    /// the include flag its `SetInclude` sets (§ 8): the one control of the
+    /// units generated under that name.
+    pub generated_timers: Vec<GeneratedTimerView>,
+}
+
+/// A generated-timer row's decision (§ 8, § 11.1). Two cron entries of one
+/// file generate units of one name, which are one row: `SetInclude` on the
+/// name decides them together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedTimerView {
+    /// The `generated_timer_units` name, the row's `ItemId::GeneratedTimer`
+    /// key.
+    pub name: String,
+    /// Whether the export carries the units of this name. Also false when
+    /// the cron job they were generated from is excluded, which excludes
+    /// them with it.
+    pub include: bool,
+    pub locked: bool,
 }
 
 /// The row a generated unit's request came from (§ 11.1).

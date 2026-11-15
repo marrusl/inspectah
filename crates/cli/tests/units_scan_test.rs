@@ -5079,3 +5079,219 @@ fn the_local_timers_comment_says_which_are_carried() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 8, § 11.1: every scheduled control applies or is refused by name
+// (T35).
+// ---------------------------------------------------------------------
+
+/// The service the scheduled inspector generates beside
+/// [`CRON_BACKUP_TIMER`].
+const CRON_BACKUP_SERVICE: &str = "cron-backup.service";
+/// The generated-timer row of the [`CRON_FILE`] entry.
+const CRON_BACKUP: &str = "cron-backup";
+/// The cron-job row of [`CRON_FILE`], as the scheduled inspector records
+/// its path.
+const CRON_ROW: &str = "etc/cron.d/backup";
+/// The scheduled section's copy of the generated units it enables.
+const SCHEDULED_COPY: &str = "COPY config/etc/systemd/system/ /etc/systemd/system/";
+
+fn generated_item(name: &str) -> ItemId {
+    ItemId::GeneratedTimer { name: name.into() }
+}
+
+fn cron_item(path: &str) -> ItemId {
+    ItemId::CronJob { path: path.into() }
+}
+
+/// What an export carries of the generated `cron-backup` pair: how many
+/// files of each name are in its tree, whether the scheduled section
+/// copies the generated units, and whether the timer is enabled.
+#[derive(Debug, PartialEq, Eq)]
+struct GeneratedCarriage {
+    timer: usize,
+    service: usize,
+    copy: bool,
+    enable: bool,
+}
+
+const PAIR_CARRIED: GeneratedCarriage = GeneratedCarriage {
+    timer: 1,
+    service: 1,
+    copy: true,
+    enable: true,
+};
+
+const PAIR_NOT_CARRIED: GeneratedCarriage = GeneratedCarriage {
+    timer: 0,
+    service: 0,
+    copy: false,
+    enable: false,
+};
+
+fn generated_carriage(tree: &tempfile::TempDir) -> GeneratedCarriage {
+    let cf = containerfile_in(tree);
+    GeneratedCarriage {
+        timer: files_named(tree.path(), CRON_BACKUP_TIMER).len(),
+        service: files_named(tree.path(), CRON_BACKUP_SERVICE).len(),
+        copy: scheduled_lines(&cf).iter().any(|l| l == SCHEDULED_COPY),
+        enable: acts(&cf, "enable", CRON_BACKUP_TIMER),
+    }
+}
+
+/// The include flag refine's decisions give the generated-timer row
+/// `name`, if it has one.
+fn generated_decision(session: &RefineSession, name: &str) -> Option<bool> {
+    session
+        .decisions()
+        .generated_timers
+        .iter()
+        .find(|row| row.name == name)
+        .map(|row| row.include)
+}
+
+/// T35, the generated-timer row: through the refine session and its
+/// export, `SetInclude(false)` removes the generated timer, its service,
+/// the scheduled section's copy and the timer's enable, and `true`
+/// restores all four. Presence first. The excluded unit is not shown as
+/// declined for another reason: no FIXME and no `declined_generated`
+/// entry, and its decision row reads excluded.
+#[test]
+fn t35_the_generated_timer_row_removes_and_restores_its_unit() {
+    let snap = scan(with_cron_backup(UnitHost::new().preset("disable *")));
+    let mut refine = session(&snap);
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_CARRIED,
+        "presence"
+    );
+    assert_eq!(generated_decision(&refine, CRON_BACKUP), Some(true));
+
+    refine
+        .apply(set_include(generated_item(CRON_BACKUP), false))
+        .expect("the generated-timer row's exclusion applies");
+    let tree = export_session(&refine);
+    assert_eq!(generated_carriage(&tree), PAIR_NOT_CARRIED);
+    let cf = containerfile_in(&tree);
+    assert!(collision_fixme(&cf, CRON_BACKUP_TIMER).is_none(), "{cf}");
+    assert!(in_no_systemctl_instruction(&cf, CRON_BACKUP_TIMER), "{cf}");
+    assert!(refine.decisions().declined_generated.is_empty());
+    assert_eq!(generated_decision(&refine, CRON_BACKUP), Some(false));
+
+    refine
+        .apply(set_include(generated_item(CRON_BACKUP), true))
+        .expect("the generated-timer row's inclusion applies");
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_CARRIED,
+        "re-included"
+    );
+    assert_eq!(generated_decision(&refine, CRON_BACKUP), Some(true));
+}
+
+/// T35, the cron-job row: excluding the cron job removes every unit
+/// generated from it, through the refine export, and including it
+/// restores them. While the cron job is excluded, including one of its
+/// generated units is refused, naming both rows, and the export does not
+/// change, so the two controls cannot contradict each other.
+#[test]
+fn t35_a_cron_job_row_carries_or_drops_the_units_it_generates() {
+    let snap = scan(with_cron_backup(UnitHost::new().preset("disable *")));
+    assert!(
+        snap.scheduled_tasks
+            .as_ref()
+            .is_some_and(|st| st.cron_jobs.iter().any(|c| c.path == CRON_ROW)),
+        "presence: the cron-job row"
+    );
+    let mut refine = session(&snap);
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_CARRIED,
+        "presence"
+    );
+
+    refine
+        .apply(set_include(cron_item(CRON_ROW), false))
+        .expect("the cron-job row's exclusion applies");
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_NOT_CARRIED
+    );
+    assert_eq!(generated_decision(&refine, CRON_BACKUP), Some(false));
+
+    let refused = refine
+        .apply(set_include(generated_item(CRON_BACKUP), true))
+        .expect_err("a generated unit of an excluded cron job stays excluded");
+    let message = refused.to_string();
+    assert!(
+        message.contains(CRON_BACKUP) && message.contains(CRON_ROW),
+        "{message}"
+    );
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_NOT_CARRIED
+    );
+
+    refine
+        .apply(set_include(cron_item(CRON_ROW), true))
+        .expect("the cron-job row's inclusion applies");
+    assert_eq!(
+        generated_carriage(&export_session(&refine)),
+        PAIR_CARRIED,
+        "re-included"
+    );
+}
+
+/// T35, the rows whose operation is refused: a cron job that generates no
+/// unit (its file holds no entry), and an at job, which the export never
+/// carries. Each `SetInclude`, either way, returns an error naming the
+/// row, and the export is unchanged. The positive control is the cron job
+/// above, whose operation applies.
+#[test]
+fn t35_a_cron_job_that_generates_nothing_and_an_at_job_are_refused_by_name() {
+    const QUIET_CRON: &str = "/etc/cron.d/quiet";
+    const QUIET_ROW: &str = "etc/cron.d/quiet";
+    const AT_JOB: &str = "/var/spool/at/a0000101b2c3d4";
+    const AT_ROW: &str = "var/spool/at/a0000101b2c3d4";
+    let snap = scan(
+        with_cron_backup(UnitHost::new().preset("disable *"))
+            .file(QUIET_CRON, "# no entries\n")
+            .file(AT_JOB, "#!/bin/sh\n/usr/local/bin/one-off\n"),
+    );
+    let st = snap.scheduled_tasks.as_ref().expect("a scheduled section");
+    assert!(
+        st.cron_jobs.iter().any(|c| c.path == QUIET_ROW),
+        "presence: the quiet cron-job row"
+    );
+    assert!(
+        !st.generated_timer_units
+            .iter()
+            .any(|u| u.source_path == QUIET_ROW),
+        "presence: it generates nothing"
+    );
+    let at_row = st
+        .at_jobs
+        .iter()
+        .find(|a| a.file == AT_ROW)
+        .unwrap_or_else(|| panic!("presence: the at-job row: {:?}", st.at_jobs));
+
+    let mut refine = session(&snap);
+    let before = containerfile_in(&export_session(&refine));
+    for include in [false, true] {
+        for (item, row) in [
+            (cron_item(QUIET_ROW), QUIET_ROW),
+            (
+                ItemId::AtJob {
+                    file: at_row.file.clone(),
+                },
+                AT_ROW,
+            ),
+        ] {
+            let refused = refine
+                .apply(set_include(item.clone(), include))
+                .expect_err("refused");
+            assert!(refused.to_string().contains(row), "{item:?}: {refused}");
+        }
+    }
+    assert_eq!(containerfile_in(&export_session(&refine)), before);
+}

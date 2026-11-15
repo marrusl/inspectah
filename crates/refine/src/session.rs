@@ -349,8 +349,41 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             })
             .map(|e| e.locked)
             .unwrap_or(false),
+        ItemId::CronJob { path } => snapshot
+            .scheduled_tasks
+            .as_ref()
+            .and_then(|st| st.cron_jobs.iter().find(|c| c.path == *path))
+            .map(|c| c.locked)
+            .unwrap_or(false),
+        ItemId::GeneratedTimer { name } => snapshot.scheduled_tasks.as_ref().is_some_and(|st| {
+            st.generated_timer_units
+                .iter()
+                .any(|u| u.name == *name && u.locked)
+        }),
         // Item kinds without locked field or not yet handled: not lockable
         _ => false,
+    }
+}
+
+/// § 8: a generated unit is carried only with the cron job it was
+/// generated from. Every generated unit whose cron-job row is excluded is
+/// excluded too, whatever its own row says, so the cron-job row and the
+/// generated-timer row can never disagree in an export. Applied to every
+/// projected snapshot, after the operations.
+fn exclude_units_of_excluded_cron_jobs(snapshot: &mut InspectionSnapshot) {
+    let Some(sched) = snapshot.scheduled_tasks.as_mut() else {
+        return;
+    };
+    let excluded: Vec<&str> = sched
+        .cron_jobs
+        .iter()
+        .filter(|c| !c.disposition.is_included())
+        .map(|c| c.path.as_str())
+        .collect();
+    for unit in &mut sched.generated_timer_units {
+        if excluded.iter().any(|path| unit.generated_from(path)) {
+            unit.disposition = FindingKind::excluded();
+        }
     }
 }
 
@@ -2000,6 +2033,68 @@ impl RefineSession {
 
     // --- Private helpers ---
 
+    /// `SetInclude` on a generated-timer row (§ 8): the name must be a
+    /// generated unit's, and an inclusion is refused while a cron job the
+    /// unit was generated from is excluded, since that row excludes it.
+    fn validate_generated_timer(&self, name: &str, include: bool) -> Result<(), RefineError> {
+        let found = self
+            .original
+            .scheduled_tasks
+            .as_ref()
+            .is_some_and(|st| st.generated_timer_units.iter().any(|u| u.name == name));
+        if !found {
+            return Err(RefineError::UnknownTarget(name.to_owned()));
+        }
+        if !include {
+            return Ok(());
+        }
+        let projected = self.project_snapshot();
+        let Some(sched) = projected.scheduled_tasks.as_ref() else {
+            return Ok(());
+        };
+        let excluded_source = sched
+            .generated_timer_units
+            .iter()
+            .filter(|u| u.name == name)
+            .find_map(|u| {
+                sched
+                    .cron_jobs
+                    .iter()
+                    .find(|c| !c.disposition.is_included() && u.generated_from(&c.path))
+            });
+        match excluded_source {
+            Some(cron) => Err(RefineError::BadRequest(format!(
+                "cannot include generated timer '{name}': the cron job '{}' it is generated \
+                 from is excluded; include the cron job",
+                cron.path
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// `SetInclude` on a cron-job row (§ 8): the path must be a cron job's,
+    /// and the cron job must generate a unit, which is what its operation
+    /// carries or drops. One that generates none is refused by name.
+    fn validate_cron_job(&self, path: &str) -> Result<(), RefineError> {
+        let Some(sched) = self.original.scheduled_tasks.as_ref() else {
+            return Err(RefineError::UnknownTarget(path.to_owned()));
+        };
+        if !sched.cron_jobs.iter().any(|c| c.path == path) {
+            return Err(RefineError::UnknownTarget(path.to_owned()));
+        }
+        if !sched
+            .generated_timer_units
+            .iter()
+            .any(|u| u.generated_from(path))
+        {
+            return Err(RefineError::NoopTarget(format!(
+                "cron job '{path}' generates no unit, so the export carries nothing from it \
+                 to include or exclude"
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_target(&self, op: &RefinementOp) -> Result<(), RefineError> {
         match op {
             RefinementOp::SetInclude { item_id, include } => {
@@ -2175,11 +2270,30 @@ impl RefineSession {
                             item_id
                         )));
                     }
+                    ItemId::GeneratedTimer { name } => {
+                        self.validate_generated_timer(name, *include)?
+                    }
+                    ItemId::CronJob { path } => self.validate_cron_job(path)?,
+                    ItemId::AtJob { file } => {
+                        let found = self
+                            .original
+                            .scheduled_tasks
+                            .as_ref()
+                            .is_some_and(|st| st.at_jobs.iter().any(|a| a.file == *file));
+                        if !found {
+                            return Err(RefineError::UnknownTarget(file.clone()));
+                        }
+                        // § 8: an at job is never carried, so an operation on
+                        // it could change nothing. Refused rather than
+                        // accepted and dropped.
+                        return Err(RefineError::BadRequest(format!(
+                            "at job '{file}' is not carried into the image: the Containerfile \
+                             lists it in a FIXME to convert by hand, so it has nothing to \
+                             include or exclude"
+                        )));
+                    }
                     // Phase 2-3 item kinds: not yet handled, accept without validation
                     ItemId::Compose { .. }
-                    | ItemId::CronJob { .. }
-                    | ItemId::AtJob { .. }
-                    | ItemId::GeneratedTimer { .. }
                     | ItemId::SelinuxPort { .. }
                     | ItemId::Fstab { .. }
                     | ItemId::NonRpm { .. }
@@ -2873,6 +2987,36 @@ impl RefineSession {
                                     }
                                 }
                             }
+                            // § 8: the cron job's units go and come back with
+                            // it. A locked unit stays excluded.
+                            ItemId::CronJob { path } => {
+                                if let Some(ref mut sched) = snap.scheduled_tasks {
+                                    if let Some(cron) =
+                                        sched.cron_jobs.iter_mut().find(|c| c.path == *path)
+                                    {
+                                        cron.disposition = FindingKind::from_bool(*include);
+                                    }
+                                    for unit in sched
+                                        .generated_timer_units
+                                        .iter_mut()
+                                        .filter(|u| u.generated_from(path))
+                                        .filter(|u| !(*include && u.locked))
+                                    {
+                                        unit.disposition = FindingKind::from_bool(*include);
+                                    }
+                                }
+                            }
+                            ItemId::GeneratedTimer { name } => {
+                                if let Some(ref mut sched) = snap.scheduled_tasks {
+                                    for unit in sched
+                                        .generated_timer_units
+                                        .iter_mut()
+                                        .filter(|u| u.name == *name)
+                                    {
+                                        unit.disposition = FindingKind::from_bool(*include);
+                                    }
+                                }
+                            }
                             // Phase 2-3 item kinds: not yet handled
                             _ => {}
                         }
@@ -3080,6 +3224,7 @@ impl RefineSession {
         // of op-stack state. Ensures renderers and exporters never see a
         // locked item with include=true.
         clamp_locked_items(&mut snap);
+        exclude_units_of_excluded_cron_jobs(&mut snap);
 
         // § 3.3: a repo-enabling package whose serving repo definition
         // this export no longer carries is demoted to the repo-less
