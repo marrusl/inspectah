@@ -620,8 +620,9 @@ pub struct UnitSection {
     pub mount_findings: Vec<MountUnitFinding>,
     /// Links inspectah reports and does not carry (§ 6.6).
     pub manual_links: Vec<ManualLink>,
-    /// Units whose `[Install]` cannot be relied on and whose `/etc`
-    /// files change it (§ 6.6, § 7.3).
+    /// Units whose `[Install]` cannot be relied on, where the image's
+    /// links can differ from the host's with nothing else to say so
+    /// (§ 6.6, § 7.3).
     pub undetermined_installs: Vec<UndeterminedInstall>,
     /// The default target, when the host sets one (§ 7.6).
     pub default_target: Option<DefaultTarget>,
@@ -729,15 +730,16 @@ pub struct ManualLink {
 }
 
 /// A unit whose `[Install]` on the source host is `Undetermined` and
-/// whose `/etc` install files change it (§ 7.3). One per unit, whether
-/// or not the unit has a link, since the image's links can differ from
-/// the host's with no link on either side to report.
+/// whose `/etc` install files change it, or that has no link and assigns
+/// `Also=`, so no `disable` can be carried for it (§ 7.3). One per unit,
+/// whether or not the unit has a link, since the image's links can differ
+/// from the host's with no link on either side to report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UndeterminedInstall {
     pub unit: UnitName,
     pub reason: InstallUnknown,
     /// The unit's `/etc` install files: its unit file or shadow, and its
-    /// install drop-ins (§ 10.2).
+    /// install drop-ins (§ 10.2). Empty when it has none.
     pub install_files: Vec<String>,
     pub aggregate: Option<AggregatePrevalence>,
 }
@@ -807,6 +809,10 @@ what the image would have; where its file lives; and which package owns it.
    read only to decide whether an install is complete (§ 7.3) and never
    become a row.
 5. The effective unit for each name the other sources produce (§ 7.2).
+6. The instances the presets say a package install would link, derived
+   from sources 1, 2 and 5 and checked against source 3, so a disabled
+   template-backed instance is found (§ 7.5). Nothing more is read from
+   the host for them.
 
 Source 1 cannot answer what the links answer (all measured). An enabled
 instance has no row and shows only as its template reading `indirect`. A
@@ -894,7 +900,10 @@ pub enum InstallRead {
     Known(InstallSection),
     /// The section cannot be relied on. The cause is kept for the warning
     /// and travels with every finding the section produces (§ 6.6).
-    Undetermined(InstallUnknown),
+    /// `assigns_also` says whether any line assigns `Also=`, which decides
+    /// whether a `disable` may be carried for it (§ 7.3). Written
+    /// `Undetermined(<reason>)` in this spec.
+    Undetermined { reason: InstallUnknown, assigns_also: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -962,8 +971,10 @@ Resolution, for a name `N`:
    own `.d` wins over the template's. So an `/etc` drop-in in the
    instance's own `.d` hides a vendor drop-in of the same name in the
    template's `.d`, which is what systemd's drop-in handling is expected
-   to do. That hiding across the two directories was not measured, and it
-   is an open item of § 13 R5.
+   to do. That hiding across the two directories was not measured in
+   either placement, an `/etc` file in the instance's `.d` over a vendor
+   file in the template's, or an `/etc` file in the template's `.d` over a
+   vendor file in the instance's; both are open items of § 13 R5.
 
 **The reader applies the reset systemd performs: an empty assignment of
 `WantedBy=` or `Alias=` clears every value of that key assigned before it
@@ -1049,7 +1060,9 @@ three sets:
 | `Known`, expected not empty | No expected link is in admin | `Disabled` | A `ManualLink`, cause `NotInInstall`. |
 | `Known`, expected not empty | Some expected links are in admin, and one is in neither admin nor vendor | None. No state change is recorded. | A `ManualLink`, cause `PartialInstall`. |
 | `Known` with nothing expected (only `Also=`, or lists a drop-in reset to empty), or `Absent` | (nothing is expected) | None. The unit has no enablement of its own. § 7.4 still compares a vendor unit's section with the package's. | A `ManualLink`, cause `StaticUnit`, except a link § 7.4 finds the package install makes in the image too, which produces nothing. |
-| `Undetermined` | (cannot be computed) | None. No state change is recorded. When the unit has an install file under `/etc` (§ 10.2), one `UndeterminedInstall` record (§ 6.6), whether or not the unit has a link. | A `ManualLink`, cause `Undetermined` with its reason. |
+| `Undetermined`, not assigning `Also=` | No link to `U` under `/etc/systemd/system` | `Disabled`. `disable` removes every link to `U` under `/etc` and does not need the expected set, so an absent set of links is `Disabled` whatever the section would expect. | (none) |
+| `Undetermined`, assigning `Also=` | No link to `U` under `/etc/systemd/system` | None. A `disable` would also act on members the collector could not list. One `UndeterminedInstall` record (§ 6.6), with or without an `/etc` install file. | (none) |
+| `Undetermined` | Some link to `U` under `/etc/systemd/system` | None. No state change is recorded. When the unit has an install file under `/etc` (§ 10.2), one `UndeterminedInstall` record (§ 6.6). | A `ManualLink`, cause `Undetermined` with its reason. |
 
 The install state, not systemd's word, is what § 7.4 compares with the
 preset and what `inventory` records. Three points about the table:
@@ -1070,10 +1083,12 @@ preset and what `inventory` records. Three points about the table:
   a `Type=oneshot` unit without `RemainAfterExit=yes` loops until it hits
   its start limit and leaves the host degraded on every boot (measured on
   RHEL 10). An `[Install]` section that holds `UpheldBy=` is therefore
-  `Undetermined(UpheldBy)`: the unit gets no install state and no
-  `enable`, and each of its links, `.upholds/` ones included, is advised
-  (§ 10.9). The `.upholds/` directories are read so that those links are
-  seen.
+  `Undetermined(UpheldBy)`: the unit never gets an `enable`, and each of
+  its links, `.upholds/` ones included, is advised (§ 10.9). With no link
+  at all it is `Disabled` by the table, so a preset-enabled vendor unit
+  with `UpheldBy=` that the administrator disabled gets a `disable` row,
+  and the image, whose package install linked it, ends without the links.
+  The `.upholds/` directories are read so that those links are seen.
 
 Every row that does not end in `Enabled` or `Disabled` falls on the
 advisory side on purpose: an advisory costs the operator one line, and a
@@ -1253,87 +1268,93 @@ uncovered, and § 17 lists them:
   An additive row enables the `new` one (§ 7.5) and nothing removes the
   `old` link.
 
-**The preset for an instance: the first rule in file order that matches
-the instance's own name or its template's name wins. A template rule with
-an instance list counts only for the listed instances, and a bare
-template rule counts for the template's `DefaultInstance=`. This is the
-lookup `systemctl preset` performs for the names a package scriptlet
-passes it. (Mark Russell, 2026-11-15)** A scriptlet's `%systemd_post`
-presets the names it is given: a template, which links the
-`DefaultInstance=` or the listed instances, or a concrete instance such as
-`getty@tty1.service`. It does not turn an instance name into its
-template's. Which names the scriptlets of the packages concerned pass was
-not inspected; the rule covers both.
+**The preset for an instance follows what the package ships. An instance
+that has its own unit file is looked up by its own name: rules that name
+it or a glob that matches it, in file order, and a list-form template
+rule that lists it. An instance backed only by its template takes the
+template's first matching rule: a bare `enable` gives `enable` to the
+`DefaultInstance=` only, the list form gives `enable` to the listed
+instances only, and `disable` reaches every instance; rules that name an
+instance are not read for it. (Mark Russell, 2026-11-15)** The two cases
+follow the two names a package's scriptlet can preset. A package that
+ships a concrete `t@two.service` can preset that name, and `systemctl
+preset t@two.service` applies rules that name it or list it (measured). A
+package that ships only `t@.service` presets the template, and a preset
+of the template ignores rules that name an instance (measured). The
+snapshot does not record which names a scriptlet passes, so the rule
+takes the name the shipped file suggests; § 17 states what that misses.
 
-For an instance `t@i.service`, rules are read in preset order, and each
-one either matches it or does not:
+*An instance with its own unit file,* `t@i.service`, rules in file order:
 
-| Rule | Matches `t@i` when | Preset when it matches |
-|---|---|---|
-| `enable` or `disable` naming `t@i.service`, or a glob that matches that name (`disable *`, `enable t@*`) | always | its verb |
-| `enable` or `disable` naming the template `t@.service` (the bare form), or a glob that matches the template's name and not the instance's | `i` is the template's `DefaultInstance=` | its verb |
-| `enable t@.service a b` (the list form) | `i` is listed | `enable` |
-| A line whose first word is neither verb (`Unknown`), whose pattern matches either name | always | none, and a warning (below) |
-| No rule matches | | none: no evidence of a change and no row, as for any unit |
+| Rule | Matches when | Preset when it matches | Evidence |
+|---|---|---|---|
+| `enable` or `disable` naming `t@i.service` | always | its verb | Measured: `preset t@two.service` under `enable t@two.service` links it. |
+| A glob that matches `t@i.service` (`disable *`, `enable t@*`) | always | its verb | Assumed for an `enable` glob; `disable *` was the catch-all in every R5 case. |
+| `enable t@.service a b` (the list form) | `i` is listed | `enable` | Measured: `preset t@two.service` under `enable t@.service two three` links it. |
+| The list form, `i` not listed; a bare `enable` or `disable t@.service` | never; later rules decide | | Assumed. R5 saw no link from `preset t@one.service` under either rule, but `disable *` followed, so whether the rule stopped the lookup is not shown. |
+| `Unknown` whose pattern matches `t@i.service` | always | none, and a warning | Not measured. |
+| No rule matches | | none: no row | |
 
-**A rule that does not match lets the lookup go on to later rules.** An
-unlisted instance under a list-form rule, a non-default instance under a
-bare template rule, and every instance under a bare rule on a template
-with no `DefaultInstance=`, are not matched by that rule, and a later rule
-decides. This is assumed, not measured. Run R5 could not tell it from the
-other reading, that the rule stops the lookup with `disable`, because the
-only later rule on both bases was `disable *`, which gives the same
-answer. The case that tells them apart, a later positive rule after a
-list-form rule that leaves the instance out, is an open item of § 13 R5.
+*An instance backed only by its template,* `t@i` with no file of its own:
+the template's name, `t@.service`, is looked up as any unit's is, first
+match wins, and the instance's preset is read off the rule found.
 
-What R5 measured (§ 13 R5), each template with `DefaultInstance=one`:
+| The template's first matching rule | Instance | Preset | Evidence |
+|---|---|---|---|
+| `enable t@.service`, or an `enable` glob matching the template's name | the `DefaultInstance=` | `enable` | Measured for the bare rule: a preset of the template links `t@one`. The glob is assumed. |
+| The same | any other instance, or every instance when there is no `DefaultInstance=` | `disable` | Measured for other instances: the preset of the template links `t@one` only. No `DefaultInstance=` is assumed. |
+| `enable t@.service two three` | `two`, `three` | `enable` | Measured: a preset of the template links both. |
+| The same | any other, the default instance included | `disable` | Measured: not `t@one`. |
+| `disable t@.service`, or a `disable` glob matching the template's name (`disable *`) | every instance | `disable` | Assumed for a preset of the template. R5 measured `preset` on each enabled instance removing its link, which `disable *` would also explain. |
+| `Unknown` matching the template's name | every instance | none, and a warning | Not measured. |
+| No rule matches | every instance | none: no row | |
 
-- `enable t@.service`: a preset of the template links `t@one`; `systemctl
-  preset` on `t@one.service` or `t@two.service` by name links nothing.
-  The rule counts for `t@one` because a scriptlet that passes the
-  template links it.
-- `enable t@two.service`: a preset of `t@two.service` links it; a preset
-  of the template links nothing.
-- `enable t@.service two three`: a preset of the template links `t@two`
-  and `t@three` and not `t@one`; a preset of `t@two.service` links it; a
-  preset of `t@one.service` links nothing. That last answer shows what the
-  preset creates, not why: whether the lookup stopped at the list rule or
-  went on to `disable *` cannot be attributed.
-- `disable t@.service`, with `t@one` and `t@two` enabled: a preset of each
-  instance removes its link. `disable *` follows the rule on both bases,
-  so the removal cannot be attributed to `disable t@.service`; under the
-  rule above it is that rule for `t@one` and `disable *` for `t@two`.
+A rule that names an instance, `enable t@two.service`, matches neither
+the template's name nor, for this case, anything read: a preset of the
+template links nothing for it (measured).
 
-The no-`DefaultInstance=` case, globs that name instances, and `Unknown`
-lines were not measured.
+**Whether a rule that does not count stops the lookup** arises only in the
+first case, for the fourth row. The second case reads one rule, the
+template's first match, and a preset of the template measurably links
+only the instances that rule names. The first-case question stays an
+open item of § 13 R5.
 
-**A matching `Unknown` line stops the lookup and is reported.**
-inspectah does not know what the line asks systemd to do, so the lookup
-gives no preset, as today. That is
-not left silent: the collector raises one structured warning per such
-line that decides at least one unit, naming the line, its file and the
-units it decided, and saying their state was not compared with a preset.
-Each of those units is in the inventory with no preset and gets no state
-change. This holds for every unit, not only instances.
+**A matching `Unknown` line stops the lookup and is reported.** systemd
+skips a line whose verb it does not accept and goes on to later rules;
+inspectah stops with no preset, which is a deliberate, conservative
+difference: inspectah cannot tell whether the line is a verb a newer
+systemd reads, so it does not guess what a later rule would mean. The
+collector raises one structured warning per such line that decides at
+least one unit, naming the line, its file and the units it decided, and
+saying their state was not compared with a preset. Each of those units is
+in the inventory with no preset and gets no state change. This holds for
+every unit, not only instances. The warning is in the scan's diagnostics;
+the Containerfile does not name those units (§ 17).
 
-**`getty@tty1.service` on the two bases.** On RHEL 9.8,
-`90-default.preset` sorts before `90-systemd.preset`, so the first rule
-that matches `getty@tty1.service` is `90-default.preset: enable
-getty@tty1.service`, by its own name. On RHEL 10.2 there is no such line,
-and the first match is `90-systemd.preset: enable getty@.service`, the
-bare form, with `DefaultInstance=tty1`. Both give `enable`. Both bases
-already have `getty@tty1` linked (measured), so the image has it and a
-stock host, where it is enabled, has no row. An administrator who
-disabled it gets a `disable` row on either release, and the image ends
-without it. `getty@tty2.service` matches neither line and falls to
-`disable *` on both, so an enabled `tty2` is an `enable` row; `systemctl
-preset getty@tty2.service` made no link on either release (measured).
+**The named cases.**
 
-**The concrete-instance case.** A package that ships `t@two.service` as
-its own file and presets it, with `enable t@two.service` before `disable
-*`: the lookup matches the instance's own name and gives `enable`. An
-administrator who disabled it gets a `Disabled` state change, so the
-image, where the package install enabled it again, carries `disable`.
+- **`getty@tty1` and `getty@tty2`.** Neither has a unit file of its own,
+  so both take the template's rule. Both bases have `90-systemd.preset:
+  enable getty@.service`, and `getty@.service` has `DefaultInstance=tty1`
+  (measured). RHEL 9.8's `90-default.preset: enable getty@tty1.service`,
+  which sorts first, names an instance and is not read for it. So on both
+  releases `tty1` is `enable` and `tty2` is `disable`. Both bases already
+  have `getty@tty1` linked (measured), so the image has it: a stock host
+  has no row; an administrator who disabled `tty1` gets a `disable` row,
+  found as § 7.5 says; an administrator who enabled `tty2` gets an
+  `enable` row, matching `systemctl preset getty@tty2.service` making no
+  link on either release (measured).
+- **A package that ships a concrete `t@two.service`, with `enable
+  t@two.service` then `disable *`, and the administrator disabled it.**
+  First case: the own-name rule gives `enable`, the unit file is listed
+  by `list-unit-files`, its install state is `Disabled`, and it gets a
+  `disable` row. The image's package install enables it again, and the
+  row's `disable` removes it.
+- **A package that ships only `t@.service`, with `enable t@two.service`
+  then `disable *`, and the administrator enabled `t@two`.** Second case:
+  the template's first match is `disable *`, so `t@two` is `disable`, its
+  install state is `Enabled`, and it gets an `enable` row. A preset of the
+  template makes no link for it, so the image needs that `enable`.
 
 The collector's preset rule gains the list form. Today's parser keeps the
 first two words of a line, so `enable t@.service two three` reads as the
@@ -1399,8 +1420,26 @@ and the host no longer has, after a changed `DefaultInstance=`, is not
 carried (§ 7.4).
 
 A masked instance needs nothing new: its mask under `/etc/systemd/system`
-is found by form and its name parses. An instance that is disabled leaves
-no trace on the host and is not recorded.
+is found by form and its name parses.
+
+**A disabled instance is found from the presets.** An instance with its
+own unit file is listed by `list-unit-files` and gets its install state
+like any unit. An instance backed only by its template leaves no trace on
+the host once it is disabled: no link and no row of its own. So the
+collector derives the instances the image's package install would link,
+from the presets, and checks each against the host's links. For each
+template whose first matching rule (§ 7.4, second case) is a bare
+`enable`, the candidate is its `DefaultInstance=`; for the list form,
+each listed instance. Each candidate's install state is read by § 7.3,
+with the template's effective `[Install]` expanded for the instance and
+the links under `/etc/systemd/system`. One with no expected link there is
+`Disabled` against an `enable` preset, a state change like any other,
+and renders `disable`. A candidate with its own unit file is already
+listed by source 1 and is not derived twice. This reads nothing new from
+the host: the preset files (source 2), the links (source 3) and the
+template's unit file, which source 1 lists and source 5 resolves. It is
+built in phase 5, with carried instances (§ 15). Until then such an
+instance is not collected, and phase 4 says nothing about it.
 
 **Instances tied to one host's devices are never carried.** An instance of
 `systemd-cryptsetup@.service` or `systemd-fsck@.service` names a volume or
@@ -2607,7 +2646,10 @@ or not the unit has a link, beside any per-link `Undetermined` advisories:
 #   The image's links for <unit> can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image.
 ```
 
-`<cause>` is the record's reason in the words above. A preset-enabled
+`<cause>` is the record's reason in the words above. A record with no
+install file ends the first line at `(<cause>)`, and adds `It has no link
+on the source host, and a disable would also act on the units its Also=
+names.` A preset-enabled
 packaged unit whose only relation is `RequiredBy=`, reset by a drop-in,
 has no link on the host and so no per-link advisory; this block is what
 tells the operator that the image's package install linked it anyway.
@@ -2619,7 +2661,7 @@ There is no command line.
 rendered (§ 7.4), and the unit gets this line in their place:
 
 ```
-# Omitted: <unit> links (excluded from the export: <path>, <path>; the [Install] the image reads is not the one recorded, so the source host's links for <unit> are not reproduced. Check them with systemctl is-enabled in the image.)
+# Omitted: <unit> links (excluded from the export: <path>, <path>; the [Install] the image reads is not the one recorded, so the source host's links for <unit> are not reproduced, and links its package install made may remain in the image. Check them with systemctl is-enabled in the image.)
 ```
 
 It names every excluded file of the unit, gives no repair line, and is
@@ -3285,37 +3327,45 @@ Phase 4 (the `/etc/systemd/system` scan):
   fragment: carried. A masked protected unit whose package is excluded:
   the FIXME of rule 3, not the package reason. A mask whose path a staged
   file occupies, package excluded: `MaskPathOccupied`.
-- **T39. The preset for an instance.** Through the real inspectors, with
-  templates with `DefaultInstance=one` unless a case says otherwise. Each
-  case asserts first that the instance is collected, its inventory entry
-  with the preset the lookup gave, and then the state change or its
-  absence. Under `enable t@.service` then `disable *`: `t@one` enabled, no
-  state change; `t@two` enabled, an `Enabled` state change. Under `enable
-  t@.service two three` then `disable *`: `t@two` enabled, no state
-  change; `t@one` enabled, an `Enabled` state change. The regression: a
-  package that ships its own `t@two.service` file, with `enable
-  t@two.service` then `disable *`, and `t@two` disabled by the
-  administrator: a `Disabled` state change and `disable` carried. An
-  instance-name rule on a template-backed instance, `enable
-  t@two.service` then `disable *` with no file of its own: `t@two`
-  enabled, no state change; disabled, a `Disabled` state change. A glob,
-  `enable t@*` then `disable *`: `t@two` enabled, no state change. No
-  `DefaultInstance=`, `enable t@.service` then `disable *`: `t@one`
-  enabled, an `Enabled` state change. `disable t@.service` then `disable
-  *`: `t@one` enabled, an `Enabled` state change. A matching `Unknown`
-  line, `frobnicate t@.service`, before `enable t@.service`: `t@one`
-  enabled has an inventory entry with no preset, no state change, and the
-  structured warning naming the line, its file and `t@one`. No rule that
-  matches either name, no catch-all included: the inventory entry with no
-  preset, and no state change. `getty@tty1.service` enabled, with
-  RHEL 9.8's rules (`enable getty@tty1.service` in `90-default.preset`,
-  `enable getty@.service` in `90-systemd.preset`, `disable *` in
+- **T39. The preset for an instance.** Through the real inspectors.
+  Each case asserts first that the instance is collected, with its
+  inventory entry and the preset the lookup gave, then the state change
+  or its absence. Templates have `DefaultInstance=one` unless a case says
+  otherwise. An instance with its own unit file `t@two.service`: under
+  `enable t@two.service` then `disable *`, enabled has no state change;
+  the regression, the administrator disabled it, is a `Disabled` state
+  change rendering `disable`. Under `enable t@*` then `disable *`, enabled
+  has no state change. Under `enable t@.service two three` then `disable
+  *`, enabled has no state change. Under a bare `enable t@.service` then
+  `disable *`, enabled is an `Enabled` state change, the bare rule not
+  read for it. An instance backed only by its template: under `enable
+  t@.service` then `disable *`, `t@one` enabled has no state change and
+  `t@two` enabled is an `Enabled` state change; with no
+  `DefaultInstance=`, `t@one` enabled is an `Enabled` state change. Under
+  `enable t@.service two three` then `disable *`, `t@two` enabled has no
+  state change and `t@one` enabled is `Enabled`. The regression: under
+  `enable t@two.service` then `disable *`, `t@two` enabled is an `Enabled`
+  state change rendering `enable`. Under `disable t@.service`, `t@one`
+  enabled is `Enabled`. Under a bare `enable t@.service` with no rule after
+  it and no link for `t@one` on the host, `t@one` is found from the presets
+  (§ 7.5) and is a `Disabled` state change rendering `disable`; the same
+  with a list-form rule finds each listed instance; under `disable
+  t@.service` no instance is derived. A matching `Unknown` line,
+  `frobnicate t@.service`, before `enable t@.service`: `t@one` enabled has
+  an inventory entry with no preset, no state change, and the structured
+  warning naming the line, its file and `t@one`. No rule matching the
+  template, no catch-all included: an inventory entry with no preset and
+  no state change. `getty@tty1` and `getty@tty2`, with RHEL 9.8's rules
+  (`enable getty@tty1.service` in `90-default.preset`, `enable
+  getty@.service` in `90-systemd.preset`, `disable *` in
   `99-default-disable.preset`) and with RHEL 10.2's (the same without the
-  first): no state change on either; disabled, a `Disabled` state change
-  on either. The parser: `enable t@.service two three` is
-  `EnableInstances` with `two` and `three`; `enable t@two.service`,
-  `enable t@.service` and `disable t@.service x` are `Plain`; a line whose
-  first word is neither verb is `Unknown` with its file and line.
+  first), on each: `tty1` enabled, no state change; `tty1` with no link,
+  found from the presets and a `Disabled` state change rendering
+  `disable`; `tty2` enabled, an `Enabled` state change. The parser:
+  `enable t@.service two three` is `EnableInstances` with `two` and
+  `three`; `enable t@two.service`, `enable t@.service` and `disable
+  t@.service x` are `Plain`; a line whose first word is neither verb is
+  `Unknown` with its file and line.
 - **T40. An undetermined section with `/etc` files and no link.** A
   vendor unit enabled by an `enable` preset whose only relation is
   `RequiredBy=a.target`, with an `/etc` drop-in holding `RequiredBy=` and
@@ -3326,7 +3376,14 @@ Phase 4 (the `/etc/systemd/system` scan):
   all three and no `systemctl` line for the unit; the refine
   `undetermined_installs[]` row holds the same block. The same unit with a
   `UpheldBy=` drop-in on a RHEL 10 fixture: the same, with reason
-  `UpheldBy`. With the drop-in excluded: the unit's `# Omitted:` line
+  `UpheldBy`. A vendor unit under an `enable` preset whose own `[Install]`
+  holds `WantedBy=multi-user.target` and `UpheldBy=multi-user.target`, no
+  `/etc` install file and no link on the host: a `Disabled` state change
+  rendering `disable`, and no `UndeterminedInstall`; with one link on the
+  host: no state change and the per-link advisories. The same unit
+  with `Also=helper.service` added and no link: no state change, and one
+  `UndeterminedInstall` with no files, rendering the block without the
+  file clause. With the drop-in excluded: the unit's `# Omitted:` line
   naming it, and the row's `not_applied` with its path. The control: the
   vendor unit with no `/etc` file has no record.
 - **T41. A partly excluded set of install files.** A vendor unit enabled
@@ -3454,16 +3511,25 @@ not use the CentOS9 or fedora44 VMs for them.**
     so § 7.4 can say whether a stock host meets the list form.
   - The additive sequence for a unit with an existing alias link, which
     the measured unit did not have.
-  - Hiding across the unit's own and the template's `.d`: an `/etc`
-    drop-in with no `[Install]` in `t@x.service.d` named like a vendor
-    drop-in with `WantedBy=` in `t@.service.d`, then `enable t@x.service`
-    (§ 7.2 assumes it hides it).
-  - Whether a preset rule that does not count for an instance lets the
-    lookup go on: `enable t@.service two`, then `enable t@three.service`,
-    then `disable *`, and `systemctl preset t@three.service`; the same with
-    a bare `enable t@.service` and `DefaultInstance=one`, then `enable
-    t@two.service`, and `systemctl preset t@two.service`. A link means the
-    lookup went on, as § 7.4 assumes.
+  - Hiding across the unit's own and the template's `.d`, both
+    placements: an `/etc` drop-in with no `[Install]` in `t@x.service.d`
+    named like a vendor drop-in with `WantedBy=multi-user.target` in
+    `t@.service.d`, then `enable t@x.service`; and an `/etc` drop-in in
+    `t@.service.d` named like a vendor one in `t@x.service.d`. § 7.2
+    assumes the first hides and the second does not.
+  - For an instance with its own unit file (§ 7.4, first case), whether a
+    rule that does not count for it lets the lookup go on: with a unit
+    file `t@three.service`, `enable t@.service two`, then `enable
+    t@three.service`, then `disable *`, and `systemctl preset
+    t@three.service`; the same with a bare `enable t@.service` before
+    `enable t@three.service`. A link means the lookup went on, as § 7.4
+    assumes.
+  - On both bases, `rpm -q --scripts` for every package that owns a
+    template unit, recording which names each scriptlet passes to
+    `systemctl preset`: a template, an instance, or both. § 7.4 takes the
+    name from what the package ships, and a scriptlet that presets a
+    template-backed instance by name, or a concrete instance's template,
+    is where it can be wrong.
 
 ## 14. Backlog items
 
@@ -3565,13 +3631,18 @@ T27, T30 to T34 and T39 to T41.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
-(§ 7.5); rule 6 of § 10.2 and `InstanceConfigNotStaged`; the attention
+(§ 7.5); the instances derived from the presets, so a disabled
+template-backed instance is found (§ 7.1 source 6, § 7.5); rule 6 of
+§ 10.2 and `InstanceConfigNotStaged`; the attention
 notes for unredacted and flagged configuration; and the data advisory
-(§ 10.8). The placeholder omission from phase 4 is removed. Tests T28 and
-T29.
+(§ 10.8). The placeholder omission from phase 4 is removed. Tests T28,
+T29, and T39's derived instances and carried commands.
 
 **The floor for instances** is the end of phase 4: every enabled instance
-named in an `# Omitted:` line, none carried. It is a state of the branch
+named in an `# Omitted:` line, none carried. A disabled instance backed
+only by its template is not found until phase 5 derives it from the
+presets, so at the floor it is silent: nothing names it, and the image's
+package install links it again. It is a state of the branch
 between phases, not a point at which it merges.
 
 **Phase 6: the Systemd units section. Size M, frontend.** § 11.2 after its
@@ -3704,17 +3775,26 @@ Other objections worth weighing:
   empty `Also=`, as measured on systemd 252 and 257; a release that
   behaves otherwise would get a wrong `enable` or a missed link with
   nothing to say so, where declining every reset could only have cost an
-  advisory. The preset lookup matches like `systemctl preset` for the
-  names a scriptlet passes, the instance's own and its template's,
-  measured on the same two releases; it assumes that a rule which does
-  not count for an instance lets later rules decide, which R5 could not
-  tell apart from stopping with `disable`. Which names the packages'
-  `%systemd_post` scriptlets pass was not inspected, so an instance whose
-  package presets only the template, while a stock or administrator rule
-  names the instance, is judged as if the rule applied in the image, and
-  its `enable` can be missing there with nothing to say so. No stock
-  preset file was searched for the list form, so how often a host meets
-  it is unknown.
+  advisory. The preset lookup takes the name a package presets from what
+  it ships: an instance's own name when it has a unit file, its
+  template's otherwise. The snapshot does not record which names the
+  scriptlets pass, and no scriptlet was read. A scriptlet that presets a
+  template-backed instance by name, or presets a concrete instance only
+  through its template, makes the model disagree with the image's
+  package install in either direction, with no comment: a missing
+  `enable` or `disable`, or a redundant one. For an instance with its
+  own unit file the lookup also assumes that a list-form rule which does
+  not list it, or a bare template rule, lets later rules decide; if such a
+  rule stops the lookup instead, a later positive rule, or no rule at all,
+  can hide the `enable` an administrator-enabled instance needs, with no
+  comment. No stock preset file was searched for the list form, so how
+  often a host meets it is unknown.
+- **A preset line inspectah cannot read is reported only in the scan's
+  diagnostics.** The lookup stops there with no preset, where systemd
+  skips the line, and the units it decided get no state change. The
+  structured warning names them; the Containerfile does not, so an
+  operator who reads only the Containerfile does not learn that those
+  units were not compared.
 - **Two controls operators have today go away:** the timer toggle, which
   does nothing, and the unconditional tuned enable.
 - **Rendered unit state depends on the image's machine-id.** It survives
