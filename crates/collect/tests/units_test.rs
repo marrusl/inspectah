@@ -4899,6 +4899,8 @@ fn each_member_links_value_comes_from_the_links() {
         ("hand-made.service", NO_INSTALL),
         ("also-only.service", "[Install]\nAlso=unlinked.service\n"),
         ("masked.service", WANTS_MULTI_USER),
+        ("undetermined.service", REQUIRED_BY_RESET),
+        ("unsupported.service", WANTS_MULTI_USER),
     ];
     let also: Vec<&str> = members
         .iter()
@@ -4924,7 +4926,11 @@ fn each_member_links_value_comes_from_the_links() {
     exec = with_link_in(exec, ETC, "multi-user.target.wants", "hand-made.service");
     exec = exec
         .with_dir_entry(ETC, "masked.service")
-        .with_link(&format!("{ETC}/masked.service"), "/dev/null");
+        .with_link(&format!("{ETC}/masked.service"), "/dev/null")
+        .with_file(
+            "/usr/local/lib/systemd/system/unsupported.service",
+            WANTS_MULTI_USER,
+        );
     let (section, _) = scan(&exec);
     assert_eq!(
         also_of(&section, "owner.service"),
@@ -4938,8 +4944,52 @@ fn each_member_links_value_comes_from_the_links() {
             ("hand-made.service", MemberLinks::Other),
             ("also-only.service", MemberLinks::Inert),
             ("masked.service", MemberLinks::Other),
+            ("undetermined.service", MemberLinks::Other),
+            ("unsupported.service", MemberLinks::Other),
             ("missing.service", MemberLinks::Inert),
         ]
+    );
+}
+
+/// An `[Install]` section whose `RequiredBy=` is reset after a value, which
+/// the reader records as `Undetermined(RequiredByReset)`.
+const REQUIRED_BY_RESET: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
+                                 RequiredBy=a.target\nRequiredBy=\n";
+
+/// § 7.3: the walk does not continue through a member whose section could
+/// not be read. A member whose `RequiredBy=` is reset holds
+/// `Also=deep.service`: the member is `Other` and `deep.service` is not
+/// recorded. The control, the same member with a readable section, records
+/// `deep.service`.
+#[test]
+fn the_also_walk_stops_at_a_member_whose_section_cannot_be_read() {
+    let host = |member: &str| {
+        also_host(
+            &[("owner.service", "enabled")],
+            "disable *\n",
+            &[
+                ("owner.service", &wants_with("Also=member.service\n")),
+                ("member.service", member),
+                ("deep.service", WANTS_MULTI_USER),
+            ],
+            &["owner.service"],
+        )
+    };
+    let readable = format!("{WANTS_MULTI_USER}Also=deep.service\n");
+    let (section, _) = scan(&host(&readable));
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [
+            ("member.service", MemberLinks::Unlinked),
+            ("deep.service", MemberLinks::Unlinked)
+        ]
+    );
+
+    let unreadable = format!("{REQUIRED_BY_RESET}Also=deep.service\n");
+    let (section, _) = scan(&host(&unreadable));
+    assert_eq!(
+        also_of(&section, "owner.service"),
+        [("member.service", MemberLinks::Other)]
     );
 }
 

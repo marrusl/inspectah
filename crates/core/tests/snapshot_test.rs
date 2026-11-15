@@ -323,6 +323,39 @@ fn state_change_vendor_drop_ins_are_file_names_on_load() {
     }
 }
 
+/// § 6.7: an `Also=` member's `vendor_drop_ins` holds file names only, as
+/// the row's own list does. A member holding `../x.conf` fails the load
+/// naming the field; the same member holding `10-a.conf` loads.
+#[test]
+fn also_member_vendor_drop_ins_are_file_names_on_load() {
+    let with_member = |vendor: &str| {
+        let mut payload: serde_json::Value = serde_json::from_str(&payload_with_state_change(
+            subject("app.service", "vendor", Some("apppkg")),
+            "enabled",
+        ))
+        .expect("the payload is JSON");
+        payload["units"]["state_changes"][0]["also"] = serde_json::json!([{
+            "unit": "helper.service",
+            "links": "installed",
+            "vendor_drop_ins": [vendor],
+        }]);
+        payload.to_string()
+    };
+
+    let snap =
+        InspectionSnapshot::load(&with_member("10-a.conf")).expect("a plain file name loads");
+    let change = &snap.units.expect("units present").state_changes[0];
+    assert_eq!(change.also[0].vendor_drop_ins, ["10-a.conf"]);
+
+    let err = InspectionSnapshot::load(&with_member("../x.conf"))
+        .expect_err("a member's drop-in name with a path component does not load")
+        .to_string();
+    assert!(
+        err.contains("vendor_drop_ins") && err.contains("../x.conf"),
+        "{err}"
+    );
+}
+
 /// § 10.2: "holds an `[Install]` section" is one lexical test. True for
 /// the header with surrounding whitespace, with a trailing CR, before a
 /// backslash-continued assignment, after a comment ending in a backslash

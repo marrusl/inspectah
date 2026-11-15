@@ -1327,12 +1327,12 @@ mod tests {
                 unit: _,             // exempt: a proved name, fragment and package name
                 current_state: _,    // exempt: enabled, disabled or masked
                 default_state: _,    // exempt: enable or disable
-                also: _, // names and links: `AlsoMember` is classified in the pipeline guard
+                also: _,             // names and links: classified in the pipeline guard
                 install_drop_ins: _, // identifiers: drop-in paths, no content
-                vendor_drop_ins: _, // identifiers: file names, no content
-                disposition: _, // decision
-                locked: _, // decision
-                aggregate: _, // fleet counts
+                vendor_drop_ins: _,  // identifiers: file names, no content
+                disposition: _,      // decision
+                locked: _,           // decision
+                aggregate: _,        // fleet counts
                 attention_reason: _, // generated prose, never file content
             } = change;
         }
