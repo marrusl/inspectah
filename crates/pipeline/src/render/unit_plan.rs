@@ -885,6 +885,12 @@ pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
                 "# Advisory: {unit} is tied to a device of the source host. Not carried."
             )];
         }
+        // Placeholder: no lines yet. The install-comparison advisory task
+        // renders § 10.9's text for these two causes, with their
+        // `install_files` read through the export.
+        ManualLinkCause::HostInstallOnly | ManualLinkCause::VendorInstallOnly => {
+            return Vec::new();
+        }
     };
     let second = match link.relation {
         LinkRelation::Wants | LinkRelation::Requires => {

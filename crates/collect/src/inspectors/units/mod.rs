@@ -24,8 +24,10 @@ mod install;
 mod links;
 mod resolve;
 
-use install::{DropInRoot, DropInSource, InstallRead, drop_in_dirs, read_install};
-use links::HostLinks;
+use install::{
+    DropInRoot, DropInSource, InstallRead, drop_in_dirs, read_install, read_vendor_install,
+};
+use links::{HostLinks, InstallDifference};
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
@@ -47,7 +49,8 @@ const EXCLUDED_KIND_SUFFIXES: &[&str] = &["device", "scope"];
 
 /// The `list-unit-files` states, dropped without a warning, that a unit
 /// is still read under when a link under `/etc/systemd/system` names it
-/// (§ 7.3 of the units spec): systemctl's word is not what decides its
+/// (§ 7.3 of the units spec), or when it has a file or drop-in directory
+/// of its own name there (§ 7.4): systemctl's word is not what decides its
 /// install state.
 const LINK_READ_STATES: &[&str] = &["static", "indirect"];
 
@@ -57,8 +60,11 @@ const LINK_READ_STATES: &[&str] = &["static", "indirect"];
 /// dropped first, with no warning whatever its state, so an open login
 /// session's transient scope is not reported on every scan. A state that is
 /// not durable is then dropped or warned about by [`parse_unit_state`],
-/// except that a `static` or `indirect` unit a link under `/etc` names
-/// ([`LINK_READ_STATES`]) is kept with no state word. The name must parse
+/// except that a `static` or `indirect` unit ([`LINK_READ_STATES`]) is kept
+/// with no state word when a link under `/etc` names it, or when it has a
+/// file or drop-in directory of its own name there: a unit whose `/etc`
+/// files leave it no link reads `static`, and § 7.4 compares it with its
+/// package's. The name must parse
 /// as a [`UnitName`] and not be a D-Bus activation alias. A template is
 /// recorded only when masked, since its mask masks every instance;
 /// enabling a template means nothing without an instance. An instance is
@@ -86,7 +92,7 @@ fn gate(
         ),
         ParsedUnitState::SilentDrop if LINK_READ_STATES.contains(&unit.state.as_str()) => {
             let name = UnitName::try_from(unit.unit.clone()).ok()?;
-            if !host_links.admin.contains_key(&name) {
+            if !host_links.admin.contains_key(&name) && !host_links.has_etc_files(&name) {
                 return None;
             }
             (name, None)
@@ -430,10 +436,13 @@ fn build_state_changes(
     for subject in listed {
         let warn =
             |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
-        let (fragment, state, evidence) = match resolve::resolve(exec, &subject.name) {
-            Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => {
-                (fragment, UnitState::Masked, InstallEvidence::default())
-            }
+        let (fragment, state, evidence, additive) = match resolve::resolve(exec, &subject.name) {
+            Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => (
+                fragment,
+                UnitState::Masked,
+                InstallEvidence::default(),
+                false,
+            ),
             // A read under `/etc/systemd/system` failed, so links there may
             // be missing, and a state read from the rest could carry a
             // command the host never had. The scan degrades, and no unit
@@ -448,14 +457,29 @@ fn build_state_changes(
                         continue;
                     }
                 };
+                let mut additive = false;
                 let state = match &evidence.read {
                     Some(read) => {
-                        let found = links::link_findings(
+                        let install_files = etc_install_files(&fragment, &evidence);
+                        let mut found =
+                            links::link_findings(&subject.name, read, host_links, &install_files);
+                        let difference = install_difference(
                             &subject.name,
-                            read,
-                            host_links,
-                            &etc_install_files(&fragment, &evidence),
+                            &fragment,
+                            &evidence,
+                            found.state,
+                            &install_files,
+                            rules,
                         );
+                        if let Some(difference) = difference {
+                            additive = links::apply_install_difference(
+                                &mut found,
+                                &subject.name,
+                                difference,
+                                host_links,
+                                &install_files,
+                            );
+                        }
                         manual_links.extend(found.manual_links);
                         undetermined_installs.extend(found.undetermined);
                         found.state
@@ -469,11 +493,11 @@ fn build_state_changes(
                 let Some(state) = state else {
                     continue;
                 };
-                (fragment, state, evidence)
+                (fragment, state, evidence, additive)
             }
             // A mask reads no `[Install]`, so it records no install files.
             Ok(Resolved::Masked { hidden }) => {
-                (hidden, UnitState::Masked, InstallEvidence::default())
+                (hidden, UnitState::Masked, InstallEvidence::default(), false)
             }
             Ok(Resolved::AliasOf(target)) => {
                 warnings.push(warn(&format!(
@@ -546,10 +570,12 @@ fn build_state_changes(
             state,
             default_state: preset,
         };
-        let state_change = is_state_change(&candidate, &fragment);
+        // An additive unit is an `Enabled` state change whatever its
+        // preset says (§ 7.4).
+        let state_change = additive || is_state_change(&candidate, &fragment);
         if state_change || is_enabled_storage(&candidate) {
             fragments.push(fragment);
-            found.push((candidate, state_change, evidence));
+            found.push((candidate, state_change, evidence, additive));
         }
     }
     for ((file, line), units) in unknown_lines {
@@ -560,7 +586,9 @@ fn build_state_changes(
 
     let mut state_changes = Vec::new();
     let mut mount_findings = Vec::new();
-    for ((candidate, state_change, evidence), fragment) in found.into_iter().zip(fragments) {
+    for ((candidate, state_change, evidence, additive), fragment) in
+        found.into_iter().zip(fragments)
+    {
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         let subject = match UnitSubject::new(candidate.name.clone(), fragment) {
@@ -595,6 +623,12 @@ fn build_state_changes(
         };
         match UnitStateChange::new(unit, candidate.state, candidate.default_state) {
             Ok(mut change) => {
+                // § 7.4: the `/etc` files add links the package's unit
+                // does not make. The notes below take its place when they
+                // apply.
+                if additive {
+                    change.attention_reason = Some(ADDS_LINKS_REASON.to_owned());
+                }
                 // § 10.3: the plan refuses this command, and refine shows
                 // why in the plan's own words.
                 let name = change.unit().name().as_str();
@@ -618,6 +652,53 @@ fn build_state_changes(
         manual_links,
         undetermined_installs,
     }
+}
+
+/// The attention note of an additive row (§ 7.4 of the units spec): the
+/// unit's `/etc` files add links the package's unit does not make.
+const ADDS_LINKS_REASON: &str = "Its /etc files add links the package's unit does not make.";
+
+/// § 7.4's comparison of `name`'s effective `[Install]` with its
+/// package's, when the test applies: a `Vendor` or `Shadowed` fragment, an
+/// install file under `/etc` (`install_files`), a preset of `enable`, and
+/// install state `Enabled`, or no install state because the effective
+/// section names no link (a `WantedBy=` reset with nothing added, or a
+/// shadow with no `[Install]`). `None` when it does not apply, or when the
+/// package's section could not be read as text.
+fn install_difference(
+    name: &UnitName,
+    fragment: &UnitFragment,
+    evidence: &InstallEvidence,
+    state: Option<UnitState>,
+    install_files: &[String],
+    rules: &[PresetRule],
+) -> Option<InstallDifference> {
+    let packaged = matches!(
+        fragment,
+        UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
+    );
+    if !packaged || install_files.is_empty() {
+        return None;
+    }
+    let effective = match evidence.read.as_ref()? {
+        InstallRead::Known(section) => Some(section),
+        InstallRead::Absent => None,
+        InstallRead::Undetermined { .. } => return None,
+    };
+    let names_no_link = effective.is_none_or(|section| links::expected_links(section).is_empty());
+    match state {
+        Some(UnitState::Enabled) => {}
+        None if names_no_link => {}
+        _ => return None,
+    }
+    let own_file = fragment_file(fragment) == Some(name);
+    let default_instance = effective.and_then(|section| section.default_instance.as_deref());
+    let preset = preset_for(name, own_file, default_instance, rules);
+    if !matches!(preset, PresetLookup::Rule(PresetDefault::Enable)) {
+        return None;
+    }
+    let vendor = evidence.vendor_read.as_ref()?;
+    Some(links::compare_install(effective, vendor))
 }
 
 /// The install files of a unit under `/etc/systemd/system` (§ 10.2 of the
@@ -689,6 +770,10 @@ struct InstallEvidence {
     /// The effective section, or `None` when the unit file or a drop-in
     /// that applies could not be read as text.
     read: Option<InstallRead>,
+    /// The section the package alone provides (§ 7.2, "The vendor-side
+    /// read"), for a `Vendor` or `Shadowed` unit with an install file under
+    /// `/etc`; `None` otherwise, or when a file it reads is not text.
+    vendor_read: Option<InstallRead>,
     /// Paths of the drop-ins under `/etc/systemd/system` that are install
     /// files, sorted.
     install_drop_ins: Vec<String>,
@@ -764,16 +849,28 @@ fn install_evidence(
         Some(path) => unit_text(exec, &path)?,
         None => None,
     };
-    let read = fragment_text.filter(|_| every_text_read).map(|text| {
-        let drop_ins: Vec<(DropInSource, &str)> = drop_ins
-            .iter()
-            .map(|(source, text)| (source.clone(), text.as_str()))
-            .collect();
-        read_install(name, &text, &drop_ins)
-    });
+    let drop_ins: Vec<(DropInSource, &str)> = drop_ins
+        .iter()
+        .map(|(source, text)| (source.clone(), text.as_str()))
+        .collect();
+    // The vendor-side read (§ 7.2): for a packaged unit file with an
+    // install file under `/etc`, a shadow or an install drop-in.
+    let vendor_text = match fragment {
+        _ if !every_text_read => None,
+        UnitFragment::Vendor { .. } if !install_drop_ins.is_empty() => fragment_text.clone(),
+        UnitFragment::Shadowed { file, .. } => {
+            unit_text(exec, &format!("{VENDOR_UNIT_DIR}/{}", file.as_str()))?
+        }
+        _ => None,
+    };
+    let vendor_read = vendor_text.map(|text| read_vendor_install(name, &text, &drop_ins));
+    let read = fragment_text
+        .filter(|_| every_text_read)
+        .map(|text| read_install(name, &text, &drop_ins));
     install_drop_ins.sort();
     Ok(InstallEvidence {
         read,
+        vendor_read,
         install_drop_ins,
         vendor_drop_ins: vendor_names.into_iter().collect(),
     })
@@ -3280,8 +3377,13 @@ mod tests {
                      {WANTED_BY_MULTI_USER}"
                 ),
             )
-            // Vendor counterpart exists
-            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n");
+            // Vendor counterpart exists, with the same `[Install]`: a vendor
+            // file with none would make the shadow's `WantedBy=` an added
+            // link, and the unit an `enable` row (§ 7.4).
+            .with_file(
+                "/usr/lib/systemd/system/sshd.service",
+                &format!("[Unit]\n\n{WANTED_BY_MULTI_USER}"),
+            );
         let exec = with_enable_link(exec, "sshd.service");
 
         let source = SourceSystem::PackageBased {

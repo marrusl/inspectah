@@ -16,7 +16,7 @@ use std::collections::btree_map::Entry;
 const INSTALL_SECTION: &str = "Install";
 
 /// The suffix of a unit's drop-in directory.
-const DROP_IN_DIR_SUFFIX: &str = ".d";
+pub(crate) const DROP_IN_DIR_SUFFIX: &str = ".d";
 
 /// The unit directory a drop-in sits under. The order is the priority:
 /// for one file name in one directory, an `/etc` file replaces a vendor
@@ -125,6 +125,24 @@ pub(crate) fn read_install(
         reader.read(text);
     }
     reader.finish()
+}
+
+/// The `[Install]` section the package alone provides for `name` (§ 7.2
+/// of the units spec, "The vendor-side read"): [`read_install`] over
+/// `vendor_fragment`, the vendor unit file's text, and the vendor drop-ins
+/// of `drop_ins` only, with nothing from `/etc`. It is the section the
+/// image's package install acts on, before any `COPY`.
+pub(crate) fn read_vendor_install(
+    name: &UnitName,
+    vendor_fragment: &str,
+    drop_ins: &[(DropInSource, &str)],
+) -> InstallRead {
+    let vendor: Vec<(DropInSource, &str)> = drop_ins
+        .iter()
+        .filter(|(source, _)| source.root == DropInRoot::Vendor)
+        .cloned()
+        .collect();
+    read_install(name, vendor_fragment, &vendor)
 }
 
 /// The `[Install]` assignments read so far, in load order.

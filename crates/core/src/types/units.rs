@@ -1217,11 +1217,20 @@ pub enum ManualLinkCause {
     Undetermined { reason: InstallUnknown },
     /// An instance of a template tied to one host's devices (§ 7.5).
     HostDevice,
+    /// The unit's `/etc` files make this link, and the package's
+    /// `[Install]` alone does not: the image lacks it (§ 7.4).
+    HostInstallOnly,
+    /// The package's `[Install]` alone makes this link, and the unit's
+    /// `/etc` files do not: the image has it and the host did not (§ 7.4).
+    VendorInstallOnly,
 }
 
 /// A link on the source host that inspectah reports and does not carry
 /// (§ 6.6 of the units spec). It holds no carried unit and no decision:
-/// nothing turns it into a command, and it has no toggle.
+/// nothing turns it into a command, and it has no toggle. The two
+/// install-difference causes are the one case where it describes something
+/// other than a link on the host: a difference between the links the host's
+/// files make and the links the package's files make.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManualLink {
     pub relation: LinkRelation,
@@ -1231,7 +1240,9 @@ pub struct ManualLink {
     pub unit: UnitName,
     pub cause: ManualLinkCause,
     /// For the two install-difference causes: the `/etc` install files
-    /// that produce the difference. Empty otherwise.
+    /// that produce the difference (§ 7.4). They are the files of the unit
+    /// whose `[Install]` was compared: `unit` for a link, `parent` for
+    /// relation `Also`. Empty otherwise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub install_files: Vec<String>,
     pub aggregate: Option<AggregatePrevalence>,

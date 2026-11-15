@@ -7,11 +7,12 @@
 //! section, against the links under `/etc/systemd/system` and the links a
 //! package ships under `/usr/lib/systemd/system`.
 
-use super::install::{InstallRead, InstallSection};
+use super::install::{DROP_IN_DIR_SUFFIX, InstallRead, InstallSection};
 use super::resolve::{ETC_UNIT_DIR, VENDOR_UNIT_DIR};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{
-    LinkRelation, ManualLink, ManualLinkCause, UndeterminedInstall, UnitName, UnitState,
+    InstallUnknown, LinkRelation, ManualLink, ManualLinkCause, UndeterminedInstall, UnitName,
+    UnitState,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -68,6 +69,8 @@ pub(crate) struct HostLinks {
     /// Whether some read under `/etc/systemd/system` failed, so links there
     /// may be missing from [`admin`](HostLinks::admin).
     pub(crate) admin_unreadable: bool,
+    /// The names directly under `/etc/systemd/system`.
+    pub(crate) admin_entries: BTreeSet<String>,
     /// Under `/usr/lib/systemd/system`, the links packages ship (source 4).
     /// They complete an install and never start one.
     pub(crate) vendor: LinksByUnit,
@@ -89,6 +92,16 @@ impl HostLinks {
     pub(crate) fn vendor(&self, unit: &UnitName) -> &[Link] {
         self.vendor.get(unit).map_or(&[], Vec::as_slice)
     }
+
+    /// Whether `unit` has a file or a drop-in directory of its own name
+    /// directly under `/etc/systemd/system`, where an install file of it
+    /// can sit (§ 10.2).
+    pub(crate) fn has_etc_files(&self, unit: &UnitName) -> bool {
+        self.admin_entries.contains(unit.as_str())
+            || self
+                .admin_entries
+                .contains(&format!("{}{DROP_IN_DIR_SUFFIX}", unit.as_str()))
+    }
 }
 
 /// Read the links under both unit directories. A listing of
@@ -107,6 +120,7 @@ pub(crate) fn read_host_links(exec: &dyn Executor) -> (HostLinks, Vec<String>) {
         admin_unparsed_parent: admin.unparsed_parent,
         admin_unparsed: admin.unparsed,
         admin_unreadable: admin.unreadable,
+        admin_entries: admin.entries,
         vendor: vendor.links,
     };
     (links, failures)
@@ -124,6 +138,8 @@ struct RootLinks {
     unparsed: Vec<String>,
     /// Whether a read under the directory failed.
     unreadable: bool,
+    /// The names directly under the directory.
+    entries: BTreeSet<String>,
 }
 
 /// The links in one unit directory: every entry of its `.wants`,
@@ -147,6 +163,7 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
             return read;
         }
     };
+    read.entries = entries.iter().cloned().collect();
     for entry in entries {
         let path = format!("{root}/{entry}");
         let dependency = DEPENDENCY_DIRS.iter().find_map(|(suffix, relation)| {
@@ -390,11 +407,173 @@ pub(crate) fn link_findings(
     }
 }
 
+/// How a unit's effective `[Install]` section differs from the one its
+/// package alone provides (§ 7.4 of the units spec, "A unit at its preset
+/// whose `/etc` files change `[Install]`"). Internal to the collector; it
+/// is not stored.
+#[derive(Debug, PartialEq)]
+pub(crate) enum InstallDifference {
+    /// The links and the `Also=` names are equal.
+    Same,
+    /// Every link the package's section makes is an effective link, at
+    /// least one effective link is not, and the `Also=` names are equal.
+    Additive,
+    /// Anything else: the links and the `Also=` names only one side has.
+    NotAdditive {
+        host_only: Vec<Link>,
+        vendor_only: Vec<Link>,
+        also_host_only: Vec<UnitName>,
+        also_vendor_only: Vec<UnitName>,
+    },
+    /// The package's section cannot be relied on.
+    VendorUndetermined { reason: InstallUnknown },
+}
+
+/// Compare `effective`, the unit's effective `[Install]` section (`None`
+/// when it has none), with `vendor`, the one its package alone provides
+/// (§ 7.4 of the units spec). Two pairs of sets are compared: the links
+/// `enable` would make from each (a relation and a parent, or an alias
+/// name), and the names each assigns in `Also=`. Order and spelling of the
+/// sections do not matter.
+pub(crate) fn compare_install(
+    effective: Option<&InstallSection>,
+    vendor: &InstallRead,
+) -> InstallDifference {
+    let none = InstallSection::default();
+    let vendor = match vendor {
+        InstallRead::Undetermined { reason, .. } => {
+            return InstallDifference::VendorUndetermined { reason: *reason };
+        }
+        InstallRead::Absent => &none,
+        InstallRead::Known(section) => section,
+    };
+    let effective = effective.unwrap_or(&none);
+    let (effective_links, vendor_links) = (expected_links(effective), expected_links(vendor));
+    let host_only = only_in(&effective_links, &vendor_links);
+    let vendor_only = only_in(&vendor_links, &effective_links);
+    let also_host_only = only_in(&effective.also, &vendor.also);
+    let also_vendor_only = only_in(&vendor.also, &effective.also);
+    if vendor_only.is_empty() && also_host_only.is_empty() && also_vendor_only.is_empty() {
+        if host_only.is_empty() {
+            InstallDifference::Same
+        } else {
+            InstallDifference::Additive
+        }
+    } else {
+        InstallDifference::NotAdditive {
+            host_only,
+            vendor_only,
+            also_host_only,
+            also_vendor_only,
+        }
+    }
+}
+
+/// The items of `side` that `other` does not hold, in `side`'s order.
+fn only_in<T: Clone + PartialEq>(side: &[T], other: &[T]) -> Vec<T> {
+    side.iter()
+        .filter(|item| !other.contains(item))
+        .cloned()
+        .collect()
+}
+
+/// Apply `difference`, § 7.4's comparison for `unit`, to `found`, the
+/// unit's findings from [`link_findings`], with `install_files` its `/etc`
+/// install files. Returns whether the unit is an additive state change:
+/// `Enabled` whatever its preset says.
+///
+/// - `NotAdditive`: one `HostInstallOnly` finding per effective link the
+///   package's section does not make; one `VendorInstallOnly` finding per
+///   link only the package's section makes that is not under `/etc` on the
+///   host (one that is, the host and the image both have); and relation
+///   `Also`, with the same two causes, for a name only one side assigns.
+///   A `StaticUnit` link the package's section makes is dropped: the
+///   package install makes it in the image too, so it produces nothing.
+/// - `VendorUndetermined`: each of the unit's links under `/etc` is an
+///   `Undetermined` finding with the package section's reason, in place of
+///   what [`link_findings`] reported for it.
+pub(crate) fn apply_install_difference(
+    found: &mut LinkFindings,
+    unit: &UnitName,
+    difference: InstallDifference,
+    links: &HostLinks,
+    install_files: &[String],
+) -> bool {
+    let finding =
+        |relation, parent: &UnitName, member: &UnitName, cause, files: &[String]| ManualLink {
+            relation,
+            parent: parent.clone(),
+            unit: member.clone(),
+            cause,
+            install_files: files.to_vec(),
+            aggregate: None,
+        };
+    match difference {
+        InstallDifference::Same => false,
+        InstallDifference::Additive => true,
+        InstallDifference::NotAdditive {
+            host_only,
+            vendor_only,
+            also_host_only,
+            also_vendor_only,
+        } => {
+            found.manual_links.retain(|link| {
+                link.cause != ManualLinkCause::StaticUnit
+                    || !vendor_only.contains(&Link {
+                        relation: link.relation,
+                        parent: link.parent.clone(),
+                    })
+            });
+            let admin = links.admin(unit);
+            let differences = host_only
+                .iter()
+                .map(|link| (link, ManualLinkCause::HostInstallOnly))
+                .chain(
+                    vendor_only
+                        .iter()
+                        .filter(|link| !admin.contains(link))
+                        .map(|link| (link, ManualLinkCause::VendorInstallOnly)),
+                )
+                .map(|(link, cause)| {
+                    finding(link.relation, &link.parent, unit, cause, install_files)
+                });
+            let also = also_host_only
+                .iter()
+                .map(|member| (member, ManualLinkCause::HostInstallOnly))
+                .chain(
+                    also_vendor_only
+                        .iter()
+                        .map(|member| (member, ManualLinkCause::VendorInstallOnly)),
+                )
+                .map(|(member, cause)| {
+                    finding(LinkRelation::Also, unit, member, cause, install_files)
+                });
+            found.manual_links.extend(differences.chain(also));
+            false
+        }
+        InstallDifference::VendorUndetermined { reason } => {
+            found.manual_links = links
+                .admin(unit)
+                .iter()
+                .map(|link| {
+                    finding(
+                        link.relation,
+                        &link.parent,
+                        unit,
+                        ManualLinkCause::Undetermined { reason },
+                        &[],
+                    )
+                })
+                .collect();
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
-    use inspectah_core::types::units::InstallUnknown;
 
     fn unit(name: &str) -> UnitName {
         UnitName::try_from(name.to_owned()).expect("a valid unit name")
@@ -1014,5 +1193,100 @@ mod tests {
             ]
         );
         assert_eq!(links.admin(&unit("app.service")).len(), 1);
+    }
+
+    /// § 7.4's comparison of the effective section with the package's:
+    /// reordered values are `Same`; an added `Alias=` is `Additive`; equal
+    /// links with a differing `Also=` name are `NotAdditive`; an effective
+    /// section that names no link, or none at all, against a package
+    /// section with one is `NotAdditive` with that link in `vendor_only`; an
+    /// `Undetermined` package section is `VendorUndetermined`.
+    #[test]
+    fn compare_install_follows_the_four_rows() {
+        let known = |wanted_by: &[&str], aliases: &[&str], also: &[&str]| {
+            let units = |names: &[&str]| names.iter().map(|n| unit(n)).collect();
+            InstallSection {
+                wanted_by: units(wanted_by),
+                alias: units(aliases),
+                also: units(also),
+                ..InstallSection::default()
+            }
+        };
+        let vendor = |section: InstallSection| InstallRead::Known(section);
+        let not_additive = |host_only, vendor_only, also_host_only, also_vendor_only| {
+            InstallDifference::NotAdditive {
+                host_only,
+                vendor_only,
+                also_host_only,
+                also_vendor_only,
+            }
+        };
+        let both = known(&["multi-user.target", "graphical.target"], &[], &[]);
+        let cases: Vec<(&str, Option<InstallSection>, InstallRead, InstallDifference)> = vec![
+            (
+                "reordered values",
+                Some(known(&["graphical.target", "multi-user.target"], &[], &[])),
+                vendor(both.clone()),
+                InstallDifference::Same,
+            ),
+            (
+                "an added Alias=",
+                Some(known(&["multi-user.target"], &["app-alias.service"], &[])),
+                vendor(known(&["multi-user.target"], &[], &[])),
+                InstallDifference::Additive,
+            ),
+            (
+                "equal links, a differing Also= name",
+                Some(known(&["multi-user.target"], &[], &["a.socket"])),
+                vendor(known(&["multi-user.target"], &[], &["b.socket"])),
+                not_additive(
+                    vec![],
+                    vec![],
+                    vec![unit("a.socket")],
+                    vec![unit("b.socket")],
+                ),
+            ),
+            (
+                "an effective section that names no link",
+                Some(known(&[], &[], &[])),
+                vendor(known(&["multi-user.target"], &[], &[])),
+                not_additive(vec![], vec![wants("multi-user.target")], vec![], vec![]),
+            ),
+            (
+                "no effective section",
+                None,
+                vendor(known(&["multi-user.target"], &[], &[])),
+                not_additive(vec![], vec![wants("multi-user.target")], vec![], vec![]),
+            ),
+            (
+                "a replaced link",
+                Some(known(&["graphical.target"], &[], &[])),
+                vendor(known(&["multi-user.target"], &[], &[])),
+                not_additive(
+                    vec![wants("graphical.target")],
+                    vec![wants("multi-user.target")],
+                    vec![],
+                    vec![],
+                ),
+            ),
+            (
+                "an undetermined package section",
+                Some(both.clone()),
+                InstallRead::Undetermined {
+                    reason: InstallUnknown::Specifier,
+                    assigns_also: false,
+                },
+                InstallDifference::VendorUndetermined {
+                    reason: InstallUnknown::Specifier,
+                },
+            ),
+        ];
+        for (case, effective, vendor, expected) in cases {
+            assert_eq!(
+                compare_install(effective.as_ref(), &vendor),
+                expected,
+                "{case}"
+            );
+        }
     }
 }

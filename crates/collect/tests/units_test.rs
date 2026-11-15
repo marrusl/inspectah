@@ -4285,3 +4285,520 @@ fn a_link_that_does_not_parse_is_warned_and_reported_no_further() {
         );
     }
 }
+
+// ── A unit at its preset whose `/etc` files change `[Install]` (§ 7.4, T30) ──
+
+/// The unit every T30 case scans.
+const APP: &str = "app.service";
+/// Its full shadow's path.
+const APP_SHADOW: &str = "/etc/systemd/system/app.service";
+/// Its `/etc` drop-in directory.
+const APP_DROP_IN_DIR: &str = "/etc/systemd/system/app.service.d";
+/// Its vendor drop-in directory.
+const APP_VENDOR_DROP_IN_DIR: &str = "/usr/lib/systemd/system/app.service.d";
+/// A unit section with no `[Install]`.
+const NO_INSTALL: &str = "[Service]\nExecStart=/bin/true\n";
+/// The attention note of an additive row.
+const ADDS_LINKS_NOTE: &str = "Its /etc files add links the package's unit does not make.";
+
+/// One T30 host: `app.service` under `/usr/lib` with `vendor` as its
+/// file, listed with `state`, and the `/etc` files and links given.
+#[derive(Clone, Copy)]
+struct T30<'a> {
+    case: &'a str,
+    vendor: &'a str,
+    /// A vendor drop-in in its own `.d`: file name and text.
+    vendor_drop_in: Option<(&'a str, &'a str)>,
+    /// Its full shadow's text.
+    shadow: Option<&'a str>,
+    /// An `/etc` drop-in in its own `.d`: file name and text.
+    drop_in: Option<(&'a str, &'a str)>,
+    /// The dependency directories under `/etc` holding a link to it.
+    links: &'a [&'a str],
+    /// The word `systemctl list-unit-files` prints for it.
+    state: &'a str,
+    /// An alias under `/etc` naming it: the alias name.
+    alias_link: Option<&'a str>,
+}
+
+impl<'a> T30<'a> {
+    /// An enabled vendor unit with `vendor` as its file and nothing else.
+    const fn new(case: &'a str, vendor: &'a str) -> Self {
+        Self {
+            case,
+            vendor,
+            vendor_drop_in: None,
+            shadow: None,
+            drop_in: None,
+            links: &[],
+            state: "enabled",
+            alias_link: None,
+        }
+    }
+
+    /// The host under `preset`.
+    fn host(&self, preset: &str) -> MockExecutor {
+        let mut exec = unlinked_host(&[(APP, self.state)], preset)
+            .with_file(&format!("{VENDOR}/{APP}"), self.vendor);
+        if let Some((file, text)) = self.vendor_drop_in {
+            exec = with_drop_in(exec, APP_VENDOR_DROP_IN_DIR, file, text);
+        }
+        if let Some(text) = self.shadow {
+            exec = exec.with_dir_entry(ETC, APP).with_file(APP_SHADOW, text);
+        }
+        if let Some((file, text)) = self.drop_in {
+            exec = with_drop_in(
+                exec.with_dir_entry(ETC, "app.service.d"),
+                APP_DROP_IN_DIR,
+                file,
+                text,
+            );
+        }
+        for dir in self.links {
+            exec = with_link_in(exec, ETC, dir, APP);
+        }
+        if let Some(alias) = self.alias_link {
+            exec = exec
+                .with_dir_entry(ETC, alias)
+                .with_link(&format!("{ETC}/{alias}"), APP_SHADOW);
+        }
+        exec
+    }
+
+    /// The path of its `/etc` file: the shadow, else the drop-in.
+    fn etc_file(&self) -> String {
+        match (self.shadow, self.drop_in) {
+            (Some(_), _) => APP_SHADOW.to_owned(),
+            (None, Some((file, _))) => format!("{APP_DROP_IN_DIR}/{file}"),
+            (None, None) => panic!("{}: a T30 case has an /etc file", self.case),
+        }
+    }
+
+    /// Asserts its `/etc` file is collected, the subject the absence
+    /// assertions that follow are about.
+    fn assert_collected(&self, section: &UnitSection) {
+        let path = self.etc_file();
+        assert!(
+            drop_in_paths(section).contains(&path.as_str()),
+            "{}: {path} collected: {:?}",
+            self.case,
+            drop_in_paths(section)
+        );
+    }
+}
+
+/// Each hand-made link or install difference the scan reports, with its
+/// install files.
+type Finding<'a> = (
+    LinkRelation,
+    &'a str,
+    &'a str,
+    ManualLinkCause,
+    Vec<&'a str>,
+);
+
+fn findings(section: &UnitSection) -> Vec<Finding<'_>> {
+    section
+        .manual_links
+        .iter()
+        .map(|l| {
+            (
+                l.relation,
+                l.parent.as_str(),
+                l.unit.as_str(),
+                l.cause,
+                l.install_files.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect()
+}
+
+/// The vendor section of most T30 cases: `WantedBy=multi-user.target`.
+const VENDOR_WANTS: &str = WANTS_MULTI_USER;
+/// A section wanted by `multi-user.target` and `extra.target`.
+const WANTS_BOTH: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target extra.target\n";
+/// A section wanted by `graphical.target` in place of `multi-user.target`.
+const WANTS_GRAPHICAL: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=graphical.target\n";
+/// A vendor section that also names `helper.service` in `Also=`.
+const WANTS_WITH_HELPER: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlso=helper.service\n";
+/// A drop-in that resets `WantedBy=` and wants `graphical.target`.
+const RESET_THEN_GRAPHICAL: &str = "[Install]\nWantedBy=\nWantedBy=graphical.target\n";
+
+/// T30 (d): the shadow that replaces `multi-user.target` with
+/// `graphical.target`, on a host with the `graphical.target` link.
+const REPLACING_SHADOW: T30 = T30 {
+    shadow: Some(WANTS_GRAPHICAL),
+    links: &["graphical.target.wants"],
+    ..T30::new("(d) a shadow replacing the target", VENDOR_WANTS)
+};
+
+/// T30 (c), first case: a shadow adding a second `WantedBy=`.
+const ADDING_SHADOW: T30 = T30 {
+    shadow: Some(WANTS_BOTH),
+    links: &["multi-user.target.wants", "extra.target.wants"],
+    ..T30::new("(c) a shadow adding a WantedBy=", VENDOR_WANTS)
+};
+
+/// T30 (g): a shadow that drops `Also=helper.service`.
+const ALSO_DROPPING_SHADOW: T30 = T30 {
+    shadow: Some(VENDOR_WANTS),
+    links: &["multi-user.target.wants"],
+    ..T30::new("(g) a shadow dropping Also=", WANTS_WITH_HELPER)
+};
+
+/// T30 (b), (c), (e) and the first case of (l), under an `enable` preset
+/// with the unit enabled: each is an `Enabled` state change at its
+/// `enable` preset, with its fragment as resolved, its drop-in in
+/// `install_drop_ins`, the attention note, and no link finding.
+#[test]
+fn t30_added_links_are_an_enabled_row() {
+    let cases = [
+        (
+            T30 {
+                drop_in: Some(("10-extra.conf", "[Install]\nWantedBy=extra.target\n")),
+                links: &["multi-user.target.wants", "extra.target.wants"],
+                ..T30::new("(b) a drop-in adding WantedBy=extra.target", VENDOR_WANTS)
+            },
+            false,
+        ),
+        (ADDING_SHADOW, true),
+        (
+            T30 {
+                shadow: Some(
+                    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=app-alias.service\n",
+                ),
+                links: &["multi-user.target.wants"],
+                alias_link: Some("app-alias.service"),
+                ..T30::new("(c) a shadow adding an Alias=", VENDOR_WANTS)
+            },
+            true,
+        ),
+        (
+            T30 {
+                drop_in: Some(("10-install.conf", "[Install]\nWantedBy=multi-user.target\n")),
+                links: &["multi-user.target.wants"],
+                ..T30::new(
+                    "(e) a vendor unit made installable by a drop-in",
+                    NO_INSTALL,
+                )
+            },
+            false,
+        ),
+        (
+            T30 {
+                drop_in: Some((
+                    "10-reset.conf",
+                    "[Install]\nWantedBy=\nWantedBy=multi-user.target extra.target\n",
+                )),
+                links: &["multi-user.target.wants", "extra.target.wants"],
+                ..T30::new("(l) reset, then the same target and another", VENDOR_WANTS)
+            },
+            false,
+        ),
+    ];
+    for (case, shadowed) in cases {
+        let (section, _) = scan(&case.host("enable app.service\n"));
+        let name = case.case;
+        case.assert_collected(&section);
+        assert_eq!(
+            change_of(&section, APP),
+            Some((UnitState::Enabled, Some(PresetDefault::Enable))),
+            "{name}"
+        );
+        let fragment = fragment_of(&section, APP);
+        if shadowed {
+            assert!(
+                matches!(fragment, UnitFragment::Shadowed { .. }),
+                "{name}: {fragment:?}"
+            );
+        } else {
+            assert!(
+                matches!(fragment, UnitFragment::Vendor { .. }),
+                "{name}: {fragment:?}"
+            );
+        }
+        let change = section
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == APP)
+            .expect("the row asserted above");
+        let expected_drop_ins: Vec<String> =
+            case.drop_in.map(|_| case.etc_file()).into_iter().collect();
+        assert_eq!(change.install_drop_ins, expected_drop_ins, "{name}");
+        assert_eq!(
+            change.attention_reason.as_deref(),
+            Some(ADDS_LINKS_NOTE),
+            "{name}"
+        );
+        assert_eq!(findings(&section), [], "{name}");
+        assert!(section.undetermined_installs.is_empty(), "{name}");
+    }
+}
+
+/// T30 (a) and (n): a shadow with the package's `[Install]` unchanged, one
+/// with the same values reordered, and an `/etc` drop-in holding only
+/// `Also=` over a package `Also=helper.service`. Each `/etc` file is first
+/// shown collected and the unit `Enabled` at its `enable` preset; then
+/// there is no row and no finding. (b) above is the positive control on
+/// the same unit and route.
+#[test]
+fn t30_an_unchanged_install_section_is_no_row() {
+    let cases = [
+        T30 {
+            shadow: Some(VENDOR_WANTS),
+            links: &["multi-user.target.wants"],
+            ..T30::new("(a) a shadow with the same [Install]", VENDOR_WANTS)
+        },
+        T30 {
+            shadow: Some(
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=extra.target multi-user.target\n",
+            ),
+            links: &["multi-user.target.wants", "extra.target.wants"],
+            ..T30::new("(a) a shadow with the values reordered", WANTS_BOTH)
+        },
+        T30 {
+            drop_in: Some(("10-also.conf", "[Install]\nAlso=\n")),
+            links: &["multi-user.target.wants"],
+            ..T30::new("(n) an empty Also= that changes nothing", WANTS_WITH_HELPER)
+        },
+    ];
+    for case in cases {
+        let (section, _) = scan(&case.host("enable app.service\n"));
+        let name = case.case;
+        case.assert_collected(&section);
+        assert_eq!(
+            entry_of(&section, APP),
+            Some((UnitState::Enabled, Some(PresetDefault::Enable))),
+            "{name}"
+        );
+        assert_eq!(change_of(&section, APP), None, "{name}");
+        assert_eq!(findings(&section), [], "{name}");
+        assert!(section.undetermined_installs.is_empty(), "{name}");
+    }
+}
+
+/// T30 (d), (f), (g), (i), (j), the first and third cases of (k), the
+/// second case of (l), and (m): no state change, and one finding per
+/// difference with its relation, cause and the `/etc` install file.
+#[test]
+fn t30_changed_links_are_install_difference_findings() {
+    use LinkRelation::{Alias, Also, Wants};
+    use ManualLinkCause::{HostInstallOnly, NotInInstall, VendorInstallOnly};
+    let specifier = ManualLinkCause::Undetermined {
+        reason: InstallUnknown::Specifier,
+    };
+    // (relation, parent, unit, cause, whether it names the `/etc` file)
+    type Expected<'a> = Vec<(LinkRelation, &'a str, &'a str, ManualLinkCause, bool)>;
+    let cases: Vec<(T30, Expected)> = vec![
+        (
+            REPLACING_SHADOW,
+            vec![
+                (Wants, "graphical.target", APP, HostInstallOnly, true),
+                (Wants, "multi-user.target", APP, VendorInstallOnly, true),
+            ],
+        ),
+        (
+            T30 {
+                vendor_drop_in: Some(("10-extra.conf", "[Install]\nWantedBy=extra.target\n")),
+                drop_in: Some(("10-extra.conf", "[Service]\nNice=5\n")),
+                links: &["multi-user.target.wants"],
+                ..T30::new(
+                    "(f) a [Service] drop-in hiding a vendor [Install] drop-in",
+                    VENDOR_WANTS,
+                )
+            },
+            vec![(Wants, "extra.target", APP, VendorInstallOnly, true)],
+        ),
+        (
+            ALSO_DROPPING_SHADOW,
+            vec![(Also, APP, "helper.service", VendorInstallOnly, true)],
+        ),
+        (
+            T30 {
+                shadow: Some(VENDOR_WANTS),
+                links: &["multi-user.target.wants"],
+                ..T30::new(
+                    "(i) a package section with a specifier, shadowed",
+                    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=%H.target\n",
+                )
+            },
+            vec![(Wants, "multi-user.target", APP, specifier, false)],
+        ),
+        (
+            T30 {
+                links: &["graphical.target.wants", "multi-user.target.wants"],
+                case: "(j) the replacing shadow with a hand-made multi-user.target link",
+                ..REPLACING_SHADOW
+            },
+            vec![
+                (Wants, "multi-user.target", APP, NotInInstall, false),
+                (Wants, "graphical.target", APP, HostInstallOnly, true),
+            ],
+        ),
+        (
+            T30 {
+                drop_in: Some(("10-reset.conf", "[Install]\nWantedBy=\n")),
+                state: "static",
+                ..T30::new("(k) a WantedBy= reset, no link", VENDOR_WANTS)
+            },
+            vec![(Wants, "multi-user.target", APP, VendorInstallOnly, true)],
+        ),
+        (
+            T30 {
+                shadow: Some(NO_INSTALL),
+                state: "static",
+                ..T30::new("(k) a shadow with no [Install], no link", VENDOR_WANTS)
+            },
+            vec![(Wants, "multi-user.target", APP, VendorInstallOnly, true)],
+        ),
+        (
+            T30 {
+                drop_in: Some(("10-reset.conf", RESET_THEN_GRAPHICAL)),
+                links: &["graphical.target.wants"],
+                ..T30::new("(l) reset, then another target", VENDOR_WANTS)
+            },
+            vec![
+                (Wants, "graphical.target", APP, HostInstallOnly, true),
+                (Wants, "multi-user.target", APP, VendorInstallOnly, true),
+            ],
+        ),
+        (
+            T30 {
+                drop_in: Some(("10-alias.conf", "[Install]\nAlias=\n")),
+                links: &["multi-user.target.wants"],
+                ..T30::new(
+                    "(m) an Alias= reset",
+                    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=x-alias.service\n",
+                )
+            },
+            vec![(Alias, "x-alias.service", APP, VendorInstallOnly, true)],
+        ),
+    ];
+    for (case, expected) in cases {
+        let (section, _) = scan(&case.host("enable app.service\n"));
+        let name = case.case;
+        case.assert_collected(&section);
+        assert_eq!(change_of(&section, APP), None, "{name}");
+        let file = case.etc_file();
+        let expected: Vec<Finding> = expected
+            .into_iter()
+            .map(|(relation, parent, unit, cause, with_file)| {
+                let files = if with_file {
+                    vec![file.as_str()]
+                } else {
+                    vec![]
+                };
+                (relation, parent, unit, cause, files)
+            })
+            .collect();
+        assert_eq!(findings(&section), expected, "{name}");
+        assert!(section.undetermined_installs.is_empty(), "{name}");
+    }
+}
+
+/// T30 (k), second case: the `WantedBy=` reset drop-in with the package's
+/// `multi-user.target` link still on the host. The drop-in is collected
+/// and the same unit with no link reports the `VendorInstallOnly` link
+/// (the positive control); with the link kept, the host and the image both
+/// have it, so it produces no finding of any cause.
+#[test]
+fn t30_a_package_link_kept_on_the_host_is_no_finding() {
+    let unlinked = T30 {
+        drop_in: Some(("10-reset.conf", "[Install]\nWantedBy=\n")),
+        state: "static",
+        ..T30::new("(k) a WantedBy= reset", VENDOR_WANTS)
+    };
+    let (control, _) = scan(&unlinked.host("enable app.service\n"));
+    assert_eq!(
+        findings(&control),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target",
+            APP,
+            ManualLinkCause::VendorInstallOnly,
+            vec![unlinked.etc_file().as_str()]
+        )]
+    );
+
+    let kept = T30 {
+        links: &["multi-user.target.wants"],
+        state: "enabled",
+        ..unlinked
+    };
+    let exec = kept.host("enable app.service\n");
+    use inspectah_core::traits::executor::Executor as _;
+    assert!(
+        exec.read_dir(std::path::Path::new(MULTI_USER_WANTS))
+            .expect("the link's directory")
+            .contains(&APP.to_owned()),
+        "the package's link is on the host"
+    );
+    let (section, _) = scan(&exec);
+    kept.assert_collected(&section);
+    assert_eq!(change_of(&section, APP), None);
+    assert_eq!(findings(&section), []);
+    assert!(section.undetermined_installs.is_empty());
+}
+
+/// T30 (h), (o) and (p):
+/// - (h) the shadows of (c), (d) and (g) under a `disable` preset: the
+///   ordinary `Enabled` row, with no attention note and no finding;
+/// - (o) a vendor unit with no `[Install]` and an `/etc` drop-in holding
+///   only `[Service]`, no link: the drop-in collected, then no state
+///   change, no finding and no record;
+/// - (p) the drop-in of (l)'s second case on a host with no
+///   `graphical.target.wants/` link: a `Disabled` row, whose `disable` is
+///   the command, and no install-difference finding.
+#[test]
+fn t30_other_presets_and_controls() {
+    for case in [ADDING_SHADOW, REPLACING_SHADOW, ALSO_DROPPING_SHADOW] {
+        let (section, _) = scan(&case.host("disable *\n"));
+        let name = case.case;
+        case.assert_collected(&section);
+        assert_eq!(
+            change_of(&section, APP),
+            Some((UnitState::Enabled, Some(PresetDefault::Disable))),
+            "{name}"
+        );
+        let change = &section.state_changes[0];
+        assert_eq!(change.attention_reason, None, "{name}");
+        assert_eq!(findings(&section), [], "{name}");
+    }
+
+    let service_only = T30 {
+        drop_in: Some(("10-nice.conf", "[Service]\nNice=5\n")),
+        state: "static",
+        ..T30::new(
+            "(o) a [Service] drop-in on a unit with no [Install]",
+            NO_INSTALL,
+        )
+    };
+    let (section, _) = scan(&service_only.host("enable app.service\n"));
+    service_only.assert_collected(&section);
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    assert_eq!(findings(&section), []);
+    assert!(section.undetermined_installs.is_empty());
+
+    let disabled = T30 {
+        drop_in: Some(("10-reset.conf", RESET_THEN_GRAPHICAL)),
+        state: "disabled",
+        ..T30::new("(p) reset, then another target, not linked", VENDOR_WANTS)
+    };
+    let (section, _) = scan(&disabled.host("enable app.service\n"));
+    disabled.assert_collected(&section);
+    assert_eq!(
+        change_of(&section, APP),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        section.state_changes[0].implied_action(),
+        UnitAction::Disable
+    );
+    assert_eq!(findings(&section), []);
+}
