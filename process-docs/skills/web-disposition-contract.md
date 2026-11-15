@@ -116,6 +116,42 @@ item id: ids are host data, and a unit name can hold a literal backslash
 (`backup\x2djob.timer`), which a selector reads as an escape, so the link
 opens the section and focuses nothing.
 
+## 1c. Units: link rows, records and the default target
+
+`/api/view` passes the projection's unit views through untouched
+(`ManualLinkView`, `UndeterminedInstallView`, `DefaultTargetView`), so the
+TypeScript types mirror serde exactly. Four wire forms are easy to get
+wrong:
+
+- **`ManualLinkView.cause` is externally tagged.** Six causes are bare
+  strings (`"static_unit"`); `undetermined` is an object,
+  `{"undetermined":{"reason":"upheld_by"}}`. Branch on `typeof`, never on
+  string equality alone (`causeName` in `ServiceSection.tsx`).
+- **`ItemId::DefaultTarget` has no `key`.** It is `{"kind":"DefaultTarget"}`,
+  the one item id without one, since a snapshot records at most one
+  default target. Code that reads `item_id.key` from an arbitrary item
+  breaks on it.
+- **Absent versus `null`.** `default_target` is absent, not `null`, when
+  the host records none. `DefaultTargetView.declined` is `null`, not
+  absent, when the target is carried. A unit row's `also` and
+  `install_drop_ins` are absent when empty.
+- **Link rows and undetermined records have no toggle.** They carry no
+  `include`; their state follows the unit's install files, and
+  `not_applied` lists the files the export leaves out, absent while the
+  advisory applies.
+
+**Row identity in the Services grid.** A unit name can hold `-`, even
+`.service-` (`a.service-b.service` is a valid name), so a link row's React
+key and `data-testid` are the JSON-encoded `[relation, parent, unit]`
+(`linkIdentity`), never the three joined with a separator, which can give
+two links one id and make reveal focus the wrong row. An undetermined
+record's key is `["undetermined", unit]`: its bare unit name is the key a
+unit row or mount finding beside it may already use. The default target's
+pending-guard key is `["default_target"]`.
+
+The services bulk toggle does not send `DefaultTarget`: the target has its
+own toggle. The fleet view shows none of these rows.
+
 ## 2. The hand-built decision DTOs — still `include: bool`
 
 `ServiceDecisionDto`, `DropInDecisionDto`, `QuadletDecisionDto`,

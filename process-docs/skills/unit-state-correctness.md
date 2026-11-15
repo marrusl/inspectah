@@ -225,3 +225,5 @@ names it. Use one of those, after proving presence on the same route.
 - [service-omission-model](service-omission-model.md): the rules, in order, per verb
 - [containerfile-value-quoting](containerfile-value-quoting.md): unit operands after `--`
 - [cross-inspector-shadow-passes](cross-inspector-shadow-passes.md): masks are states; storage files belong to config
+- [unit-install-state](unit-install-state.md): how the collector reads enablement from the links
+- [etc-systemd-system-ownership](etc-systemd-system-ownership.md): who owns each thing under `/etc/systemd/system`

@@ -54,7 +54,7 @@ no other workspace crate; `collect` on `core`; `pipeline` on `core` and
 Each module defines the data model for a snapshot section:
 - `rpm.rs` — RPM package types
 - `config.rs` — Modified config file types
-- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`, `mount_findings`); `UnitName` proves a unit name once and gives its kind, instance and template. A state change's unit is a `CarriedUnit` (an ordinary unit with its `UnitFragment`, or a package-owned storage unit); an administrator's mount, automount or swap unit is an `AdvisoryUnit` in a `MountUnitFinding`, never a state change. `InstanceName::template` builds a `UnitName` without a re-parse, which is sound only because `InstanceName`'s fields are private; any type that feeds an unchecked constructor of a proved type has no public fields (`UnitName`, `UnitSubject`, `UnitStateChange`'s unit and state, and `PlannedUnit` and `Destination` in the pipeline), so a caller cannot swap in text the parser never checked
+- `units.rs`: systemd unit types for the snapshot field `units` (`UnitSection`: `state_changes`, `inventory`, `drop_ins`, `mount_findings`, `manual_links`, `undetermined_installs`, `default_target`), and the one unit-file line model (`logical_lines`, `holds_install_section`); `UnitName` proves a unit name once and gives its kind, instance and template. A state change's unit is a `CarriedUnit` (an ordinary unit with its `UnitFragment`, or a package-owned storage unit); an administrator's mount, automount or swap unit is an `AdvisoryUnit` in a `MountUnitFinding`, never a state change. `InstanceName::template` builds a `UnitName` without a re-parse, which is sound only because `InstanceName`'s fields are private; any type that feeds an unchecked constructor of a proved type has no public fields (`UnitName`, `UnitSubject`, `UnitStateChange`'s unit and state, and `PlannedUnit` and `Destination` in the pipeline), so a caller cannot swap in text the parser never checked
 - `containers.rs` — Podman/Docker container types
 - `network.rs`, `storage.rs`, `kernelboot.rs`, `selinux.rs`, `scheduled.rs`, `nonrpm.rs`, `users.rs`
 - `sysctl/`: `KernelBootSection.sysctl`, the sysctl search path as collected (`SysctlSection`, `SysctlDir`, `SysctlKey`); records, decides nothing
@@ -90,8 +90,12 @@ only when the subscription is preserved), and the pipeline runs it through
   - `rpm/dnf_vars.rs`: the host's dnf variables, used to expand `gpgkey=` paths in `rpm/repos.rs`
 - `config/` — Modified config files via `rpm -Va`
 - `units/`: `UnitsInspector`, which writes the `units` section for every unit kind
-  - `mod.rs`: the inspector: `systemctl list-unit-files`, masks, drop-ins, owners, state changes and mount findings
-  - `resolve.rs`: the unit file systemd would load for a name, from `/etc/systemd/system` and the vendor directory
+  - `mod.rs`: the inspector: `systemctl list-unit-files`, the name gate, masks, drop-ins, owners, state changes, mount findings, instances found from links, the install comparison and the default target
+  - `resolve.rs`: the unit file systemd would load for a name, from `/etc/systemd/system` and the vendor directory, and the search-path refusal (`UNREAD_SEARCH_PATH`)
+  - `install.rs`: the effective `[Install]` section `enable` acts on, from the unit file and its own and template drop-ins (`read_install`, `read_vendor_install`)
+  - `links.rs`: the links under both unit directories, the install state they give a unit, hand-made link findings and undetermined install records, and the comparison with the package's `[Install]` (see `unit-install-state.md`)
+  - `also.rs`: the units `Also=` reaches from a unit and what the links say about each
+  - `specifiers.rs`: `expand_unit_specifiers`, for the `[Install]` reader and a timer's `Unit=`
 - `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
 - `modernization.rs`: not an `Inspector`, detection rules for modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.
 - `nonrpm.rs` also contains `scan_unmanaged_files()` for Tier 2 unmanaged file cataloging
@@ -118,7 +122,7 @@ Artifact generators invoked after triage decisions finalized:
 - `tarball.rs` — Snapshot archive packaging
 - `users.rs` — User/group materialization (passwd/group entries)
 - `not_carried.rs`: the not-carried class (`classify_auto_carriage`, `apply_scan_package_defaults`, `not_carried_packages`); the one decider of which auto packages the image leaves out, read by the Containerfile, the audit report and `unit_plan.rs`; `var_dirs.rs` asks `unit_plan::pulled_in_by_included` directly
-- `unit_plan.rs`: `plan_units`, every `systemctl` line for a collected unit, checked against `staged_writes` (see `service-omission-model.md`); `declined_line`, the one source of a declined command's text; `mount_advisory_lines` for mount findings; `unit_state_lines` writes the `# === Systemd Unit State ===` section
+- `unit_plan.rs`: `plan_units`, every `systemctl` line for a collected unit and the default target, checked against `staged_writes` (see `service-omission-model.md`); `declined_line`, the one source of a declined command's text; `mount_advisory_lines` for mount findings; `manual_link_lines`, `undetermined_install_lines` and `also_advisory_lines` for link findings and rule 7; `unit_state_lines` writes the `# === Systemd Unit State ===` section
 - `language_packages.rs` — Tier 1 pip/npm/gem Containerfile rendering
 - `unmanaged.rs` — Tier 2 unmanaged file COPY directives and symlink `ln -sf`
 - `repoless.rs`: package routing (`route_for`), repo-less install planning for the combined local and disabled-repo install, and the scan tarball's cached RPM writer

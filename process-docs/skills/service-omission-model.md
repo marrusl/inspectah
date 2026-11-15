@@ -1,16 +1,19 @@
 # Service omission model
 
 `plan_units` in `crates/pipeline/src/render/unit_plan.rs` is the
-authority for which `systemctl enable`, `disable` and `mask` lines the
-Containerfile carries for collected units of every kind: services,
-sockets, paths, timers, targets, slices, and package-owned mount,
-automount and swap units. It reads the snapshot's `units` section
+authority for which `systemctl enable`, `disable`, `mask` and
+`set-default` lines the Containerfile carries for collected units of every
+kind: services, sockets, paths, timers, targets, slices, and package-owned
+mount, automount and swap units. It reads the snapshot's `units` section
 (`UnitSection.state_changes`, `UnitStateChange` in
-`crates/core/src/types/units.rs`) and checks each included row against
-`staged_writes`, the stager's own decision, so the plan and the files the
-export writes cannot disagree. `containerfile.rs` writes the plan's
-lines in the `# === Systemd Unit State ===` section, after the
-configuration `COPY`, and refine's projection reads the same plan.
+`crates/core/src/types/units.rs`, and the default target, link findings
+and undetermined install records beside them) and checks each included row
+against `staged_writes`, the stager's own decision, so the plan and the
+files the export writes cannot disagree. `containerfile.rs` writes the
+plan's lines in the `# === Systemd Unit State ===` section, after the
+configuration `COPY`, and refine's projection reads the same plan. How
+the collector reads the state the rows carry is in
+[unit-install-state](unit-install-state.md).
 
 ## Every `systemctl` line is the plan's
 
@@ -26,7 +29,8 @@ needs a `systemctl` line adds a request to the plan.
 
 The plan takes three kinds of request (§ 10.2):
 
-- each included state change, rendered in the unit state section;
+- each included state change, and the included default target
+  (`plan_default_target`), rendered in the unit state section;
 - the units inspectah generates from cron entries (timers, and the
   service of an `@reboot` entry), in `UnitPlan.scheduled`, copied and
   enabled in the Scheduled Tasks section before the unit state section;
@@ -63,15 +67,22 @@ each included state change. The first that fails declines the command.
 
 | Order | Rule | Verbs | Declines with |
 |---|---|---|---|
+| 0 | The instance placeholder: a template instance is collected and not carried yet. It decides before every rule, and Task 5.2 removes it. | all | `InstanceNotCarriedYet` |
 | 1 | Rule 2: a package-owned storage unit (`PackagedStorage`) acts only on its package's file. Any file staged at `/etc/systemd/system/<name>` is what the image would load. | all | `StorageFileStaged` |
 | 2 | Rule 3: no `disable` or `mask` of a unit on `TARGET_NEEDED_UNITS` (`bootc-*`, `ostree-*`, `systemd-remount-fs.service`), and no `mask` of `TMP_MOUNT` (`tmp.mount`). Both constants are in `crates/core/src/baseline.rs`. | `disable`, `mask` | `TargetNeedsUnit` (a FIXME) |
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
-| 5 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
+| 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. | `enable`, `disable` | `InstallEvidenceChanged` |
+| 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
+| 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
+| 8 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
+
+Rule 6, an instance's configuration, is phase 5's and is not built; the
+placeholder at order 0 stands in its place.
 
 **A mask follows the package check.** `mask` reads no `[Install]`, so
-rule 5's file half (order 4) does not apply to it, but the package half
-(order 5) does, through the same presence tiers, unchanged: a mask of a
+rule 5's file and drop-in halves (orders 4 and 5) do not apply to it, but
+the package half (order 6) does, through the same presence tiers, unchanged: a mask of a
 `Vendor` or `PackagedStorage` unit whose package is not in the image is
 omitted with the tiers' reason, so the host's mask stays visible as an
 `# Omitted:` line. Rules 3 and 4 run first, so a protected unit or
@@ -100,9 +111,83 @@ generated timer included), so a generated file never replaces the
 host's own. The staging rules in full are in
 [unit-state-correctness](unit-state-correctness.md).
 
+## Install files: rule 5's drop-in half
+
+Rules 5 and 7 ask one question of the export: which files under
+`/etc/systemd/system` can supply or change `[Install]` for a name `N`.
+They are the unit file at `N` (for an instance, its template's too), and
+each `.conf` in `N.d` (or the template's `.d`) that holds an `[Install]`
+section or has the file name of one of the row's `vendor_drop_ins`. A
+drop-in with no `[Install]` hides a vendor drop-in of its name, so
+excluding it brings the vendor section back. The type-wide (`service.d`)
+and dash-prefix directories are never install files (`install_drop_in_dirs`).
+
+- **"Holds an `[Install]` section" is the only lexical read the plan
+  makes** (`holds_install_section` in core, the collector's line model).
+  The plan never reads `[Install]` keys and never re-resolves a unit.
+- `rule_5_drop_ins` checks each recorded path through `Destination` (one
+  that does not parse fails), then scans the staged writes under each
+  install directory by a `BTreeMap` range from the directory's
+  destination, so a staged install file the row did not record fails too.
+  In a fleet aggregate, a recorded file whose path holds more than one
+  content variant fails (`one_variant`).
+- § 10.2 says a file whose content was not captured counts as an install
+  file. Such a file can never be staged (its config row is a
+  `content_not_captured` advisory with no toggle), so the case cannot
+  reach either rule today.
+
 **Every rule that asks whether a file is staged asks `is_staged`**, which
 looks the path up in `staged_writes.writes` by `Destination`, never by a
 string compare. A path spelled two ways is one destination.
+
+## Rule 7, `Also=` members
+
+`enable` and `disable` also act on every unit `Also=` reaches. A command
+for a unit with a non-empty `also` list is carried only when three
+conditions hold, the first that fails giving the `AlsoWhy`:
+
+1. Every member's `MemberLinks` match the verb: `Installed` or `Inert` for
+   `enable`, `Unlinked` or `Inert` for `disable`.
+2. A member with a row of its own is carried with the same verb; a member
+   with no row is not an instance under `enable` nor a protected unit
+   under `disable`.
+3. Neither the unit nor any member has an install file in the snapshot,
+   **staged or excluded** (`install_file_in_snapshot`). Excluding the file
+   does not make the command safe: the list and the links were recorded
+   from it.
+
+- **`rule_7_also` runs after rules 1 to 6 for every row**, because
+  condition 2 reads that first pass (`carried`). A member whose own row
+  fails, or carries another verb, blocks its owner.
+- **A fleet aggregate is `AlsoWhy::FleetAggregate` before any condition**,
+  naming every member: the merge keeps no other host's file paths, so no
+  condition can be established.
+- **The reason names every failing member.** `AlsoMember.member` is the
+  first member, in `also` order, failing the first failing condition;
+  `named` lists every member failing it the same way and `further` the
+  members failing it the other way it can fail (a condition fails at most
+  two ways). `add` lists the members that get a line of the opposite verb.
+- **Every rule 7 sentence is an `ALSO_*` constant, and
+  `also_advisory_lines` is the only renderer**, for the Containerfile and
+  refine. Its blocks follow the `systemctl` lines. The wording beyond the
+  one block § 10.2 quotes is provisional until the spec quotes it; change
+  the constants, not the callers.
+
+## Findings the plan advises on
+
+Beside the commands, the plan renders the collector's link findings and
+undetermined install records (`link_advisories`,
+`undetermined_advisories`), each a `FindingAdvisory` built from
+`manual_link_lines` or `undetermined_install_lines`. While one of the
+unit's install files is not staged (`excluded_install_files`, per unit, by
+`Destination`), its advisories give way to one `install_omitted_line`
+naming the excluded files, with those files in `not_applied`, and
+`unit_state_lines` writes that line once per unit.
+
+The default target is planned by `plan_default_target`: rule 5's file
+half, then the package half for a `Vendor` target. `set-default` reads no
+`[Install]`, so the drop-in half and rule 7 do not apply. A target that
+fails is `default_target_declined`, written with `default_target_line`.
 
 Runtime package updaters (`RUNTIME_UPDATERS` in `core/baseline.rs`) are
 excluded by default at collect and in the fleet merge, and can be
@@ -169,6 +254,11 @@ showed, and the build failed with no warning anywhere.
   whose files the stager withheld because a collected unit, `name`, has
   one file's name. A FIXME, with exclude advice for `Reservation::Row`
   and rename advice for `Reservation::Inventory`.
+- `InstanceNotCarriedYet`: the phase 4 placeholder for every template
+  instance.
+- `AlsoMember { member, why, verb, named, further, add }`: rule 7. Not an
+  `# Omitted:` line but an advisory block (`also_advisory_lines`); refine
+  marks it `DeclinedMarker::Advisory`.
 
 `AdvisoryReason::PackageUnreachable` and `BaselineUnavailable` are the
 emitted-with-context tiers.

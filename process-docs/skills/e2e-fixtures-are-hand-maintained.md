@@ -58,6 +58,19 @@ fixture edit, run it yourself and review the snapshot diff:
 cargo test -p inspectah-web --test fixture_structure_test
 ```
 
+**A new always-present view key goes into every view fixture.** The
+single-host view fixtures (`single-host/view*.json`,
+`post-responses/*/success.json` and `sequences/**`) carry every key
+`ViewResponse` always serializes, `manual_links` and
+`undetermined_installs` among them, and so do the system-tuning
+recordings that `system_tuning_fixtures_test` compares against. A key
+added to the response and not to both goes red in
+`fixture_structure_test` or `system_tuning_fixtures_test`. Add it to the
+hand-written fixtures by script, then re-record the system-tuning ones
+with `UPDATE_SYSTEM_TUNING_FIXTURES=1 cargo test -p inspectah-web --test
+system_tuning_fixtures_test` and read the diff. A key skipped when empty
+or absent (`default_target`, a unit row's `also`) needs neither.
+
 **The compensating control named in `fixture_structure_test.rs`'s header
 is nominal.** That file says Rust-type compatibility is "proven by
 [the] real-server smoke tests" — `e2e/smoke-integration.spec.ts`. Those

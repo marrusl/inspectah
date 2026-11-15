@@ -101,36 +101,63 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | **ID** | `Units` |
 | **Applies to** | `PackageBased` systems |
 | **Snapshot field** | `units` (`UnitSection`) |
-| **Source** | `inspectors/units/` (`mod.rs`, and `resolve.rs` for the unit file each name loads) |
+| **Source** | `inspectors/units/` (`mod.rs`; `resolve.rs` for the unit file each name loads; `install.rs` for its `[Install]` section; `links.rs` for the links and what they mean; `also.rs` for `Also=` members) |
 
-**Unit kinds.** Services, sockets, paths, timers, targets and slices carry their state. A mount, automount or swap unit carries its state when a package owns its unit file under `/usr/lib/systemd/system/`; one the administrator wrote is a mount finding (below) and never gets a `systemctl` line. Device and scope units are not recorded, though drop-ins for them are. A template carries only a mask; a template instance is not recorded.
+**Unit kinds.** Services, sockets, paths, timers, targets and slices carry their state. A mount, automount or swap unit carries its state when a package owns its unit file under `/usr/lib/systemd/system/`; one the administrator wrote is a mount finding (below) and never gets a `systemctl` line. Device and scope units are not recorded, though drop-ins for them are. A template carries only a mask. A template instance enabled by a link under `/etc/systemd/system/`, an instance with a unit file of its own, and a masked instance are recorded with their state; instances are not carried yet, so each is named in an `# Omitted: <unit> (template instances are not carried yet)` line.
 
 **What it reads:**
 
 | Data source | Purpose |
 |:------------|:--------|
-| `systemctl list-unit-files --no-pager` | Installed units of every kind and their states |
+| `systemctl list-unit-files --no-pager` | Installed units of every kind. Its `enabled` and `disabled` are not used: the state is read from the links |
 | `/usr/lib/systemd/system-preset/`, `/etc/systemd/system-preset/` (`*.preset`) | Preset rules, to tell an operator change from a vendor default |
 | `/etc/systemd/system/<unit>` and `/usr/lib/systemd/system/<unit>` | The unit file the name loads: local, a full shadow of a vendor file, the vendor file, or a mask |
+| `[Install]` in the unit file and in the `.conf` drop-ins of `<unit>.d/` and, for an instance, its template's `.d/`, under both directories | The links `systemctl enable` would make, and the units its `Also=` names |
+| Links in `*.wants/`, `*.requires/` and `*.upholds/`, and aliases, under `/etc/systemd/system/` | The links the source host has, which decide whether a unit is enabled |
+| Links under `/usr/lib/systemd/system/` | The links packages ship, which complete an install and never start one |
+| `/etc/systemd/system/default.target` | The default target |
+| The rest of systemd's unit search path (`/usr/local/lib/systemd/system/`, `/run/systemd/system/`, `/etc/systemd/system.control/` and others) | Only checked: a unit file or `[Install]` drop-in there that changes what loads refuses the unit with a warning |
 | `rpm -qf --queryformat` on `/usr/lib/systemd/system/<unit>` | Owning package of each vendor unit file |
 | `/etc/systemd/system/<unit>.d/*.conf` | Drop-in overrides, for a unit of any kind |
 | `/etc/systemd/system/<unit>` against `/usr/lib/systemd/system/` | Full unit shadows |
 | `Where=` and `Options=` in an administrator's mount, automount or swap unit file | The mount point and whether the unit is `nofail`, for its mount finding |
 
-**What becomes a state change.** The inspector records operator intent only. A masked unit is always recorded, whichever form the mask takes: a link to `/dev/null` or a zero-length file. A vendor unit, a full shadow, or a package-owned storage unit is recorded when its state differs from its preset; with no matching preset rule there is no evidence of a change, and nothing is recorded. A local unit, whose file is only under `/etc/systemd/system/`, is recorded when it is enabled, whatever the presets say, because the image does not have it unless the export carries it; a disabled local unit is not recorded. A unit file a package owns under `/etc/systemd/system/` counts as local, with no owner. Timers follow the same rules as every other kind: a local timer that is enabled, or a vendor timer whose state differs from its preset, is a state change, and the unit row is the timer's one state control. Units at their preset state produce no state change; like every unit with a durable state, they are recorded in the section's `inventory` with their state and preset.
+**Enablement is read from the links.** `systemctl list-unit-files` says `enabled` whenever it finds a link to a unit, whoever made it. The inspector reads the unit's effective `[Install]` section instead, as `systemctl enable` reads it (an empty `WantedBy=` or `Alias=` in a drop-in clears the values before it; type-wide `service.d/` and dash-prefix `a-.service.d/` drop-ins are not read for it), and compares the links it names with the links on the host. A unit is enabled when every link its section names is under `/etc/systemd/system/` or shipped by a package, and at least one is under `/etc`; it is disabled when none is under `/etc`. A link a package ships completes an install and never starts one. A unit with some of its links and not others, or whose `[Install]` names no link, has no state of its own and gets no state change.
 
-Static, alias, indirect and generated units are dropped silently, and runtime-only or invalid states produce a warning. `remote-cryptsetup.target` disabled against its `enable` preset is left alone, since a stock RHEL 9 install leaves it that way. A unit with no file under `/etc/systemd/system/` or `/usr/lib/systemd/system/` (only under `/usr/local/lib/systemd/system/` or `/run`, for example), an alias, and a link to a file elsewhere each get a warning and no state change. A unit file that is not valid UTF-8 keeps its unit.
+**What becomes a state change.** The inspector records operator intent only. A masked unit is always recorded, whichever form the mask takes: a link to `/dev/null` or a zero-length file. A vendor unit, a full shadow, or a package-owned storage unit is recorded when its state differs from its preset; with no matching preset rule there is no evidence of a change, and nothing is recorded. A preset line with a verb the inspector does not read stops the lookup for the units it matches and gives a warning naming the line. A local unit, whose file is only under `/etc/systemd/system/`, is recorded when it is enabled, whatever the presets say, because the image does not have it unless the export carries it; a disabled local unit is not recorded. A unit file a package owns under `/etc/systemd/system/` counts as local, with no owner. Timers follow the same rules as every other kind: a local timer that is enabled, or a vendor timer whose state differs from its preset, is a state change, and the unit row is the timer's one state control. Units at their preset state produce no state change, with two exceptions for a packaged unit enabled under an `enable` preset. When its full shadow or `/etc` drop-ins only add links the package's unit does not make, it is an enabled state change, since the image's package install linked it from the package's `[Install]` and the `enable` after the `COPY` adds the rest. When one of its `Also=` members is not enabled on the host, it is an enabled state change, so that the export can say what enabling it would also do (see Links and `[Install]` below). Every unit with an install state, or a mask, is recorded in the section's `inventory` with its state and preset.
+
+Alias and generated units are dropped silently, and so are static and indirect units, unless a link under `/etc/systemd/system/` names one or it has a file or drop-in directory of its own name there. Runtime-only or invalid states produce a warning. `remote-cryptsetup.target` disabled against its `enable` preset is left alone, since a stock RHEL 9 install leaves it that way. A unit whose file or `[Install]` drop-in sits elsewhere on the search path where it changes what loads (under `/usr/local/lib/systemd/system/` or `/run`, for example), an alias, and a link to a file elsewhere each get a warning naming the path and no state change, whatever the unit's state. A unit file that is not valid UTF-8 keeps its unit.
 
 **Units the export never switches off.** A `disable` or `mask` of `bootc-*`, `ostree-*` or `systemd-remount-fs.service`, and a `mask` of `tmp.mount`, are not carried: the Containerfile writes a `# FIXME:` saying why, and refine shows the same reason on the row. An `enable` of any of them is carried. The bootc base image mounts `/tmp` from `tmp.mount`, and without it `/tmp` is read-only.
 
 **Units that update packages in place.** `dnf-automatic*.timer` and `packagekit-offline-update.service` are recorded with their state and excluded by default, since an image-based host is updated by a new image. Include one in `refine` to carry it anyway.
 
+#### Links and `[Install]`
+
+The inspector reports what the links and `[Install]` sections say that a `systemctl` line cannot carry. Each finding is an advisory in the unit state section, comment lines only, and a row with no toggle in `refine`'s single-host Services list:
+
+| Finding | What the advisory gives |
+|:--------|:------------------------|
+| A link under `/etc/systemd/system/` the unit's `[Install]` does not make: one made by hand, one for a unit with no `[Install]` links, one of a unit with only some of its links, an `.upholds` link, or an alias | Why it is not carried, and the `RUN systemctl add-wants` or `add-requires` line that recreates a `.wants` or `.requires` link, or how to add an `.upholds` link or an alias by hand |
+| A link to an instance of `systemd-cryptsetup@.service` or `systemd-fsck@.service`, which names a volume or device of the source host | Why it is not carried, with no command |
+| A unit whose `[Install]` holds an `UpheldBy=`, an empty `RequiredBy=` after a value, a specifier the scan does not expand, or a name it does not admit | Each of its links with the reason; and, when it has an `[Install]` file under `/etc` or assigns `Also=`, one block saying the image's links can differ from the source host's. The unit gets no `enable` or `disable` then |
+| A preset-enabled packaged unit whose `/etc` files drop or replace a link the package's unit makes, or change its `Also=` | One advisory per difference: the `add-wants` or `add-requires` line for a link only the source host has, a quoted `RUN rm --` line for a link only the package install makes, and no command for an `Also=` difference |
+
+While the export leaves out one of a unit's `[Install]` files, that unit's advisories become one `# Omitted:` line naming the files that are not in the export. A link a package ships under `/usr/lib/systemd/system/` is never reported, and a link whose parent or own name is not a unit name gets a warning.
+
+**`Also=` members.** `systemctl enable` and `disable` also act on every unit a unit's `[Install]` names in `Also=`, and on the units those name. Each state change records those members and what the links say about each. An `enable` or `disable` of a unit with members is carried only when every member's links match what the command does, a member with a row of its own is carried with the same verb, and neither the unit nor a member has an `[Install]` file under `/etc/systemd/system/`, whether or not the export copies it. Otherwise the command is an advisory naming the members that keep it from being carried and, where it can, the lines to add by hand. In a fleet aggregate such a command is always an advisory.
+
+#### The default target
+
+When `/etc/systemd/system/default.target` links to a target with a unit file the scan reads, the export sets it with `RUN systemctl set-default`, as the first command of the unit state section. It is not compared with a preset. It is left out with an `# Omitted:` line when the target is local or a replacement whose file the export excludes, or when the target's package is not in the image. In `refine` it has its own toggle. A link to anything else gives a warning and nothing is set. A fleet aggregate keeps the target most hosts set, included only when every host sets it.
+
 #### What the export does with each state change
 
-The Containerfile writes the commands in a `# === Systemd Unit State ===` section after the configuration `COPY`, so each command runs after the files it names are in place. Each verb is one `RUN` (`enable`, then `disable`, then `mask`), with every unit single-quoted after `--`:
+The Containerfile writes the commands in a `# === Systemd Unit State ===` section after the configuration `COPY`, so each command runs after the files it names are in place. The default target comes first, then each verb is one `RUN` (`enable`, then `disable`, then `mask`), with every unit single-quoted after `--`:
 
 ```dockerfile
 # === Systemd Unit State ===
+RUN systemctl set-default -- 'multi-user.target'
 RUN systemctl enable -- \
     'httpd.service' \
     'cockpit.socket'
@@ -144,6 +171,8 @@ A command the export cannot reproduce is left out with a `# Omitted:` line namin
 |:----------|:-------------|
 | A local unit whose unit file is excluded | its unit file is not in the export |
 | A shadowed unit whose shadow is excluded, or a vendor unit with a unit file staged at its name | the `[Install]` section in the image would not be the one recorded on the source host |
+| An `enable` or `disable` whose `[Install]` drop-in is excluded, or with an `[Install]` drop-in the export would copy that the scan did not record | the `[Install]` section in the image would not be the one recorded on the source host |
+| A template instance | template instances are not carried yet |
 | A package-owned mount, automount or swap unit with an administrator's file staged at its name | the export carries an administrator's unit file for it |
 | A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
 | A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |
