@@ -1408,30 +1408,53 @@ switch off a unit the base image has enabled. Suppressing them would also
 need the collector to know which enables came from an install, which the
 host does not record. Run R4 reviews both classes.
 
-**An owner at its preset whose member is off.** A unit with a `Vendor`
-or `Shadowed` fragment that is `Enabled` under an `enable` preset has no
-row by the rules above, so nothing checks its `Also=`. The image's
-package install enables it, and through its `Also=` every member,
-whatever the member's own preset says. So the collector walks `Also=`
-from such a unit as § 7.3 walks it for a state change, and when the walk
-records a member that is an instance (§ 7.5's third kind of candidate)
-with `MemberLinks` `Unlinked` or `Other`, the owner becomes an `Enabled`
-state change whatever the preset says, with its `also` list and an
-`attention_reason` saying that a unit it enables through `Also=` is not
-enabled on the source host. Rule 7 of § 10.2 then finds a member that
-does not match `enable` and makes the command an advisory,
-`AlsoWhy::LinksDiffer`, so the row never carries a line of its own. The
-advisory's lines are the owner's `enable`, which the image already has,
-and the member's `disable`, which is what the image needs. A member that
-is `Installed` or `Inert` leaves the owner with no row, as before.
+**An owner at its preset whose member is off. The check applies to
+every `Also=` member, not only instances. (Mark Russell, 2026-11-15)** A
+unit with a `Vendor` or `Shadowed` fragment that is `Enabled` under an
+`enable` preset has no row by the rules above, so rule 7 has no command
+of its own to check. The image's package install enables it, and through its
+`Also=` every member, whatever the member's own preset says. So the
+collector walks `Also=` from such a unit as § 7.3 walks it for a state
+change, and when the walk records any member with `MemberLinks`
+`Unlinked` or `Other`, the owner becomes an `Enabled` state change
+whatever the preset says, with its `also` list and an `attention_reason`
+saying that a unit it enables through `Also=` is not enabled on the
+source host. Rule 7 of § 10.2 then finds a member that does not match
+`enable` and makes the command an advisory, `AlsoWhy::LinksDiffer`, so
+the row never carries a line of its own: the operator gets the owner's
+`enable`, which the image already has, and the member's `disable`, which
+is what the image needs, as two lines to add by hand. A member that is
+`Installed` (every link its `[Install]` names is present) does not
+trigger it, and neither does one that is `Inert`: by § 6.3 that is a
+member with no link of its own to make (no `[Install]`, only `Also=`, or
+no unit file) and no link naming it, which the package install's
+`enable` does not link either. A member with nothing to make and a link
+made by hand is `Other`, and triggers it.
 
-The same loss exists for a member that is not an instance: a
-`multipathd.socket` enabled through `multipathd.service`'s `Also=`
-against a `disable` preset, which the administrator then disables, is
-`Disabled` at its preset and has no row, and the image's package install
-enables it again. This section does not cover it: the decision above is
-for instances, and widening the owner check to every member is not
-decided (§ 17).
+**`multipathd.socket`.** Installing `device-mapper-multipath` enables
+`multipathd.socket` through another unit's `Also=` against its `disable`
+preset (measured on RHEL 9); the record does not name the owner, and the
+trace takes it to be `multipathd.service`, at an `enable` preset. On a
+host where the administrator disabled only the socket, the socket is
+`Unlinked`, `Disabled` at its own preset and without a row; the owner
+becomes an `Enabled` row, and the Containerfile holds rule 7's advisory
+naming `multipathd.socket`, with `RUN systemctl enable --
+'multipathd.service'` and `RUN systemctl disable -- 'multipathd.socket'`
+as the lines to add, and no `systemctl` instruction for either unit. On a
+host where both are as the package left them, the socket is `Installed`,
+the owner has no row, and this check emits nothing. The socket's own
+`enable` row, enabled against its `disable` preset, is the second class
+above and is carried as before.
+
+**Stock hosts.** An owner whose package leaves a member unlinked in stock
+state would get this advisory on every scan. The 2026-11-13 `Also=`
+survey names no such owner: it records that every member of the 60
+`Also=` units is installable, and the two members it names enabled
+through `Also=` (`NetworkManager-wait-online.service`,
+`multipathd.socket`) are linked in stock state, so their owners have no
+row. The survey did not list every member's links on a stock host, so
+this is not shown to be the only answer; run R4 lists every advisory the
+check produces on a stock host of each release.
 
 The name gate becomes: the name parses as a `UnitName` and is not a D-Bus
 activation alias. The alias test narrows to the `dbus-org.` prefix, which
@@ -1483,14 +1506,17 @@ through each member's effective unit until no new name appears, as
 `enable` and `disable` follow it at build (measured). Each candidate's
 install state is read as above; one with no link is `Disabled`. Its own
 preset is usually `disable`, so it gets no row of its own; what reports
-it is the owner's `Also=` check (§ 7.4, "An owner at its preset whose
+it is the owner's `Also=` check, which applies to every member (§ 7.4,
+"An owner at its preset whose
 member is off"). An owner whose section is `Undetermined` has no
 readable `Also=`, so it derives no candidate; § 7.3 gives it an
 `UndeterminedInstall` whenever it assigns `Also=`, which says its members
 could not be checked.
 
 Both kinds of candidate are built in phase 5, with carried instances
-(§ 15). Until then such an instance is not collected, and phase 4 says
+(§ 15). The owner check that reports a member, instance or not, is
+phase 4's: it needs only the `Also=` walk, which resolves an instance
+through its template. Until then such an instance is not collected, and phase 4 says
 nothing about it.
 
 **Instances tied to one host's devices are never carried.** An instance of
@@ -2895,7 +2921,10 @@ narrowing are unchanged.
   is the union of the names. Neither can produce a carried `Also=`
   command, because of the next rule.
 - **A command for a unit with a non-empty `also` list is always an
-  advisory in an aggregate (§ 10.2 rule 7).** An aggregate is a snapshot
+  advisory in an aggregate (§ 10.2 rule 7).** The owner check of § 7.4
+  runs on each host before the merge, and the row it makes merges as any
+  state change, so in an aggregate it is an advisory as well, with
+  `AlsoWhy::FleetAggregate`. An aggregate is a snapshot
   whose rows carry `aggregate`. The merge keeps one `file_ownership` entry
   per package name (`merge.rs:1332`), so a package-owned, unmodified
   `[Install]` drop-in that one host has can be absent from the aggregate,
@@ -3431,7 +3460,18 @@ Phase 4 (the `/etc/systemd/system` scan):
   't@two.service'` as the lines to add, and no `systemctl` instruction
   names either unit. The control: the same host with
   `multi-user.target.wants/t@two.service` linked: `t@two` is `Installed`,
-  `p.service` has no row and the Containerfile names neither.
+  `p.service` has no row and the Containerfile names neither. The same
+  for a member that is not an instance: a vendor `m.service` with
+  `Also=m.socket`, enabled under `enable m.service` with its link, and
+  `m.socket` (`WantedBy=sockets.target`) under `disable *` with no link:
+  `m.socket` is `Disabled` with no row, `m.service` an `Enabled` row with
+  `m.socket` `Unlinked`, rule 7's advisory with `RUN systemctl enable --
+  'm.service'` and `RUN systemctl disable -- 'm.socket'`, and no
+  `systemctl` instruction for either. Its stock control, `m.socket`
+  linked as the package left it: `Installed`, no owner row, and only
+  `m.socket`'s own `enable` row against its `disable` preset (§ 7.4's
+  second class). The `Inert` control: `Also=m-helper.service`, a member
+  with no `[Install]` and no link: `Inert`, no owner row, no advisory.
 - **T40. An undetermined section with `/etc` files and no link.** A
   vendor unit enabled by an `enable` preset whose only relation is
   `RequiredBy=a.target`, with an `/etc` drop-in holding `RequiredBy=` and
@@ -3554,8 +3594,11 @@ not use the CentOS9 or fedora44 VMs for them.**
   host of each release before a drifted one, and review every row the new
   kinds add, every link advisory, every instance and every `Also=`
   advisory. Known before the run: `remote-cryptsetup.target` on RHEL 9,
-  and the rows a package install makes through `Also=` (§ 7.4). Keep the
-  classified rows and their reasons as the evidence.
+  and the rows a package install makes through `Also=` (§ 7.4). List
+  every advisory the owner check of § 7.4 ("An owner at its preset whose
+  member is off") produces on the stock host of each release, each with
+  its owner and member. Keep the classified rows and their reasons as
+  the evidence.
 - **R5. Small systemd facts, no inspectah build.** Run on 2026-11-14 on
   both releases, and each answer is written where the spec relies on it:
   the reset of an empty `[Install]` key (§ 7.2), the drop-in directories
@@ -3684,8 +3727,9 @@ The `[Install]` reader with `install_drop_ins`, `vendor_drop_ins` and the
 drop-in half of rule 5 (the fragment half is phase 2), and the search-path
 test (§ 7.1, § 7.2); the link scan with vendor links, the install state,
 the instance preset lookup and the stock-state list (§ 7.3, § 7.4); the
-`also` list and rule 7 of § 10.2; `ManualLink` and its advisories
-(§ 10.9); the vendor-side read and the install comparison for a unit at
+`also` list and rule 7 of § 10.2, with the check of an owner at its
+preset whose member is off, for every member (§ 7.4); `ManualLink` and
+its advisories (§ 10.9); the vendor-side read and the install comparison for a unit at
 its preset (§ 7.2, § 7.4); the `.upholds` exclusion in the config walk;
 the default target (§ 7.6, § 10.5); and the overlap contract text. Enabled
 instances are collected as state changes and every one is omitted at
@@ -3700,8 +3744,7 @@ T27, T30 to T34 and T39 to T41.
 `required_config` and `data_paths` with their derivation and fixed tables
 (§ 7.5); the instances derived from the presets and from enabled units'
 `Also=`, so a disabled template-backed instance is found (§ 7.1 source
-6, § 7.5), and the check of an owner at its preset whose member is off
-(§ 7.4); rule 6 of
+6, § 7.5); rule 6 of
 § 10.2 and `InstanceConfigNotStaged`; the attention
 notes for unredacted and flagged configuration; and the data advisory
 (§ 10.8). The placeholder omission from phase 4 is removed. Tests T28,
@@ -3858,14 +3901,11 @@ Other objections worth weighing:
   can hide the `enable` an administrator-enabled instance needs, with no
   comment. No stock preset file was searched for the list form, so how
   often a host meets it is unknown.
-- **An owner's `Also=` is checked only for instance members, and only as
-  an advisory.** A disabled instance that an enabled owner's package
-  install would enable again gets an advisory whose two lines the operator
-  must add by hand, one of them an `enable` the image already has; every
-  enabled owner at its preset is now walked, which can surface owners on a
-  stock host whose members are linked by hand (run R4 reviews them); and
-  the same loss for a member that is not an instance, `multipathd.socket`
-  disabled under `multipathd.service`, stays silent (§ 7.4).
+- **An owner at its preset is advised about every member it enables
+  that the host has off,** which is noise on every scan of a stock host
+  whose package ships an `Also=` member it does not link, and two lines
+  to add by hand, one an `enable` the image already has, where a command
+  could have done it.
 - **A preset line inspectah cannot read is reported only in the scan's
   diagnostics.** The lookup stops there with no preset, where systemd
   skips the line, and the units it decided get no state change. The
