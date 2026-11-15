@@ -385,8 +385,9 @@ fn mount_finding_views(snap: &InspectionSnapshot, plan: &UnitPlan) -> Vec<MountF
 }
 
 /// One view per hand-made link and one per undetermined install record,
-/// each with § 10.9's lines from the plan, which holds one block per record
-/// in the section's order.
+/// each with § 10.9's lines and the install files the export does not
+/// stage, from the plan, which holds one per record in the section's
+/// order.
 fn link_finding_views(
     snap: &InspectionSnapshot,
     plan: &UnitPlan,
@@ -407,23 +408,25 @@ fn link_finding_views(
         .manual_links
         .iter()
         .zip(&plan.link_advisories)
-        .map(|(link, advisories)| ManualLinkView {
+        .map(|(link, advisory)| ManualLinkView {
             relation: link.relation,
             parent: link.parent.clone(),
             unit: link.unit.clone(),
             cause: link.cause,
-            advisories: advisories.clone(),
+            advisories: advisory.lines.clone(),
+            not_applied: advisory.not_applied.clone(),
         })
         .collect();
     let records = units
         .undetermined_installs
         .iter()
         .zip(&plan.undetermined_advisories)
-        .map(|(record, advisories)| UndeterminedInstallView {
+        .map(|(record, advisory)| UndeterminedInstallView {
             unit: record.unit.clone(),
             reason: record.reason,
             install_files: record.install_files.clone(),
-            advisories: advisories.clone(),
+            advisories: advisory.lines.clone(),
+            not_applied: advisory.not_applied.clone(),
         })
         .collect();
     (links, records)

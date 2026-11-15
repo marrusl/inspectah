@@ -244,8 +244,14 @@ pub struct ManualLinkView {
     /// Why the link is not carried; `undetermined` carries its reason.
     pub cause: ManualLinkCause,
     /// § 10.9's lines for the link, as the Containerfile writes them before
-    /// escaping.
+    /// escaping; while `not_applied` holds a path, the unit's `# Omitted:`
+    /// line in their place.
     pub advisories: Vec<String>,
+    /// For an install difference, the unit's install files the export
+    /// does not stage, which keep the advisory out of the Containerfile
+    /// (§ 7.4). Absent while it applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applied: Vec<String>,
 }
 
 /// A unit whose `[Install]` cannot be relied on, as refine shows it
@@ -257,8 +263,13 @@ pub struct UndeterminedInstallView {
     /// The unit's install files under `/etc/systemd/system`.
     pub install_files: Vec<String>,
     /// § 10.9's block for the unit, as the Containerfile writes it before
-    /// escaping.
+    /// escaping; while `not_applied` holds a path, the unit's `# Omitted:`
+    /// line in its place.
     pub advisories: Vec<String>,
+    /// The unit's install files the export does not stage, which keep the
+    /// block out of the Containerfile (§ 7.4). Absent while it applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applied: Vec<String>,
 }
 
 /// One package the export leaves out as not carried: an auto package

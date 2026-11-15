@@ -7448,3 +7448,563 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 7.4 and § 10.9: a unit at its preset whose `/etc` files change
+// `[Install]`, rendered (T31, T32, T41, T40's excluded file).
+// ---------------------------------------------------------------------
+
+/// The unit of the install-difference hosts.
+const DIFF_UNIT: &str = "app.service";
+/// Its full shadow.
+const DIFF_SHADOW: &str = "/etc/systemd/system/app.service";
+/// A section wanted by `multi-user.target` and `extra.target`.
+const WANTS_BOTH: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target extra.target\n";
+/// A section wanted by `graphical.target` only.
+const WANTS_GRAPHICAL: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=graphical.target\n";
+
+/// `unit` from [`INSTALL_PACKAGE`] with `vendor` as its file, listed
+/// `state` under an `enable` preset for it, scanned against a base image
+/// so refine keeps the package included.
+fn diff_host(unit: &str, vendor: &str, state: &str) -> UnitHost {
+    UnitHost::new()
+        .base_package("glibc")
+        .package(INSTALL_PACKAGE)
+        .unit(unit, state)
+        .preset(&format!("enable {unit}"))
+        .vendor_unit(unit, vendor, Some(INSTALL_PACKAGE))
+}
+
+/// `host` with a link to `unit` in `<parent>.wants` under `/etc`.
+fn wants_link(host: UnitHost, parent: &str, unit: &str) -> UnitHost {
+    host.link(
+        &format!("/etc/systemd/system/{parent}.wants/{unit}"),
+        &format!("/usr/lib/systemd/system/{unit}"),
+    )
+}
+
+/// The drop-in `file` in `unit`'s own `.d` under `/etc`.
+fn etc_drop_in(unit: &str, file: &str) -> String {
+    format!("/etc/systemd/system/{unit}.d/{file}")
+}
+
+/// A refine session over `snap` with `ops` applied in order.
+fn session_after(snap: &InspectionSnapshot, ops: &[(ItemId, bool)]) -> RefineSession {
+    let mut session = session(snap);
+    for (item_id, include) in ops {
+        session
+            .apply(set_include(item_id.clone(), *include))
+            .unwrap_or_else(|e| panic!("SetInclude({item_id:?}, {include}): {e:?}"));
+    }
+    session
+}
+
+fn drop_in_item(path: &str) -> ItemId {
+    ItemId::DropIn { path: path.into() }
+}
+
+/// A refine row's `not_applied` paths, read from its serialized form.
+fn not_applied_of(row: serde_json::Value) -> Vec<String> {
+    match row.get("not_applied") {
+        None => Vec::new(),
+        Some(paths) => serde_json::from_value(paths.clone()).expect("a list of paths"),
+    }
+}
+
+/// § 10.9's `# Omitted:` line for `unit`'s install files `excluded`.
+fn install_omitted(unit: &str, excluded: &[&str]) -> String {
+    format!(
+        "# Omitted: {unit} links (excluded from the export: {}; the [Install] the image reads \
+         is not the one recorded, so the source host's links for {unit} are not reproduced, and \
+         links its package install made may remain in the image. Check them with systemctl \
+         is-enabled in the image.)",
+        excluded.join(", ")
+    )
+}
+
+/// How many lines of `containerfile` are `line`.
+fn count_lines(containerfile: &str, line: &str) -> usize {
+    containerfile.lines().filter(|l| *l == line).count()
+}
+
+/// § 10.9's `HostInstallOnly` block for a `.wants` link.
+fn host_only_block(parent: &str, unit: &str) -> [String; 2] {
+    [
+        format!(
+            "# Advisory: {parent}.wants/{unit} is on the source host because {unit}'s files \
+             under /etc/systemd/system name it, and the package's unit does not. The image was \
+             linked from the package's unit, so it lacks this link. Not carried."
+        ),
+        format!(
+            "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+             '{parent}' '{unit}'"
+        ),
+    ]
+}
+
+/// § 10.9's `VendorInstallOnly` block for a link named `link` (the
+/// dependency-directory path, or the alias's words), removed at `path`.
+fn vendor_only_block(link: &str, unit: &str, path: &str) -> [String; 2] {
+    [
+        format!(
+            "# Advisory: {link} is not on the source host: {unit}'s files under \
+             /etc/systemd/system do not name it, and the package's unit does. The image was \
+             linked from the package's unit, so it has this link."
+        ),
+        format!("#   To remove it, add after the configuration COPY: RUN rm -- '{path}'"),
+    ]
+}
+
+/// T31: the units of T30 (b), (c), (e) and the first case of (l) are in
+/// `RUN systemctl enable` after every `COPY`, the one that stages their
+/// `/etc` files included, on both routes.
+/// With the drop-in of (b) or the shadow of (c) excluded through refine:
+/// `InstallEvidenceChanged` naming it and no enable. The units of (a) and
+/// (o) are in no `systemctl` line.
+#[test]
+fn t31_added_links_are_enabled_after_the_copy() {
+    let b_drop_in = etc_drop_in(DIFF_UNIT, "10-extra.conf");
+    let with_both = |host| {
+        wants_link(
+            wants_link(host, "multi-user.target", DIFF_UNIT),
+            "extra.target",
+            DIFF_UNIT,
+        )
+    };
+    let b = with_both(diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"))
+        .file(&b_drop_in, "[Install]\nWantedBy=extra.target\n");
+    let c = with_both(diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"))
+        .etc_unit(DIFF_UNIT, WANTS_BOTH);
+    let cases: Vec<(&str, UnitHost, Option<String>)> = vec![
+        ("(b)", b, Some(b_drop_in.clone())),
+        ("(c) WantedBy=", c, Some(DIFF_SHADOW.to_owned())),
+        (
+            "(c) Alias=",
+            wants_link(diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"), "multi-user.target", DIFF_UNIT)
+                .etc_unit(
+                    DIFF_UNIT,
+                    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=app-alias.service\n",
+                )
+                .link("/etc/systemd/system/app-alias.service", DIFF_SHADOW),
+            None,
+        ),
+        (
+            "(e)",
+            wants_link(diff_host(DIFF_UNIT, NO_INSTALL, "enabled"), "multi-user.target", DIFF_UNIT)
+                .file(&etc_drop_in(DIFF_UNIT, "10-install.conf"), INSTALL_DROP_IN),
+            None,
+        ),
+        (
+            "(l)",
+            with_both(diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled")).file(
+                &etc_drop_in(DIFF_UNIT, "10-reset.conf"),
+                "[Install]\nWantedBy=\nWantedBy=multi-user.target extra.target\n",
+            ),
+            None,
+        ),
+    ];
+    for (case, host, excluded_file) in cases {
+        let snap = scan(host);
+        for (route, containerfile) in both_routes(&snap) {
+            assert!(
+                acts(&containerfile, "enable", DIFF_UNIT),
+                "{case} {route}:\n{containerfile}"
+            );
+            // The install files are staged through the drop-ins COPY or the
+            // configuration COPY: the enable follows every COPY.
+            let copy = containerfile
+                .rfind("\nCOPY ")
+                .unwrap_or_else(|| panic!("{case} {route}: no COPY:\n{containerfile}"));
+            let enable = containerfile
+                .find(&format!("'{DIFF_UNIT}'"))
+                .unwrap_or_else(|| panic!("{case} {route}: no enable:\n{containerfile}"));
+            assert!(
+                copy < enable,
+                "{case} {route}: the enable precedes the COPY:\n{containerfile}"
+            );
+        }
+        if let Some(path) = excluded_file {
+            let excluded =
+                containerfile_in(&exported_after(&snap, &[(drop_in_item(&path), false)]));
+            assert!(
+                in_no_systemctl_instruction(&excluded, DIFF_UNIT),
+                "{case}:\n{excluded}"
+            );
+            assert!(
+                omitted(&excluded, DIFF_UNIT)
+                    .is_some_and(|l| l.ends_with(&evidence_changed(&path))),
+                "{case}:\n{excluded}"
+            );
+        }
+    }
+
+    let unchanged = wants_link(
+        diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"),
+        "multi-user.target",
+        DIFF_UNIT,
+    )
+    .etc_unit(DIFF_UNIT, WANTS_MULTI_USER);
+    let service_only = diff_host(DIFF_UNIT, NO_INSTALL, "static")
+        .file(&etc_drop_in(DIFF_UNIT, "10-nice.conf"), SERVICE_DROP_IN);
+    for (case, host, path) in [
+        ("(a)", unchanged, DIFF_SHADOW.to_owned()),
+        ("(o)", service_only, etc_drop_in(DIFF_UNIT, "10-nice.conf")),
+    ] {
+        let snap = scan(host);
+        assert!(
+            snap.units
+                .as_ref()
+                .expect("a units section")
+                .drop_ins
+                .iter()
+                .any(|d| d.path == path),
+            "{case}: the /etc file is collected"
+        );
+        for (route, containerfile) in both_routes(&snap) {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+                "{case} {route}:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// T32 for T30 (d), the shadow replacing `multi-user.target` with
+/// `graphical.target`: the `HostInstallOnly` block with its `add-wants`
+/// line and the `VendorInstallOnly` block with its quoted `rm` line on both
+/// routes, no `systemctl` instruction naming the unit, and two refine rows
+/// holding the same blocks with no include field and nothing not applied.
+/// A unit named with `\x2d` keeps its backslashes inside the quotes. With
+/// the shadow excluded: no `rm` or `add-wants` line, no command for the
+/// unit, one `# Omitted:` line naming the unit and the shadow, and both
+/// rows `not_applied` with the shadow and that line; included again, both
+/// blocks return and the line goes.
+#[test]
+fn t32_a_replaced_link_is_advised_both_ways() {
+    for unit in [DIFF_UNIT, "my\\x2dapp.service"] {
+        let shadow = format!("/etc/systemd/system/{unit}");
+        let snap = scan(
+            wants_link(
+                diff_host(unit, WANTS_MULTI_USER, "enabled"),
+                "graphical.target",
+                unit,
+            )
+            .etc_unit(unit, WANTS_GRAPHICAL),
+        );
+        let host_only = host_only_block("graphical.target", unit);
+        let vendor_only = vendor_only_block(
+            &format!("multi-user.target.wants/{unit}"),
+            unit,
+            &format!("/etc/systemd/system/multi-user.target.wants/{unit}"),
+        );
+        let refine = session(&snap);
+        let rows = &refine.decisions().manual_links;
+        assert_eq!(rows.len(), 2, "{unit}: {rows:?}");
+        assert_eq!(
+            (rows[0].cause, rows[1].cause),
+            (
+                ManualLinkCause::HostInstallOnly,
+                ManualLinkCause::VendorInstallOnly
+            ),
+            "{unit}"
+        );
+        assert_eq!(rows[0].advisories, host_only, "{unit}");
+        assert_eq!(rows[1].advisories, vendor_only, "{unit}");
+        for row in rows {
+            let value = serde_json::to_value(row).expect("the row serializes");
+            assert!(!has_include(value), "{unit}: the row has no toggle");
+            assert_eq!(
+                not_applied_of(serde_json::to_value(row).expect("the row serializes")),
+                Vec::<String>::new(),
+                "{unit}"
+            );
+        }
+        for (route, containerfile) in both_routes(&snap) {
+            assert_eq!(
+                block_from(&containerfile, &host_only[0]),
+                host_only,
+                "{unit} {route}:\n{containerfile}"
+            );
+            assert_eq!(
+                block_from(&containerfile, &vendor_only[0]),
+                vendor_only,
+                "{unit} {route}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{unit} {route}:\n{containerfile}"
+            );
+        }
+
+        let excluded = session_after(&snap, &[(drop_in_item(&shadow), false)]);
+        let line = install_omitted(unit, &[&shadow]);
+        let containerfile = containerfile_in(&export_session(&excluded));
+        assert!(
+            !containerfile.contains("RUN rm --"),
+            "{unit}:\n{containerfile}"
+        );
+        assert!(
+            !containerfile.contains("add-wants"),
+            "{unit}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{unit}:\n{containerfile}"
+        );
+        assert_eq!(
+            count_lines(&containerfile, &line),
+            1,
+            "{unit}:\n{containerfile}"
+        );
+        for row in &excluded.decisions().manual_links {
+            assert_eq!(
+                not_applied_of(serde_json::to_value(row).expect("the row serializes")),
+                std::slice::from_ref(&shadow),
+                "{unit}"
+            );
+            assert_eq!(row.advisories, std::slice::from_ref(&line), "{unit}");
+        }
+
+        let restored = containerfile_in(&exported_after(
+            &snap,
+            &[
+                (drop_in_item(&shadow), false),
+                (drop_in_item(&shadow), true),
+            ],
+        ));
+        assert_eq!(
+            block_from(&restored, &host_only[0]),
+            host_only,
+            "{unit}:\n{restored}"
+        );
+        assert_eq!(
+            block_from(&restored, &vendor_only[0]),
+            vendor_only,
+            "{unit}:\n{restored}"
+        );
+        assert_eq!(count_lines(&restored, &line), 0, "{unit}:\n{restored}");
+    }
+}
+
+/// T32 for T30 (f), the first case of (k), (g) and (m): the removal line,
+/// with the alias's own path for (m), and no `systemctl` instruction naming
+/// the unit; for (g) the `Also` text and no command line.
+#[test]
+fn t32_package_only_links_and_also_names_are_advised() {
+    let f = wants_link(
+        diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"),
+        "multi-user.target",
+        DIFF_UNIT,
+    )
+    .file(
+        "/usr/lib/systemd/system/app.service.d/10-extra.conf",
+        "[Install]\nWantedBy=extra.target\n",
+    )
+    .file(&etc_drop_in(DIFF_UNIT, "10-extra.conf"), SERVICE_DROP_IN);
+    let k = diff_host(DIFF_UNIT, WANTS_MULTI_USER, "static").file(
+        &etc_drop_in(DIFF_UNIT, "10-reset.conf"),
+        "[Install]\nWantedBy=\n",
+    );
+    let m = wants_link(
+        diff_host(
+            DIFF_UNIT,
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=x-alias.service\n",
+            "enabled",
+        ),
+        "multi-user.target",
+        DIFF_UNIT,
+    )
+    .file(&etc_drop_in(DIFF_UNIT, "10-alias.conf"), "[Install]\nAlias=\n");
+    let cases = [
+        (
+            "(f)",
+            f,
+            vendor_only_block(
+                "extra.target.wants/app.service",
+                DIFF_UNIT,
+                "/etc/systemd/system/extra.target.wants/app.service",
+            ),
+        ),
+        (
+            "(k)",
+            k,
+            vendor_only_block(
+                "multi-user.target.wants/app.service",
+                DIFF_UNIT,
+                "/etc/systemd/system/multi-user.target.wants/app.service",
+            ),
+        ),
+        (
+            "(m)",
+            m,
+            vendor_only_block(
+                "x-alias.service, a link to app.service,",
+                DIFF_UNIT,
+                "/etc/systemd/system/x-alias.service",
+            ),
+        ),
+    ];
+    for (case, host, block) in cases {
+        let snap = scan(host);
+        assert_eq!(session(&snap).decisions().manual_links.len(), 1, "{case}");
+        for (route, containerfile) in both_routes(&snap) {
+            assert_eq!(
+                block_from(&containerfile, &block[0]),
+                block,
+                "{case} {route}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+                "{case} {route}:\n{containerfile}"
+            );
+        }
+    }
+
+    let g = wants_link(
+        diff_host(
+            DIFF_UNIT,
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlso=helper.service\n",
+            "enabled",
+        ),
+        "multi-user.target",
+        DIFF_UNIT,
+    )
+    .etc_unit(DIFF_UNIT, WANTS_MULTI_USER);
+    let snap = scan(g);
+    let also = [
+        "# Advisory: app.service's package unit names helper.service in Also=, and its files \
+         under /etc/systemd/system do not. The package install in the image acted on the \
+         package's list."
+            .to_owned(),
+        "#   Check helper.service with systemctl is-enabled in the image.".to_owned(),
+    ];
+    let refine = session(&snap);
+    let rows = &refine.decisions().manual_links;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].advisories, also);
+    for (route, containerfile) in both_routes(&snap) {
+        let block = block_from(&containerfile, &also[0]);
+        assert_eq!(block, also, "(g) {route}:\n{containerfile}");
+        assert!(
+            block.iter().all(|l| !l.contains("RUN ")),
+            "(g) {route}: no command line"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+            "(g) {route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T41: `WantedBy=multi-user.target` in the vendor unit, an `/etc`
+/// `10-reset.conf` holding `WantedBy=` and `20-add.conf` holding
+/// `WantedBy=graphical.target`, and a `graphical.target.wants/` link only.
+/// With both files staged, the two blocks. With only `20-add.conf`
+/// excluded through refine: no `add-wants` or `rm` line, one `# Omitted:`
+/// line naming the unit and `20-add.conf` alone, and both rows
+/// `not_applied` with that path and the line. Included again, both blocks
+/// return and the line goes.
+#[test]
+fn t41_a_partly_excluded_set_of_install_files() {
+    let reset = etc_drop_in(DIFF_UNIT, "10-reset.conf");
+    let add = etc_drop_in(DIFF_UNIT, "20-add.conf");
+    let snap = scan(
+        wants_link(
+            diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled"),
+            "graphical.target",
+            DIFF_UNIT,
+        )
+        .file(&reset, "[Install]\nWantedBy=\n")
+        .file(&add, "[Install]\nWantedBy=graphical.target\n"),
+    );
+    let host_only = host_only_block("graphical.target", DIFF_UNIT);
+    let vendor_only = vendor_only_block(
+        "multi-user.target.wants/app.service",
+        DIFF_UNIT,
+        "/etc/systemd/system/multi-user.target.wants/app.service",
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, &host_only[0]),
+            host_only,
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            block_from(&containerfile, &vendor_only[0]),
+            vendor_only,
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let excluded = session_after(&snap, &[(drop_in_item(&add), false)]);
+    let line = install_omitted(DIFF_UNIT, &[&add]);
+    let containerfile = containerfile_in(&export_session(&excluded));
+    assert!(!containerfile.contains("add-wants"), "{containerfile}");
+    assert!(!containerfile.contains("RUN rm --"), "{containerfile}");
+    assert_eq!(count_lines(&containerfile, &line), 1, "{containerfile}");
+    let rows = &excluded.decisions().manual_links;
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    for row in rows {
+        assert_eq!(
+            not_applied_of(serde_json::to_value(row).expect("the row serializes")),
+            std::slice::from_ref(&add)
+        );
+        assert_eq!(row.advisories, std::slice::from_ref(&line));
+    }
+
+    let restored = containerfile_in(&exported_after(
+        &snap,
+        &[(drop_in_item(&add), false), (drop_in_item(&add), true)],
+    ));
+    assert_eq!(
+        block_from(&restored, &host_only[0]),
+        host_only,
+        "{restored}"
+    );
+    assert_eq!(
+        block_from(&restored, &vendor_only[0]),
+        vendor_only,
+        "{restored}"
+    );
+    assert_eq!(count_lines(&restored, &line), 0, "{restored}");
+}
+
+/// T40 with the drop-in excluded: the `RequiredBy=` reset unit's
+/// `# Omitted:` line naming it and the drop-in, in place of its block, and
+/// the `undetermined_installs[]` row `not_applied` with the path and that
+/// line. Control: with the drop-in staged, the block and no line.
+#[test]
+fn t40_an_excluded_install_file_omits_the_undetermined_block() {
+    let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
+    let snap = scan(t40_host(required, Some("[Install]\nRequiredBy=\n")));
+    let line = install_omitted("need.service", &[T40_DROP_IN]);
+    let block_start = "# Advisory: need.service is not carried:";
+
+    let staged = containerfile_in(&export_session(&session(&snap)));
+    assert!(
+        staged.lines().any(|l| l.starts_with(block_start)),
+        "{staged}"
+    );
+    assert_eq!(count_lines(&staged, &line), 0, "{staged}");
+
+    let excluded = session_after(&snap, &[(drop_in_item(T40_DROP_IN), false)]);
+    let containerfile = containerfile_in(&export_session(&excluded));
+    assert_eq!(count_lines(&containerfile, &line), 1, "{containerfile}");
+    assert!(
+        !containerfile.lines().any(|l| l.starts_with(block_start)),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, "need.service"),
+        "{containerfile}"
+    );
+    let rows = &excluded.decisions().undetermined_installs;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        not_applied_of(serde_json::to_value(&rows[0]).expect("the row serializes")),
+        [T40_DROP_IN.to_owned()]
+    );
+    assert_eq!(rows[0].advisories, [line]);
+}

@@ -17,6 +17,7 @@ use inspectah_core::types::units::{
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
+use std::collections::BTreeMap;
 
 use super::comment::escape_comment_text;
 pub use super::configtree::Reservation;
@@ -456,13 +457,24 @@ pub struct UnitPlan {
     /// ([`mount_advisory_lines`]), unescaped. Not commands: the section
     /// writes them after its `systemctl` lines (§ 10.1).
     pub mount_advisories: Vec<Vec<String>>,
-    /// § 10.9's comment lines, one block per hand-made link
-    /// ([`manual_link_lines`]), in the section's order, unescaped.
-    pub link_advisories: Vec<Vec<String>>,
+    /// § 10.9's comment lines, one per hand-made link
+    /// ([`manual_link_lines`]), in the section's order.
+    pub link_advisories: Vec<FindingAdvisory>,
     /// § 10.9's unit-level block, one per undetermined install record
-    /// ([`undetermined_install_lines`]), in the section's order,
-    /// unescaped.
-    pub undetermined_advisories: Vec<Vec<String>>,
+    /// ([`undetermined_install_lines`]), in the section's order.
+    pub undetermined_advisories: Vec<FindingAdvisory>,
+}
+
+/// What § 10.9 says for one hand-made link or undetermined install record,
+/// unescaped.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FindingAdvisory {
+    /// The record's block, or, while `not_applied` holds a path, its
+    /// unit's `# Omitted:` line ([`install_omitted_line`]) in its place.
+    pub lines: Vec<String>,
+    /// The install files of the record's unit the export does not stage
+    /// (§ 7.4). Empty while the advisory applies.
+    pub not_applied: Vec<String>,
 }
 
 /// What asked for a generated unit's enable: the row it shows on (§ 11.1).
@@ -714,7 +726,9 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
 /// ([`UnitPlan::mount_advisories`]), the hand-made link advisories
 /// ([`UnitPlan::link_advisories`]) and the undetermined install blocks
 /// ([`UnitPlan::undetermined_advisories`]). Each block starts with its `# Advisory:` line, so
-/// no line separates them.
+/// no line separates them. A unit's `# Omitted:` line, which stands in for
+/// every block of the unit whose install files are not all staged, is
+/// written once, where its first block would be (§ 10.9).
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
     // line is escaped here rather than inside `declined_line`, which refine
@@ -737,11 +751,20 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     lines.extend(
         plan.mount_advisories
             .iter()
-            .chain(&plan.link_advisories)
-            .chain(&plan.undetermined_advisories)
             .flatten()
             .map(|line| escape_comment_text(line)),
     );
+    let mut omitted = std::collections::HashSet::new();
+    for advisory in plan
+        .link_advisories
+        .iter()
+        .chain(&plan.undetermined_advisories)
+    {
+        if !advisory.not_applied.is_empty() && !omitted.insert(&advisory.lines) {
+            continue;
+        }
+        lines.extend(advisory.lines.iter().map(|line| escape_comment_text(line)));
+    }
     lines
 }
 
@@ -786,34 +809,40 @@ pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
 /// How § 10.9 names a link: `<parent>.<relation>/<unit>` for a link in a
 /// dependency directory, and for an alias the words `<parent> is a link to
 /// <unit>`, which take the place of the path and of the `is a link` after
-/// it. With relation `Also` there is no link: `<parent>` names `<unit>` in
-/// `Also=`.
-///
-/// The `Also` wording here is a placeholder, not § 10.9's text, and no
-/// finding reaches it yet: the install-comparison advisory task replaces
-/// it, and the `None` second line for `Also`, with § 10.9's `Also` text.
+/// it. Relation `Also` is not a link and has no name here
+/// ([`also_lines`]).
 enum LinkName<'a> {
-    Path(String),
+    Path { path: String, dir: DependencyDir },
     Alias { alias: &'a str, unit: &'a str },
-    Also { owner: &'a str, unit: &'a str },
+}
+
+/// The dependency directory a link sits in.
+#[derive(Clone, Copy)]
+enum DependencyDir {
+    Wants,
+    Requires,
+    Upholds,
 }
 
 impl<'a> LinkName<'a> {
-    fn of(link: &'a ManualLink) -> Self {
+    /// The name of `link`, or `None` for relation `Also`.
+    fn of(link: &'a ManualLink) -> Option<Self> {
         let (parent, unit) = (link.parent.as_str(), link.unit.as_str());
-        let dir = |suffix: &str| Self::Path(format!("{parent}.{suffix}/{unit}"));
+        let path = |suffix: &str, dir| {
+            Some(Self::Path {
+                path: format!("{parent}.{suffix}/{unit}"),
+                dir,
+            })
+        };
         match link.relation {
-            LinkRelation::Wants => dir("wants"),
-            LinkRelation::Requires => dir("requires"),
-            LinkRelation::Upholds => dir("upholds"),
-            LinkRelation::Alias => Self::Alias {
+            LinkRelation::Wants => path("wants", DependencyDir::Wants),
+            LinkRelation::Requires => path("requires", DependencyDir::Requires),
+            LinkRelation::Upholds => path("upholds", DependencyDir::Upholds),
+            LinkRelation::Alias => Some(Self::Alias {
                 alias: parent,
                 unit,
-            },
-            LinkRelation::Also => Self::Also {
-                owner: parent,
-                unit,
-            },
+            }),
+            LinkRelation::Also => None,
         }
     }
 
@@ -821,9 +850,8 @@ impl<'a> LinkName<'a> {
     /// `<path> is a link`, `<alias> is a link to <unit>`.
     fn is_a_link(&self) -> String {
         match self {
-            Self::Path(path) => format!("{path} is a link"),
+            Self::Path { path, .. } => format!("{path} is a link"),
             Self::Alias { alias, unit } => format!("{alias} is a link to {unit}"),
-            Self::Also { owner, unit } => format!("{owner} names {unit} in Also="),
         }
     }
 
@@ -831,12 +859,39 @@ impl<'a> LinkName<'a> {
     /// link.
     fn subject(&self) -> String {
         match self {
-            Self::Path(path) => path.clone(),
+            Self::Path { path, .. } => path.clone(),
             Self::Alias { alias, unit } => format!("{alias}, a link to {unit},"),
-            Self::Also { owner, unit } => format!("{owner}'s Also= entry {unit}"),
+        }
+    }
+
+    /// Where the link sits in the image: under `/etc/systemd/system`, by
+    /// its path or its alias name.
+    fn etc_path(&self) -> String {
+        match self {
+            Self::Path { path, .. } => format!("{ETC_UNIT_DIR}/{path}"),
+            Self::Alias { alias, .. } => format!("{ETC_UNIT_DIR}/{alias}"),
         }
     }
 }
+
+/// § 10.9's `HostInstallOnly` text after the link and before the unit.
+const LINK_HOST_INSTALL_ONLY: &str = "is on the source host because";
+
+/// § 10.9's `HostInstallOnly` text after `<unit>'s`.
+const LINK_HOST_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system name it, and the \
+     package's unit does not. The image was linked from the package's unit, so it lacks this \
+     link. Not carried.";
+
+/// § 10.9's `VendorInstallOnly` text after the link and before the unit.
+const LINK_VENDOR_INSTALL_ONLY: &str = "is not on the source host:";
+
+/// § 10.9's `VendorInstallOnly` text after `<unit>'s`.
+const LINK_VENDOR_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system do not name it, \
+     and the package's unit does. The image was linked from the package's unit, so it has this \
+     link.";
+
+/// § 10.9's start of the removal line, before the quoted path.
+const LINK_REMOVE_PREFIX: &str = "#   To remove it, add after the configuration COPY: RUN rm --";
 
 /// The comment lines of § 10.9 for one hand-made link, the one source for
 /// the Containerfile and the view response. The lines are the spec's text
@@ -845,16 +900,21 @@ impl<'a> LinkName<'a> {
 ///
 /// - The first line by cause. For an alias, the link is named
 ///   `<alias> is a link to <unit>` in place of its path ([`LinkName`]).
-/// - For the first four causes, one more line by relation: the
-///   `add-wants` or `add-requires` command, quoted after `--`, for a
-///   `.wants` or `.requires` link; for an `.upholds` link, what the link
-///   does and how to add it, since no verb makes one; for an alias, how to
-///   add it, since no verb but `enable` makes one. A `HostDevice` link gets
-///   no command.
+/// - For the first four causes and `HostInstallOnly`, one more line by
+///   relation: the `add-wants` or `add-requires` command, quoted after
+///   `--`, for a `.wants` or `.requires` link; for an `.upholds` link, what
+///   the link does and how to add it, since no verb makes one; for an
+///   alias, how to add it, since no verb but `enable` makes one. A
+///   `HostDevice` link gets no command.
+/// - For `VendorInstallOnly`, the `rm` line that removes the link the
+///   image has, its path quoted after `--`.
+/// - Relation `Also` is not a link: [`also_lines`].
 pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
     let unit = link.unit.as_str();
     let parent = link.parent.as_str();
-    let name = LinkName::of(link);
+    let Some(name) = LinkName::of(link) else {
+        return also_lines(link);
+    };
     let first = match link.cause {
         ManualLinkCause::StaticUnit => format!(
             "# Advisory: {} on the source host that {unit}'s {LINK_STATIC_UNIT}",
@@ -867,10 +927,8 @@ pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
         ),
         ManualLinkCause::PartialInstall => {
             let present = match &name {
-                LinkName::Path(path) => path.clone(),
-                LinkName::Alias { .. } | LinkName::Also { .. } => {
-                    name.subject().trim_end_matches(',').to_owned()
-                }
+                LinkName::Path { path, .. } => path.clone(),
+                LinkName::Alias { .. } => name.subject().trim_end_matches(',').to_owned(),
             };
             format!("# Advisory: {unit} {LINK_PARTIAL_INSTALL} {present}.")
         }
@@ -885,41 +943,96 @@ pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
                 "# Advisory: {unit} is tied to a device of the source host. Not carried."
             )];
         }
-        // Placeholder: no lines yet. The install-comparison advisory task
-        // renders § 10.9's text for these two causes, with their
-        // `install_files` read through the export.
-        ManualLinkCause::HostInstallOnly | ManualLinkCause::VendorInstallOnly => {
-            return Vec::new();
+        ManualLinkCause::HostInstallOnly => format!(
+            "# Advisory: {} {LINK_HOST_INSTALL_ONLY} {unit}'s {LINK_HOST_INSTALL_ONLY_REST}",
+            name.subject()
+        ),
+        ManualLinkCause::VendorInstallOnly => {
+            return vec![
+                format!(
+                    "# Advisory: {} {LINK_VENDOR_INSTALL_ONLY} {unit}'s \
+                     {LINK_VENDOR_INSTALL_ONLY_REST}",
+                    name.subject()
+                ),
+                format!("{LINK_REMOVE_PREFIX} {}", single_quote(&name.etc_path())),
+            ];
         }
     };
-    let second = match link.relation {
-        LinkRelation::Wants | LinkRelation::Requires => {
-            let verb = if link.relation == LinkRelation::Wants {
-                "add-wants"
-            } else {
-                "add-requires"
-            };
-            Some(format!(
-                "{LINK_COMMAND_PREFIX} {verb} -- {} {}",
-                single_quote(parent),
-                single_quote(unit)
-            ))
-        }
-        LinkRelation::Upholds => Some(format!(
+    let command = |verb: &str| {
+        format!(
+            "{LINK_COMMAND_PREFIX} {verb} -- {} {}",
+            single_quote(parent),
+            single_quote(unit)
+        )
+    };
+    let second = match name {
+        LinkName::Path {
+            dir: DependencyDir::Wants,
+            ..
+        } => command("add-wants"),
+        LinkName::Path {
+            dir: DependencyDir::Requires,
+            ..
+        } => command("add-requires"),
+        LinkName::Path {
+            dir: DependencyDir::Upholds,
+            ..
+        } => format!(
             "#   An .upholds link starts {unit} as soon as it exists and restarts it whenever \
              it stops, so adding it for a unit that exits produces a restart loop. A RHEL 9 \
              target does not honor it. To add it, put Upholds={unit} in a drop-in for {parent}."
-        )),
-        LinkRelation::Alias => Some(format!(
+        ),
+        LinkName::Alias { .. } => format!(
             "#   No systemctl verb but enable makes an alias link. To carry it, add \
              Alias={parent} in a drop-in for {unit}, or make the link in the Containerfile."
-        )),
-        // Not a link: there is nothing to make. Placeholder, unreachable
-        // today: the install-comparison advisory task replaces it with
-        // § 10.9's `Also` text.
-        LinkRelation::Also => None,
+        ),
     };
-    std::iter::once(first).chain(second).collect()
+    vec![first, second]
+}
+
+/// § 10.9's text for relation `Also`, which is not a link and has no
+/// command: which side names `<unit>` in `Also=`, that the package install
+/// in the image acted on the package's list, and to check `<unit>` with
+/// `systemctl is-enabled` in the image. Only the two install-difference
+/// causes name a relation `Also` (§ 6.6); any other has no text.
+fn also_lines(link: &ManualLink) -> Vec<String> {
+    let (owner, unit) = (link.parent.as_str(), link.unit.as_str());
+    let side = match link.cause {
+        ManualLinkCause::HostInstallOnly => format!(
+            "{owner}'s files under /etc/systemd/system name {unit} in Also=, and the package's \
+             unit does not."
+        ),
+        ManualLinkCause::VendorInstallOnly => format!(
+            "{owner}'s package unit names {unit} in Also=, and its files under \
+             /etc/systemd/system do not."
+        ),
+        ManualLinkCause::StaticUnit
+        | ManualLinkCause::NotInInstall
+        | ManualLinkCause::PartialInstall
+        | ManualLinkCause::Undetermined { .. }
+        | ManualLinkCause::HostDevice => return Vec::new(),
+    };
+    vec![
+        format!("# Advisory: {side} {ALSO_PACKAGE_LIST}"),
+        format!("#   Check {unit} with systemctl is-enabled in the image."),
+    ]
+}
+
+/// § 10.9's `Also` text after which side names the unit.
+const ALSO_PACKAGE_LIST: &str = "The package install in the image acted on the package's list.";
+
+/// § 10.9's line for a unit whose install-difference advisories or
+/// undetermined install block the export no longer supports: `excluded`
+/// are its install files the export does not stage. Unescaped.
+pub fn install_omitted_line(unit: &UnitName, excluded: &[String]) -> String {
+    let unit = unit.as_str();
+    format!(
+        "# Omitted: {unit} links (excluded from the export: {}; the [Install] the image reads \
+         is not the one recorded, so the source host's links for {unit} are not reproduced, and \
+         links its package install made may remain in the image. Check them with systemctl \
+         is-enabled in the image.)",
+        excluded.join(", ")
+    )
 }
 
 /// § 10.9's unit-level block for one undetermined install record, the one
@@ -1870,13 +1983,86 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .iter()
         .map(|finding| mount_advisory_lines(finding, staged, &units.drop_ins))
         .collect();
-    plan.link_advisories = units.manual_links.iter().map(manual_link_lines).collect();
+    let excluded = excluded_install_files(units, staged);
+    let advise = |unit: &UnitName, files: &[String], lines: Vec<String>| match excluded
+        .get(unit)
+        .filter(|_| !files.is_empty())
+    {
+        Some(paths) => FindingAdvisory {
+            lines: vec![install_omitted_line(unit, paths)],
+            not_applied: paths.clone(),
+        },
+        None => FindingAdvisory {
+            lines,
+            not_applied: Vec::new(),
+        },
+    };
+    plan.link_advisories = units
+        .manual_links
+        .iter()
+        .map(|link| {
+            advise(
+                compared_unit(link),
+                &link.install_files,
+                manual_link_lines(link),
+            )
+        })
+        .collect();
     plan.undetermined_advisories = units
         .undetermined_installs
         .iter()
-        .map(undetermined_install_lines)
+        .map(|record| {
+            advise(
+                &record.unit,
+                &record.install_files,
+                undetermined_install_lines(record),
+            )
+        })
         .collect();
     plan
+}
+
+/// The unit whose `[Install]` a link's `install_files` belong to: `unit`
+/// for a link, `parent` for relation `Also` (§ 6.6).
+fn compared_unit(link: &ManualLink) -> &UnitName {
+    match link.relation {
+        LinkRelation::Also => &link.parent,
+        LinkRelation::Wants
+        | LinkRelation::Requires
+        | LinkRelation::Upholds
+        | LinkRelation::Alias => &link.unit,
+    }
+}
+
+/// For each unit with an install-difference link or an undetermined
+/// install record, the install files those name that `staged` does not
+/// write, in first-named order: one that does not parse as a
+/// [`Destination`] counts as not staged (§ 6.7). Units with none are left
+/// out.
+fn excluded_install_files(
+    units: &inspectah_core::types::units::UnitSection,
+    staged: &StagedWrites<'_>,
+) -> BTreeMap<UnitName, Vec<String>> {
+    let mut excluded: BTreeMap<UnitName, Vec<String>> = BTreeMap::new();
+    let named = units
+        .manual_links
+        .iter()
+        .map(|link| (compared_unit(link), &link.install_files))
+        .chain(
+            units
+                .undetermined_installs
+                .iter()
+                .map(|record| (&record.unit, &record.install_files)),
+        );
+    for (unit, files) in named {
+        for path in files.iter().filter(|path| !is_staged(staged, path)) {
+            let paths = excluded.entry(unit.clone()).or_default();
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+        }
+    }
+    excluded
 }
 
 #[cfg(test)]
