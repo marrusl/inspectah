@@ -222,8 +222,10 @@ function SingleHostApp({
   useEffect(() => {
     shownViewRef.current = view.data;
   }, [view.data]);
-  // Set after each successful Undo or Redo that changed a user record, so
-  // MainContent can drop failures kept for the records the step replaced.
+  // Set to a new object after every successful Undo or Redo, naming the
+  // users whose record the step changed (possibly none). MainContent drops
+  // the failures kept for those users, and every generated-timer failure,
+  // since any step can replace a generated row's state.
   const [historyChange, setHistoryChange] = useState<HistoryChange>();
 
   const onMutationSuccess = useCallback(
@@ -234,7 +236,7 @@ function SingleHostApp({
           result.users_groups_decisions,
         );
         shownViewRef.current = result;
-        if (users.length > 0) setHistoryChange({ users });
+        setHistoryChange({ users });
       }
       view.invalidate();
 

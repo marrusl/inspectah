@@ -98,7 +98,11 @@ runGuarded(key, () =>
   the view on screen with the view the step returned (`changedUsers` in
   `components/userHistory.ts`) and passes the changed names to
   `MainContent` as `historyChange`, which calls `end` on them. Users the
-  step did not change keep their failures. Compare records rather than
+  step did not change keep their failures. App sends `historyChange` on
+  every successful step, with `users` empty when no user record changed,
+  because the generated-timer failures end on any step: a step that
+  changed only a generated row must still end them, or the restored row
+  keeps a failure about the record it replaced. Compare records rather than
   read the undone op from `/api/ops`: that is a separate request that
   can fail, and it would need per-op knowledge of which item an op
   touches.

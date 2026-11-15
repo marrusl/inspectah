@@ -95,10 +95,11 @@ export interface MainContentProps {
    */
   resetCounter?: number;
   /**
-   * Set to a new object after each successful Undo or Redo, naming the
-   * users whose record that step changed. Their kept failures were about
-   * the record the step replaced, so they are cleared; other users keep
-   * theirs.
+   * Set to a new object after every successful Undo or Redo, naming the
+   * users whose record that step changed, possibly none. Their kept
+   * failures were about the record the step replaced, so they are
+   * cleared; other users keep theirs. Every generated-timer failure ends
+   * on any step.
    */
   historyChange?: HistoryChange;
   /** When set, auto-expands any collapsed summary containing this item ID. */

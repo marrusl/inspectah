@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import App from "../App";
 import type { GeneratedTimerDto, ReferenceSection } from "../api/types";
 import { emptyView } from "../test-utils/emptyView";
+import { mockStats } from "../test-utils/mockStats";
 
 const NAME = "cron-backup";
 const ROW_ID = `generated:0:${NAME}`;
@@ -82,13 +83,19 @@ function view() {
   return emptyView({
     generated_timers: [row],
     containerfile_preview: row.include ? ENABLE : "",
+    // Undo and Redo stay available, so a test can step either way.
+    stats: mockStats({ ops_applied: 1, can_undo: true, can_redo: true }),
   });
 }
+
+/** History steps the app sent, in order. */
+let steps: string[];
 
 beforeEach(() => {
   row = { name: NAME, include: true, locked: false };
   ops = [];
   failNextOp = null;
+  steps = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -102,6 +109,16 @@ beforeEach(() => {
           return { ok: false, status: 409, json: async () => ({ error }) };
         }
         row = { ...row, include: body.target.include };
+        return { ok: true, status: 200, json: async () => view() };
+      }
+      // A step through history that changes only the generated row: no
+      // user record is in either view.
+      if (
+        (url === "/api/undo" || url === "/api/redo") &&
+        init?.method === "POST"
+      ) {
+        steps.push(url);
+        row = { ...row, include: !row.include };
         return { ok: true, status: 200, json: async () => view() };
       }
       const routes: Record<string, unknown> = {
@@ -235,5 +252,54 @@ describe("generated timer row control", () => {
     });
     expect(toggle).toBeChecked();
     expect(within(rowEl).queryByText(/Excluded with its cron job/)).toBeNull();
+  });
+
+  describe.each(["Undo", "Redo"])("a timer-only %s", (step) => {
+    it("ends a failure already on the row", async () => {
+      let fail!: (error: string) => void;
+      failNextOp = new Promise<string>((resolve) => {
+        fail = resolve;
+      });
+      const rowEl = await generatedRow();
+      await userEvent.click(
+        within(rowEl).getByRole("checkbox", { name: `Toggle ${NAME}` }),
+      );
+      fail("the session changed underneath this request");
+      expect(
+        await within(rowEl).findByText(/^Could not exclude/),
+      ).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: step }));
+      await waitFor(() => expect(steps).toHaveLength(1));
+      await waitFor(() =>
+        expect(
+          within(screen.getByTestId(`context-item-${ROW_ID}`)).queryByText(
+            /^Could not exclude/,
+          ),
+        ).toBeNull(),
+      );
+    });
+
+    it("records nothing for a request that fails after it", async () => {
+      let fail!: (error: string) => void;
+      failNextOp = new Promise<string>((resolve) => {
+        fail = resolve;
+      });
+      const rowEl = await generatedRow();
+      await userEvent.click(
+        within(rowEl).getByRole("checkbox", { name: `Toggle ${NAME}` }),
+      );
+      // The step lands while the toggle's request is still in flight.
+      await userEvent.click(screen.getByRole("button", { name: step }));
+      await waitFor(() => expect(steps).toHaveLength(1));
+      fail("the session changed underneath this request");
+
+      const back = screen.getByTestId(`context-item-${ROW_ID}`);
+      const toggle = within(back).getByRole("checkbox", {
+        name: `Toggle ${NAME}`,
+      });
+      await waitFor(() => expect(toggle).toBeEnabled());
+      expect(within(back).queryByText(/^Could not/)).toBeNull();
+    });
   });
 });

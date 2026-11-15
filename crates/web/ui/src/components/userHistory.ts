@@ -1,6 +1,10 @@
 import type { UserDecision } from "../api/types";
 
-/** The users whose record one Undo or Redo step changed. */
+/**
+ * One successful Undo or Redo step, and the users whose record it changed.
+ * Sent for every step, with `users` empty when no user record changed, so
+ * a step that changed only other rows still ends their kept failures.
+ */
 export interface HistoryChange {
   users: readonly string[];
 }
