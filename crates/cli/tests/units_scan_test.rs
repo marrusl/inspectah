@@ -6572,8 +6572,8 @@ fn t34_a_mask_follows_its_package_through_the_scan_and_refine() {
 
 /// The scan of the [`CRON_FILE`] host with a second record of the
 /// generated name `cron-backup`, as a second cron file of the same name
-/// gives one, and only the record at `locked_at` locked.
-fn two_records_of_one_name(locked_at: usize) -> InspectionSnapshot {
+/// gives one, and only the record at `locked_at` locked (none for `None`).
+fn two_records_of_one_name(locked_at: Option<usize>) -> InspectionSnapshot {
     let mut snap = scan(with_cron_backup(UnitHost::new().preset("disable *")));
     let units = &mut snap
         .scheduled_tasks
@@ -6585,7 +6585,7 @@ fn two_records_of_one_name(locked_at: usize) -> InspectionSnapshot {
     second.source_path = "/var/spool/cron/backup".into();
     units.push(second);
     for (i, unit) in units.iter_mut().enumerate() {
-        unit.locked = i == locked_at;
+        unit.locked = Some(i) == locked_at;
     }
     snap
 }
@@ -6595,10 +6595,12 @@ fn two_records_of_one_name(locked_at: usize) -> InspectionSnapshot {
 /// is locked: `SetInclude(true)` on the name is a silent no-op
 /// (`RefineSession::apply`), so after an exclusion the row cannot be
 /// included again. The generated-timer row in refine's decisions must say
-/// `locked` too, so the UI offers no toggle the server ignores.
+/// `locked` too, so the UI offers no toggle the server ignores. Control:
+/// with no record locked, the same sequence includes the row again and
+/// the view reports it unlocked.
 #[test]
 fn a_generated_name_is_shown_locked_when_any_of_its_records_is() {
-    for locked_at in [1, 0] {
+    for locked_at in [Some(1), Some(0), None] {
         let snap = two_records_of_one_name(locked_at);
         let mut refine = session(&snap);
         let row = |refine: &RefineSession| {
@@ -6619,13 +6621,19 @@ fn a_generated_name_is_shown_locked_when_any_of_its_records_is() {
             .apply(set_include(generated_item(CRON_BACKUP), true))
             .unwrap_or_else(|e| panic!("{e:?}"));
         let enforced_locked = !row(&refine).include;
-        assert!(
+        assert_eq!(
             enforced_locked,
-            "record {locked_at} locked: the session keeps the name excluded"
+            locked_at.is_some(),
+            "{locked_at:?} locked: the session keeps the name excluded only when a record is locked"
         );
         assert_eq!(
             shown_locked, enforced_locked,
-            "record {locked_at} locked: the view agrees with the session"
+            "{locked_at:?} locked: the view agrees with the session"
+        );
+        assert_eq!(
+            row(&refine).locked,
+            locked_at.is_some(),
+            "{locked_at:?} locked"
         );
     }
 }
