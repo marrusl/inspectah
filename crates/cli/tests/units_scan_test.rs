@@ -9529,6 +9529,66 @@ fn t25_a_every_member_installed_is_carried_and_one_unlinked_is_advised() {
     assert_also_advisory(&snap, BUNDLE, &block, &["c.service"]);
 }
 
+/// Rule 7's recipe never suggests disabling a unit the image needs, through
+/// the scan, the render and refine. An enabled packaged unit names
+/// `bootc-fetch-apply-updates.timer`, a protected unit, and `helper.socket`
+/// in `Also=`, and neither is enabled on the source host: the advisory
+/// names both, keeps the `disable` line for `helper.socket`, says the image
+/// needs the timer instead of a `disable` line for it, and its header says
+/// the lines do not reproduce the source host, with no footer. Control:
+/// `helper.socket` alone gets the full recipe.
+#[test]
+fn rule_7_never_suggests_disabling_a_protected_member_through_both_exports() {
+    const TIMER: &str = "bootc-fetch-apply-updates.timer";
+    let host = |also: &str| {
+        rule7_host(
+            &[],
+            &[
+                (BUNDLE, "enabled"),
+                (TIMER, "disabled"),
+                ("helper.socket", "disabled"),
+            ],
+            &[
+                (BUNDLE, &wanted_with(also)),
+                (
+                    TIMER,
+                    "[Timer]\nOnCalendar=daily\n\n[Install]\nWantedBy=timers.target\n",
+                ),
+                (
+                    "helper.socket",
+                    "[Socket]\nListenStream=/run/helper.sock\n\n[Install]\nWantedBy=sockets.target\n",
+                ),
+            ],
+        )
+    };
+
+    let control = scan(host("Also=helper.socket\n"));
+    let mut block = vec![also_head(BUNDLE, "enable", "helper.socket", NOT_ENABLED)];
+    block.extend(also_lines(
+        "enable",
+        BUNDLE,
+        &[("disable", "helper.socket")],
+    ));
+    assert_also_advisory(&control, BUNDLE, &block, &["helper.socket"]);
+
+    let snap = scan(host(&format!("Also={TIMER} helper.socket\n")));
+    let block = [
+        also_head(
+            BUNDLE,
+            "enable",
+            &format!("{TIMER} and helper.socket"),
+            "which are not enabled there",
+        ),
+        "#   These lines do not reproduce the source host. Check each unit, then add after the \
+         configuration COPY:"
+            .to_owned(),
+        format!("#     RUN systemctl enable -- '{BUNDLE}'"),
+        "#     RUN systemctl disable -- 'helper.socket'".to_owned(),
+        format!("#   No disable line for {TIMER}: the image needs this unit."),
+    ];
+    assert_also_advisory(&snap, BUNDLE, &block, &[TIMER, "helper.socket"]);
+}
+
 /// T25 (b): a `disable` with every member `Unlinked` is carried. A member
 /// with no `[Install]` and a hand-made link is `Other`: an advisory with no
 /// line to add.
