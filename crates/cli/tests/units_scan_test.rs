@@ -10096,3 +10096,83 @@ fn a_default_target_link_to_a_socket_is_a_warning() {
         );
     }
 }
+
+/// § 7.6's other warning paths: a dangling link to `missing.target`, a
+/// regular file at `default.target`, and a link whose last component is
+/// not a unit name. Each gives no record, a units warning naming the link
+/// and saying why, and no `set-default`.
+#[test]
+fn a_default_target_that_cannot_be_recorded_is_a_warning() {
+    let cases = [
+        (
+            "dangling link",
+            target_host(Some("/usr/lib/systemd/system/missing.target")),
+            "missing.target has no unit file this scan reads",
+        ),
+        (
+            "regular file",
+            target_host(None).file(DEFAULT_TARGET_LINK, "graphical.target\n"),
+            "could not be read as a link",
+        ),
+        (
+            "not a unit name",
+            target_host(Some("/usr/lib/systemd/system/graphical")),
+            "/usr/lib/systemd/system/graphical",
+        ),
+    ];
+    for (label, host, why) in cases {
+        let snap = scan(host);
+        assert!(
+            snap.units
+                .as_ref()
+                .is_some_and(|u| u.default_target.is_none()),
+            "{label}"
+        );
+        assert!(
+            snap.warnings.iter().any(|w| w.inspector == "units"
+                && w.message.contains(DEFAULT_TARGET_LINK)
+                && w.message.contains(why)),
+            "{label}: {:?}",
+            snap.warnings
+        );
+        for (route, containerfile) in both_routes(&snap) {
+            assert!(
+                !containerfile.contains("set-default"),
+                "{label} {route}:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// § 10.5, rule 5's package half on the default target: a target its
+/// package ships is omitted while refine excludes the package, with the
+/// package reason, and set again when the package is included.
+#[test]
+fn a_default_target_follows_its_package() {
+    let snap = scan(
+        target_host(Some("/usr/lib/systemd/system/app.target")).vendor_unit(
+            "app.target",
+            "[Unit]\nDescription=App\n",
+            Some(INSTALL_PACKAGE),
+        ),
+    );
+    let package = package_item(INSTALL_PACKAGE);
+    let excluded = containerfile_in(&exported_after(&snap, &[(package.clone(), false)]));
+    assert!(!excluded.contains("set-default"), "{excluded}");
+    assert_eq!(
+        omitted(&excluded, "app.target"),
+        Some(format!("# Omitted: app.target (package '{INSTALL_PACKAGE}' was excluded)").as_str()),
+        "{excluded}"
+    );
+    let included = containerfile_in(&exported_after(
+        &snap,
+        &[(package.clone(), false), (package, true)],
+    ));
+    assert!(
+        included
+            .lines()
+            .any(|l| l == set_default_line("app.target")),
+        "{included}"
+    );
+    assert_eq!(omitted(&included, "app.target"), None, "{included}");
+}

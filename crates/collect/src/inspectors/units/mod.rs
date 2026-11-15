@@ -1454,7 +1454,7 @@ fn default_target(exec: &dyn Executor, warnings: &mut Vec<Warning>) -> Option<De
         Err(e) => {
             warnings.push(default_target_warning(
                 None,
-                &format!("is not a link ({e})"),
+                &format!("could not be read as a link ({e})"),
             ));
             return None;
         }
