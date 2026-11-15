@@ -60,12 +60,71 @@ it returns `Some` only for `FindingKind::Actionable`, `None` for
 `Advisory` and `Inventory`, so a row backed by either of the
 non-actionable variants renders with no control to offer.
 
+## 1b. Scheduled Tasks rows: identity, and the generated-timer exception
+
+**Generated timer rows are an exception to the `decision` contract.** A
+timer or `@reboot` service converted from cron is decided on its
+Scheduled Tasks row (`ItemId::GeneratedTimer { name }`), but its row
+carries no `decision`. Reference sections come from
+`/api/snapshot/sections`, which the UI fetches once; the row's state
+changes with every operation, including one on another row (excluding
+its cron job excludes it). So the state is in `/api/view`, which is
+recomputed per operation:
+
+- `generated_timers[]`: `name`, `include`, `locked`, and
+  `cron_job_excluded` (the excluded cron job it is generated from).
+  `include` is true while any record of the name is included, since the
+  export carries the name while one is: two cron files can generate one
+  name.
+- `declined_generated[]`: a generated request the export declines, with
+  `row: { row: "scheduled", name }`.
+
+**Join both through the row's `generated_timer` field, the generated
+name.** Never derive the name by parsing the row's id. The id is an
+identity, not a key into the view: an earlier version joined on a
+`generated:` prefix, and a collected timer whose own name began with that
+prefix took the generated row's decline note.
+
+The row offers a toggle unless it is excluded and `cron_job_excluded` is
+set: the server refuses that include, so the row shows why instead.
+While any record is still included, excluding stays available even when
+one source cron job is excluded.
+
+**Scheduled row ids are kind and source.** `adapter::generic_row_id`
+builds them from `GenericRefItem.scheduled` (`ScheduledSource`, set by
+the reference projection):
+
+| Row | Id |
+|---|---|
+| Cron job | `cron:<path>` |
+| Collected timer | `timer:<path>`, or `timer:<name>` when the snapshot records no path |
+| At job | `at:<file>` |
+| Generated timer | `generated:<index>:<name>`, `<index>` its place in `generated_timer_units` |
+
+The kind ends at the first `:` and contains none, so rows of two kinds
+never share an id, and within a kind the source is unique. Names are not:
+a shadowed timer's `/etc` and vendor files, a collected timer and a
+generated one, and two lines of one cron file all share names. A shared
+id is a shared React key, DOM id and GlobalSearch key, so search and
+reveal land on the wrong row. Rows of other reference sections keep the
+projection's ids.
+
+**Reveal matches test ids exactly.** After a navigation, App finds the
+target row by comparing each `data-testid` as a string
+(`elementByTestId` in `App.tsx`). Do not build a CSS selector from an
+item id: ids are host data, and a unit name can hold a literal backslash
+(`backup\x2djob.timer`), which a selector reads as an escape, so the link
+opens the section and focuses nothing.
+
 ## 2. The hand-built decision DTOs — still `include: bool`
 
 `ServiceDecisionDto`, `DropInDecisionDto`, `QuadletDecisionDto`,
 `FlatpakDecisionDto`, `TunedDecisionDto`,
 `LanguagePackageEnvDto`, and `UnmanagedFileItemDto` collapse the
-disposition with `.is_included()`.
+disposition with `.is_included()`. `UnmanagedFileItemDto` also carries
+`withheld`, as a config row does, found by the row's recorded `path` and
+present only on an included row: a file under `/etc/systemd/system/` is
+withheld there (`UnmanagedUnitPath`).
 
 That is currently sound: as of v0.9.0-beta.2 the only producers of
 non-actionable dispositions are the config inspector (modernization,

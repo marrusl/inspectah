@@ -46,6 +46,18 @@ drifted in two independent ways:
    preset view with its item lists emptied, which is enough for a test
    that only needs the stats bar and the Export dialog.
 
+**A fixture edit changes a Rust snapshot.**
+`crates/web/tests/fixture_structure_test.rs` snapshots several of these
+files with insta, so adding a field to a view fixture breaks it. The
+pre-commit hook skips every cargo gate when no Rust or Cargo file is
+staged, so a fixture-only commit lands with that test red, as one did
+when `declined_generated` and `generated_timers` were added. After any
+fixture edit, run it yourself and review the snapshot diff:
+
+```bash
+cargo test -p inspectah-web --test fixture_structure_test
+```
+
 **The compensating control named in `fixture_structure_test.rs`'s header
 is nominal.** That file says Rust-type compatibility is "proven by
 [the] real-server smoke tests" — `e2e/smoke-integration.spec.ts`. Those

@@ -73,8 +73,10 @@ runGuarded(key, () =>
   Keep it with the guard's owner, in `useItemFailures`
   (`crates/web/ui/src/hooks/useItemFailures.ts`). The Users section does
   this: `MainContent` holds each user's last failed request by username,
-  and the card shows it on return. `onMutationError` is not a substitute:
-  in `MainContent` it only logs.
+  and the card shows it on return. The generated timer toggle does the
+  same by generated name, and `ContextItem` shows the failure in the
+  row's live region. `onMutationError` is not a substitute: in
+  `MainContent` it only logs.
 - **A kept failure ends with the record it was about.** Kept with a
   long-lived owner, a failure outlives the item too, unless something
   ends it. `useItemFailures` gives each item a lifetime: `clearAll` ends
@@ -148,6 +150,7 @@ runGuarded(key, () =>
 | Tuned row | `TunedSection` | `MainContent` | `tuned:<profile>` |
 | Service row | `ServiceSection` | `MainContent` | `["service", unit]` |
 | Service drop-in row | `ServiceSection` | `MainContent` | `["dropin", path]` |
+| Generated timer row | `ContextItem` (Scheduled Tasks) | `MainContent` | `["generated-timer", name]` |
 | User include, strategy, password | `UsersGroupsSection` | `MainContent` | username |
 | Language package pin | `LanguagePackageList` | `MainContent` | `["pin", ecosystem, env_path, package]` |
 | Bulk pin | `LanguagePackageList` | `MainContent` | `["bulk-pin", ecosystem, env_path]` |
