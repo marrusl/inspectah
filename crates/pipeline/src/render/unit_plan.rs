@@ -1275,8 +1275,18 @@ const LINK_VENDOR_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system do 
      and the package's unit does. The image was linked from the package's unit, so it has this \
      link.";
 
-/// § 10.9's start of the removal line, before the quoted path.
-const LINK_REMOVE_PREFIX: &str = "#   To remove it, add after the configuration COPY: RUN rm --";
+/// § 10.9's start of the removal line, before the quoted path. The line
+/// tests that the path is a link before it removes it, so it never deletes
+/// a file.
+const LINK_REMOVE_PREFIX: &str = "#   To remove it, add after the configuration COPY: RUN test -L";
+
+/// The line in place of the removal line when the export writes a file at
+/// the link's path, before the path: the copied file replaces the link, and
+/// advice never deletes a file the export carries.
+const LINK_STAGED_FILE_PREFIX: &str = "#   The export copies a file to";
+
+/// [`LINK_STAGED_FILE_PREFIX`]'s line after the path.
+const LINK_STAGED_FILE_REST: &str = "which replaces this link in the image, so no line removes it.";
 
 /// The comment lines of § 10.9 for one hand-made link, the one source for
 /// the Containerfile and the view response. The lines are the spec's text
@@ -1291,10 +1301,12 @@ const LINK_REMOVE_PREFIX: &str = "#   To remove it, add after the configuration 
 ///   the link does and how to add it, since no verb makes one; for an
 ///   alias, how to add it, since no verb but `enable` makes one. A
 ///   `HostDevice` link gets no command.
-/// - For `VendorInstallOnly`, the `rm` line that removes the link the
-///   image has, its path quoted after `--`.
+/// - For `VendorInstallOnly`, the line that removes the link the image
+///   has, its path quoted, after a test that the path is a link. When
+///   `staged` writes a file at that path, the copied file replaces the
+///   link, and a line says so in place of the removal line.
 /// - Relation `Also` is not a link: [`also_lines`].
-pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
+pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<String> {
     let unit = link.unit.as_str();
     let parent = link.parent.as_str();
     let Some(name) = LinkName::of(link) else {
@@ -1339,7 +1351,15 @@ pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
                      {LINK_VENDOR_INSTALL_ONLY_REST}",
                     name.subject()
                 ),
-                format!("{LINK_REMOVE_PREFIX} {}", single_quote(&name.etc_path())),
+                {
+                    let path = name.etc_path();
+                    if is_staged(staged, &path) {
+                        format!("{LINK_STAGED_FILE_PREFIX} {path}, {LINK_STAGED_FILE_REST}")
+                    } else {
+                        let path = single_quote(&path);
+                        format!("{LINK_REMOVE_PREFIX} {path} && rm -- {path}")
+                    }
+                },
             ];
         }
     };
@@ -2429,7 +2449,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
             advise(
                 compared_unit(link),
                 &link.install_files,
-                manual_link_lines(link),
+                manual_link_lines(link, staged),
             )
         })
         .collect();

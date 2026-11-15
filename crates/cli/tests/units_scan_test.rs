@@ -7197,9 +7197,11 @@ fn t23_link_advisory_table() {
             ],
         ),
     ];
+    let empty = InspectionSnapshot::new();
+    let nothing_staged = render::configtree::staged_writes(&empty);
     for (link, expected) in cases {
         assert_eq!(
-            render::unit_plan::manual_link_lines(&link),
+            render::unit_plan::manual_link_lines(&link, &nothing_staged),
             expected,
             "{link:?}"
         );
@@ -7776,7 +7778,10 @@ fn vendor_only_block(link: &str, unit: &str, path: &str) -> [String; 2] {
              /etc/systemd/system do not name it, and the package's unit does. The image was \
              linked from the package's unit, so it has this link."
         ),
-        format!("#   To remove it, add after the configuration COPY: RUN rm -- '{path}'"),
+        format!(
+            "#   To remove it, add after the configuration COPY: RUN test -L '{path}' && rm -- \
+             '{path}'"
+        ),
     ]
 }
 
@@ -8117,6 +8122,67 @@ fn t32_package_only_links_and_also_names_are_advised() {
         assert!(
             in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
             "(g) {route}:\n{containerfile}"
+        );
+    }
+}
+
+/// A removal line never deletes a file the export copies. The package's
+/// `app.service` names `Alias=compat.service`, an `/etc` drop-in resets
+/// it, and the host has its own regular `compat.service` under `/etc`,
+/// which the export copies. The `VendorInstallOnly` finding for the alias
+/// then says that file replaces the link in the image, with no `rm` line,
+/// on both routes and in refine. Control: with no such file, the same
+/// finding gets the removal line, which removes only a link.
+#[test]
+fn a_removal_line_never_deletes_a_staged_file() {
+    const COMPAT: &str = "/etc/systemd/system/compat.service";
+    let host = || {
+        wants_link(
+            diff_host(
+                DIFF_UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=compat.service\n",
+                "enabled",
+            ),
+            "multi-user.target",
+            DIFF_UNIT,
+        )
+        .file(&etc_drop_in(DIFF_UNIT, "10-alias.conf"), "[Install]\nAlias=\n")
+    };
+    let subject = "compat.service, a link to app.service,";
+
+    let control = scan(host());
+    let block = vendor_only_block(subject, DIFF_UNIT, COMPAT);
+    for (route, containerfile) in both_routes(&control) {
+        assert_eq!(
+            block_from(&containerfile, &block[0]),
+            block,
+            "control {route}:\n{containerfile}"
+        );
+    }
+
+    let snap = scan(host().etc_unit("compat.service", "[Service]\nExecStart=/usr/bin/compat\n"));
+    let expected = [
+        block[0].clone(),
+        format!(
+            "#   The export copies a file to {COMPAT}, which replaces this link in the image, \
+             so no line removes it."
+        ),
+    ];
+    let refine = session(&snap);
+    let rows = &refine.decisions().manual_links;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].advisories, expected);
+    for (route, tree) in both_exports(&snap) {
+        assert!(staged_at(&tree, COMPAT), "{route}: the file is copied");
+        let containerfile = containerfile_in(&tree);
+        assert_eq!(
+            block_from(&containerfile, &expected[0]),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            !containerfile.contains("rm --"),
+            "{route}:\n{containerfile}"
         );
     }
 }
