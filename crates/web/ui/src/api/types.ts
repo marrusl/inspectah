@@ -556,7 +556,8 @@ export type InstallUnknown =
   | "specifier"
   | "required_by_reset"
   | "foreign_name"
-  | "upheld_by";
+  | "upheld_by"
+  | "unreadable";
 
 /**
  * Why a link is not carried (Rust: `ManualLinkCause`, externally tagged).

@@ -388,6 +388,33 @@ describe("Sidebar", () => {
       ).toBeInTheDocument();
     });
 
+    it("counts the default target, the only decision in a target-only view", () => {
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+        default_target: {
+          target: "graphical.target",
+          include: true,
+          locked: false,
+          declined: null,
+        },
+      });
+      expect(within(entry).getByLabelText("1 decisions")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Services: 0 decisions remaining"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("counts no target in the same view without one", () => {
+      const entry = renderUnits({
+        ...MOCK_VIEW_DATA,
+        unit_states: [],
+        unit_dropins: [],
+      });
+      expect(within(entry).getByLabelText("0 decisions")).toBeInTheDocument();
+    });
+
     it("counts a full-shadow drop-in when the unit has no state row", () => {
       // A unit at its preset whose only change is a full shadow has no
       // state row: its one decision is the drop-in toggle.
@@ -1421,6 +1448,66 @@ describe("Sidebar", () => {
         "All items included in Configuration Files",
       );
       expect(announceEl.getAttribute("aria-live")).toBe("assertive");
+    });
+
+    it("names the default target as outside the units bulk toggle", async () => {
+      const withTarget: ViewResponse = {
+        ...MOCK_VIEW_DATA,
+        default_target: {
+          target: "graphical.target",
+          include: true,
+          locked: false,
+          declined: null,
+        },
+      };
+      render(
+        <Sidebar
+          activeSection="units"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={withTarget}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-units"));
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "Exclude all except the default target" }),
+      );
+
+      expect(onBatchToggle).toHaveBeenCalledWith("units", false);
+      const announceEl = await screen.findByTestId("batch-toggle-announce");
+      await vi.waitFor(() =>
+        expect(announceEl).toHaveTextContent(
+          "All items except the default target excluded from Services",
+        ),
+      );
+      expect(announceEl.textContent).not.toMatch(/^All items excluded/);
+    });
+
+    it("keeps the plain units bulk labels when the view has no default target", async () => {
+      render(
+        <Sidebar
+          activeSection="units"
+          onSelect={vi.fn()}
+          stats={MOCK_STATS}
+          sections={MOCK_SECTIONS}
+          health={MOCK_HEALTH}
+          viewData={MOCK_VIEW_DATA}
+          groups={MOCK_GROUPS}
+          onBatchToggle={onBatchToggle}
+        />,
+      );
+
+      await userEvent.click(screen.getByTestId("kebab-units"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "Exclude all" }));
+      const announceEl = await screen.findByTestId("batch-toggle-announce");
+      await vi.waitFor(() =>
+        expect(announceEl).toHaveTextContent("All items excluded from Services"),
+      );
     });
 
     it("does not include packages in safety gate for Include all", async () => {

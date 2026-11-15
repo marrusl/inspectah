@@ -83,6 +83,14 @@ describe("ServiceSection drop-ins without a parent service row", () => {
     ).toBeInTheDocument();
   });
 
+  it("states that the group's overrides have no unit-state row", () => {
+    render(<ServiceSection {...defaultProps} dropins={[makeDropin()]} />);
+    const group = screen.getByTestId("dropin-orphans");
+    expect(group).toHaveTextContent("These overrides have no unit-state decision row.");
+    // A record's drop-in lands here too, so the note claims nothing about presets.
+    expect(group.textContent).not.toMatch(/preset/i);
+  });
+
   it("renders orphan drop-ins when there are no services at all", () => {
     render(<ServiceSection {...defaultProps} dropins={[makeDropin()]} />);
     expect(screen.getByTestId(`dropin-item-${ORPHAN_PATH}`)).toBeInTheDocument();

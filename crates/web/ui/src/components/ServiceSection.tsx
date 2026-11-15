@@ -899,18 +899,18 @@ export function ServiceSection({
         />
       ))}
 
-      {/* Drop-ins whose unit produced no state change: a unit sitting at
-          its preset state never reaches `state_changes`, so without this
-          group the drop-in row — which owns the decision for a config
-          path it shadows — would render nowhere. */}
+      {/* Drop-ins whose unit has no state row: a unit at its preset, or one
+          with an undetermined or install-difference record, never reaches
+          `state_changes`, so without this group the drop-in row — which
+          owns the decision for a config path it shadows — would render
+          nowhere. */}
       {orphanDropins.length > 0 && (
         <div data-testid="dropin-orphans">
           <h3 className="inspectah-service-section__orphan-heading">
             Other drop-in overrides
           </h3>
           <p className="inspectah-service-section__orphan-note">
-            These units are at their preset state, so the drop-in is the whole
-            decision.
+            These overrides have no unit-state decision row.
           </p>
           {[...groupDropinsByUnit(orphanDropins).entries()].map(
             ([unit, unitDropins]) => (

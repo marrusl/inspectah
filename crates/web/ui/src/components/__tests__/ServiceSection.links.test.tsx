@@ -85,7 +85,7 @@ function makeLink(overrides: Partial<ManualLinkView> = {}): ManualLinkView {
 const NEED_DROP_IN = "/etc/systemd/system/need.service.d/10-reset.conf";
 const UNDETERMINED_LINES = [
   `# Advisory: need.service is not carried: its [Install] section on the source host cannot be relied on (an empty RequiredBy= whose effect was not measured), and these files under /etc/systemd/system change it: ${NEED_DROP_IN}.`,
-  "#   Enable or disable need.service yourself in the image.",
+  "#   The image's links for need.service can differ from the source host's, including links its package install made before these files are copied. Check them with systemctl is-enabled in the image.",
 ];
 
 function makeUndetermined(

@@ -76,6 +76,22 @@ function sectionCount(
   return String(subTotal);
 }
 
+/**
+ * The batch slugs whose toggle reaches the unit rows. The server's units
+ * bulk toggle leaves the default target out: it keeps its own toggle.
+ */
+const UNIT_BATCH_SLUGS = new Set(["units", "services-scheduling"]);
+
+/**
+ * What a batch toggle on `slug` reaches, as its menu and announcement say
+ * it: everything, or everything but a default target the view holds.
+ */
+function batchScope(slug: string, viewData?: ViewResponse | null): string {
+  return UNIT_BATCH_SLUGS.has(slug) && viewData?.default_target
+    ? "all except the default target"
+    : "all";
+}
+
 function decisionCount(
   stats: RefineStats | null,
   id: string,
@@ -85,13 +101,15 @@ function decisionCount(
   if (id === "users_groups") {
     return userDecisionCount != null ? String(userDecisionCount) : "...";
   }
-  // Every row the section renders is a toggle: state rows and drop-ins,
-  // including a full shadow whose unit has no state row.
+  // Every toggle the section renders: state rows and drop-ins, including
+  // a full shadow whose unit has no state row, and the default target.
   if (id === "units") {
     if (!viewData) return "...";
     // Required fields, read without a fallback: one the server stops
     // sending fails here instead of counting as an empty section.
-    return String(viewData.unit_states.length + viewData.unit_dropins.length);
+    // `default_target` is the one the server leaves out when there is none.
+    const target = viewData.default_target ? 1 : 0;
+    return String(viewData.unit_states.length + viewData.unit_dropins.length + target);
   }
   // Tuned rows only: the sysctl panel holds no decisions.
   if (id === "system_tuning") {
@@ -281,12 +299,16 @@ export function Sidebar({
         onBatchToggle(groupSlug, include)
           .then(() => {
             const verb = include ? "included in" : "excluded from";
-            setBatchAnnouncement(`All items ${verb} ${groupLabel}`);
+            const items =
+              batchScope(groupSlug, viewData) === "all"
+                ? "All items"
+                : "All items except the default target";
+            setBatchAnnouncement(`${items} ${verb} ${groupLabel}`);
           })
           .catch(() => setBatchAnnouncement(`Failed to update ${groupLabel}`)),
       );
     },
-    [onBatchToggle, runBatch],
+    [onBatchToggle, runBatch, viewData],
   );
 
   /** Handle a batch-toggle menu action, gating Packages exclude behind confirmation. */
@@ -476,7 +498,7 @@ export function Sidebar({
                 isDisabled={isPending}
                 data-testid={`include-all-${group.slug}`}
               >
-                Include all
+                Include {batchScope(group.slug, viewData)}
               </DropdownItem>
               <DropdownItem
                 key="exclude"
@@ -484,7 +506,7 @@ export function Sidebar({
                 isDisabled={isPending}
                 data-testid={`exclude-all-${group.slug}`}
               >
-                Exclude all
+                Exclude {batchScope(group.slug, viewData)}
               </DropdownItem>
             </DropdownList>
           </Dropdown>
@@ -598,7 +620,7 @@ export function Sidebar({
                   isDisabled={secPending}
                   data-testid={`include-all-${sec.id}`}
                 >
-                  Include all
+                  Include {batchScope(sec.id, viewData)}
                 </DropdownItem>
                 <DropdownItem
                   key="exclude"
@@ -606,7 +628,7 @@ export function Sidebar({
                   isDisabled={secPending}
                   data-testid={`exclude-all-${sec.id}`}
                 >
-                  Exclude all
+                  Exclude {batchScope(sec.id, viewData)}
                 </DropdownItem>
               </DropdownList>
             </Dropdown>
