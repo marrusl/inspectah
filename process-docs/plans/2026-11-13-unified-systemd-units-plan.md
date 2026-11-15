@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `de4f6479`. The spec is the contract. Section numbers (§) and test ids (T1 to T32) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `7de09436`. The spec is the contract. Section numbers (§) and test ids (T1 to T38) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -282,6 +282,8 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Acceptance:** the listed cases pass; `safe_write_file` no longer returns silently.
 
+**Note, added after Task 2.6 was done:** the spec now also has `staged_writes` withhold any write to `/etc/machine-id` (§ 10.2 "Never the machine-id", `WithheldWhy::MachineId`). Task 4.0a adds it.
+
 ### Task 2.7: `plan_units`, quoting and the fragment half of rule 5 (Rust lane, L)
 
 **Spec:** § 10.1 (one function, one `RUN` per verb, kind then name order, single quotes and `--`, `systemctl_lines(&[PlannedUnit])`), § 10.2 `PlannedUnit`, `UnitPlan`, `plan_units`, rule 5 fragment table (`Local`, `Shadowed`, `Vendor`/`PackagedStorage`), the aggregate content-variant sentence for staged unit files, `OmissionReason::{UnitFileNotStaged, InstallEvidenceChanged}`, "The no-RPM path runs every rule"; § 4 "Unit names reach `RUN` lines bare" for the unit section; T2 signature test, T6, T13 quoting, T15 (except the conflict case), T18 (d).
@@ -305,6 +307,8 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): refuse commands the image cannot take`.
 
 **Acceptance:** T12 (except its view-response sentence, Task 2.13), T8 render cases, T11 (except the rendered advisory for unowned storage masks, Task 2.10) and T16 pass.
+
+**Note, added after this task was done:** the spec now also applies rule 5's package check to `mask` (§ 10.2 "A mask follows the package check"). This task carries a mask whatever its package's state. Task 4.0b adds the check.
 
 ### Task 2.9: Section order, every `systemctl` site quoted, README sentences (Rust lane, S)
 
@@ -412,11 +416,13 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 **Gate:** may run beside phase 3. A result on § 17's list (presets applied at first boot on any route; `/tmp` writable on RHEL 9 with `tmp.mount` masked) stops the branch before phase 4 for a spec change by the project owner. Other results are recorded and change nothing.
 
+**Note, added after this run:** it was run, and § 13 R3 now lists what it settled. An image whose machine-id reads `uninitialized` does get a preset pass, and the spec was changed for it (§ 10.1 condition, § 10.2 guard: Task 4.0a). `to-disk` was measured to deploy a zero-length machine-id and was not booted, and the installer route was not run. The routes still open are Task 5.6's.
+
 ---
 
 ## Phase 3: one control per fact (size M; 7 tasks)
 
-Spec: § 8, § 10.2 "What the plan takes" item 3 and the tuned decision, § 11.1 `scheduled_tasks` row, § 9.1 "Aggregate timer control". Tests T19 to T21.
+Spec: § 8, § 10.2 "What the plan takes" item 3 and the tuned decision, § 11.1 `scheduled_tasks` row, § 9.1 "Aggregate timer control". Tests T19 to T21. T35 to T38 are built by the four phase 3 fixes listed after review gate 3.
 
 Before Task 3.1: merge `main` into the branch and run the gate.
 
@@ -431,6 +437,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 **Acceptance:** T19 passes; `SystemdTimer` has no `disposition`, `locked`, `timer_content` or `service_content`.
 
+**Note, added after this task was done:** removing the second writer lets an operator exclude a local timer's service and keep the timer. The spec now records each timer's trigger (`SystemdTimer.trigger`, § 8) and omits the timer's `enable` when that trigger is local and not staged (§ 10.2 rule 5). Phase 3 fix 3 adds both.
+
 ### Task 3.2: Remove the timer operation; link scheduled rows to their unit (Rust lane, S)
 
 **Spec:** § 8 last bullet (refine half), § 11.1 `scheduled_tasks` timers (`unit`, `unit_row`), § 11.1 Operations "`ItemId::SystemdTimer` is removed"; T20 refine half.
@@ -439,6 +447,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 - [ ] **Step 1: Failing tests first:** a request naming `SystemdTimer` is rejected at deserialization; a scheduled timer row has `unit` and `unit_row` and no include flag; the timer's `unit_states` row keeps its flag.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `refactor(refine): remove the timer toggle that applied nothing`.
+
+**Note, added after this task was done:** the same validation arm still accepts `SetInclude` for `GeneratedTimer`, `CronJob` and `AtJob` and applies nothing. The spec now requires each to apply or be refused by name (§ 8). Phase 3 fix 1 does it.
 
 ### Task 3.3: Timer control gone from the UI and aggregate view (frontend lane, S)
 
@@ -459,6 +469,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 - [ ] **Step 1: Failing tests first:** the flatpak enable is quoted and follows its own `COPY`; a generated cron timer and service named for a collected, enabled vendor timer, through the scan export and the refine export: the request is declined with a FIXME, neither generated file is in the staged tree, and the vendor timer's enable is carried against the package's unit; the declined request shows on the scheduled row.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): plan generated and flatpak units like collected ones`.
+
+**Note, added after this task was done:** this task's collision set holds the units that have a row. The spec now counts inventory entries as well (§ 10.2 "What the plan takes" item 3). Phase 3 fix 2 widens the set and adds the rename advice.
 
 ### Task 3.5: The tuned enable goes; every line is planned (Rust lane, S)
 
@@ -493,11 +505,22 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 **Review gate 3:** implementation review before Task 4.0. Focus: no second writer remains for any unit file; generated-name collisions through both export routes.
 
+### Phase 3 fixes, after review gate 3 (Rust lane; fix 4 has a frontend piece)
+
+Four rules the spec gained once the phase's tasks were built. Each is one test-first fix on the branch before phase 3 closes, with the usual gate, and is not a numbered task. Build them in this order; fix 3 is last, since its check reads the final `staged_writes`, which fixes 2 and 4 change.
+
+- **Fix 1: the scheduled controls apply (§ 8, § 11.1; T35).** Files: `crates/refine/src/session.rs` (validation and apply arms for `GeneratedTimer`, `CronJob` with its cascade to the units it generates, and `AtJob`, refused), `crates/refine/src/projection/` (the generated rows' include state, and the units of an excluded cron job excluded in every projection), `crates/core/src/types/scheduled.rs` (`GeneratedTimerUnit::generated_from`), `crates/web/src/handlers.rs` (the bulk toggle sends no at-job operation and no cron-job operation for a cron job that generates nothing). Test: T35 in `crates/cli/tests/units_scan_test.rs`, built by the real inspectors and asserted through the refine session and its export: the generated-timer row removes and restores its unit; a cron-job row drops and restores the units it generates, and including a generated unit under an excluded cron job is `BadRequest` with the export unchanged; a cron job that generates nothing is `NoopTarget` and an at job is `BadRequest`, the Containerfile unchanged. The bulk toggle in `crates/web/tests/api_test.rs` (`the_scheduling_group_toggle_carries_and_drops_generated_units`): the exact operation list and its effect on the staged tree and the plan.
+- **Fix 2: an inventory name blocks a generated pair (§ 10.2 item 3; T36).** Files: `crates/pipeline/src/render/configtree.rs` (the collision set in `staged_writes`, now with inventory names and mount findings, `Reservation`, `WithheldWhy::GeneratedNameCollision { unit, reserved_by }`), `crates/pipeline/src/render/unit_plan.rs` (`OmissionReason::GeneratedNameCollision { name, reserved_by }` and the two FIXME texts, each naming the collided unit). The flatpak case is unchanged. Test: T36 in `crates/cli/tests/units_scan_test.rs`, through the scan export, the refine export and the refine projection, with the service-only row collision beside it (`a_generated_timer_declined_for_its_service_names_the_service`); `crates/pipeline/tests/unit_plan_test.rs` and `crates/web/tests/api_test.rs` follow the type.
+- **Fix 4: an unmanaged file under `/etc/systemd/system` is refused (§ 10.2 "No other writer", § 11.1; T38).** Files: `crates/pipeline/src/render/configtree.rs` (the one shared decision, `unmanaged_unit_path`, by `Destination`, covering nested paths; `WithheldWhy::UnmanagedUnitPath` and the `StagedFileKind::UnmanagedFile` source kind on the withheld record), `crates/pipeline/src/render/unmanaged.rs` (the renderer asks the decision: no `COPY`, no `ln`), and both payload routes, which ask the same decision: `crates/cli/src/commands/scan.rs` (`bundle_unmanaged_files`) and `crates/refine/src/session.rs` (`extract_payload_dirs_with_budget`, where the export extracts payload; `crates/refine/src/tarball.rs` only unpacks a scan to load the session), then `crates/refine/src/projection/` (`unmanaged_withheld`). Test: T38 in `crates/cli/tests/units_scan_test.rs`, an imported snapshot and tarball through the refine export and the scan export, asserting the extracted tree, the `COPY` and `ln` lines, the FIXME in the Configuration Files section and `unmanaged_withheld`. Open test gap: the scan bundling change has no test of its own, and there is no case in `crates/cli/tests/copy_source_exists_test.rs` or `crates/refine/tests/tarball_test.rs`. **Frontend piece:** `crates/web/src/web_types.rs` and `adapter.rs` (`UnmanagedFileItemDto.withheld`, which does not exist today), `crates/web/ui/src/api/types.ts` and the unmanaged files component show `withheld` on the row, tested in `crates/web/tests/api_test.rs` and with a Vitest case; it follows the Rust commit, in the frontend lane.
+- **Fix 3: a timer needs its trigger (§ 8, § 10.2 rule 5, § 6.7 rows; T37). Built last.** Files: `crates/core/src/types/scheduled.rs` (`TimerTrigger`, defaulting to `Unresolved`, `SystemdTimer.trigger`, `SystemdTimer.trigger_drop_ins`), `crates/collect/src/inspectors/scheduled.rs` (record `Unit=` from the timer file and `<name>.timer.d` under `/etc/systemd/system` and `/usr/lib/systemd/system`, else the same-named service; expand `%i`, `%I`, `%p`, `%N`; anything else is `Unresolved`; list the `/etc` drop-ins that assign `Unit=`), `crates/pipeline/src/render/unit_plan.rs` (`TimerTriggerEvidenceChanged`, `TimerTriggerUnresolved`, `TimerTriggerNotStaged`, in that order, after the timer's own file and package), `crates/pipeline/src/render/mod.rs` (the field guard). Test: T37 in `crates/cli/tests/units_scan_test.rs`, built by the real inspectors through both exports and the refine row: the excluded trigger, with the default service and with `Unit=other.service`; the excluded drop-in that sets `Unit=`, together with the default service, giving `TimerTriggerEvidenceChanged` though the recorded trigger is staged; an unexpanded specifier giving `TimerTriggerUnresolved`; and the triggers that pass. The reader's cases, `%i` expansion for an instance timer among them, are collector unit tests in `crates/collect/src/inspectors/scheduled.rs`, and `crates/collect/tests/scheduled_test.rs` gains the `trigger` key. The systemd behavior the rule rests on is read from source; Task 4.0 measures it.
+
+The changelog lines are Task 3.7's, or a follow-up to it if it is already done.
+
 ---
 
-## Phase 4: the `/etc/systemd/system` scan (size L, above § 15's estimate; 15 tasks)
+## Phase 4: the `/etc/systemd/system` scan (size L, above § 15's estimate; 17 tasks)
 
-Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sources 3 to 5 and the search path, § 7.2 (all), § 7.3, § 7.4 (instance preset, stock state, a unit at its preset whose `/etc` files change `[Install]`), § 7.5 (first three paragraphs), § 7.6, § 7.7 (`*.upholds/*`), § 10.2 (install files, rule 5 drop-in half, rule 7), § 10.5, § 10.9, § 11.1 (`manual_links`, `default_target`, `also`, `install_drop_ins`), § 12 (list fields, `manual_links`, `default_target`). Tests T22 to T27, T25 (a) to (l), T30 to T32.
+Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sources 3 to 5 and the search path, § 7.2 (all), § 7.3, § 7.4 (instance preset, stock state, a unit at its preset whose `/etc` files change `[Install]`), § 7.5 (first three paragraphs), § 7.6, § 7.7 (`*.upholds/*`), § 10.2 (install files, rule 5 drop-in half, rule 7), § 10.5, § 10.9, § 11.1 (`manual_links`, `default_target`, `also`, `install_drop_ins`), § 12 (list fields, `manual_links`, `default_target`). Tests T22 to T27, T25 (a) to (l), T30 to T34. Tasks 4.0a and 4.0b are follow-on work for rules decided after phases 1 and 2 were done; they do not depend on the scan and come first.
 
 ### Task 4.0: Run R5 before phase 4 (real host, M)
 
@@ -507,11 +530,35 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 
 - [ ] Run each R5 question as § 13 states it, on both releases. Record under a dated Measured subsection. Revert both VMs. Commit `docs(skills): record the small systemd facts phase 4 relies on`.
 
+- [ ] Include the two cases § 13 R5 gained with phase 3's fixes: a timer enabled in an image that lacks its service file, and `systemctl is-enabled tuned.service` in each bootc base after `dnf install tuned`. For the timer, record the build-time result of `enable` and the links it made, and after boot the trigger's load state, the timer's state, the journal line, `systemctl --failed` and `is-system-running`, so a rejected start job is told apart from a failed or degraded system. For `tuned`, record the effective state separately from which preset rule, if any, names the unit. If the timer does start, or the base does not enable `tuned.service` by preset, tell the project owner before phase 4 goes on: the first undercuts `TimerTriggerNotStaged` (§ 10.2 rule 5) and the second the removal of the kernel section's enable (§ 10.2).
+
 - [ ] Include the sequence § 7.4's additive row rests on, on both bases: in an image where the package install has already linked a preset-enabled unit, `COPY` an `/etc` drop-in that adds `WantedBy=extra.target`, then `systemctl enable`; and the same with a full shadow that adds a target. Record the links before and after.
 
-**Gate:** phase 4 code does not start until each answer is checked against Tasks 4.1 to 4.8, 4.5a and 4.5b. If the additive sequence does not give one new link with the existing ones untouched, § 13 says the additive case becomes a `HostInstallOnly` advisory per added link: Task 4.5a's additive row and Task 4.5b's T31 are rewritten to that before they start, with the project owner told. An answer that matches the spec's assumption lets its guard stand. An answer on § 17's R5 line (a drop-in reset behaving as documented, a different search-path order, `disable` failing on an absent `Also=` member) goes to the project owner for a spec change, and this plan's affected task is rewritten before it starts.
+**Gate:** Tasks 4.0a and 4.0b do not depend on R5 and may start before it. No other phase 4 code starts until each answer is checked against Tasks 4.1 to 4.8, 4.5a and 4.5b. If the additive sequence does not give one new link with the existing ones untouched, § 13 says the additive case becomes a `HostInstallOnly` advisory per added link: Task 4.5a's additive row and Task 4.5b's T31 are rewritten to that before they start, with the project owner told. An answer that matches the spec's assumption lets its guard stand. An answer on § 17's R5 line (a drop-in reset behaving as documented, a different search-path order, `disable` failing on an absent `Also=` member) goes to the project owner for a spec change, and this plan's affected task is rewritten before it starts.
 
-Before Task 4.1: merge `main` into the branch and run the gate.
+Before Task 4.0a: merge `main` into the branch and run the gate.
+
+### Task 4.0a: Follow-on: the machine-id is never staged (Rust lane, S)
+
+**Spec:** § 10.1 "First boot keeps it with the base's empty `/etc/machine-id`" (the decision and the condition); § 10.2 "Never the machine-id" and `WithheldWhy::MachineId`; § 11.1 `withheld` on the owning row; T33.
+
+**Files:** `crates/pipeline/src/render/unit_plan.rs` or wherever Task 2.6 put `staged_writes` (one more withhold test, by `Destination`), `crates/pipeline/src/render/readme.rs` (the two first-boot sentences, worded as § 10.2 gives them: no "only while"), `crates/refine/src/projection/` (the new `WithheldWhy` variant, text only). Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
+
+- [ ] **Step 1: Failing tests first,** T33, through the scan export and through the refine export: a snapshot offering `/etc/machine-id` through a config entry, and separately one offering it through a drop-in row's path, each with the path spelled relative (`etc/machine-id`), with a doubled separator, with an interior `.` and with a trailing separator, stages nothing there, the Containerfile names it in a FIXME, and each offering row shows `withheld` with `MachineId`, two rows that offer the one destination included (the guard runs before offers are deduplicated); `/etc/machine-info` offered in each of the same ways is staged; a host scan records no entry for the path (`walk.rs:45` already excludes it: assert it, do not change it); the exported README holds the two first-boot sentences. One more assertion, not in T33: no rendered file or instruction writes `uninitialized`.
+- [ ] **Step 2-4:** run (fails: the imported entry is staged), implement, gate. **Step 5: Commit** `fix(pipeline): never stage a machine-id, and say when first boot keeps unit state`.
+
+**Acceptance:** T33 passes.
+
+### Task 4.0b: Follow-on: a mask follows its package (Rust lane, S)
+
+**Spec:** § 10.2 rule 5 "A mask follows the package check" (the three outcomes, the order against rules 3 and 4, the zero-length shadow, the fleet owner) and the rules table's row 5; T34.
+
+**Files:** `crates/pipeline/src/render/unit_plan.rs` (the presence tiers, unchanged, now asked for `mask`). Test: `crates/pipeline/tests/unit_plan_test.rs`, `crates/cli/tests/units_scan_test.rs`.
+
+- [ ] **Step 1: Failing tests first,** T34: a masked vendor unit whose owning package is excluded and not in the baseline gives no `mask` and an `# Omitted:` line with the package reason; the same mask with the package included is carried; excluded and in the baseline is carried; no known owner, and an `Absent` fragment, are carried; a masked protected unit whose package is excluded gives rule 3's FIXME; a mask whose path a staged file occupies, package excluded, gives `MaskPathOccupied`. Two existing tests in `crates/pipeline/tests/unit_plan_test.rs` assert the old exemption and are changed here: in `units_of_a_not_carried_package_are_omitted_as_not_carried_on_the_scan_path`, the masked case becomes an omission with the not-carried reason; and `a_mask_is_carried_when_its_package_is_excluded_and_an_enable_is_not` becomes an omission with the excluded-package reason for the mask as well as the enable, renamed to say so. Replace both assertions and their doc comments; do not delete the cases. The carried side is T34's included-package and in-baseline controls. T11, T12 and T16 stay unchanged and must still pass.
+- [ ] **Step 2-4:** run (fails: the mask is carried with its package excluded), implement, gate. **Step 5: Commit** `fix(pipeline): omit a mask whose unit's package is not in the image`.
+
+**Acceptance:** T34 passes. The refine row for an omitted mask shows the package reason through the existing `declined` projection.
 
 ### Task 4.1: The `[Install]` reader (Rust lane, M)
 
@@ -653,7 +700,7 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 **Spec:** § 14 row for `inspectah-write-the-collector-overlap-contract` ("Phase 4 writes this part into `process-docs/` and fixes `docs/reference/inspector-coverage.md`").
 
 - [ ] Write the `/etc/systemd/system` ownership contract (§ 7.7 table, § 8 table, the three dependency-directory exclusions) as `process-docs/skills/etc-systemd-system-ownership.md`, add it to `process-docs/skills/index.md`; fix `docs/reference/inspector-coverage.md:110-133` (sources, what becomes a state change, links, the default target); update `service-omission-model.md` (rules 5 and 7).
-- [ ] **CHANGELOG.md**: **Added** hand-made unit link advisories with the `add-wants` or `add-requires` line; the default target is carried. **Changed** enablement is read from the links, so a unit enabled only by a hand-made link is reported, not enabled; a command whose `Also=` members differ on the source is an advisory with the lines to add by hand; a unit at its preset whose `/etc` files add `[Install]` links is enabled after the `COPY`, and one whose files drop or replace a link is advised with the line to add or remove.
+- [ ] **CHANGELOG.md**: **Added** hand-made unit link advisories with the `add-wants` or `add-requires` line; the default target is carried. **Changed** enablement is read from the links, so a unit enabled only by a hand-made link is reported, not enabled; a mask on a unit whose package is not in the image is omitted with a comment; the README states that rendered unit state holds at first boot only while the image keeps the base's empty `/etc/machine-id`; a command whose `Also=` members differ on the source is an advisory with the lines to add by hand; a unit at its preset whose `/etc` files add `[Install]` links is enabled after the `COPY`, and one whose files drop or replace a link is advised with the line to add or remove.
 - [ ] The phase report names `inspectah-write-the-collector-overlap-contract` as partly covered (what remains, per § 14) and notes that the blocker of `inspectah-etc-unit-files-accessor` has moved.
 - [ ] Gate; commit `docs: write the /etc/systemd/system ownership contract`.
 
@@ -668,6 +715,8 @@ Before Task 4.1: merge `main` into the branch and run the gate.
 Spec: § 7.5 (lists, tables, `/var/run` and `/var/lock` constant), § 10.2 rule 6, § 10.8, § 11.1 `required_config[]`, `data_paths[]`. Tests T28, T29.
 
 Before Task 5.1: merge `main` into the branch and run the gate.
+
+**Instance timers and their trigger (§ 8, T37), not yet a task.** No task here records a description for an instance timer, which has no timer file of its own, and rule 5's trigger check omits the `enable` of a timer with no description as `TimerTriggerUnresolved`. So once Task 5.2 carries an enabled instance timer, its `enable` is omitted until the scheduled inspector records the instance's description; the scan-built T37 case (`Unit=worker@%i.service` through a scan) belongs with that work, and the trigger reader then needs the template's `<prefix>@.timer.d` as well as `<name>.timer.d`, since a `Unit=` set there is not seen today.
 
 ### Task 5.1: What an instance needs (Rust lane, M)
 
@@ -721,9 +770,9 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 
 **Review gate 5:** implementation review of phase 5 and a whole-branch review before Task 5.6. Focus: rule 6 against redaction findings and `staged_writes`; T25 (c) after instances became carried; the CHANGELOG and skills checked per the repo's policy.
 
-### Task 5.6: Runs R1, R2 and R4 at the branch tip (real host, L)
+### Task 5.6: Runs R1, R2, R4 and the open routes of R3 at the branch tip (real host, L)
 
-**Spec:** § 13 R1, R2, R4; § 15 real-host table, "At the branch tip, after phase 5"; § 17 "Run R4 finds stock rows beyond the known ones".
+**Spec:** § 13 R1, R2, R4, and R3's open routes; § 15 real-host table, "At the branch tip, after phase 5"; § 17 "Run R4 finds stock rows beyond the known ones".
 
 **Needs:** the branch build at the end of Task 5.5 (and, for R2's ordering case, a `main` build from before the merge); reverted `rhel9` and `rhel10` VMs, reverted before each run; the VM operating notes.
 
@@ -736,9 +785,10 @@ Before Task 5.1: merge `main` into the branch and run the gate.
   5. The libvirt service with its sockets disabled (`virtnetworkd.service`): the rendered `Also=` advisory compared line by line with the host's links (`ls -l` of the relevant `.wants` directories and `systemctl is-enabled` of the service and each socket); the advisory's lines, applied by hand to a build, reproduce the host's states.
   6. A package that owns an unmodified `/etc/systemd/system/service.d/*.conf` holding an `[Install]` section, scanned on one host: whether the snapshot holds any entry for that path in `config.files`, in `units.drop_ins` or in `file_ownership`. If no package in the enabled repositories owns such a file, record that and what was searched.
 - [ ] **R4:** scan each VM stock (no driftify) and then after driftify **kitchen-sink** (cumulative, so every unit-state case of all three levels). Classify every row the new kinds add, every link advisory, every instance and every `Also=` advisory, and keep the classified list with its reasons. Known before the run: `remote-cryptsetup.target` on RHEL 9 and the rows a package install makes through `Also=` (§ 7.4).
+- [ ] **R3, the routes read from source:** boot one image built from each base through each of an image-builder disk image, the installer ISO route, and a plain `ostreecontainer` kickstart. For each, record the size of the deployed `/etc/machine-id` before first boot and the journal's first-boot line (`First Boot Complete was skipped` or `Detected first boot`), and the state of one rendered `enable`, `disable` and `mask`. A route that cannot be set up on the test VMs is recorded as not run, with what was missing: it stays assessed from source and unbooted, and is never written up as a passed boot. `to-disk` is in that state already (its zero-length file was measured on RHEL 10.2 only, and the disk was not booted), and both bases were booted through `to-existing-root`. In R1, also plant the enabled-against-preset case by hand on RHEL 10, where the standard profile disables the socket.
 - [ ] Record each under a dated Measured subsection. Revert both VMs. The run report names `inspectah-full-shadow-wants-link-points-at-the-vendor-path` as partly covered by observation 2. Commit `docs(skills): record the units branch merge-gate runs`.
 
-**Gate (the merge gate):** the branch merges only when R1 shows the image reading the host's socket state on both releases; R2's branch build succeeds with the enable after its file, the full shadow loads from `/etc`, the WireGuard enable is omitted, the clean instance is active, and the libvirt advisory matches the host's links (observation 6 is recorded and gates nothing); and R4 finds no unexplained stock row. A stock row beyond the known ones either joins the stock-state constant (a reviewed change on the branch) or, if the list is shown to be the wrong tool, goes to the project owner before the merge.
+**Gate (the merge gate):** a route in R3 that deploys a machine-id other than the image's zero-length one goes to the project owner before the merge, since § 10.1's condition would have to name it. The branch merges only when R1 shows the image reading the host's socket state on both releases; R2's branch build succeeds with the enable after its file, the full shadow loads from `/etc`, the WireGuard enable is omitted, the clean instance is active, and the libvirt advisory matches the host's links (observation 6 is recorded and gates nothing); and R4 finds no unexplained stock row. A stock row beyond the known ones either joins the stock-state constant (a reviewed change on the branch) or, if the list is shown to be the wrong tool, goes to the project owner before the merge.
 
 ### Task 5.7: Merge (project owner)
 
@@ -752,8 +802,8 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 |---|---|---|---|
 | 1 the rename | 7 (6 / 1 / 0) | M | M |
 | 2 every kind | 17 (13 / 1 / 2 runs; 1 close) | L, upper end | XL: about one and a half L |
-| 3 one control per fact | 7 (5 / 2 / 0) | M | M |
-| 4 the `/etc/systemd/system` scan | 15 (13 / 1 / 1 run) | L, upper end | L+: about a half over L |
+| 3 one control per fact | 7 (5 / 2 / 0), plus four fixes after its review gate, one with a frontend piece | M | M, plus the fixes |
+| 4 the `/etc/systemd/system` scan | 17 (15 / 1 / 1 run) | L, upper end | L+: about a half over L, plus two small follow-on tasks |
 | 5 carried instances | 7 (4 / 1 / 1 run; 1 merge) | S to M | M |
 
 Task sizes: S is one short dispatch, M one full dispatch, L one dispatch at the limit of what a single review can check from the diff. The L tasks (1.2, 2.7, 4.4, 4.8, 2.17, 5.6) are the ones to watch for a split.
@@ -804,10 +854,16 @@ Each spec section that states a requirement, and the task that implements it.
 | § 7.7 `*.upholds/*` exclusion | 4.5 |
 | § 7.8 owning package | 2.2 |
 | § 8 scheduled tasks | 3.1, 3.2, 3.3; generated units 3.4, 3.6 |
+| § 8 the scheduled controls apply; § 11.1 operations on scheduled rows | Phase 3 fix 1 |
+| § 8 a carried timer needs its trigger, declined on changed evidence; § 10.2 rule 5 timer trigger (three steps); § 6.7 `SystemdTimer.trigger` and `trigger_drop_ins` | Phase 3 fix 3 |
+| § 10.2 item 3, a collected unit includes inventory names | Phase 3 fix 2 |
+| § 10.2 no other writer under `/etc/systemd/system`; § 11.1 `withheld` on the unmanaged row | Phase 3 fix 4, with its frontend piece |
 | § 9 schema, one bump, refusal test | 1.2; re-run 5.5 |
 | § 9.1 string consumers | 1.2, 1.5, 1.6, 1.7; aggregate timer control 3.3 |
 | § 10.1 lines, quoting, order within section | 2.7, 2.9 |
-| § 10.1 README sentences | 2.9 |
+| § 10.1 README sentences | 2.9; the first-boot condition 4.0a |
+| § 10.1 first-boot decision; § 10.2 never the machine-id | 4.0a |
+| § 10.2 rule 5, a mask follows the package check | 4.0b |
 | § 10.2 `staged_writes`, `Destination`, rule 1 | 2.6 |
 | § 10.2 `plan_units`, `PlannedUnit`, rule 5 fragment half, no-RPM path | 2.7 |
 | § 10.2 rules 2, 3, 4 | 2.8 |
@@ -837,8 +893,9 @@ Each spec section that states a requirement, and the task that implements it.
 | § 13 tests | Per test in the table below |
 | § 13 R1 | 2.16, 5.6 |
 | § 13 R2 (six observations), R4 | 5.6 |
-| § 13 R3 (a) to (f), (c) on its own install routes | 2.17 |
-| § 13 R5, the additive sequence included | 4.0 |
+| § 13 R3 settled results | 2.17 |
+| § 13 R3 open routes (image-builder disk image, installer ISO, `ostreecontainer` kickstart) | 5.6 |
+| § 13 R5, the additive sequence, the timer without its service and the `tuned.service` preset included | 4.0 |
 | § 13 unrecorded measurements | 2.15 |
 | § 14 backlog items | Backlog items section; closures named in 2.15, 3.7, 4.12, 5.6 |
 | § 14 overlap contract text | 4.12 |
@@ -851,6 +908,9 @@ Each spec section that states a requirement, and the task that implements it.
 | § 17 limit: fleet evidence may omit install metadata | 4.9 (the `FleetAggregate` advisory text) |
 | § 11.1 single-host scope of `declined` and `withheld`; § 12 what a fleet refine row shows; § 17 limit: the fleet view does not say why a command was not written | No product code: the fleet view is unchanged. 2.13 and 2.14 implement the reasons for the single-host view only. The changelog line saying the fleet view does not yet show them is Task 2.15's. |
 | § 17 cost: a changed `[Install]` is carried only when it adds | 4.5b (the two advisory texts) |
+| § 17 limit: rendered unit state depends on the image's machine-id | 4.0a (the README sentence); what a later layer does is outside the product |
+| § 17 cost: a mask is dropped with its package | 4.0b (the `# Omitted:` line is its text) |
+| § 17 cost: four rules that come with the single writer, with what the trigger check cannot see, the drop-in directories the trigger reader does not read, the declined unrecorded trigger, the inventory FIXME's wording and the cron source left in place | Phase 3 fixes 1 to 4 (each rule's FIXME, error or `# Omitted:` line is its text); the unread directories, the wording and the cron source are stated limits with no product text; the template drop-in directory, the Phase 5 note on instance timers |
 
 ### Tests
 
@@ -890,3 +950,9 @@ Each test, and each lettered case, in the task that carries it. Every task liste
 | T30 | 4.5a |
 | T31 | 4.5b |
 | T32 | render and the excluded-file case 4.5b; rows 4.11 |
+| T33 | 4.0a |
+| T34 | 4.0b |
+| T35 | Phase 3 fix 1 |
+| T36 | Phase 3 fix 2 |
+| T37 | Phase 3 fix 3; the scan-built instance timer case, the Phase 5 note on instance timers (no task yet) |
+| T38 | Phase 3 fix 4 |

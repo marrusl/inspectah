@@ -750,6 +750,8 @@ read from a host file has one of three answers:
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
+| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`, or the marker `unresolved` when the value cannot be made into one. The raw value is not stored. A snapshot that lacks the field loads it as `unresolved`, so a snapshot written before the field omits its timers' `enable` lines until it is rescanned (§ 8). |
+| `SystemdTimer.trigger_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
 | `attention_reason`, advisory strings | Generated | Built from the fields above and fixed text only. Never from file content. |
 
@@ -1306,8 +1308,10 @@ unit. The same rule is why the kernel section stops enabling
 What changes in scheduled:
 
 - `SystemdTimer` becomes a description: `name`, `on_calendar`, `exec_start`,
-  `description`, `source`, `path`, `aggregate`. It loses `disposition` and
-  `locked`, since it controls nothing, and `timer_content` and
+  `description`, `source`, `path`, `trigger`, `trigger_drop_ins`,
+  `aggregate`. It loses
+  `disposition` and `locked`, since it controls nothing, and
+  `timer_content` and
   `service_content`, since the local file's content is already in
   `config.files` and a second copy is a second thing to redact.
 - `scan_systemd_timers` keeps reading the files to fill those fields.
@@ -1327,6 +1331,101 @@ What changes in scheduled:
 The cron-to-timer conversion (`make_timer_service`, `scheduled.rs:676`) is
 untouched. A generated unit does not exist on the host, so it has no host
 state to collect, and the scheduled section stays its single control.
+
+**The generated-timer row's control applies. (Mark Russell, 2026-11-14)**
+`SetInclude(false)` on a generated-timer row removes its generated files
+from the staged tree and its `enable` from the Containerfile, and
+`SetInclude(true)` restores both, through the refine export. The same
+holds for the other scheduled rows that take an operation, cron jobs and
+at jobs: an operation on one either changes the export or is refused by
+name. Accepting an operation and applying nothing, which is what the
+session's validation does today for these rows, in the same arm § 4
+describes for the timer toggle, is not allowed for any of the three.
+
+The invariant is met this way, and this is the contract for each row:
+
+- **Generated-timer row.** Applies, as above. Including a generated unit
+  whose cron job is excluded is refused with `BadRequest`, naming both
+  rows.
+- **Cron-job row.** Applies, with a cascade: the cron job is the source of
+  its generated units, so excluding it drops every unit generated from it
+  and including it brings them back (a locked unit stays out). Refine's
+  projection also excludes the units of an excluded cron job, so the two
+  rows cannot disagree. A cron job that generates no unit has no export
+  effect, and its operation is refused with `NoopTarget`, naming it.
+- **At-job row.** Refused with `BadRequest`, naming the file. The export
+  never carries an at job: the Containerfile lists every at job in a FIXME
+  whatever its row says, so there is nothing to apply.
+- **Bulk toggle.** The services-and-scheduling toggle sends no at-job
+  operation, and no cron-job operation for a cron job that generates
+  nothing, since each would only be refused.
+
+**A carried timer needs its trigger. (Mark Russell, 2026-11-14)** The
+second writer used to put a local timer's service file in the image
+whatever its row said. With one writer, the operator can exclude the
+service and keep the timer, and systemd refuses to start a timer whose
+trigger unit did not load (read from the systemd 252 and 257 sources, not
+measured: § 13 run R5). The scheduled inspector therefore records each
+timer's trigger on its description, and § 10.2 rule 5 omits the timer's
+`enable` when that trigger is a local unit whose file is not staged.
+
+```rust
+#[serde(rename_all = "snake_case")]
+pub enum TimerTrigger {
+    /// The unit the timer starts.
+    Unit(UnitName),
+    /// `Unit=` holds a value the inspector cannot make into a unit name.
+    /// Also what a description with no recorded trigger reads as.
+    #[default]
+    Unresolved,
+}
+// on SystemdTimer:
+#[serde(default)]
+pub trigger: TimerTrigger,
+/// Drop-ins under `/etc/systemd/system` that assign `Unit=` for this
+/// timer.
+#[serde(default, skip_serializing_if = "Vec::is_empty")]
+pub trigger_drop_ins: Vec<String>,
+```
+
+**The trigger is declined on changed evidence. (Mark Russell,
+2026-11-14)** The recorded name is only true while the files that set it
+are in the export. A local `report.timer` with a drop-in holding
+`[Timer] Unit=other.service` records `other.service`; with that drop-in
+excluded the image's timer starts `report.service`, which the record
+never checked. So the inspector records the files that set the trigger
+beside its name, and the plan omits the `enable` when one of them is not
+staged. The plan does not read unit files to find the trigger again.
+
+- **What the list holds.** `trigger_drop_ins` is every drop-in under
+  `/etc/systemd/system` that applies to the timer and assigns `Unit=` in
+  `[Timer]`, whether or not a later one overrides it. The timer's own
+  file is not listed: rule 5 already requires a local or shadowed timer's
+  file to be staged, and a second entry would report one exclusion twice.
+  When the trigger is the default, the same-named `.service`, and no
+  drop-in assigns `Unit=`, the list is empty. A vendor drop-in arrives
+  with its package and is not listed.
+- **Specifiers.** In a `Unit=` value the inspector expands `%i`, `%I`,
+  `%p` and `%N`, the set the `[Install]` reader expands (§ 7.2), for a
+  concrete instance timer and for a plain one. Any other specifier, or a
+  result that is not a unit name this model admits, makes the trigger
+  `Unresolved`. A value that cannot be resolved is never read as "no
+  local trigger".
+- **Where `Unit=` is read.** The timer's own file, then the `.conf` files
+  in `<name>.timer.d` under `/etc/systemd/system` and
+  `/usr/lib/systemd/system`, in file-name order, an `/etc` file
+  overriding a vendor file of the same name. The last assignment in
+  `[Timer]` wins and an empty one resets to the default. No other drop-in
+  directory is read (§ 17).
+- **An unrecorded trigger.** A timer with no description, or a
+  description from a snapshot written before the field, has trigger
+  `Unresolved`, so its `enable` is omitted as `TimerTriggerUnresolved`
+  with its `# Omitted:` comment. A snapshot written before the field
+  therefore loses its timers' `enable` lines until it is rescanned. That
+  is accepted under the standing decision: **no upgrade or migration code
+  for pre-1.0 file breaks while the spec is still moving (Mark Russell,
+  2026-11-14)**. Reading the missing field as "no trigger to check"
+  would pass exactly the timers the check exists for.
 
 ## 9. Snapshot schema
 
@@ -1435,16 +1534,42 @@ all work in a `RUN` step with no manager running, on both bases
 (measured). Two more measured facts bound what a carried line means on the
 target, and the exported README states each in a sentence:
 
-- **First boot keeps it.** On both bootc bases, installed with
-  `bootc install to-existing-root`, first boot does not re-apply presets,
-  and rendered `disable`, `enable`, `mask`, `add-wants` and `set-default`
-  state held through two boots. Only that route was tried (run R3). A
-  later `systemctl preset-all` puts every unit back to preset.
+- **First boot keeps it with the base's empty `/etc/machine-id`.** **The
+  rendered `systemctl` lines are kept, the condition is stated, and the
+  machine-id is guarded. No preset file is written. (Mark Russell,
+  2026-11-14)** Both bootc bases ship a zero-length `/etc/machine-id`,
+  and both were booted through `bootc install to-existing-root`, which
+  deploys it unchanged. With it, first boot applies no presets. What was
+  measured to hold: on RHEL 9.8, rendered `enable`, `disable` and `mask`,
+  through a scan, build and install, three runs, each read after its
+  first boot; on RHEL 10.2, on 2026-11-13, `disable`, `mask` and
+  `add-wants` through two boots. The two-boot record does not document a
+  rendered `enable` or `set-default`. `to-disk` was measured to deploy the
+  zero-length file on RHEL 10.2 only, and that disk was not booted. An
+  image whose `/etc/machine-id` reads `uninitialized`, or that has no
+  such file, gets a preset pass at first boot. The pass reverses state
+  that is contrary to the preset and leaves the rest: it undoes a
+  rendered `disable` against an `enable` preset on RHEL 9, and that and a
+  rendered `enable` against a `disable` preset on RHEL 10, where a unit
+  with no preset rule also falls under `disable *`. A mask survives on
+  both (measured for `uninitialized`; the missing-file case is read from
+  systemd's source, as is the third case, a file that already holds a
+  valid identity, which is not a first boot either). The two releases
+  differ by a build option of their systemd packages, read from the
+  package sources and not measured further. Read from source and not
+  booted: none of bootc's install paths, the image builder's bootc disk
+  and ISO pipelines, or the installer's container payloads writes
+  `uninitialized` or removes the file, so the pass runs only when the
+  image itself carries one or the other, which in practice means a later
+  Containerfile layer or an installer `%post` did it (§ 13 run R3). A
+  later `systemctl preset-all` likewise puts rendered `enable` and
+  `disable` state back to preset.
 - **`disable` removes the administrator's links and nothing more.** A unit
   that a package's `.wants` link or another unit's `Wants=` pulls in
-  reads `disabled` afterwards and is still wanted (the boot effect is run
-  R3). inspectah does not compare dependency graphs (§ 3), and does not
-  turn a `disable` into a `mask`.
+  reads `disabled` afterwards, is still wanted, and is started at boot
+  (measured: a `disable` of such a unit in a `RUN` step removed nothing).
+  inspectah does not compare dependency graphs (§ 3), and does not turn a
+  `disable` into a `mask`.
 
 ### 10.2 One check of the assembled export
 
@@ -1479,7 +1604,14 @@ pub enum WithheldWhy {
     /// directory.
     Conflict { other: Destination },
     /// A unit inspectah generates has the name of a collected unit.
-    GeneratedNameCollision { unit: UnitName },
+    /// `unit` is the collected unit whose name the file has (the paired
+    /// service, when only it collides); `reserved_by` is where that name
+    /// came from, which chooses the FIXME's advice.
+    GeneratedNameCollision { unit: UnitName, reserved_by: Reservation },
+    /// The destination is `/etc/machine-id`.
+    MachineId,
+    /// An unmanaged file offered a path under `/etc/systemd/system`.
+    UnmanagedUnitPath,
 }
 
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
@@ -1518,6 +1650,43 @@ lands on disk.**
   5), and the Containerfile names both in a FIXME through the existing
   `unstaged_files` route. Any write that then fails, the flatpak writer's
   included, is an I/O error and fails the export.
+- **No other writer under `/etc/systemd/system`.** **An unmanaged file
+  whose destination is under `/etc/systemd/system` is refused by name
+  before extraction and render. (Mark Russell, 2026-11-14)** The
+  unmanaged-files section copies its files after the unit state section,
+  from its own tree, without passing `staged_writes`. A scan does not
+  collect unmanaged files there, but an imported snapshot can offer one,
+  and it would be a second writer of a unit path that no rule above
+  sees: it could replace a unit whose command was just planned, or put a
+  zero-length file where rule 1 withheld one. The entry is tested by
+  `Destination`, and the refusal covers every path below the directory,
+  a file in a `.d` or `.wants` directory included. One shared decision
+  withholds the entry, and only that entry, before a scan bundles its
+  payload, before refine extracts it, and before render: it is not in the
+  export and gets no `COPY`, and the Containerfile names it in a FIXME
+  that says a unit file belongs under Configuration Files. The FIXME is
+  written in the Configuration Files section, through the existing
+  `unstaged_files` route, and not in the unmanaged-files section. Nothing else
+  under the directory changes owner: drop-ins, shadows, local unit files
+  and links are handled as § 7.7 says. Two types grow for it, neither of
+  which has the field today: the withheld record gains an unmanaged
+  source kind beside `StagedFileKind`, and the unmanaged row of the view
+  response gains `withheld` (§ 11.1), which the UI shows.
+- **Never the machine-id.** The image keeps the base's zero-length
+  `/etc/machine-id`, which is what makes first boot keep the rendered unit
+  state (§ 10.1). inspectah never stages the source host's machine-id and
+  never writes `uninitialized`. The config walk excludes the path on a
+  scan (`walk.rs:45`, the exact-exclusion list). `staged_writes` holds the
+  same line for every writer: a write whose `Destination` is
+  `/etc/machine-id` is withheld, whichever section of an imported snapshot
+  or fleet mix offered it and however the path is spelled, and the
+  Containerfile names it in a FIXME. The guard runs before offers of one
+  destination are deduplicated, so every row that offered the path keeps
+  its withheld reason. The exported README says it in two sentences:
+  rendered unit state survives first boot with the base image's empty
+  `/etc/machine-id`; a later layer or installer script that removes that
+  file or writes `uninitialized` to it makes first boot apply the
+  presets, which undoes rendered `enable` and `disable` lines.
 
 **What the plan takes.** Three kinds of request. No `systemctl` line in
 the Containerfile comes from anywhere else.
@@ -1535,10 +1704,33 @@ the Containerfile comes from anywhere else.
    generated timer included, the request is declined with a FIXME, and the
    collected unit is then planned against the files that remain. So a
    collected vendor timer is never enabled over a generated file of its
-   name. A known case is not designed around: a host built from an
-   inspectah image has a local, enabled `flatpak-provision.service`, so a
-   rescan of it carries the collected copy and withholds the generated
-   one until the operator excludes the collected row and its file.
+   name. **For this rule a collected unit is any unit the units section
+   names: a state change, a mount finding, or an inventory entry. (Mark
+   Russell, 2026-11-14)** A package's unit at its preset has no row and
+   is only in the inventory, and a generated `cron-*` pair that took its
+   name would replace it in the image just the same. Such a pair is
+   withheld, both files. The collision reason carries the conflicting
+   name and where the reservation came from, a row or the inventory, so
+   the two FIXMEs can differ. Both name the collected unit. For a row it
+   says to exclude the collected unit and its file, and the flatpak case
+   below is unchanged: `inspectah generates this unit, and a unit
+   collected from the host, <name>, has the name of one of its files, so
+   the generated files are not written and the unit is not enabled here;
+   to carry the generated unit, exclude the collected unit and its file`.
+   For an inventory name there is no row to exclude: `inspectah generates
+   this unit, and <name>, a unit the host already has, has the name of one
+   of its files, so the generated files are not written and the unit is
+   not enabled here; <name> has no row to exclude, so to carry the job,
+   write its timer and its service by hand under other names, keeping the
+   timer's Unit= or their shared name consistent`. A mount finding counts
+   as an inventory reservation. It cannot meet a generated name today,
+   since generated names end in `.timer` or `.service` and a mount
+   finding's in `.mount`, `.automount` or `.swap`. Nowhere else does this spec widen
+   "collected unit": § 10.1 and § 10.7 mean the units that have a row. A
+   known case is not designed around: a host built from an inspectah
+   image has a local, enabled `flatpak-provision.service`, so a rescan of
+   it carries the collected copy and withholds the generated one until
+   the operator excludes the collected row and its file.
 
 **The kernel and boot section's own `RUN systemctl enable tuned.service` is
 removed; `tuned.service` is enabled or not through its own unit row. (Mark
@@ -1563,7 +1755,7 @@ fails decides.
 | 2 | **Storage units act only on a package's file.** If the export stages a unit file at the name of a `PackagedStorage` unit, the administrator's file is what the image would load. | `enable`, `disable`, `mask` on a storage kind | Omitted: `the export carries an administrator's unit file for it (<path>)`. The mount advisory (§ 10.6) is rendered for the staged file. |
 | 3 | **Units the target needs are not switched off** (§ 10.3). | `disable` and `mask` on a protected unit; `mask` on `tmp.mount` | A FIXME line, no command. |
 | 4 | **A mask needs the path free.** `systemctl mask` makes a link at `/etc/systemd/system/<name>`, after every `COPY` (§ 10.7), and exits 1 when a regular file is there (measured). | `mask` when a unit file is staged at the name | Omitted: `the export also carries a unit file at <path>; exclude one of the two`. |
-| 5 | **The command acts on the file the row was recorded from.** See below. | `enable`, `disable`, `set-default` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, or the package reason the presence tiers give today. |
+| 5 | **The command acts on the file the row was recorded from, and its package is in the image.** See below. | `enable`, `disable`, `set-default`; the package half also `mask` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, one of the three `TimerTrigger` reasons, or the package reason the presence tiers give today. |
 | 6 | **An instance needs its configuration** (§ 10.8). | `enable` on an instance | Omitted, naming the path. |
 | 7 | **`Also=` members match, and nothing in `/etc` changes what `Also=` means.** See below. | `enable`, `disable` with a non-empty `also` list | An advisory, no command. |
 
@@ -1630,9 +1822,76 @@ and no `disable`: the vendor file's `[Install]` is not the row's install
 evidence. A unit
 whose install drop-in is excluded gets no `enable` that would exit 0 and
 link nothing. A generated unit's request needs only its own file, which is
-in `staged_writes` by construction. `mask` reads no `[Install]`, succeeds
-on an absent unit, and is exempt. `disable` on an absent unit exits 1 on
-RHEL 9 (0 on RHEL 10), as `enable` does on both (all measured). Because
+in `staged_writes` by construction. `disable` on an absent unit exits 1 on
+RHEL 9 (0 on RHEL 10), as `enable` does on both (all measured).
+
+**A timer's trigger is held to the same rule.** After the timer's own
+file and package pass, an `enable` on a timer is checked against its
+recorded trigger (§ 8), in three steps. Each omits the `enable` with an
+`# Omitted:` line.
+
+1. **The evidence is unchanged.** Every path in `trigger_drop_ins` is in
+   `staged_writes`, each read through `Destination`, and one that does
+   not parse fails. This is rule 5's own test, none of the recorded files
+   missing, asked of the files that set `Unit=`. It has its own reason,
+   `TimerTriggerEvidenceChanged`, because `InstallEvidenceChanged`'s text
+   is about `[Install]`: `the drop-in <path> that sets its Unit= is not in
+   the export, so the unit it would start is not the one recorded`.
+2. **The trigger is known.** A trigger recorded `Unresolved` is
+   `TimerTriggerUnresolved`: `its Unit= could not be resolved to a unit
+   name, so inspectah cannot tell whether that unit is in the image`.
+3. **The trigger is in the image.** `TimerTriggerNotStaged` when the
+   snapshot holds the trigger as a local unit, a unit file under
+   `/etc/systemd/system` with no vendor file of that name, that file is
+   not in the final `staged_writes`, and nothing else provides the unit:
+   no generated unit of that name is staged, and no package in the image
+   owns it. "No package in the image owns it" reads the `package` of the
+   trigger's config entry against the presence tiers' target package set.
+   With no baseline the package is taken as present, as the tiers take an
+   unproved absence for `enable` (Tier 6 emits the line with its
+   `BaselineUnavailable` advisory). A trigger the base image or an included package ships, and
+   one that is a full shadow, pass, since the vendor file loads. The line
+   reads `# Omitted: report.timer (its unit report.service is not in the
+   export, and a timer whose unit is missing does not start)`. It says
+   unit, since `Unit=` may name any kind.
+
+The check sits here, and not as a rule of its own, because it is rule 5's
+question asked of a second unit, and it comes after the timer's own file
+so that a timer whose file is missing is reported for that. `disable` and
+`mask` on a timer need no trigger. Passing it is not being carried: rules
+6 and 7 still apply, and every gate is computed again each time a row is
+included or excluded.
+
+What step 3 can and cannot know: it reads recorded config ownership,
+fragment and shadow evidence, and the staged generated files. It does not
+prove what a target base supplies. So it can omit a timer that would have
+worked, when the trigger is provided by an alias, by a template behind an
+excluded concrete instance, by an implicit mount, or by a generator at
+boot. Each such omission carries its `# Omitted:` line. Step 1 checks
+only for a recorded file that is missing: a drop-in from another host of
+a fleet that assigns `Unit=` is not seen.
+
+**A mask follows the package check. (Mark Russell, 2026-11-14)** `mask`
+reads no `[Install]`, so the file and drop-in halves of this rule do not
+apply to it. The package half does, through the same presence tiers,
+unchanged:
+
+- The owning package is not in the image: the mask is omitted with the
+  tiers' package reason on an `# Omitted:` line, so the host's mask stays
+  visible.
+- The base image ships the package: the mask is carried.
+- No owning package is known, which includes a mask on a name with no unit
+  file (`Absent`): the mask is carried.
+
+Rules run in order, so rule 3 and rule 4 decide first. A mask on a
+protected unit or on `tmp.mount` is a FIXME whatever its package's state.
+A mask whose path a staged file occupies is `MaskPathOccupied`. Only then
+is the package asked. A zero-length shadow is withheld by rule 1 either
+way, and its unit's mask is then judged like any other. On a fleet the
+row's owner is the representative host's (§ 12), as for `enable`. The
+first-boot condition of § 10.1 does not rely on masks, so the two are
+independent: a mask that is carried survives a preset pass, and one that
+is omitted was never in the image. Because
 the rule asks `staged_writes`, the renderer and the stager cannot
 disagree, which is the defect in
 `inspectah-timer-enable-lines-unquoted-and-trust-empty-units` item 2.
@@ -1718,12 +1977,22 @@ InstallEvidenceChanged { path: String },
 StorageFileStaged { path: String },
 /// The target needs the unit, or needs it unmasked (rule 3). A FIXME.
 TargetNeedsUnit,
+/// A timer's trigger unit is local and its file is not in the export
+/// (rule 5).
+TimerTriggerNotStaged { trigger: UnitName },
+/// A drop-in that sets a timer's `Unit=` is not in the export (rule 5).
+TimerTriggerEvidenceChanged { path: String },
+/// A timer's `Unit=` could not be resolved to a unit name (rule 5).
+TimerTriggerUnresolved,
 /// A mask and a unit file claim one path (rule 4).
 MaskPathOccupied { path: String },
 /// A unit inspectah generates has a collected unit's name. A FIXME.
-GeneratedNameCollision,
+GeneratedNameCollision { name: UnitName, reserved_by: Reservation },
 /// The command would also act on `member` (rule 7). An advisory.
 AlsoMember { member: UnitName, why: AlsoWhy },
+
+/// Where a name that blocks a generated unit came from.
+pub enum Reservation { Row, Inventory }
 
 pub enum AlsoWhy {
     /// The member's links on the source are not what the verb produces.
@@ -1795,8 +2064,9 @@ target `/tmp` is mounted from that unit whatever `is-enabled` reads. With
 the unit masked on a booted RHEL 10 bootc host, `/tmp` is the read-only
 image's directory, `bootc status` fails, and a bootc service fails at
 boot. On a package-mode source the same mask is harmless: after a reboot
-`/tmp` is a plain directory on the writable root filesystem (all measured;
-the RHEL 9 base ships the same link and its boot is run R3). The plan
+`/tmp` is a plain directory on the writable root filesystem. A masked
+`tmp.mount` on a booted RHEL 9.8 bootc host gives the same read-only
+`/tmp` and the same failures (all measured). The plan
 writes:
 
 ```
@@ -1900,9 +2170,12 @@ constants beside `VAR_SYMLINKED_TOPLEVELS`
 (`crates/pipeline/src/render/selinux.rs:29`). On both RHEL bootc bases,
 `/home`, `/mnt`, `/root` and `/srv` are symlinks into `/var`, and `/opt`
 and `/usr/local` are real directories (measured). A fedora-bootc or
-centos-bootc base creates a different set and is not covered. What a
-mount under `/usr` or `/opt` does on a booted host, and whether the
-vendor link starts a copied `tmp.mount`, were not measured (run R3).
+centos-bootc base creates a different set and is not covered. On a
+booted host of either release, a mount under `/opt` or `/usr` whose
+directory is in the image mounts over it and hides the image's file, and
+the vendor link starts a copied `tmp.mount` by name (measured). A mount
+under `/opt` whose directory is missing fails and leaves the host
+degraded (measured); the same under `/usr` is inferred from it.
 
 **The unit file itself stays a config entry, included by default, under the
 config walk's control. No enable line is written for it, and the advisory
@@ -2085,7 +2358,9 @@ of § 10.2). It is structured, so a refusal reaches a row whose
 `staged_writes` withholds is shown the same way on the row that offered
 it, a config entry or a drop-in found by path, as `withheld` with the
 `WithheldWhy` variant and its text. A declined generated unit is shown on
-its scheduled or flatpak row.
+its scheduled or flatpak row. An unmanaged file refused under
+`/etc/systemd/system` (§ 10.2) carries `withheld` on its own row in the
+unmanaged-files list, a field that row gains for it.
 
 Two results of § 10.2 come from a toggle on a different row, and the unit
 row has to say so. Excluding a full shadow or an install drop-in
@@ -2100,7 +2375,12 @@ keeps its cascade to drop-ins and its membership check before it applies.
 `ItemId::DefaultTarget` is added; it toggles the recorded target and takes
 no target name of its own. `ItemId::SystemdTimer` is removed. `SetInclude`
 on a mount finding or a hand-made link does not exist, so there is nothing
-to refuse.
+to refuse. `SetInclude` on a generated-timer row applies, and is refused
+with `BadRequest` when its cron job is excluded. On a cron-job row it
+applies to every unit generated from the cron job, and is refused with
+`NoopTarget` when the cron job generates none. On an at-job row it is
+refused with `BadRequest`. The bulk scheduling toggle sends neither
+refused kind (§ 8).
 
 The cascade from a unit row to its drop-ins is kept, full shadows
 included. It cannot produce an enable on an administrator's storage file:
@@ -2389,6 +2669,60 @@ Phase 3 (one control per fact):
   FIXME, neither generated file is in the staged tree, and the vendor
   timer's enable is carried against the package's unit.
 
+- **T35. The scheduled controls apply.** Through `RefineSession` and the
+  refine export: `SetInclude(false)` on a generated-timer row removes its
+  timer and service from the staged tree and its `enable` from the
+  Containerfile, and `SetInclude(true)` restores all three. On the cron
+  job it is generated from, `SetInclude(false)` removes the same three and
+  `SetInclude(true)` restores them; with the cron job excluded,
+  `SetInclude(true)` on the generated-timer row returns `BadRequest`
+  naming both rows and leaves the export unchanged. On a cron job that
+  generates no unit, `SetInclude` in either direction returns
+  `NoopTarget` naming it, and on an at job `BadRequest` naming the file;
+  the Containerfile is unchanged in each. Through the production
+  handlers, the scheduling bulk toggle sends the cron-job and
+  generated-timer operations and no at-job operation and no cron-job
+  operation for a cron job that generates nothing, and its exclude and
+  include change the staged tree and the plan.
+- **T36. An inventory name blocks a generated pair.** A package timer at
+  its preset, in the inventory with no state change, and a generated cron
+  pair of the same name: neither generated file is in the staged tree,
+  the request is declined with the FIXME and its rename advice, and no
+  `enable` names the unit. The same with only the generated service's
+  name in the inventory: both files withheld, and the FIXME names the
+  service. The control: a generated pair whose names are in no list is
+  staged and enabled.
+- **T37. A timer whose trigger is not in the export.** A local enabled
+  timer whose paired local service's config row is excluded: no `enable`
+  for the timer, the `TimerTriggerNotStaged` line naming the unit, and
+  the reason on the timer's refine row; the service row included again:
+  the enable returns. The same with `Unit=other.service`. A local
+  `report.timer` with a drop-in holding `[Timer] Unit=other.service`:
+  the drop-in is in `trigger_drop_ins`; with it and `report.service`
+  excluded, `TimerTriggerEvidenceChanged` naming the drop-in and no
+  enable, although `other.service` is staged; with it included again,
+  the enable returns. A timer whose `Unit=` holds a specifier the
+  inspector does not expand: `trigger` is `unresolved`,
+  `TimerTriggerUnresolved`, and no enable. An instance timer with
+  `Unit=worker@%i.service`: the trigger is the expanded name. No scan
+  records a description for an instance timer, which has no timer file
+  of its own, so this case is tested at the reader only; a scan-built
+  case waits on instance timers being recorded, which the carried
+  instances of phase 5 need. These pass
+  the trigger check, and are carried when no later rule declines them: a
+  timer whose trigger a package in the image owns, one whose trigger is a
+  full shadow with the shadow excluded, and one whose trigger is a
+  staged generated service. A `disable` and a `mask` on a timer with its
+  service excluded pass it too.
+- **T38. An unmanaged file under `/etc/systemd/system` is refused.** An
+  imported snapshot whose unmanaged-files section offers
+  `/etc/systemd/system/x.service`, and one spelled with an interior `.`:
+  the file is not in the export, no `COPY` names it, the Containerfile
+  holds the FIXME, and its row shows `withheld`. The control: an
+  unmanaged file under `/opt` in the same snapshot is extracted and
+  copied. A zero-length unmanaged file at a masked unit's path does not
+  reach the image.
+
 Phase 4 (the `/etc/systemd/system` scan):
 
 - **T22. Install state.** `backup.service` with
@@ -2528,6 +2862,26 @@ Phase 4 (the `/etc/systemd/system` scan):
   and the two refine rows marked `not_applied` with the shadow's path;
   included again, both blocks return.
 
+- **T33. The machine-id is never staged.** Through the scan export and
+  through the refine export, a snapshot that offers `/etc/machine-id`
+  through a config entry, and separately one that offers it through a
+  drop-in row's path, each with the path spelled relative
+  (`etc/machine-id`), with a doubled separator, with an interior `.`, and
+  with a trailing separator: nothing is staged there, the Containerfile
+  names it in a FIXME, and each offering row shows `withheld` with
+  `MachineId`, two rows that offer the one destination included. The
+  control: `/etc/machine-info` offered in each of the same ways is
+  staged. A scan of a host never records the path. The exported README
+  holds the two first-boot sentences.
+- **T34. A mask follows its package.** A masked vendor unit whose owning
+  package is excluded and is not in the baseline: no `mask`, and an
+  `# Omitted:` line with the package reason naming the unit. The same
+  mask with the package included: carried. With the package excluded and
+  in the baseline: carried. With no known owner, and with an `Absent`
+  fragment: carried. A masked protected unit whose package is excluded:
+  the FIXME of rule 3, not the package reason. A mask whose path a staged
+  file occupies, package excluded: `MaskPathOccupied`.
+
 Phase 5 (carried instances):
 
 - **T28. Carried instance.** A
@@ -2557,7 +2911,10 @@ Phase 5 (carried instances):
 
 **Real-host evidence.** "Measured" in this spec means the `Measured,
 2026-11-13` subsection of
-`process-docs/skills/real-host-validation-runs.md`: RHEL 9.8 (systemd 252)
+`process-docs/skills/real-host-validation-runs.md`, and for the boot and
+`cockpit.socket` results its sections "Measured, 2026-11-14:
+cockpit.socket end to end" and "Measured, 2026-11-14: unit state at first
+boot": RHEL 9.8 (systemd 252)
 and RHEL 10.2 (systemd 257) hosts, and builds from `rhel9/rhel-bootc:9.8`
 and `rhel10/rhel-bootc:10.2`. A few facts quoted here were measured the
 same day and are not in that record yet: the survey results quoted in § 5,
@@ -2576,7 +2933,12 @@ or fedora44 VMs for them.**
   record the socket's preset on the host and `systemctl is-enabled
   cockpit.socket` in the unmodified base image. Switch the socket against
   its preset on the host, scan, confirm the Containerfile holds the
-  line, build, and confirm the image reads the host's state.
+  line, build, and confirm the image reads the host's state. Run once
+  with the phase 2 build: the built image read the host's state on both
+  releases. One gap remains. RHEL 10 presets the socket `enable`, so the
+  host there had it disabled against its preset, and the
+  enabled-against-preset case was exercised on RHEL 9 only. The run
+  repeats at the branch tip.
 - **R2. With the branch build.** A local service with no paired timer
   builds (the § 4 ordering defect, before and after). A full shadow,
   built and booted. An enabled `wg-quick@wg0` whose configuration holds a
@@ -2587,19 +2949,24 @@ or fedora44 VMs for them.**
   `/etc/systemd/system/service.d/*.conf` holding an `[Install]` section,
   scanned on a single host: whether the snapshot holds any entry for that
   path, in `config.files`, in `units.drop_ins` or in `file_ownership`.
-- **R3. Boot checks.** (a) RHEL 9: the journal of a first boot with
-  rendered `disable`, `enable` and `mask` lines. The unit states are
-  measured from the console; the journal is not. (b) A control image with
-  no mask on `tmp.mount`, on both bases: what `/tmp` is. Then RHEL 9 with
-  the mask. (c) `bootc install to-disk`, Anaconda, and an image whose
-  `machine-id` is `uninitialized`: whether first boot applies presets,
-  which decides whether a rendered "off" needs a preset file. (d) A unit a
-  package's `.wants` link pulls in, disabled by a carried line: whether it
-  starts. (e) A `graphical.target` default with no display manager. (f) A
-  mount unit under `/opt`, with and without its directory in the image,
-  and one under `/usr`; and a local `tmp.mount` copied into the image:
-  whether each mounts, what it hides, and which file the vendor link
-  starts.
+- **R3. Boot checks on the install routes read from source.** Settled by
+  measurement: first boot with a zero-length machine-id applies no
+  presets and keeps rendered `enable`, `disable` and `mask`, through
+  `to-existing-root`; the `uninitialized` case and what it undoes on each
+  release; `/tmp` with and without a masked `tmp.mount` on both; a
+  `disable` against a vendor `.wants` link; a `graphical.target` default
+  with no display manager, which both bases already have and which boots
+  with no failed unit; mounts under `/opt` and `/usr`; and a copied
+  `tmp.mount`. Still open, before the merge: a boot of each route whose
+  handling of the machine-id was only read from source. An image-builder
+  disk image, the installer ISO route, and a plain `ostreecontainer`
+  kickstart. For each, the size of the deployed `/etc/machine-id` before
+  first boot, and the journal's first-boot line. A route that cannot be
+  set up, or is not run, stays assessed from source and unbooted: it is
+  recorded as such and is never a passed boot result. `to-disk` is in
+  that state now: it was measured to deploy a zero-length file on RHEL
+  10.2 only, and the disk was not booted. Both bases were booted through
+  `to-existing-root`.
 - **R4. Stock-host false positives.** With the branch build, scan a stock
   host of each release before a drifted one, and review every row the new
   kinds add, every link advisory, every instance and every `Also=`
@@ -2624,6 +2991,18 @@ or fedora44 VMs for them.**
   The expected result is one new link and the existing ones untouched. If
   `enable` fails, or changes the existing links, the additive case stops
   being a row and becomes a `HostInstallOnly` advisory per added link.
+  A timer enabled in an image that lacks its service file, recorded so
+  that a rejected start job can be told from a failed or degraded
+  system: the build-time result of `enable` and the links it made, and
+  after boot the trigger's load state, the timer's state, the journal
+  line, the failed units and the overall system state. The
+  `TimerTriggerNotStaged` omission rests on systemd refusing the start,
+  which was read from source. And in each bootc base, after `dnf install
+  tuned`: what `systemctl is-enabled tuned.service` reads, recorded
+  apart from which preset rule, if any, names the unit. The removal of
+  the kernel section's enable (§ 10.2) rests on the stock preset enabling
+  the unit, which is known from a package-mode fixture and has not been
+  verified on either base.
 
 ## 14. Backlog items
 
@@ -2699,7 +3078,12 @@ takes": the scheduled section's generated units and the flatpak
 provisioning service become requests to `plan_units`, their files join
 `staged_writes` and are withheld on a name collision, and the tuned enable
 is removed, so that after this phase every `systemctl` line in the
-Containerfile is a planned one. Tests T19 to T21.
+Containerfile is a planned one. Four things follow from having one writer
+and land with it: the scheduled rows' operations apply or are refused
+(§ 8), an inventory name blocks a generated pair (§ 10.2), a timer's
+`enable` needs its trigger (§ 8, § 10.2 rule 5), and an unmanaged file
+under `/etc/systemd/system` is refused (§ 10.2). Tests T19 to T21 and T35
+to T38.
 
 **Phase 4: the `/etc/systemd/system` scan. Size L, at the upper end.**
 The `[Install]` reader with `install_drop_ins`, `vendor_drop_ins` and the
@@ -2712,8 +3096,11 @@ its preset (§ 7.2, § 7.4); the `.upholds` exclusion in the config walk;
 the default target (§ 7.6, § 10.5); and the overlap contract text. Enabled
 instances are collected as state changes and every one is omitted at
 render with a placeholder reason, `template instances are not carried
-yet`, on an `# Omitted:` line and a refine row. Tests T22 to T27 and T30
-to T32.
+yet`, on an `# Omitted:` line and a refine row. Two rules that do not
+depend on the scan land here as well, since the earlier phases are done:
+the machine-id guard in `staged_writes` and its README sentences (§ 10.2,
+§ 10.1), and the package check on `mask` (§ 10.2 rule 5). Tests T22 to
+T27 and T30 to T34.
 
 **Phase 5: carried instances. Size S to M.**
 `required_config` and `data_paths` with their derivation and fixed tables
@@ -2741,9 +3128,9 @@ there, so the merge carries the evidence with the code.
 
 | When | Runs | Why then |
 |---|---|---|
-| Before phase 4's code starts | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. A phase 4 task an answer changes is rewritten before it starts. |
-| After phase 2 | R1, R3 | R1 is the driving fix. R3 (a) to (c) can change how "off" has to be rendered. |
-| At the branch tip, after phase 5 | R1, R2 and R4 | The merge gate. The branch does not merge to `main` until they pass. |
+| Before phase 4's scan-dependent code starts | R5 | No inspectah build is needed, and each answer confirms a guard phase 4 writes or lets it go. A phase 4 task an answer changes is rewritten before it starts. The machine-id guard and the package check on `mask` rest on none of the answers and may come before the run. |
+| After phase 2 | R1, R3 | R1 is the driving fix. R3's `to-existing-root` boots decide how "off" has to be rendered. Both were run. |
+| At the branch tip, after phase 5 | R1, R2, R4 and the open routes of R3 | The merge gate. The branch does not merge to `main` until they pass. |
 
 ## 16. Open questions
 
@@ -2855,22 +3242,67 @@ Other objections worth weighing:
   while carrying, ungated, any template it does not know.
 - **Two controls operators have today go away:** the timer toggle, which
   does nothing, and the unconditional tuned enable.
+- **Rendered unit state depends on the image's machine-id.** It survives
+  first boot with the zero-length `/etc/machine-id` the bases ship. A
+  user whose own later layer or installer script writes
+  `uninitialized`, or removes the file, gets a preset pass that undoes
+  rendered `disable` lines on RHEL 9 and rendered `enable` and `disable`
+  lines on RHEL 10, with nothing in the build to say so. inspectah guards
+  its own output and states the condition in the README; it cannot guard
+  what is layered on afterwards. A shipped preset file was considered and
+  not taken: presets cannot express a mask, a unit with no `[Install]`, a
+  hand-made link, `add-wants`, an alias link or the default target, so it
+  would be a partial guarantee beside a complete one.
+- **Four rules that come with the single writer each have a cost.** A
+  cron or at job row whose operation cannot be given an export effect is
+  refused by name, so a control the operator can see stops working with
+  an error where it used to appear to work. Counting inventory names
+  withholds a generated cron job whenever any package unit at its preset
+  has its name, and the operator cannot exclude that unit: the job has to
+  be renamed by hand, and that FIXME says "timer and its service" even
+  for an `@reboot` service or the flatpak service, where there is no
+  timer. Declining a timer's `enable` when its local trigger
+  is excluded rests on systemd behavior read from source; if a timer in
+  that state does start, the line is omitted for nothing. The check also
+  omits a working timer whose trigger an alias, a template, an implicit
+  mount or a boot generator would have provided, since it cannot see
+  those, and it does not notice another fleet host's drop-in that sets
+  `Unit=`. It is conservative the other way too: excluding a drop-in that
+  sets `Unit=` omits the timer's `enable` even when a later drop-in
+  overrides it and the effective trigger is unchanged, and that omission
+  carries its comment. The inspector reads `Unit=` only from
+  `<name>.timer.d` under `/etc/systemd/system` and
+  `/usr/lib/systemd/system`, not from `/run`, `/usr/local/lib`, a
+  template's `<prefix>@.timer.d` or the type-wide `timer.d`, so a
+  `Unit=` set only there is not seen and the recorded trigger is the
+  timer file's or the default; the template directory matters once
+  instance timers are recorded. And a timer with no recorded trigger is
+  declined, so an older snapshot omits every timer `enable` until it is
+  rescanned, where reading the missing field as passing would have kept
+  them. Excluding a generated timer does not exclude the cron entry
+  it came from: if cron is carried and running, the job still runs, and
+  carrying both can run it twice. And refusing an
+  unmanaged file under `/etc/systemd/system` drops a file an imported
+  snapshot asked for, with a FIXME, when routing it through
+  `staged_writes` would have carried it.
+- **A mask is dropped with its package.** A mask on a unit whose package
+  is not in the image is a harmless link. Once it is omitted, nothing
+  keeps the unit off if a dependency, another package that provides the
+  name, or a later layer supplies the unit. The `# Omitted:` comment
+  records the intent that was lost and is all that is left of it.
 - **The measurements are narrow.** One stock VM per release with synthetic
-  drift, one install route, RHEL only, and the RHEL 9 boot read from a
-  console. A fleet with LUKS, NFS automounts or a hardening baseline could
-  put mounts and targets in the differing set, and an install route with a
-  first-boot preset pass would undo every rendered "off".
+  drift, one booted install route, and RHEL only. A fleet with LUKS, NFS
+  automounts or a hardening baseline could put mounts and targets in the
+  differing set, and the routes read from source have not been booted.
 
 Evidence that would change the design:
 
 - Run R1 shows `cockpit.socket` already in the host's state in the built
   image by some other route. Then the driving loss is smaller than
   stated, and the omission half is the only real defect.
-- Run R3 (c) shows an install route on which first boot applies presets.
-  Then "off" needs a shipped preset file beside or in place of the
-  command.
-- Run R3 (b) shows `/tmp` is writable on a RHEL 9 bootc host with
-  `tmp.mount` masked. Then the refusal is keyed by base.
+- Run R3 shows an install route that deploys a machine-id other than the
+  image's zero-length one. Then rendered state does not hold on that
+  route, and the condition in § 10.1 has to name it.
 - Run R4 finds stock rows beyond the known ones. Each either joins the
   stock-state list or shows the list is the wrong tool, in which case
   comparing against the target image's presets is the fix.
