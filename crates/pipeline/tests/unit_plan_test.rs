@@ -2301,6 +2301,15 @@ fn cron_backup_paths(
     .collect()
 }
 
+/// The reason a generated request is declined for when a collected unit
+/// with a row, `name`, has one of its files' names.
+fn row_collision(name: &str) -> OmissionReason {
+    OmissionReason::GeneratedNameCollision {
+        name: name.to_owned().try_into().expect("a unit name"),
+        reserved_by: inspectah_pipeline::render::unit_plan::Reservation::Row,
+    }
+}
+
 /// The generated requests the plan declined, by unit and reason.
 fn generated_declined_of(snap: &InspectionSnapshot) -> Vec<(String, OmissionReason)> {
     plan_units(snap, &staged_writes(snap))
@@ -2348,7 +2357,7 @@ fn a_masked_unit_withholds_a_generated_unit_of_its_name() {
     assert_eq!(render(&with_generated).lines, mask_lines);
     assert_eq!(
         generated_declined_of(&with_generated),
-        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
+        [(UNIT.to_owned(), row_collision(UNIT))]
     );
 
     let control = masked();
@@ -2398,7 +2407,7 @@ fn an_imported_local_row_over_a_mask_file_is_not_enabled_against_a_generated_fil
     );
     assert_eq!(
         generated_declined_of(&empty),
-        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
+        [(UNIT.to_owned(), row_collision(UNIT))]
     );
 
     let control = snap("[Timer]\nOnCalendar=weekly\n");
@@ -2416,7 +2425,7 @@ fn an_imported_local_row_over_a_mask_file_is_not_enabled_against_a_generated_fil
     );
     assert_eq!(
         generated_declined_of(&control),
-        [(UNIT.to_owned(), OmissionReason::GeneratedNameCollision)]
+        [(UNIT.to_owned(), row_collision(UNIT))]
     );
 }
 

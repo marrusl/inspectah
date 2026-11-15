@@ -133,11 +133,29 @@ pub enum WithheldWhy {
     /// Another staged file has this destination, or needs it as a
     /// directory.
     Conflict { other: Destination },
-    /// A unit inspectah generates has the name of a collected unit:
-    /// `unit`, an included state change or a file a config entry or a
-    /// drop-in row records (§ 10.2). Every file of the generated unit is
-    /// withheld, the paired service of a generated timer included.
-    GeneratedNameCollision { unit: UnitName },
+    /// A unit inspectah generates has the name of a collected unit,
+    /// `unit`, the file of the generated unit that collides; `reserved_by`
+    /// says where the reservation of that name came from (§ 10.2 item 3). Every file of the
+    /// generated unit is withheld, the paired service of a generated timer
+    /// included.
+    GeneratedNameCollision {
+        unit: UnitName,
+        reserved_by: Reservation,
+    },
+}
+
+/// How the collected unit a generated unit's name collides with is known
+/// (§ 10.2 "What the plan takes" item 3), which decides the advice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reservation {
+    /// A row the operator can exclude: an included state change, or an
+    /// included config entry or drop-in row at the unit's path. Excluding
+    /// that row and the unit's file lets the generated unit back in.
+    Row,
+    /// The units section names the unit with no row to exclude: an
+    /// inventory entry with no state change, as a package's unit at its
+    /// preset is, or a mount finding.
+    Inventory,
 }
 
 impl WithheldWhy {
@@ -168,9 +186,21 @@ impl WithheldWhy {
                 "{other} is also staged, and one of the two paths is a directory \
                  of the other; exclude one of the two"
             ),
-            Self::GeneratedNameCollision { unit } => format!(
+            Self::GeneratedNameCollision {
+                unit,
+                reserved_by: Reservation::Row,
+            } => format!(
                 "inspectah generates this file for a unit, and {} is a unit collected \
                  from the host; the generated file is not written over it",
+                unit.as_str()
+            ),
+            Self::GeneratedNameCollision {
+                unit,
+                reserved_by: Reservation::Inventory,
+            } => format!(
+                "inspectah generates this file for a unit, and {} is a unit the host \
+                 already has, with no row to exclude; the generated file is not written \
+                 over it",
                 unit.as_str()
             ),
         }
@@ -721,30 +751,60 @@ fn generated_unit_groups(snap: &InspectionSnapshot) -> Vec<Vec<Destination>> {
 }
 
 /// The image paths of the units collected from the host, as § 10.2's
-/// generated-name collision reads them: the unit file path of every
-/// included state change, and every path an included config entry or
-/// drop-in row offers, whatever its content (a zero-length file there is
-/// the host's mask). An excluded row is not counted, so excluding the
-/// collected row and its file lets the generated unit back in.
+/// generated-name collision reads them, and how each is collected.
+///
+/// [`Reservation::Row`]: the unit file path of every included state
+/// change, and every path an included config entry or drop-in row offers,
+/// whatever its content (a zero-length file there is the host's mask). An
+/// excluded row is not counted, so excluding the collected row and its
+/// file lets the generated unit back in.
+///
+/// [`Reservation::Inventory`]: every other unit the units section names,
+/// an inventory entry or a mount finding, unless the unit has a state
+/// change, whose row decides it as above. A package's unit at its preset
+/// has no row and is in the image all the same.
 fn collected_unit_paths(
     snap: &InspectionSnapshot,
     resolved: &[(Destination, StagedFileKind, Cow<'_, str>)],
-) -> BTreeSet<Destination> {
-    let mut paths: BTreeSet<Destination> = resolved
+) -> BTreeMap<Destination, Reservation> {
+    let mut paths: BTreeMap<Destination, Reservation> = resolved
         .iter()
         .filter(|(_, kind, _)| matches!(kind, StagedFileKind::ConfigFile | StagedFileKind::DropIn))
-        .map(|(dest, _, _)| dest.clone())
+        .map(|(dest, _, _)| (dest.clone(), Reservation::Row))
         .collect();
-    if let Some(units) = &snap.units {
-        paths.extend(
+    let Some(units) = &snap.units else {
+        return paths;
+    };
+    let unit_path =
+        |name: &UnitName| Destination::new(&format!("{ETC_UNIT_DIR}/{}", name.as_str()));
+    paths.extend(
+        units
+            .state_changes
+            .iter()
+            .filter(|sc| sc.disposition.is_included())
+            .filter_map(|sc| unit_path(sc.unit().name()).ok())
+            .map(|dest| (dest, Reservation::Row)),
+    );
+    let changed: BTreeSet<&UnitName> = units
+        .state_changes
+        .iter()
+        .map(|sc| sc.unit().name())
+        .collect();
+    let named = units
+        .inventory
+        .iter()
+        .map(|entry| &entry.unit)
+        .chain(
             units
-                .state_changes
+                .mount_findings
                 .iter()
-                .filter(|sc| sc.disposition.is_included())
-                .filter_map(|sc| {
-                    Destination::new(&format!("{ETC_UNIT_DIR}/{}", sc.unit().name().as_str())).ok()
-                }),
-        );
+                .map(|finding| finding.unit.name().as_unit_name()),
+        )
+        .filter(|name| !changed.contains(name));
+    for name in named {
+        if let Ok(dest) = unit_path(name) {
+            paths.entry(dest).or_insert(Reservation::Inventory);
+        }
     }
     paths
 }
@@ -755,16 +815,19 @@ fn collected_unit_paths(
 /// collected path when its file name is not a unit name.
 fn generated_name_collisions(
     groups: &[Vec<Destination>],
-    collected: &BTreeSet<Destination>,
+    collected: &BTreeMap<Destination, Reservation>,
 ) -> BTreeMap<Destination, WithheldWhy> {
     let mut out = BTreeMap::new();
     for files in groups {
-        let Some(hit) = files.iter().find(|dest| collected.contains(*dest)) else {
+        let Some((hit, reserved_by)) = files
+            .iter()
+            .find_map(|dest| collected.get(dest).map(|by| (dest, *by)))
+        else {
             continue;
         };
         let file_name = hit.as_str().rsplit('/').next().unwrap_or_default();
         let why = match UnitName::try_from(file_name.to_owned()) {
-            Ok(unit) => WithheldWhy::GeneratedNameCollision { unit },
+            Ok(unit) => WithheldWhy::GeneratedNameCollision { unit, reserved_by },
             Err(_) => WithheldWhy::Conflict { other: hit.clone() },
         };
         for dest in files {
@@ -784,8 +847,9 @@ fn generated_name_collisions(
 ///    ([`owned_elsewhere`]) or under `/etc/containers/systemd/` is left to
 ///    that section, as before.
 /// 3. A unit inspectah generates whose name is also a collected unit's
-///    (an included state change, or an included config entry or drop-in
-///    row at its path) has every file withheld as
+///    (an included state change, an included config entry or drop-in row
+///    at its path, or an inventory entry or mount finding with no state
+///    change, [`collected_unit_paths`]) has every file withheld as
 ///    `GeneratedNameCollision`, the paired service of a generated timer
 ///    included (§ 10.2). So a generated file never replaces the host's
 ///    own, and none lands beside it. The plan declines the generated

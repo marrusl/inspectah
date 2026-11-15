@@ -1014,8 +1014,11 @@ fn generated_collision_state(collected: bool) -> Arc<AppState> {
 /// collision: the plan's own marker, reason name and text.
 fn collision_declined(unit: &str) -> serde_json::Value {
     use inspectah_core::types::units::UnitAction;
-    use inspectah_pipeline::render::unit_plan::{OmissionReason, declined_line};
-    let reason = OmissionReason::GeneratedNameCollision;
+    use inspectah_pipeline::render::unit_plan::{OmissionReason, Reservation, declined_line};
+    let reason = OmissionReason::GeneratedNameCollision {
+        name: unit.to_owned().try_into().unwrap(),
+        reserved_by: Reservation::Row,
+    };
     let line = declined_line(
         &unit.to_owned().try_into().unwrap(),
         UnitAction::Enable,

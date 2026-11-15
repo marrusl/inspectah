@@ -4478,12 +4478,12 @@ const HOST_CRON_BACKUP_TIMER: &str =
     "[Timer]\nOnCalendar=weekly\n[Install]\nWantedBy=timers.target\n";
 
 /// The FIXME the export writes for a generated request declined because a
-/// collected unit has its name, by its prefix and unit.
+/// collected unit with a row has its name, by its prefix and unit.
 fn collision_fixme<'a>(containerfile: &'a str, unit: &str) -> Option<&'a str> {
     let prefix = format!("# FIXME: {unit} (");
-    containerfile.lines().find(|l| {
-        l.starts_with(&prefix) && l.contains("a unit collected from the host has its name")
-    })
+    containerfile
+        .lines()
+        .find(|l| l.starts_with(&prefix) && l.contains("a unit collected from the host, "))
 }
 
 /// A host with the cron file and, from `host`, whatever else.
@@ -5294,4 +5294,206 @@ fn t35_a_cron_job_that_generates_nothing_and_an_at_job_are_refused_by_name() {
         }
     }
     assert_eq!(containerfile_in(&export_session(&refine)), before);
+}
+
+// ---------------------------------------------------------------------
+// § 10.2 "What the plan takes" item 3: an inventory name blocks a
+// generated pair (T36), and the decline names the unit that collided.
+// ---------------------------------------------------------------------
+
+/// The declined lines the export writes for generated `unit`, by prefix.
+fn generated_fixmes<'a>(containerfile: &'a str, unit: &str) -> Vec<&'a str> {
+    let prefix = format!("# FIXME: {unit} (inspectah generates this unit, ");
+    containerfile
+        .lines()
+        .filter(|l| l.starts_with(&prefix))
+        .collect()
+}
+
+/// The FIXME for a generated `cron-backup.timer` request declined because
+/// `collided`, a unit the host has with no row, has a file's name.
+fn inventory_collision_fixme(collided: &str) -> String {
+    format!(
+        "# FIXME: {CRON_BACKUP_TIMER} (inspectah generates this unit, and {collided}, a unit the \
+         host already has, has the name of one of its files, so the generated files are not \
+         written and the unit is not enabled here; {collided} has no row to exclude, so to \
+         carry the job, write its timer and its service by hand under other names, keeping the \
+         timer's Unit= or their shared name consistent)"
+    )
+}
+
+/// The FIXME for a generated `cron-backup.timer` request declined because
+/// `collided`, a unit with a row, has a file's name.
+fn row_collision_fixme(collided: &str) -> String {
+    format!(
+        "# FIXME: {CRON_BACKUP_TIMER} (inspectah generates this unit, and a unit collected from \
+         the host, {collided}, has the name of one of its files, so the generated files are not \
+         written and the unit is not enabled here; to carry the generated unit, exclude the \
+         collected unit and its file)"
+    )
+}
+
+/// A package's `vendor` unit in `state`, at a preset that says the same,
+/// beside the cron file that generates `cron-backup`.
+fn inventory_collision_host(vendor: &str, state: &str) -> UnitHost {
+    let preset = if state == "enabled" {
+        "enable"
+    } else {
+        "disable"
+    };
+    let body = if vendor.ends_with(".timer") {
+        HOST_CRON_BACKUP_TIMER
+    } else {
+        "[Service]\nExecStart=/usr/bin/vendor-backup\n[Install]\nWantedBy=multi-user.target\n"
+    };
+    with_cron_backup(
+        UnitHost::new()
+            .package("backuppkg")
+            .unit(vendor, state)
+            .preset(&format!("{preset} {vendor}"))
+            .preset("disable *")
+            .vendor_unit(vendor, body, Some("backuppkg")),
+    )
+}
+
+/// T36: a package's unit named like one of the generated `cron-backup`
+/// files, at its preset, enabled or disabled, so it is in the inventory
+/// with no state change. Through the scan export and the refine export,
+/// neither generated file is in the tree, no instruction names the
+/// generated timer, and the request is declined with exactly one FIXME,
+/// the inventory text naming the unit that collided: the timer's own name,
+/// or the service's when only the service collides. Refine shows the same
+/// decline on the scheduled row. Control: with no unit of either name the
+/// pair is staged and enabled.
+#[test]
+fn t36_an_inventory_name_blocks_a_generated_pair() {
+    use inspectah_refine::projection::{DeclinedRenders, GeneratedRowView};
+    for vendor in [CRON_BACKUP_TIMER, CRON_BACKUP_SERVICE] {
+        for state in ["enabled", "disabled"] {
+            let label = format!("{vendor} {state}");
+            let snap = scan(inventory_collision_host(vendor, state));
+            let units = snap.units.as_ref().expect("a units section");
+            assert!(
+                units.inventory.iter().any(|e| e.unit.as_str() == vendor),
+                "{label}: presence: the inventory entry"
+            );
+            assert!(
+                !units
+                    .state_changes
+                    .iter()
+                    .any(|sc| sc.unit().name().as_str() == vendor),
+                "{label}: no state change"
+            );
+            assert!(
+                snap.scheduled_tasks.as_ref().is_some_and(|st| st
+                    .generated_timer_units
+                    .iter()
+                    .any(|u| u.name == CRON_BACKUP)),
+                "{label}: presence: the generated unit"
+            );
+            let fixme = inventory_collision_fixme(vendor);
+            for (route, tree) in both_exports(&snap) {
+                let cf = containerfile_in(&tree);
+                assert_eq!(
+                    generated_fixmes(&cf, CRON_BACKUP_TIMER),
+                    [fixme.as_str()],
+                    "{label} {route}:\n{cf}"
+                );
+                for name in [CRON_BACKUP_TIMER, CRON_BACKUP_SERVICE] {
+                    assert!(
+                        files_named(tree.path(), name).is_empty(),
+                        "{label} {route}: {name} is staged"
+                    );
+                }
+                assert!(
+                    in_no_systemctl_instruction(&cf, CRON_BACKUP_TIMER),
+                    "{label} {route}:\n{cf}"
+                );
+            }
+            let refine = session(&snap);
+            let views = &refine.decisions().declined_generated;
+            assert_eq!(views.len(), 1, "{label}: {views:?}");
+            assert_eq!(
+                views[0].row,
+                GeneratedRowView::Scheduled {
+                    name: CRON_BACKUP.into()
+                }
+            );
+            assert_eq!(views[0].declined.renders, DeclinedRenders::Fixme);
+            assert_eq!(views[0].declined.reason, "GeneratedNameCollision");
+            assert_eq!(format!("# FIXME: {}", views[0].declined.text), fixme);
+        }
+    }
+
+    let control = scan(with_cron_backup(UnitHost::new().preset("disable *")));
+    for (route, tree) in both_exports(&control) {
+        assert_eq!(generated_carriage(&tree), PAIR_CARRIED, "{route}");
+        assert!(
+            generated_fixmes(&containerfile_in(&tree), CRON_BACKUP_TIMER).is_empty(),
+            "{route}"
+        );
+    }
+}
+
+/// The decline names the unit that collided. A package's
+/// `cron-backup.service`, enabled against a `disable` preset, is a state
+/// change row with the name of the generated pair's service only. Through
+/// both exports the timer's request is declined with exactly one FIXME,
+/// which names the service, not the timer, and gives the row advice; the
+/// service's own enable is carried. Refine's decline says the same.
+/// Control: the timer-name collision names the timer.
+#[test]
+fn a_generated_timer_declined_for_its_service_names_the_service() {
+    let snap = scan(with_cron_backup(
+        UnitHost::new()
+            .base_package("glibc")
+            .package("backuppkg")
+            .unit(CRON_BACKUP_SERVICE, "enabled")
+            .preset("disable *")
+            .vendor_unit(
+                CRON_BACKUP_SERVICE,
+                "[Service]\nExecStart=/usr/bin/vendor-backup\n[Install]\nWantedBy=multi-user.target\n",
+                Some("backuppkg"),
+            ),
+    ));
+    assert!(
+        matches!(
+            fragment_of(&snap, CRON_BACKUP_SERVICE),
+            UnitFragment::Vendor { .. }
+        ),
+        "presence: the service's state change"
+    );
+    let fixme = row_collision_fixme(CRON_BACKUP_SERVICE);
+    for (route, tree) in both_exports(&snap) {
+        let cf = containerfile_in(&tree);
+        assert_eq!(
+            generated_fixmes(&cf, CRON_BACKUP_TIMER),
+            [fixme.as_str()],
+            "{route}:\n{cf}"
+        );
+        assert!(acts(&cf, "enable", CRON_BACKUP_SERVICE), "{route}:\n{cf}");
+        assert!(
+            in_no_systemctl_instruction(&cf, CRON_BACKUP_TIMER),
+            "{route}:\n{cf}"
+        );
+    }
+    let refine = session(&snap);
+    let views = &refine.decisions().declined_generated;
+    assert_eq!(views.len(), 1, "{views:?}");
+    assert_eq!(format!("# FIXME: {}", views[0].declined.text), fixme);
+
+    let control = scan(with_cron_backup(
+        UnitHost::new()
+            .base_package("glibc")
+            .package("backuppkg")
+            .unit(CRON_BACKUP_TIMER, "enabled")
+            .preset("disable *")
+            .vendor_unit(CRON_BACKUP_TIMER, HOST_CRON_BACKUP_TIMER, Some("backuppkg")),
+    ));
+    let cf = containerfile_in(&render_export(&control));
+    assert_eq!(
+        generated_fixmes(&cf, CRON_BACKUP_TIMER),
+        [row_collision_fixme(CRON_BACKUP_TIMER).as_str()],
+        "{cf}"
+    );
 }

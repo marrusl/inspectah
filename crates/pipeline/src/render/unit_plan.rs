@@ -17,6 +17,7 @@ use inspectah_core::types::units::{
 use inspectah_core::types::verified_upload::VerifiedUploads;
 
 use super::comment::escape_comment_text;
+pub use super::configtree::Reservation;
 use super::configtree::{
     Destination, ETC_UNIT_DIR, FLATPAK_SERVICE, PathError, StagedWrites, WithheldWhy, is_staged,
     staged_unit_file,
@@ -240,14 +241,15 @@ pub enum OmissionReason {
     MaskPathOccupied { path: String },
     /// A unit inspectah generates has a collected unit's name, so the
     /// stager withholds its files (§ 10.2, "What the plan takes" item 3).
-    /// Rendered as a FIXME, not an `# Omitted:` line.
-    GeneratedNameCollision,
+    /// `name` is the collected unit's, the name of whichever generated file
+    /// collides (the paired service of a generated timer, say), and
+    /// `reserved_by` where that reservation came from, which decides the
+    /// advice. Rendered as a FIXME, not an `# Omitted:` line.
+    GeneratedNameCollision {
+        name: UnitName,
+        reserved_by: Reservation,
+    },
 }
-
-/// [`OmissionReason::GeneratedNameCollision`]'s text, after the unit name.
-const GENERATED_NAME_COLLISION: &str = "inspectah generates this unit, and a unit collected \
-     from the host has its name, so the generated files are not written and the unit is not \
-     enabled here; to carry the generated unit, exclude the collected unit and its file";
 
 impl OmissionReason {
     /// The text after the unit name in the `# Omitted:` line, and refine's
@@ -275,7 +277,27 @@ impl OmissionReason {
             Self::MaskPathOccupied { path } => {
                 format!("the export also carries a unit file at {path}; exclude one of the two")
             }
-            Self::GeneratedNameCollision => GENERATED_NAME_COLLISION.to_owned(),
+            Self::GeneratedNameCollision {
+                name,
+                reserved_by: Reservation::Row,
+            } => format!(
+                "inspectah generates this unit, and a unit collected from the host, {name}, has \
+                 the name of one of its files, so the generated files are not written and the \
+                 unit is not enabled here; to carry the generated unit, exclude the collected \
+                 unit and its file",
+                name = name.as_str()
+            ),
+            Self::GeneratedNameCollision {
+                name,
+                reserved_by: Reservation::Inventory,
+            } => format!(
+                "inspectah generates this unit, and {name}, a unit the host already has, has the \
+                 name of one of its files, so the generated files are not written and the unit \
+                 is not enabled here; {name} has no row to exclude, so to carry the job, write \
+                 its timer and its service by hand under other names, keeping the timer's Unit= \
+                 or their shared name consistent",
+                name = name.as_str()
+            ),
         }
     }
 
@@ -292,7 +314,7 @@ impl OmissionReason {
             Self::StorageFileStaged { .. } => "StorageFileStaged",
             Self::TargetNeedsUnit => "TargetNeedsUnit",
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
-            Self::GeneratedNameCollision => "GeneratedNameCollision",
+            Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
         }
     }
 
@@ -308,7 +330,7 @@ impl OmissionReason {
             | Self::StorageFileStaged { .. }
             | Self::TargetNeedsUnit
             | Self::MaskPathOccupied { .. }
-            | Self::GeneratedNameCollision => None,
+            | Self::GeneratedNameCollision { .. } => None,
         }
     }
 }
@@ -436,20 +458,27 @@ pub(crate) fn generated_unit_name(name: &str, suffix: &str) -> Option<UnitName> 
 }
 
 /// Whether a generated unit whose files are `files` may be enabled: every
-/// file is staged. [`OmissionReason::GeneratedNameCollision`] when the
-/// stager withheld one for a collision, and
-/// [`OmissionReason::UnitFileNotStaged`] when one is not staged for any
-/// other reason.
+/// file is staged. [`OmissionReason::GeneratedNameCollision`], naming the
+/// collected unit the stager gave, when it withheld one for a collision,
+/// and [`OmissionReason::UnitFileNotStaged`] when one is not staged for
+/// any other reason.
 fn generated_request(files: &[String], staged: &StagedWrites<'_>) -> Result<(), OmissionReason> {
-    let collided = files.iter().any(|path| {
-        Destination::new(path).is_ok_and(|dest| {
-            staged.withheld.iter().any(|(at, _, why)| {
-                *at == dest && matches!(why, WithheldWhy::GeneratedNameCollision { .. })
+    let collision = files
+        .iter()
+        .filter_map(|path| Destination::new(path).ok())
+        .find_map(|dest| {
+            staged.withheld.iter().find_map(|(at, _, why)| match why {
+                WithheldWhy::GeneratedNameCollision { unit, reserved_by } if *at == dest => {
+                    Some(OmissionReason::GeneratedNameCollision {
+                        name: unit.clone(),
+                        reserved_by: *reserved_by,
+                    })
+                }
+                _ => None,
             })
-        })
-    });
-    if collided {
-        return Err(OmissionReason::GeneratedNameCollision);
+        });
+    if let Some(reason) = collision {
+        return Err(reason);
     }
     if !files.iter().all(|path| is_staged(staged, path)) {
         return Err(OmissionReason::UnitFileNotStaged);
@@ -616,7 +645,7 @@ pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReaso
             marker: DeclinedMarker::Fixme,
             text: target_needs_unit_text(name.as_str(), action),
         },
-        OmissionReason::GeneratedNameCollision => DeclinedLine {
+        OmissionReason::GeneratedNameCollision { .. } => DeclinedLine {
             marker: DeclinedMarker::Fixme,
             text: format!("{} ({})", name.as_str(), reason.describe()),
         },
