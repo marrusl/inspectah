@@ -414,9 +414,8 @@ fn write_staged(path: &Path, content: &str) -> Result<(), RenderError> {
 /// ordinary write would put the second offer's bytes under the first
 /// offer's path with no conflict named. So below a kind's directory every
 /// directory is created by this stager or reused only when it created that
-/// exact path, and every file is created new. The one overwrite is the
-/// interim `beside` write, and only of a file this stager wrote at that
-/// exact path. A collision fails the export, naming both files.
+/// exact path, and every file is created new. A collision fails the
+/// export, naming both files.
 ///
 /// The decision itself stays lexical: [`staged_writes`] is read by the
 /// Containerfile, the unit plan and refine's view without a staging

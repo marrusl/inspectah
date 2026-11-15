@@ -64,18 +64,41 @@ interim rules of phase 2 are retired: generated and flatpak offers
 written `beside` a collected file, the per-unit withhold that followed,
 and `plan.deferred`, which left a collected unit's `enable` to the
 Scheduled Tasks section. In their place, rule 3 of `staged_writes` is the
-generated-name collision of § 10.2. A collected unit is an included
-state change (its unit path) or an included config entry or drop-in row
-at the generated path, whatever its content, a zero-length mask file
-included. Every file of a generated unit with such a name is withheld
-as `WithheldWhy::GeneratedNameCollision { unit }`, the paired service of
-a generated timer included, and the plan declines its request with
-`OmissionReason::GeneratedNameCollision`. Excluding the collected row
-and its file lets the generated unit back in. A unit in the inventory
-only (at its preset, no `/etc` file) is not counted as collected. Two
+generated-name collision of § 10.2, and for this rule only a collected
+unit is any unit the units section names (`collected_unit_paths`):
+
+- `Reservation::Row`: an included state change (its unit path), or an
+  included config entry or drop-in row at the generated path, whatever
+  its content, a zero-length mask file included. Excluding that row and
+  its file lets the generated unit back in.
+- `Reservation::Inventory`: an inventory entry or mount finding with no
+  state change, such as a package's unit at its preset. It has no row to
+  exclude, so the advice is to write the timer and its service by hand
+  under other names. A unit with a state change is decided by that row
+  alone, included or excluded, which keeps the flatpak rescan case as it
+  was.
+
+Every file of a generated unit with such a name is withheld as
+`WithheldWhy::GeneratedNameCollision { unit, reserved_by }`, the paired
+service of a generated timer included, and the plan declines its request
+with `OmissionReason::GeneratedNameCollision { name, reserved_by }`.
+`name` is the file that collided, not the generated unit: a collision on
+the paired service alone must name the service, or the FIXME describes a
+unit the host does not have. Two
 cron units of one name are one destination twice and the last one is
 written; every other clash at one destination is an ordinary
 `Conflict`.
+
+**No other writer under `/etc/systemd/system`.** The unmanaged-files
+section copies its own tree after the unit state section, outside
+`staged_writes`. `configtree::unmanaged_unit_path`, by `Destination` and
+covering every path below the directory, is the one decision on an
+unmanaged path there: the scan's bundling, refine's payload extraction
+(asked of the snapshot path and of the tarball entry's own path) and the
+unmanaged section all skip the file, and `staged_writes` lists it as
+withheld (`StagedFileKind::UnmanagedFile`, `WithheldWhy::UnmanagedUnitPath`)
+so the configuration FIXME names it. A new payload route for unmanaged
+files must ask the same function.
 
 Identical content offered twice at one destination is one write, not a
 conflict. A custom repo file is both a config entry and an

@@ -177,14 +177,14 @@ continuation line as `single_quote(name)`. The operand is a `UnitName`,
 proved when the collector parsed it, so the site has nothing left to
 refuse: `single_quote` is total on the type's character set, which holds
 no quote and no line break, and `--` makes a name that starts with `-`
-(`-.slice`) an operand. The units the Containerfile enables outside the
-plan use `systemctl_enable_line` in `containerfile.rs`, the same form on
-one line: local and converted timers and `@reboot` services in the
-Scheduled Tasks section, `flatpak-provision.service` (`FLATPAK_SERVICE`)
-and `tuned.service` (`TUNED_SERVICE`). The two constants need no check.
-A timer name still comes from the snapshot as text, so `enableable_unit`
-writes a FIXME for one the stager would not stage or that is not a shell
-operand, and quotes the rest.
+(`-.slice`) an operand. No `systemctl` line is written outside the plan:
+converted cron timers and `@reboot` services, and
+`flatpak-provision.service`, are plan requests whose enables
+`systemctl_lines` writes in their own sections, and `tuned.service` is a
+unit row like any other. A generated unit's name still comes from the
+snapshot as text, so `generated_unit_name` in `unit_plan.rs` proves it a
+`UnitName` the stager would stage, and the Scheduled Tasks section writes
+a FIXME for one it refuses.
 
 **A value with two emission surfaces is proved once for both, or the fix
 is half a fix.** `ExportPath` guards the tmpfiles.d `d` entry as well as

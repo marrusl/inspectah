@@ -38,7 +38,11 @@ service, or the `@reboot` service. When the stager withheld one as
 `GeneratedNameCollision` the request is declined with
 `OmissionReason::GeneratedNameCollision`, a FIXME in the generated
 unit's own section; when one is missing for any other reason it is
-declined with `UnitFileNotStaged`. Declines are in
+declined with `UnitFileNotStaged`, an `# Omitted:` line. A generated unit
+whose row is excluded, or whose cron job's row is excluded, is no
+request at all, so it is never declined: refine's session excludes the
+units of an excluded cron job in every projected snapshot, and refuses
+including one of them while the cron job stays excluded. Declines are in
 `UnitPlan.generated_declined` with their `GeneratedSource` (the cron
 row's name, or the flatpak provisioning service), which refine projects
 as `declined_generated` for the scheduled or flatpak row. A name that is
@@ -141,8 +145,10 @@ showed, and the build failed with no warning anywhere.
 - `UnitFileNotStaged`, `InstallEvidenceChanged { path }`,
   `StorageFileStaged { path }`, `TargetNeedsUnit` and
   `MaskPathOccupied { path }`: the rules above.
-- `GeneratedNameCollision`: a generated request whose files the stager
-  withheld because a collected unit has its name. A FIXME.
+- `GeneratedNameCollision { name, reserved_by }`: a generated request
+  whose files the stager withheld because a collected unit, `name`, has
+  one file's name. A FIXME, with exclude advice for `Reservation::Row`
+  and rename advice for `Reservation::Inventory`.
 
 `AdvisoryReason::PackageUnreachable` and `BaselineUnavailable` are the
 emitted-with-context tiers.

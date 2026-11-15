@@ -381,7 +381,8 @@ The Containerfile action depends on the item type:
 | Administrator's mount, automount or swap unit | No instruction: an advisory comment in the `Systemd Unit State` section. Its unit file is a config file |
 | Quadlet unit | `COPY quadlet/ /etc/containers/systemd/` |
 | Sysctl file (`/etc/sysctl.conf`, `/etc/sysctl.d/*.conf`) | A config file: carried unchanged by the `COPY config/etc/ /etc/` line |
-| Scheduled task (timer) | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.timer'` |
+| Scheduled task: a timer or `@reboot` service converted from cron | `COPY config/etc/systemd/system/ /etc/systemd/system/` and `RUN systemctl enable -- '<name>.timer'` in the Scheduled Tasks section, unless a unit collected from the host has its name (a `# FIXME:` instead) |
+| Scheduled task: an existing timer | No instruction of its own: a description. Its file is a config file or a unit drop-in row, and its state a unit row in the `Systemd Unit State` section |
 
 Advisory and Inventory findings produce no Containerfile line, apart from
 the unbacked `/var` directories the export provisions. That includes

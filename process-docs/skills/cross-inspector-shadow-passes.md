@@ -198,10 +198,11 @@ has already set it false. Measured through `/api/view`.
 Only the service case above has been measured. A read of the source
 suggests the same or related failures for quadlets
 (`containers.quadlet_units` plus the unconditional `QUADLET_PREFIX`
-skip), repo files and GPG keys (an **OR** rule rather than a
-subtraction: either inclusion stages the file), and local systemd timers
-(`configtree.rs` writes them without checking `t.disposition`). None of
-these has a host measurement. **Do not fix one from a source trace** —
+skip), and repo files and GPG keys (an **OR** rule rather than a
+subtraction: either inclusion stages the file). None of these has a host
+measurement. Local systemd timers are no longer on this list: the stager
+has no local-timer writer, so a local timer's file is staged only by its
+config row, or its drop-in row for a full shadow. **Do not fix one from a source trace**:
 this subsystem has produced a chain of confident, wrong conclusions
 reasoned from unverified premises. Measure first.
 
