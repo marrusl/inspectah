@@ -6637,3 +6637,252 @@ fn a_generated_name_is_shown_locked_when_any_of_its_records_is() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// T24 and T25 (k): install drop-ins and rule 5's drop-in half (§ 6.3,
+// § 7.2, § 10.2 "Install files").
+// ---------------------------------------------------------------------
+
+/// The package that owns the vendor units of [`install_host`].
+const INSTALL_PACKAGE: &str = "apppkg";
+
+/// A vendor `unit` owned by [`INSTALL_PACKAGE`] whose own file holds
+/// `vendor_content`, enabled against a `disable` preset, on a host scanned
+/// against a base image so refine keeps the package included.
+fn install_host(unit: &str, vendor_content: &str) -> UnitHost {
+    UnitHost::new()
+        .base_package("glibc")
+        .package(INSTALL_PACKAGE)
+        .unit(unit, "enabled")
+        .preset("disable *")
+        .vendor_unit(unit, vendor_content, Some(INSTALL_PACKAGE))
+}
+
+/// A unit file with no `[Install]` section.
+const NO_INSTALL_UNIT: &str = "[Service]\nExecStart=/usr/bin/app\n";
+/// A drop-in that sets an `[Install]` section.
+const INSTALL_DROP_IN: &str = "[Install]\nWantedBy=multi-user.target\n";
+/// A drop-in that changes no `[Install]` key.
+const SERVICE_DROP_IN: &str = "[Service]\nNice=5\n";
+
+/// T24: a `WantedBy=` that comes only from an `/etc` drop-in is carried,
+/// with the drop-in in `install_drop_ins`; with that drop-in excluded
+/// through refine, `InstallEvidenceChanged` naming it and no enable; with
+/// it included again, the enable returns.
+#[test]
+fn t24_a_wanted_by_from_a_drop_in_is_carried_with_that_drop_in() {
+    const DROP_IN: &str = "/etc/systemd/system/app.service.d/10-install.conf";
+    let snap = scan(install_host("app.service", NO_INSTALL_UNIT).file(DROP_IN, INSTALL_DROP_IN));
+    assert_eq!(change(&snap, "app.service").install_drop_ins, [DROP_IN]);
+
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "enable", "app.service"), "{scanned}");
+
+    let drop_in = ItemId::DropIn {
+        path: DROP_IN.into(),
+    };
+    let excluded = containerfile_in(&exported_after(&snap, &[(drop_in.clone(), false)]));
+    assert!(
+        in_no_systemctl_instruction(&excluded, "app.service"),
+        "{excluded}"
+    );
+    assert!(
+        omitted(&excluded, "app.service").is_some_and(|l| l.ends_with(&evidence_changed(DROP_IN))),
+        "{excluded}"
+    );
+
+    let restored = containerfile_in(&exported_after(
+        &snap,
+        &[(drop_in.clone(), false), (drop_in, true)],
+    ));
+    assert!(acts(&restored, "enable", "app.service"), "{restored}");
+}
+
+/// T24 and T25 (k) first half: an `/etc` drop-in with no `[Install]` and
+/// the file name of a vendor drop-in in the unit's own `.d` is an install
+/// file, since it hides the vendor one's section; the vendor name is in
+/// `vendor_drop_ins`. With the `/etc` file included the enable is carried;
+/// excluded, `InstallEvidenceChanged`. An `/etc` `[Service]` drop-in under
+/// a name of its own is not an install file.
+#[test]
+fn t25_k_an_etc_file_named_like_a_vendor_drop_in_is_an_install_file() {
+    const VENDOR: &str = "/usr/lib/systemd/system/bundle.service.d/10-members.conf";
+    const HIDING: &str = "/etc/systemd/system/bundle.service.d/10-members.conf";
+    const OWN: &str = "/etc/systemd/system/bundle.service.d/20-limits.conf";
+    let snap = scan(
+        install_host("bundle.service", NO_INSTALL_UNIT)
+            .file(
+                VENDOR,
+                "[Install]\nWantedBy=multi-user.target\nAlso=helper.service\n",
+            )
+            .file(HIDING, SERVICE_DROP_IN)
+            .file(OWN, SERVICE_DROP_IN),
+    );
+    let recorded = change(&snap, "bundle.service");
+    assert_eq!(recorded.install_drop_ins, [HIDING]);
+    assert_eq!(recorded.vendor_drop_ins, ["10-members.conf"]);
+
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "enable", "bundle.service"), "{scanned}");
+
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(
+            ItemId::DropIn {
+                path: HIDING.into(),
+            },
+            false,
+        )],
+    ));
+    assert!(
+        in_no_systemctl_instruction(&excluded, "bundle.service"),
+        "{excluded}"
+    );
+    assert!(
+        omitted(&excluded, "bundle.service")
+            .is_some_and(|l| l.ends_with(&evidence_changed(HIDING))),
+        "{excluded}"
+    );
+
+    // The own-named override alone excluded changes nothing.
+    let own_excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(ItemId::DropIn { path: OWN.into() }, false)],
+    ));
+    assert!(
+        acts(&own_excluded, "enable", "bundle.service"),
+        "{own_excluded}"
+    );
+}
+
+/// T24: the type-wide directory and a dash-prefix directory are never
+/// read for `[Install]`. A vendor drop-in holding `WantedBy=` there is not
+/// in `vendor_drop_ins`; an `/etc` drop-in with `[Install]` there is not in
+/// `install_drop_ins`, and staging it beside the carried enable leaves the
+/// enable carried; an `/etc` file in `service.d` named like a vendor
+/// drop-in in the unit's own `.d` is not an install file and does not hide
+/// it, which stays in `vendor_drop_ins`.
+#[test]
+fn t24_type_wide_and_dash_prefix_drop_ins_are_not_install_files() {
+    let hosts = [
+        (
+            "a-b.service",
+            "/usr/lib/systemd/system/service.d/10-vendor.conf",
+            "/etc/systemd/system/service.d/10-site.conf",
+        ),
+        (
+            "a-b.service",
+            "/usr/lib/systemd/system/a-.service.d/10-vendor.conf",
+            "/etc/systemd/system/a-.service.d/10-site.conf",
+        ),
+    ];
+    for (unit, vendor, etc) in hosts {
+        let snap = scan(
+            install_host(
+                unit,
+                "[Service]\nExecStart=/usr/bin/ab\n[Install]\nWantedBy=multi-user.target\n",
+            )
+            .file(vendor, INSTALL_DROP_IN)
+            .file(etc, INSTALL_DROP_IN),
+        );
+        let recorded = change(&snap, unit);
+        assert!(
+            recorded.vendor_drop_ins.is_empty(),
+            "{vendor}: {:?}",
+            recorded.vendor_drop_ins
+        );
+        assert!(
+            recorded.install_drop_ins.is_empty(),
+            "{etc}: {:?}",
+            recorded.install_drop_ins
+        );
+
+        let as_config = snap.config.as_ref().is_some_and(|c| {
+            c.files
+                .iter()
+                .any(|f| (f.path == etc[1..] || f.path == etc) && f.disposition.is_included())
+        });
+        let as_drop_in = snap.units.as_ref().is_some_and(|u| {
+            u.drop_ins
+                .iter()
+                .any(|d| d.path == etc && d.disposition.is_included())
+        });
+        assert!(
+            as_config || as_drop_in,
+            "{etc} is collected, included, and so staged"
+        );
+        let scanned = containerfile_in(&render_export(&snap));
+        assert!(acts(&scanned, "enable", unit), "{etc}:\n{scanned}");
+    }
+
+    // A type-wide /etc file named like a vendor drop-in in the unit's own
+    // .d hides nothing there.
+    const OWN_VENDOR: &str = "/usr/lib/systemd/system/a-b.service.d/10-members.conf";
+    const TYPEWIDE: &str = "/etc/systemd/system/service.d/10-members.conf";
+    let snap = scan(
+        install_host("a-b.service", NO_INSTALL_UNIT)
+            .file(OWN_VENDOR, INSTALL_DROP_IN)
+            .file(TYPEWIDE, SERVICE_DROP_IN),
+    );
+    let recorded = change(&snap, "a-b.service");
+    assert_eq!(recorded.vendor_drop_ins, ["10-members.conf"]);
+    assert!(
+        recorded.install_drop_ins.is_empty(),
+        "{:?}",
+        recorded.install_drop_ins
+    );
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "enable", "a-b.service"), "{scanned}");
+}
+
+/// T24 resets, through the scan: a drop-in that resets `WantedBy=` and
+/// then assigns it is an install drop-in like any other. An empty
+/// `RequiredBy=` after `RequiredBy=a.target` makes the section
+/// undetermined: no state change and no enable (its advisory comes with
+/// the link findings). Control: without the drop-in, the unit is a state
+/// change and enabled.
+#[test]
+fn t24_resets_through_the_scan() {
+    const RESET: &str = "/etc/systemd/system/app.service.d/10-reset.conf";
+    let vendor = "[Service]\nExecStart=/usr/bin/app\n[Install]\nWantedBy=multi-user.target\n";
+    let snap = scan(
+        install_host("app.service", vendor)
+            .file(RESET, "[Install]\nWantedBy=\nWantedBy=extra.target\n"),
+    );
+    assert_eq!(change(&snap, "app.service").install_drop_ins, [RESET]);
+
+    let required = "[Service]\nExecStart=/usr/bin/app\n[Install]\nRequiredBy=a.target\n";
+    let control = scan(install_host("app.service", required));
+    assert_eq!(
+        change(&control, "app.service").current_state(),
+        UnitState::Enabled
+    );
+    let scanned = containerfile_in(&render_export(&control));
+    assert!(acts(&scanned, "enable", "app.service"), "{scanned}");
+
+    let snap = scan(install_host("app.service", required).file(RESET, "[Install]\nRequiredBy=\n"));
+    assert!(
+        snap.units
+            .as_ref()
+            .expect("a units section")
+            .drop_ins
+            .iter()
+            .any(|d| d.path == RESET),
+        "the drop-in is collected"
+    );
+    assert!(
+        !snap
+            .units
+            .as_ref()
+            .expect("a units section")
+            .state_changes
+            .iter()
+            .any(|c| c.unit().name().as_str() == "app.service"),
+        "no state change"
+    );
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(
+        in_no_systemctl_instruction(&scanned, "app.service"),
+        "{scanned}"
+    );
+}

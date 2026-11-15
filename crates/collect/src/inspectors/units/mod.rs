@@ -13,15 +13,16 @@ use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
     AdminStorageFragment, AdvisoryUnit, Classified, MountUnitFinding, PresetDefault, StorageKind,
     SystemdDropIn, UNIT_TYPE_SUFFIXES, UnitFragment, UnitInventoryEntry, UnitKind, UnitName,
-    UnitSection, UnitState, UnitStateChange, UnitSubject,
+    UnitSection, UnitState, UnitStateChange, UnitSubject, holds_install_section,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 mod install;
 mod resolve;
 
+use install::{DropInRoot, DropInSource, InstallRead, drop_in_dirs, read_install};
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
@@ -299,11 +300,38 @@ fn build_state_changes(
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         match resolve::resolve(exec, &candidate.name) {
-            Ok(Resolved::File { fragment }) | Ok(Resolved::Masked { hidden: fragment }) => {
+            Ok(Resolved::File { fragment }) => {
+                let mut state_change = is_state_change(&candidate, &fragment);
+                let mut evidence = InstallEvidence::default();
+                if state_change {
+                    match install_evidence(exec, &candidate.name, &fragment) {
+                        Ok(read) => evidence = read,
+                        Err(failure) => {
+                            read_failures.push(failure);
+                            reported.insert(candidate.name.clone());
+                            continue;
+                        }
+                    }
+                    // § 7.3: an enabled unit has a link to it, and a link
+                    // to a unit whose `[Install]` cannot be relied on gives
+                    // no state change.
+                    if candidate.state == UnitState::Enabled
+                        && matches!(evidence.read, Some(InstallRead::Undetermined { .. }))
+                    {
+                        state_change = false;
+                    }
+                }
+                if state_change || is_enabled_storage(&candidate) {
+                    fragments.push(fragment);
+                    found.push((candidate, state_change, evidence));
+                }
+            }
+            // A mask reads no `[Install]`, so it records no install files.
+            Ok(Resolved::Masked { hidden: fragment }) => {
                 let state_change = is_state_change(&candidate, &fragment);
                 if state_change || is_enabled_storage(&candidate) {
                     fragments.push(fragment);
-                    found.push((candidate, state_change));
+                    found.push((candidate, state_change, InstallEvidence::default()));
                 }
             }
             Ok(Resolved::AliasOf(target)) => warnings.push(warn(&format!(
@@ -334,7 +362,7 @@ fn build_state_changes(
 
     let mut state_changes = Vec::new();
     let mut mount_findings = Vec::new();
-    for ((candidate, state_change), fragment) in found.into_iter().zip(fragments) {
+    for ((candidate, state_change, evidence), fragment) in found.into_iter().zip(fragments) {
         let warn =
             |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
         let subject = match UnitSubject::new(candidate.name.clone(), fragment) {
@@ -378,12 +406,121 @@ fn build_state_changes(
                 }
                 // § 10.4: a runtime package updater starts excluded.
                 apply_runtime_updater_default(&mut change);
+                change.install_drop_ins = evidence.install_drop_ins;
+                change.vendor_drop_ins = evidence.vendor_drop_ins;
                 state_changes.push(change);
             }
             Err(e) => warnings.push(warn(&e.to_string())),
         }
     }
     (state_changes, mount_findings)
+}
+
+/// What a state change records about the files `enable` reads `[Install]`
+/// from (§ 7.2 of the units spec, step 4 and the install evidence).
+#[derive(Debug, Default)]
+struct InstallEvidence {
+    /// The effective section, or `None` when the unit file or a drop-in
+    /// that applies could not be read as text.
+    read: Option<InstallRead>,
+    /// Paths of the drop-ins under `/etc/systemd/system` that are install
+    /// files, sorted.
+    install_drop_ins: Vec<String>,
+    /// File names of the vendor drop-ins that apply, sorted.
+    vendor_drop_ins: Vec<String>,
+}
+
+/// Read the install evidence of `name`, whose unit file is `fragment`:
+/// the `.conf` files in each of [`drop_in_dirs`] under both unit
+/// directories, the effective section over them, the vendor drop-ins' file
+/// names, and which `/etc` drop-ins are install files. An `/etc` drop-in is
+/// one when it holds an `[Install]` section, or a vendor drop-in of its
+/// file name exists in one of those directories (§ 10.2, "Install files").
+/// One that cannot be read as text counts, since its `[Install]` cannot be
+/// ruled out. An `Err` names a file or directory that could not be read.
+fn install_evidence(
+    exec: &dyn Executor,
+    name: &UnitName,
+    fragment: &UnitFragment,
+) -> Result<InstallEvidence, String> {
+    let failure = |e: ResolveError| match e {
+        ResolveError::Read { path, error } => format!("{path}: {error}"),
+        ResolveError::Linked { path, target } => format!("{path}: link to {target}"),
+    };
+    let dirs = drop_in_dirs(name);
+    let mut vendor_names = BTreeSet::new();
+    for dir in &dirs {
+        vendor_names.extend(
+            resolve::conf_files(exec, &format!("{VENDOR_UNIT_DIR}/{dir}")).map_err(failure)?,
+        );
+    }
+
+    let mut drop_ins = Vec::new();
+    let mut every_text_read = true;
+    let mut install_drop_ins = Vec::new();
+    for (root, base) in [
+        (DropInRoot::Etc, ETC_UNIT_DIR),
+        (DropInRoot::Vendor, VENDOR_UNIT_DIR),
+    ] {
+        for dir in &dirs {
+            for file_name in resolve::conf_files(exec, &format!("{base}/{dir}")).map_err(failure)? {
+                let path = format!("{base}/{dir}/{file_name}");
+                let text = unit_text(exec, &path)?;
+                if root == DropInRoot::Etc
+                    && (vendor_names.contains(&file_name)
+                        || text.as_deref().is_none_or(holds_install_section))
+                {
+                    install_drop_ins.push(path);
+                }
+                match text {
+                    Some(text) => drop_ins.push((
+                        DropInSource {
+                            root,
+                            dir: dir.clone(),
+                            file_name,
+                        },
+                        text,
+                    )),
+                    None => every_text_read = false,
+                }
+            }
+        }
+    }
+
+    let fragment_path = match fragment {
+        UnitFragment::Local { file } | UnitFragment::Shadowed { file, .. } => {
+            Some(format!("{ETC_UNIT_DIR}/{}", file.as_str()))
+        }
+        UnitFragment::Vendor { file, .. } => Some(format!("{VENDOR_UNIT_DIR}/{}", file.as_str())),
+        UnitFragment::Absent => None,
+    };
+    let fragment_text = match fragment_path {
+        Some(path) => unit_text(exec, &path)?,
+        None => None,
+    };
+    let read = fragment_text.filter(|_| every_text_read).map(|text| {
+        let drop_ins: Vec<(DropInSource, &str)> = drop_ins
+            .iter()
+            .map(|(source, text)| (source.clone(), text.as_str()))
+            .collect();
+        read_install(name, &text, &drop_ins)
+    });
+    install_drop_ins.sort();
+    Ok(InstallEvidence {
+        read,
+        install_drop_ins,
+        vendor_drop_ins: vendor_names.into_iter().collect(),
+    })
+}
+
+/// The text of the unit file or drop-in at `path`, or `None` when it is
+/// not text the executor returns (not UTF-8, or over its size cap).
+fn unit_text(exec: &dyn Executor, path: &str) -> Result<Option<String>, String> {
+    match exec.read_file(Path::new(path)) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(None),
+        Err(e) => Err(format!("{path}: {e}")),
+    }
 }
 
 /// The mount findings for the storage files under `/etc/systemd/system`

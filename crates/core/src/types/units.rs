@@ -849,6 +849,18 @@ pub struct UnitStateChange {
     current_state: UnitState,
     #[serde(deserialize_with = "require_explicit_null")]
     pub default_state: Option<PresetDefault>,
+    /// Drop-ins under `/etc/systemd/system` that apply to the unit and are
+    /// install files: they hold an `[Install]` section or carry a vendor
+    /// drop-in's file name. Each is checked as a destination when the plan
+    /// reads it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub install_drop_ins: Vec<String>,
+    /// File names of the vendor drop-ins that apply to the unit for
+    /// `[Install]`: the `.conf` files in its own `.d` and, for an instance,
+    /// its template's `.d` under `/usr/lib/systemd/system`. Names only,
+    /// each one path component ending in `.conf`, checked on load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendor_drop_ins: Vec<String>,
     #[serde(default)]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -866,6 +878,10 @@ struct UnitStateChangeWire {
     #[serde(deserialize_with = "require_explicit_null")]
     default_state: Option<PresetDefault>,
     #[serde(default)]
+    install_drop_ins: Vec<String>,
+    #[serde(default)]
+    vendor_drop_ins: Vec<String>,
+    #[serde(default)]
     disposition: FindingKind,
     #[serde(default)]
     locked: bool,
@@ -878,7 +894,16 @@ impl TryFrom<UnitStateChangeWire> for UnitStateChange {
     type Error = UnitStateChangeError;
 
     fn try_from(wire: UnitStateChangeWire) -> Result<Self, Self::Error> {
+        if let Some(name) = wire
+            .vendor_drop_ins
+            .iter()
+            .find(|name| !is_drop_in_file_name(name))
+        {
+            return Err(UnitStateChangeError::VendorDropInName { name: name.clone() });
+        }
         let mut change = Self::new(wire.unit, wire.current_state, wire.default_state)?;
+        change.install_drop_ins = wire.install_drop_ins;
+        change.vendor_drop_ins = wire.vendor_drop_ins;
         change.disposition = wire.disposition;
         change.locked = wire.locked;
         change.aggregate = wire.aggregate;
@@ -905,6 +930,60 @@ pub enum UnitStateChangeError {
         unit.as_str()
     )]
     AbsentNotMasked { unit: UnitName, state: UnitState },
+    /// A vendor drop-in is recorded by its file name alone: one path
+    /// component ending in `.conf`.
+    #[error(
+        "vendor_drop_ins holds {name:?}: a vendor drop-in is recorded as one file name \
+         ending in .conf"
+    )]
+    VendorDropInName { name: String },
+}
+
+/// The suffix of a drop-in file systemd reads.
+const DROP_IN_FILE_SUFFIX: &str = ".conf";
+
+/// Whether `name` is one path component ending in `.conf`.
+fn is_drop_in_file_name(name: &str) -> bool {
+    !name.contains('/')
+        && name.len() > DROP_IN_FILE_SUFFIX.len()
+        && name.ends_with(DROP_IN_FILE_SUFFIX)
+}
+
+/// The header of the section `systemctl enable` reads.
+const INSTALL_SECTION_HEADER: &str = "[Install]";
+
+/// The characters systemd's unit file parser strips from the ends of a
+/// line.
+const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
+
+/// Whether a unit file or drop-in holds an `[Install]` section: after
+/// lines that end in an unescaped backslash are joined to the next, and
+/// with comment lines skipped, some line's trimmed text is `[Install]`.
+/// The keys are not read. The one lexical test of an install file, shared
+/// by the collector and the plan.
+pub fn holds_install_section(text: &str) -> bool {
+    let mut pending = String::new();
+    for line in text.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line
+            .trim_start_matches(UNIT_FILE_WHITESPACE)
+            .starts_with(['#', ';'])
+        {
+            continue;
+        }
+        pending.push_str(line);
+        let trailing = line.len() - line.trim_end_matches('\\').len();
+        if trailing % 2 == 1 {
+            pending.pop();
+            pending.push(' ');
+            continue;
+        }
+        if pending.trim_matches(UNIT_FILE_WHITESPACE) == INSTALL_SECTION_HEADER {
+            return true;
+        }
+        pending.clear();
+    }
+    pending.trim_matches(UNIT_FILE_WHITESPACE) == INSTALL_SECTION_HEADER
 }
 
 impl UnitStateChange {
@@ -937,6 +1016,8 @@ impl UnitStateChange {
             unit,
             current_state,
             default_state,
+            install_drop_ins: Vec::new(),
+            vendor_drop_ins: Vec::new(),
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
@@ -1068,6 +1149,8 @@ mod tests {
                 unit: _,             // exempt: a proved name, fragment and package name
                 current_state: _,    // exempt: enabled, disabled or masked
                 default_state: _,    // exempt: enable or disable
+                install_drop_ins: _, // identifiers: drop-in paths, no content
+                vendor_drop_ins: _,  // identifiers: file names, no content
                 disposition: _,      // decision
                 locked: _,           // decision
                 aggregate: _,        // fleet counts

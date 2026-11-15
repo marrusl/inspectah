@@ -276,6 +276,75 @@ fn state_change_storage_unit_is_classified_on_load() {
     }
 }
 
+/// § 6.7: `vendor_drop_ins` holds file names only, each one path
+/// component ending in `.conf`. A value with `/`, or without `.conf`,
+/// fails the load naming the field; a list of plain names loads, and so do
+/// `install_drop_ins` paths, which are read as destinations at render.
+#[test]
+fn state_change_vendor_drop_ins_are_file_names_on_load() {
+    let with_lists = |vendor: serde_json::Value| {
+        let mut payload: serde_json::Value = serde_json::from_str(&payload_with_state_change(
+            subject("app.service", "vendor", Some("apppkg")),
+            "enabled",
+        ))
+        .expect("the payload is JSON");
+        let change = &mut payload["units"]["state_changes"][0];
+        change["vendor_drop_ins"] = vendor;
+        change["install_drop_ins"] =
+            serde_json::json!(["/etc/systemd/system/app.service.d/10-a.conf"]);
+        payload.to_string()
+    };
+
+    let snap = InspectionSnapshot::load(&with_lists(serde_json::json!(["10-a.conf"])))
+        .expect("plain file names load");
+    let change = &snap.units.expect("units present").state_changes[0];
+    assert_eq!(change.vendor_drop_ins, ["10-a.conf"]);
+    assert_eq!(
+        change.install_drop_ins,
+        ["/etc/systemd/system/app.service.d/10-a.conf"]
+    );
+
+    for refused in [
+        "app.service.d/10-a.conf",
+        "10-a.txt",
+        ".conf",
+        "../10-a.conf",
+    ] {
+        let err = InspectionSnapshot::load(&with_lists(serde_json::json!([refused])))
+            .expect_err("not a drop-in file name")
+            .to_string();
+        assert!(
+            err.contains("vendor_drop_ins") && err.contains(refused),
+            "{refused}: {err}"
+        );
+    }
+}
+
+/// § 10.2: "holds an `[Install]` section" is one lexical test. True for
+/// the header with surrounding whitespace, with a trailing CR, before a
+/// backslash-continued assignment, and after a comment ending in a
+/// backslash (a comment continues nothing). False for a `[Service]`-only
+/// drop-in, a commented-out header, and a header text that is the
+/// continuation of another line.
+#[test]
+fn holds_install_section_is_one_lexical_test() {
+    use inspectah_core::types::units::holds_install_section;
+    for (text, expected) in [
+        ("[Install]\nWantedBy=a.target\n", true),
+        ("  [Install]  \nWantedBy=a.target\n", true),
+        ("[Install]\r\nWantedBy=a.target\r\n", true),
+        ("[Install]\r", true),
+        ("[Install]\nWantedBy=a.target \\\n  b.target\n", true),
+        ("[Install]\nWantedBy=\n", true),
+        ("# note \\\n[Install]\n", true),
+        ("[Service]\nNice=5\n", false),
+        ("# [Install]\n", false),
+        ("[Service]\nExecStart=/bin/echo \\\n[Install]\n", false),
+    ] {
+        assert_eq!(holds_install_section(text), expected, "{text:?}");
+    }
+}
+
 /// T2, `state_changes`: a template and a unit with no file load masked
 /// and fail in any other state, naming the rule.
 #[test]

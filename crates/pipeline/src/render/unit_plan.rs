@@ -12,7 +12,7 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
     CarriedUnit, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, UnitAction,
-    UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
+    UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -1038,14 +1038,16 @@ fn rule_5_file(
             if !is_staged(staged, &path) {
                 return Err(OmissionReason::UnitFileNotStaged);
             }
-            one_variant(snap, path)
+            one_variant(snap, path)?;
+            own_name_free(unit.name(), file, staged)
         }
         UnitFragment::Shadowed { file, .. } => {
             let path = etc_unit_path(file);
             if !is_staged(staged, &path) {
                 return Err(OmissionReason::InstallEvidenceChanged { path });
             }
-            one_variant(snap, path)
+            one_variant(snap, path)?;
+            own_name_free(unit.name(), file, staged)
         }
         UnitFragment::Vendor { .. } | UnitFragment::Absent => {
             no_file_at(etc_unit_path(unit.name()), staged)
@@ -1198,6 +1200,98 @@ fn needs_its_package(unit: &CarriedUnit) -> bool {
             }
         },
     }
+}
+
+/// For an instance recorded from its template's file under `/etc`, `Ok`
+/// when the export stages no unit file at the instance's own name, which
+/// would load in its place (§ 10.2, rule 5 for every fragment). `Ok` when
+/// `file` is the unit's own.
+fn own_name_free(
+    name: &UnitName,
+    file: &UnitName,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    if file == name {
+        return Ok(());
+    }
+    no_file_at(etc_unit_path(name), staged)
+}
+
+/// The suffix of a drop-in file systemd reads.
+const DROP_IN_FILE_SUFFIX: &str = ".conf";
+
+/// The `/etc` drop-in directories `enable` reads `[Install]` from for
+/// `name`: its own `.d` and, for an instance, its template's. The
+/// type-wide and dash-prefix directories are never among them (§ 10.2,
+/// "Install files").
+fn install_drop_in_dirs(name: &UnitName) -> Vec<String> {
+    let mut dirs = vec![format!("{ETC_UNIT_DIR}/{}.d", name.as_str())];
+    if let Some(parts) = name.instance() {
+        dirs.push(format!("{ETC_UNIT_DIR}/{}.d", parts.template().as_str()));
+    }
+    dirs
+}
+
+/// Rule 5 for every fragment, the drop-in half (§ 10.2): the install
+/// drop-ins the export stages for the unit are exactly the row's
+/// `install_drop_ins`, none missing and none added.
+///
+/// - Each recorded path is read through [`Destination`]; one that does not
+///   parse, or is not staged, fails. In a fleet aggregate, one whose path
+///   holds more than one content variant fails too ([`one_variant`]).
+/// - A staged `.conf` directly in one of [`install_drop_in_dirs`] that the
+///   row does not record fails when it is an install file: it holds an
+///   `[Install]` section ([`holds_install_section`]), or it has the file
+///   name of one of the row's `vendor_drop_ins`.
+///
+/// Every failure is [`OmissionReason::InstallEvidenceChanged`] naming the
+/// path.
+fn rule_5_drop_ins(
+    snap: &InspectionSnapshot,
+    change: &UnitStateChange,
+    staged: &StagedWrites<'_>,
+) -> Result<(), OmissionReason> {
+    let changed = |path: &str| OmissionReason::InstallEvidenceChanged {
+        path: path.to_owned(),
+    };
+    let mut recorded = Vec::new();
+    for path in &change.install_drop_ins {
+        let Ok(dest) = Destination::new(path) else {
+            return Err(changed(path));
+        };
+        if !staged.writes.contains_key(&dest) {
+            return Err(changed(path));
+        }
+        one_variant(snap, path.clone())?;
+        recorded.push(dest);
+    }
+    for dir in install_drop_in_dirs(change.unit().name()) {
+        let Ok(start) = Destination::new(&dir) else {
+            continue;
+        };
+        let prefix = format!("{}/", start.as_str());
+        // Every path under the directory sorts after it and before any
+        // path that does not start with its name.
+        for (dest, write) in staged
+            .writes
+            .range(start.clone()..)
+            .take_while(|(dest, _)| dest.as_str().starts_with(start.as_str()))
+        {
+            let Some(file) = dest.as_str().strip_prefix(&prefix) else {
+                continue;
+            };
+            if file.contains('/') || !file.ends_with(DROP_IN_FILE_SUFFIX) || recorded.contains(dest)
+            {
+                continue;
+            }
+            if holds_install_section(&write.content)
+                || change.vendor_drop_ins.iter().any(|name| name == file)
+            {
+                return Err(changed(dest.as_str()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `Ok` when the export stages no file at `path`.
@@ -1519,6 +1613,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         // package check").
         if action != UnitAction::Mask
             && let Err(reason) = rule_5_file(snap, sc.unit(), staged)
+                .and_then(|()| rule_5_drop_ins(snap, sc, staged))
         {
             plan.declined.push((name, action, reason));
             continue;

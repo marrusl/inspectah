@@ -3617,3 +3617,256 @@ fn t34_a_mask_follows_its_package() {
         )]
     );
 }
+
+// ---------------------------------------------------------------------------
+// § 10.2 rule 5, for every fragment: the install drop-ins
+// ---------------------------------------------------------------------------
+
+/// The `/etc` drop-in directory of `unit`.
+fn etc_drop_in(dir_unit: &str, file: &str) -> String {
+    format!("/etc/systemd/system/{dir_unit}.d/{file}")
+}
+
+/// `change` with its recorded install drop-ins and vendor drop-in names.
+fn with_install_files(
+    mut change: UnitStateChange,
+    install_drop_ins: &[&str],
+    vendor_drop_ins: &[&str],
+) -> UnitStateChange {
+    change.install_drop_ins = install_drop_ins.iter().map(|p| (*p).to_owned()).collect();
+    change.vendor_drop_ins = vendor_drop_ins.iter().map(|n| (*n).to_owned()).collect();
+    change
+}
+
+/// Whether the plan carries `unit`, or the reason it declines it.
+fn rule_5_outcome(snap: &InspectionSnapshot, unit: &str) -> Result<(), OmissionReason> {
+    let plan = plan_units(snap, &staged_writes(snap));
+    if plan.planned.iter().any(|u| u.name().as_str() == unit) {
+        return Ok(());
+    }
+    plan.declined
+        .into_iter()
+        .find(|(name, _, _)| name.as_str() == unit)
+        .map(|(_, _, reason)| Err(reason))
+        .unwrap_or_else(|| panic!("{unit} is neither planned nor declined"))
+}
+
+/// T24, render half, with the T25 (k) first half and Review focus 3: the
+/// install drop-ins the export stages for a unit are exactly the row's
+/// `install_drop_ins`. A recorded file missing, an unrecorded install file
+/// staged in the unit's own or the template's `.d`, and a recorded path
+/// that is not a destination are each `InstallEvidenceChanged` naming the
+/// path. A staged file is an install file when it holds an `[Install]`
+/// section, by the lexical test, or carries a recorded vendor drop-in's
+/// name. Files in the type-wide and dash-prefix directories, and a
+/// `[Service]` override under a name of its own, are not install files.
+/// For an instance recorded from its template, a unit file staged at the
+/// instance's own name fails too.
+#[test]
+fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
+    use UnitState::{Disabled, Enabled};
+    let install = "[Install]\nWantedBy=multi-user.target\n";
+    let service_only = "[Service]\nNice=5\n";
+    let listed = etc_drop_in("app.service", "10-install.conf");
+    let extra = etc_drop_in("app.service", "20-more.conf");
+    let vendor_named = etc_drop_in("app.service", "10-members.conf");
+    let dotdot = "/etc/systemd/system/app.service.d/../10-install.conf";
+    let typewide = "/etc/systemd/system/service.d/10-install.conf";
+    let dash = "/etc/systemd/system/a-.service.d/10-install.conf";
+    let template_dir = etc_drop_in("w@.service", "10-install.conf");
+    let evidence = |path: &str| {
+        Err(OmissionReason::InstallEvidenceChanged {
+            path: path.to_owned(),
+        })
+    };
+    let app = |state| change_with("app.service", vendor("app.service"), state);
+
+    type Case<'a> = (
+        &'a str,
+        UnitStateChange,
+        Vec<(&'a str, &'a str)>,
+        Result<(), OmissionReason>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a WantedBy= only from a recorded, staged drop-in",
+            with_install_files(app(Enabled), &[&listed], &[]),
+            vec![(&listed, install)],
+            Ok(()),
+        ),
+        (
+            "the recorded drop-in excluded",
+            with_install_files(app(Enabled), &[&listed], &[]),
+            vec![],
+            evidence(&listed),
+        ),
+        (
+            "the recorded drop-in excluded, disable",
+            with_install_files(app(Disabled), &[&listed], &[]),
+            vec![],
+            evidence(&listed),
+        ),
+        (
+            "a second [Install] drop-in staged that the row does not list",
+            with_install_files(app(Enabled), &[&listed], &[]),
+            vec![(&listed, install), (&extra, install)],
+            evidence(&extra),
+        ),
+        (
+            "a recorded path holding ..",
+            with_install_files(app(Enabled), &[dotdot], &[]),
+            vec![],
+            evidence(dotdot),
+        ),
+        (
+            "an unrecorded [Service]-only drop-in with a vendor drop-in's name",
+            with_install_files(app(Enabled), &[], &["10-members.conf"]),
+            vec![(&vendor_named, service_only)],
+            evidence(&vendor_named),
+        ),
+        (
+            "T25 (k): the same file recorded and staged",
+            with_install_files(app(Enabled), &[&vendor_named], &["10-members.conf"]),
+            vec![(&vendor_named, service_only)],
+            Ok(()),
+        ),
+        (
+            "T25 (k): the same file recorded and excluded",
+            with_install_files(app(Enabled), &[&vendor_named], &["10-members.conf"]),
+            vec![],
+            evidence(&vendor_named),
+        ),
+        (
+            "an unrecorded [Service]-only drop-in with a name of its own",
+            with_install_files(app(Enabled), &[], &["10-members.conf"]),
+            vec![(&extra, service_only)],
+            Ok(()),
+        ),
+        (
+            "an [Install] drop-in in the type-wide directory",
+            app(Enabled),
+            vec![(typewide, install)],
+            Ok(()),
+        ),
+        (
+            "a type-wide file named like a vendor drop-in",
+            with_install_files(app(Enabled), &[], &["10-install.conf"]),
+            vec![(typewide, service_only)],
+            Ok(()),
+        ),
+        (
+            "an [Install] drop-in in a dash-prefix directory",
+            change_with("a-b.service", vendor("a-b.service"), Enabled),
+            vec![(dash, install)],
+            Ok(()),
+        ),
+        (
+            "the lexical test: surrounding whitespace",
+            app(Enabled),
+            vec![(&extra, "  [Install]  \nWantedBy=a.target\n")],
+            evidence(&extra),
+        ),
+        (
+            "the lexical test: a trailing CR",
+            app(Enabled),
+            vec![(&extra, "[Install]\r\nWantedBy=a.target\r\n")],
+            evidence(&extra),
+        ),
+        (
+            "the lexical test: a backslash-continued assignment",
+            app(Enabled),
+            vec![(&extra, "[Install]\nWantedBy=a.target \\\n  b.target\n")],
+            evidence(&extra),
+        ),
+        (
+            "an unrecorded [Install] drop-in in the template's .d",
+            change_with("w@a.service", vendor("w@.service"), Enabled),
+            vec![(&template_dir, install)],
+            evidence(&template_dir),
+        ),
+        (
+            "the template's .d drop-in recorded and staged",
+            with_install_files(
+                change_with("w@a.service", vendor("w@.service"), Enabled),
+                &[&template_dir],
+                &[],
+            ),
+            vec![(&template_dir, install)],
+            Ok(()),
+        ),
+        (
+            "a local template recorded for an instance, staged alone",
+            change_with("w@a.service", local("w@.service"), Enabled),
+            vec![("/etc/systemd/system/w@.service", install)],
+            Ok(()),
+        ),
+        (
+            "a unit file staged at the instance's own name",
+            change_with("w@a.service", local("w@.service"), Enabled),
+            vec![
+                ("/etc/systemd/system/w@.service", install),
+                ("/etc/systemd/system/w@a.service", install),
+            ],
+            evidence("/etc/systemd/system/w@a.service"),
+        ),
+    ];
+    for (label, change, files, expected) in cases {
+        let unit = change.unit().name().as_str().to_owned();
+        let snap = units_snapshot(vec![change], files);
+        assert_eq!(rule_5_outcome(&snap, &unit), expected, "{label}");
+    }
+}
+
+/// § 10.2 rule 5: in a fleet aggregate, a recorded install drop-in whose
+/// path holds more than one content variant fails the rule, whichever
+/// variant is staged, since the row may have been recorded from the
+/// other. Control: the same snapshot with one variant carries the enable.
+#[test]
+fn rule_5_declines_a_recorded_install_drop_in_with_two_variants() {
+    let listed = etc_drop_in("app.service", "10-install.conf");
+    let change = || {
+        with_install_files(
+            change_with("app.service", vendor("app.service"), UnitState::Enabled),
+            &[&listed],
+            &[],
+        )
+    };
+    let aggregate = |snap: &mut InspectionSnapshot| {
+        snap.aggregate_meta = Some(AggregateSnapshotMeta {
+            label: "fleet".into(),
+            host_count: 2,
+            hostnames: vec!["alpha".into(), "beta".into()],
+            merged_at: "2026-11-15T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+    };
+
+    let mut one = units_snapshot(
+        vec![change()],
+        vec![(&listed, "[Install]\nWantedBy=multi-user.target\n")],
+    );
+    aggregate(&mut one);
+    assert_eq!(rule_5_outcome(&one, "app.service"), Ok(()));
+
+    let mut two = units_snapshot(
+        vec![change()],
+        vec![(&listed, "[Install]\nWantedBy=multi-user.target\n")],
+    );
+    aggregate(&mut two);
+    two.config
+        .as_mut()
+        .expect("a config section")
+        .files
+        .push(ConfigFileEntry {
+            path: listed.clone(),
+            category: ConfigCategory::Other,
+            content: "[Install]\nWantedBy=graphical.target\n".into(),
+            disposition: FindingKind::Actionable { include: false },
+            ..Default::default()
+        });
+    assert_eq!(
+        rule_5_outcome(&two, "app.service"),
+        Err(OmissionReason::InstallEvidenceChanged { path: listed })
+    );
+}

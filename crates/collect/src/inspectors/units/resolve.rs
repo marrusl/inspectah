@@ -5,9 +5,9 @@
 //! The answer is a [`Resolved`] with every owning package unknown: the
 //! owner lookup fills it in afterwards, before the unit is classified.
 
-use super::install::{DropInRoot, drop_in_dirs, holds_install_section};
+use super::install::{DropInRoot, drop_in_dirs};
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::types::units::{UnitFragment, UnitName};
+use inspectah_core::types::units::{UnitFragment, UnitName, holds_install_section};
 use std::io;
 use std::path::Path;
 
@@ -244,7 +244,7 @@ fn search_path_change(
 
 /// The `.conf` file names in the directory `path`; none when it does not
 /// exist.
-fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
+pub(super) fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
     match exec.read_dir(Path::new(path)) {
         Ok(entries) => Ok(entries
             .into_iter()

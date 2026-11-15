@@ -7,8 +7,9 @@
 //! directories [`drop_in_dirs`] names under both unit directories and
 //! reads the files; nothing here touches the host.
 
-// The scan calls the reader once install files and install state are
-// collected; until then only the tests below do.
+// The scan reads only whether the section is undetermined until install
+// state is read from the links; the section's lists are read by the tests
+// alone until then.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use super::{UNIT_FILE_WHITESPACE, logical_lines};
@@ -81,18 +82,6 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
         dirs.push(format!("{}{DROP_IN_DIR_SUFFIX}", parts.template().as_str()));
     }
     dirs
-}
-
-/// Whether `text` holds an `[Install]` section header, read by logical
-/// line with the whitespace systemd strips, so `  [Install]  ` and
-/// `[Install]\r` count.
-pub(crate) fn holds_install_section(text: &str) -> bool {
-    logical_lines(text).iter().any(|line| {
-        line.trim_matches(UNIT_FILE_WHITESPACE)
-            .strip_prefix('[')
-            .and_then(|l| l.strip_suffix(']'))
-            == Some(INSTALL_SECTION)
-    })
 }
 
 /// The effective `[Install]` section of `name`, whose unit file reads
