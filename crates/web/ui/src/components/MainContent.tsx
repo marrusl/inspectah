@@ -961,9 +961,13 @@ export function MainContent({
                     include: row.include,
                     disabled:
                       row.locked || scheduledGuard.pendingKeys.has(key),
-                    blockedReason: row.cron_job_excluded
-                      ? `Excluded with its cron job ${row.cron_job_excluded}; include the cron job to carry this unit.`
-                      : undefined,
+                    // Including is refused while a source cron job is
+                    // excluded. Excluding is not: while any record of the
+                    // name is still included, the toggle stays.
+                    blockedReason:
+                      !row.include && row.cron_job_excluded
+                        ? `Excluded with its cron job ${row.cron_job_excluded}; include the cron job to carry this unit.`
+                        : undefined,
                     onToggle: () => {
                       const op: RefinementOp = {
                         op: "SetInclude",

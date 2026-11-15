@@ -1336,6 +1336,81 @@ async fn an_unmanaged_file_at_a_unit_path_is_withheld_on_its_row() {
     );
 }
 
+/// Two cron sources that generate one name, `/etc/cron.d/crontab` and
+/// `/etc/crontab`, in the given order. Both generated records are
+/// included.
+fn two_source_generated_state(first: &str, second: &str) -> Arc<AppState> {
+    use inspectah_core::types::scheduled::GeneratedTimerUnit;
+    let generated = |source: &str| GeneratedTimerUnit {
+        name: "cron-crontab".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: source.trim_start_matches('/').into(),
+        timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00\n[Install]\nWantedBy=timers.target\n"
+            .into(),
+        service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/job.sh\n".into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let cron = |path: &str| CronJob {
+        path: path.into(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![cron(first), cron(second)],
+        generated_timer_units: vec![generated(first), generated(second)],
+        ..Default::default()
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// Two cron sources generate `cron-crontab`; only `/etc/cron.d/crontab` is
+/// excluded. The other record still exports the timer's files and enable,
+/// so the row says included and offers exclude, whichever record comes
+/// first. Excluding the name takes the enable out; including it again is
+/// refused while the one source is excluded.
+#[tokio::test]
+async fn a_generated_name_with_one_included_source_shows_included() {
+    const EXCLUDED: &str = "/etc/cron.d/crontab";
+    const INCLUDED: &str = "/etc/crontab";
+    let enable = "'cron-crontab.timer'";
+    let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-crontab"}});
+    for (first, second) in [(EXCLUDED, INCLUDED), (INCLUDED, EXCLUDED)] {
+        let app = app(two_source_generated_state(first, second));
+        let cron = serde_json::json!({"kind": "CronJob", "key": {"path": EXCLUDED}});
+        let (status, view) = set_include(&app, cron, false).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+
+        let row = &view["generated_timers"];
+        assert_eq!(row.as_array().map(Vec::len), Some(1), "{row}");
+        assert_eq!(
+            row[0]["include"], true,
+            "order {first} then {second}: {row}"
+        );
+        assert_eq!(row[0]["cron_job_excluded"], EXCLUDED, "{row}");
+        let preview = view["containerfile_preview"].as_str().expect("a preview");
+        assert!(
+            preview.contains(enable),
+            "the export still enables it: {preview}"
+        );
+        assert!(
+            preview.contains("COPY config/etc/systemd/system/ /etc/systemd/system/"),
+            "the export still copies its files: {preview}"
+        );
+
+        let (status, view) = set_include(&app, generated.clone(), false).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["generated_timers"][0]["include"], false, "{view}");
+        let preview = view["containerfile_preview"].as_str().expect("a preview");
+        assert!(!preview.contains(enable), "{preview}");
+
+        let (status, json) = set_include(&app, generated.clone(), true).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    }
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 

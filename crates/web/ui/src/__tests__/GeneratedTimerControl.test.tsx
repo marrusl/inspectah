@@ -170,4 +170,19 @@ describe("generated timer row control", () => {
     ).toBeInTheDocument();
     expect(ops).toEqual([]);
   });
+
+  it("offers exclude while another source of the name is still included", async () => {
+    row = {
+      name: NAME,
+      include: true,
+      locked: false,
+      cron_job_excluded: CRON_PATH,
+    };
+    const rowEl = await generatedRow();
+    const toggle = within(rowEl).getByRole("checkbox", {
+      name: `Toggle ${NAME}`,
+    });
+    expect(toggle).toBeChecked();
+    expect(within(rowEl).queryByText(/Excluded with its cron job/)).toBeNull();
+  });
 });

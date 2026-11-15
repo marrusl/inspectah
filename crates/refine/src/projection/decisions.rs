@@ -134,7 +134,9 @@ fn unmanaged_withheld_views(
 }
 
 /// One view per generated-timer name, in the scheduled section's order,
-/// with the include flag of the projected snapshot.
+/// with the include flag of the projected snapshot. Two cron sources can
+/// generate one name, and the export carries the name while any of its
+/// records is included, so the row is included while any record is.
 fn generated_timer_views(snap: &InspectionSnapshot) -> Vec<GeneratedTimerView> {
     let mut views: Vec<GeneratedTimerView> = Vec::new();
     for unit in snap
@@ -142,7 +144,8 @@ fn generated_timer_views(snap: &InspectionSnapshot) -> Vec<GeneratedTimerView> {
         .iter()
         .flat_map(|st| &st.generated_timer_units)
     {
-        if views.iter().any(|v| v.name == unit.name) {
+        if let Some(view) = views.iter_mut().find(|v| v.name == unit.name) {
+            view.include |= unit.disposition.is_included();
             continue;
         }
         views.push(GeneratedTimerView {
