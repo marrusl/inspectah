@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `125bf1b8`. The spec is the contract. Section numbers (§) and test ids (T1 to T38) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `061fde60`. The spec is the contract. Section numbers (§) and test ids (T1 to T38) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
