@@ -16,7 +16,7 @@ use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::{
     AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
-    MountUnitFinding, UnitFragment, UnitName, UnitState,
+    MountUnitFinding, PresetDefault, UnitFragment, UnitName, UnitState,
 };
 use inspectah_pipeline::render;
 use inspectah_refine::session::RefineSession;
@@ -1644,9 +1644,11 @@ fn a_merged_vendor_row_beside_a_local_or_shadowed_row_in_both_orders() {
 /// operands after `--`, in kind then name order, and each survives a refine
 /// export unchanged (the backslashes stay inside the quotes).
 ///
-/// Built by hand: the collector records no instance state changes until a
-/// later phase, so the instance is a vendor unit whose file is its
+/// Built by hand, with the instance a vendor unit whose file is its
 /// template, which the state change type admits for an enabled instance.
+/// Instances are not carried yet, so the instance is the placeholder's
+/// `# Omitted:` line, and a name that is not an instance carries the
+/// `\x2d` operand.
 #[test]
 fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
     use inspectah_core::types::units::{
@@ -1680,13 +1682,19 @@ fn t13_unusual_unit_names_are_quoted_operands_through_both_exports() {
                 "probe@.service",
                 UnitState::Enabled,
             ),
+            change(
+                r"probe-a\x2db.service",
+                r"probe-a\x2db.service",
+                UnitState::Enabled,
+            ),
             change(&long, &long, UnitState::Disabled),
         ],
         ..Default::default()
     });
     let expected = vec![
+        format!(r"# Omitted: probe@a\x2db.service ({INSTANCE_PLACEHOLDER})"),
         "RUN systemctl enable -- \\".to_owned(),
-        r"    'probe@a\x2db.service' \".to_owned(),
+        r"    'probe-a\x2db.service' \".to_owned(),
         "    '-.slice'".to_owned(),
         "RUN systemctl disable -- \\".to_owned(),
         format!("    '{long}'"),
@@ -8007,4 +8015,855 @@ fn t40_an_excluded_install_file_omits_the_undetermined_block() {
         [T40_DROP_IN.to_owned()]
     );
     assert_eq!(rows[0].advisories, [line]);
+}
+
+// ---------------------------------------------------------------------
+// § 7.5 and § 15: enabled template instances are collected and, until
+// instances are carried, omitted with a placeholder reason (T27, T22's
+// instance repeats, T39's state changes, T23's device link and T24's
+// instance cases through the scan).
+// ---------------------------------------------------------------------
+
+/// The placeholder reason every instance row is omitted with (§ 15).
+const INSTANCE_PLACEHOLDER: &str = "template instances are not carried yet";
+/// The vendor template of the instance hosts.
+const T_TEMPLATE: &str = "t@.service";
+const T_TEMPLATE_PATH: &str = "/usr/lib/systemd/system/t@.service";
+
+/// The `# Omitted:` line the placeholder gives `unit`.
+fn placeholder_line(unit: &str) -> String {
+    format!("# Omitted: {unit} ({INSTANCE_PLACEHOLDER})")
+}
+
+/// The placeholder as the refine view holds it.
+fn placeholder_declined(unit: &str) -> inspectah_refine::projection::DeclinedView {
+    inspectah_refine::projection::DeclinedView {
+        renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+        reason: "InstanceNotCarriedYet".into(),
+        text: format!("{unit} ({INSTANCE_PLACEHOLDER})"),
+    }
+}
+
+/// A template `t@.service` wanted by `multi-user.target`, with
+/// `DefaultInstance=` when given.
+fn t_template(default_instance: Option<&str>) -> String {
+    let default = default_instance
+        .map(|i| format!("DefaultInstance={i}\n"))
+        .unwrap_or_default();
+    format!(
+        "[Service]\nExecStart=/usr/bin/t %i\n\n[Install]\nWantedBy=multi-user.target\n{default}"
+    )
+}
+
+/// `host` with a link to the instance `unit` in `<parent>.wants` under
+/// `root`, pointing at `template_path`, as `systemctl enable` makes it.
+fn instance_link(
+    host: UnitHost,
+    root: &str,
+    parent: &str,
+    unit: &str,
+    template_path: &str,
+) -> UnitHost {
+    host.link(&format!("{root}/{parent}.wants/{unit}"), template_path)
+}
+
+/// A host shipping only `t@.service`, listed `indirect` as systemd lists a
+/// template with linked instances, under `presets`, with each instance in
+/// `linked` linked from `multi-user.target.wants` under `/etc`.
+fn template_host(presets: &[&str], default_instance: Option<&str>, linked: &[&str]) -> UnitHost {
+    let mut host = UnitHost::new().unit(T_TEMPLATE, "indirect").vendor_unit(
+        T_TEMPLATE,
+        &t_template(default_instance),
+        None,
+    );
+    for rule in presets {
+        host = host.preset(rule);
+    }
+    for instance in linked {
+        host = instance_link(
+            host,
+            "/etc/systemd/system",
+            "multi-user.target",
+            &format!("t@{instance}.service"),
+            T_TEMPLATE_PATH,
+        );
+    }
+    host
+}
+
+/// A host whose package ships the concrete `t@two.service`, listed in
+/// `state`, under `presets`. Listed `enabled`, it has the link `enable`
+/// makes.
+fn own_file_host(presets: &[&str], state: &str) -> UnitHost {
+    let mut host = UnitHost::new().unit("t@two.service", state).vendor_unit(
+        "t@two.service",
+        &t_template(None),
+        None,
+    );
+    for rule in presets {
+        host = host.preset(rule);
+    }
+    host
+}
+
+/// `unit`'s inventory entry, if any.
+fn inventory_entry<'a>(
+    snap: &'a InspectionSnapshot,
+    unit: &str,
+) -> Option<&'a inspectah_core::types::units::UnitInventoryEntry> {
+    snap.units
+        .as_ref()
+        .expect("a units section")
+        .inventory
+        .iter()
+        .find(|e| e.unit.as_str() == unit)
+}
+
+/// How many state changes name `unit`.
+fn changes_named(snap: &InspectionSnapshot, unit: &str) -> usize {
+    snap.units
+        .as_ref()
+        .expect("a units section")
+        .state_changes
+        .iter()
+        .filter(|c| c.unit().name().as_str() == unit)
+        .count()
+}
+
+/// `unit`'s row is omitted with the placeholder on both routes and in the
+/// refine view, and no `systemctl` instruction names it.
+fn assert_placeholder_omits(snap: &InspectionSnapshot, unit: &str, label: &str) {
+    assert_eq!(
+        declined_in(&session(snap), unit),
+        Some(placeholder_declined(unit)),
+        "{label}: the refine row"
+    );
+    for (route, containerfile) in both_routes(snap) {
+        assert_eq!(
+            count_lines(&containerfile, &placeholder_line(unit)),
+            1,
+            "{label}, {route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{label}, {route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T27: an enabled instance found through the directory scan, its only
+/// trace a link under `/etc`, has a state change with the template as its
+/// file and an inventory entry; its refine row exists and shows the
+/// placeholder, which is the `# Omitted:` line on both routes, and no
+/// instruction enables it. Linked from two parents, it is one state change
+/// and one line.
+#[test]
+fn t27_an_enabled_instance_found_by_its_link_is_omitted_for_now() {
+    const UNIT: &str = "t@site.service";
+    let snap = scan(template_host(&["disable *"], None, &["site"]));
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
+    assert_eq!(
+        fragment_of(&snap, UNIT),
+        &UnitFragment::Vendor {
+            file: name(T_TEMPLATE),
+            owning_package: None,
+        }
+    );
+    assert!(
+        session(&snap)
+            .decisions()
+            .unit_states
+            .iter()
+            .any(|r| r.unit.as_str() == UNIT),
+        "the refine row"
+    );
+    assert_placeholder_omits(&snap, UNIT, "one parent");
+
+    let two_parents = "[Service]\nExecStart=/usr/bin/t %i\n\n[Install]\n\
+                       WantedBy=multi-user.target graphical.target\n";
+    let host = UnitHost::new()
+        .unit(T_TEMPLATE, "indirect")
+        .preset("disable *")
+        .vendor_unit(T_TEMPLATE, two_parents, None);
+    let host = instance_link(
+        host,
+        "/etc/systemd/system",
+        "multi-user.target",
+        UNIT,
+        T_TEMPLATE_PATH,
+    );
+    let host = instance_link(
+        host,
+        "/etc/systemd/system",
+        "graphical.target",
+        UNIT,
+        T_TEMPLATE_PATH,
+    );
+    let snap = scan(host);
+    assert_eq!(changes_named(&snap, UNIT), 1);
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
+    assert!(links_of(&snap).is_empty(), "{:?}", links_of(&snap));
+    assert_placeholder_omits(&snap, UNIT, "two parents");
+}
+
+/// T27: an instance linked only under `/run` is not found: no state
+/// change, no inventory entry, no line. Control: the same link under
+/// `/etc` is found.
+#[test]
+fn t27_an_instance_linked_only_under_run_is_not_found() {
+    const UNIT: &str = "t@site.service";
+    let control = scan(template_host(&["disable *"], None, &["site"]));
+    assert_eq!(changes_named(&control, UNIT), 1);
+    assert!(inventory_entry(&control, UNIT).is_some());
+
+    let host = template_host(&["disable *"], None, &[]);
+    let snap = scan(instance_link(
+        host,
+        "/run/systemd/system",
+        "multi-user.target",
+        UNIT,
+        T_TEMPLATE_PATH,
+    ));
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    assert!(inventory_entry(&snap, UNIT).is_none());
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(!containerfile.contains(UNIT), "{route}:\n{containerfile}");
+    }
+}
+
+/// T22's first four cases for an instance of `backup@.service`, which is
+/// wanted by `multi-user.target`. Found by a link under `/etc`: its only
+/// link in `rescue.target.wants` is `Disabled` with one `NotInInstall`
+/// link, no state change under `disable *`, and a `Disabled` state change
+/// under a list-form `enable` naming it; with both links, `Enabled` and
+/// the extra link advised; with two `WantedBy=` values and one link,
+/// `PartialInstall` and no state; with the second link shipped under
+/// `/usr/lib`, `Enabled` and no advisory for it. The fourth case, only
+/// vendor links, needs a unit the scan lists: the package's concrete
+/// `backup@x.service`, `Disabled` with no state change.
+#[test]
+fn t22_the_install_state_cases_repeat_for_an_instance() {
+    const UNIT: &str = "backup@x.service";
+    const TEMPLATE: &str = "backup@.service";
+    const TEMPLATE_PATH: &str = "/usr/lib/systemd/system/backup@.service";
+    const ETC: &str = "/etc/systemd/system";
+    let host = |presets: &[&str], template: &str| {
+        let mut host = UnitHost::new()
+            .unit(TEMPLATE, "indirect")
+            .vendor_unit(TEMPLATE, template, None);
+        for rule in presets {
+            host = host.preset(rule);
+        }
+        host
+    };
+    let rescue_only = |presets: &[&str]| {
+        instance_link(
+            host(presets, WANTS_MULTI_USER),
+            ETC,
+            "rescue.target",
+            UNIT,
+            TEMPLATE_PATH,
+        )
+    };
+    let found = |snap: &InspectionSnapshot| {
+        links_of(snap)
+            .iter()
+            .map(|l| {
+                (
+                    l.relation,
+                    l.parent.as_str().to_owned(),
+                    l.unit.as_str().to_owned(),
+                    l.cause,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let rescue_link = (
+        LinkRelation::Wants,
+        "rescue.target".to_owned(),
+        UNIT.to_owned(),
+        ManualLinkCause::NotInInstall,
+    );
+
+    // Only the rescue link, under `disable *`.
+    let snap = scan(rescue_only(&["disable *"]));
+    let entry = inventory_entry(&snap, UNIT).expect("the inventory entry");
+    assert_eq!(
+        (entry.state, entry.preset),
+        (UnitState::Disabled, Some(PresetDefault::Disable))
+    );
+    assert_eq!(found(&snap), std::slice::from_ref(&rescue_link));
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    let containerfile = containerfile_in(&render_export(&snap));
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+
+    // The same under a list-form `enable` naming it.
+    let snap = scan(rescue_only(&["enable backup@.service x", "disable *"]));
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Disabled);
+    assert_eq!(found(&snap), std::slice::from_ref(&rescue_link));
+    assert_placeholder_omits(&snap, UNIT, "enable preset");
+
+    // Both links, under `disable *`.
+    let snap = scan(instance_link(
+        rescue_only(&["disable *"]),
+        ETC,
+        "multi-user.target",
+        UNIT,
+        TEMPLATE_PATH,
+    ));
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
+    assert_eq!(found(&snap), [rescue_link]);
+    assert_placeholder_omits(&snap, UNIT, "both links");
+    let containerfile = containerfile_in(&render_export(&snap));
+    assert!(
+        containerfile
+            .lines()
+            .any(|l| l.starts_with(&format!("# Advisory: rescue.target.wants/{UNIT} "))),
+        "{containerfile}"
+    );
+
+    // Two `WantedBy=` values and one link: `PartialInstall`.
+    let two = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
+               WantedBy=multi-user.target graphical.target\n";
+    let partial = instance_link(
+        host(&["disable *"], two),
+        ETC,
+        "multi-user.target",
+        UNIT,
+        TEMPLATE_PATH,
+    );
+    let snap = scan(partial);
+    assert_eq!(
+        found(&snap),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target".to_owned(),
+            UNIT.to_owned(),
+            ManualLinkCause::PartialInstall
+        )]
+    );
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    assert!(inventory_entry(&snap, UNIT).is_none());
+
+    // The second link shipped under `/usr/lib`: `Enabled`, no advisory.
+    let partial = instance_link(
+        host(&["disable *"], two),
+        ETC,
+        "multi-user.target",
+        UNIT,
+        TEMPLATE_PATH,
+    );
+    let snap = scan(instance_link(
+        partial,
+        "/usr/lib/systemd/system",
+        "graphical.target",
+        UNIT,
+        TEMPLATE_PATH,
+    ));
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Enabled);
+    assert!(found(&snap).is_empty(), "{:?}", found(&snap));
+    assert_placeholder_omits(&snap, UNIT, "vendor second link");
+
+    // Only vendor links, on the package's concrete instance file.
+    let host = UnitHost::new()
+        .unit(UNIT, "disabled")
+        .preset("disable *")
+        .vendor_unit(UNIT, WANTS_MULTI_USER, None)
+        .link(
+            &format!("/usr/lib/systemd/system/multi-user.target.wants/{UNIT}"),
+            &format!("/usr/lib/systemd/system/{UNIT}"),
+        );
+    let snap = scan(host);
+    let entry = inventory_entry(&snap, UNIT).expect("the inventory entry");
+    assert_eq!(entry.state, UnitState::Disabled);
+    assert_eq!(changes_named(&snap, UNIT), 0);
+}
+
+/// One T39 case through the scan: `unit` is collected with an inventory
+/// entry in `state` and the preset the lookup gave, then has the state
+/// change `change` or none. A state change is omitted with the
+/// placeholder.
+fn assert_t39(
+    snap: &InspectionSnapshot,
+    unit: &str,
+    state: UnitState,
+    preset: Option<PresetDefault>,
+    expected_change: Option<UnitState>,
+    label: &str,
+) {
+    let entry =
+        inventory_entry(snap, unit).unwrap_or_else(|| panic!("{label}: no inventory entry"));
+    assert_eq!((entry.state, entry.preset), (state, preset), "{label}");
+    match expected_change {
+        Some(expected) => {
+            assert_eq!(change(snap, unit).current_state(), expected, "{label}");
+            assert_placeholder_omits(snap, unit, label);
+        }
+        None => assert_eq!(changes_named(snap, unit), 0, "{label}"),
+    }
+}
+
+/// T39 for an instance with its own unit file, `t@two.service`, through
+/// the scan.
+#[test]
+fn t39_an_instance_with_its_own_unit_file() {
+    use PresetDefault::{Disable, Enable};
+    use UnitState::{Disabled, Enabled};
+    // (presets, listed state, inventory state, preset, state change, label)
+    type Case<'a> = (
+        &'a [&'a str],
+        &'a str,
+        UnitState,
+        Option<PresetDefault>,
+        Option<UnitState>,
+        &'a str,
+    );
+    let cases: [Case; 5] = [
+        (
+            &["enable t@two.service", "disable *"],
+            "enabled",
+            Enabled,
+            Some(Enable),
+            None,
+            "named",
+        ),
+        (
+            &["enable t@two.service", "disable *"],
+            "disabled",
+            Disabled,
+            Some(Enable),
+            Some(Disabled),
+            "named, the administrator disabled it",
+        ),
+        (
+            &["enable t@*", "disable *"],
+            "enabled",
+            Enabled,
+            Some(Enable),
+            None,
+            "a glob",
+        ),
+        (
+            &["enable t@.service two three", "disable *"],
+            "enabled",
+            Enabled,
+            Some(Enable),
+            None,
+            "the list form",
+        ),
+        (
+            &["enable t@.service", "disable *"],
+            "enabled",
+            Enabled,
+            Some(Disable),
+            Some(Enabled),
+            "the bare rule, not read for it",
+        ),
+    ];
+    for (presets, listed, state, preset, expected, label) in cases {
+        let snap = scan(own_file_host(presets, listed));
+        assert_eq!(
+            fragment_of_entry(&snap, "t@two.service", expected),
+            expected.map(|_| "t@two.service"),
+            "{label}"
+        );
+        assert_t39(&snap, "t@two.service", state, preset, expected, label);
+    }
+}
+
+/// The file of `unit`'s state change, when one is expected.
+fn fragment_of_entry<'a>(
+    snap: &'a InspectionSnapshot,
+    unit: &str,
+    expected: Option<UnitState>,
+) -> Option<&'a str> {
+    expected.map(|_| match fragment_of(snap, unit) {
+        UnitFragment::Vendor { file, .. }
+        | UnitFragment::Local { file }
+        | UnitFragment::Shadowed { file, .. } => file.as_str(),
+        UnitFragment::Absent => panic!("{unit} has no file"),
+    })
+}
+
+/// T39 for an instance backed only by its template, through the scan: the
+/// template's first matching rule decides, and rules that name an
+/// instance are not read for it. A matching `Unknown` line gives no preset
+/// and the structured warning naming the line, its file and the unit; no
+/// matching rule gives no preset. The derived cases (an instance with no
+/// link, found from the presets) are not found by this scan.
+#[test]
+fn t39_an_instance_backed_only_by_its_template() {
+    use PresetDefault::{Disable, Enable};
+    use UnitState::Enabled;
+    // (presets, DefaultInstance=, instance, preset, state change, label)
+    type Case<'a> = (
+        &'a [&'a str],
+        Option<&'a str>,
+        &'a str,
+        Option<PresetDefault>,
+        Option<UnitState>,
+        &'a str,
+    );
+    let cases: [Case; 8] = [
+        (
+            &["enable t@.service", "disable *"],
+            Some("one"),
+            "one",
+            Some(Enable),
+            None,
+            "the default instance",
+        ),
+        (
+            &["enable t@.service", "disable *"],
+            Some("one"),
+            "two",
+            Some(Disable),
+            Some(Enabled),
+            "another instance",
+        ),
+        (
+            &["enable t@.service", "disable *"],
+            None,
+            "one",
+            Some(Disable),
+            Some(Enabled),
+            "no DefaultInstance=",
+        ),
+        (
+            &["enable t@.service two three", "disable *"],
+            Some("one"),
+            "two",
+            Some(Enable),
+            None,
+            "listed",
+        ),
+        (
+            &["enable t@.service two three", "disable *"],
+            Some("one"),
+            "one",
+            Some(Disable),
+            Some(Enabled),
+            "not listed, the default instance",
+        ),
+        (
+            &["enable t@two.service", "disable *"],
+            Some("one"),
+            "two",
+            Some(Disable),
+            Some(Enabled),
+            "a rule naming the instance is not read",
+        ),
+        (
+            &["disable t@.service"],
+            Some("one"),
+            "one",
+            Some(Disable),
+            Some(Enabled),
+            "disable",
+        ),
+        (
+            &["enable other.service"],
+            Some("one"),
+            "one",
+            None,
+            None,
+            "no rule matches",
+        ),
+    ];
+    for (presets, default, instance, preset, expected, label) in cases {
+        let unit = format!("t@{instance}.service");
+        let snap = scan(template_host(presets, default, &[instance]));
+        assert_eq!(
+            fragment_of_entry(&snap, &unit, expected),
+            expected.map(|_| T_TEMPLATE),
+            "{label}"
+        );
+        assert_t39(&snap, &unit, Enabled, preset, expected, label);
+    }
+
+    // A matching `Unknown` line before `enable t@.service`.
+    let snap = scan(template_host(
+        &["frobnicate t@.service", "enable t@.service"],
+        Some("one"),
+        &["one"],
+    ));
+    assert_t39(&snap, "t@one.service", Enabled, None, None, "Unknown");
+    let warned = snap.warnings.iter().any(|w| {
+        w.extra.get("file") == Some(&serde_json::json!(PRESET_PATH))
+            && w.extra.get("line") == Some(&serde_json::json!(1))
+            && w.extra.get("units") == Some(&serde_json::json!(["t@one.service"]))
+    });
+    assert!(warned, "{:?}", snap.warnings);
+}
+
+/// The preset file every [`UnitHost::preset`] rule is written to.
+const PRESET_PATH: &str = "/usr/lib/systemd/system-preset/90-default.preset";
+
+/// T39's getty cases, enabled instances only, with RHEL 9.8's preset files
+/// and with RHEL 10.2's: `tty1` enabled has no state change and `tty2`
+/// enabled is an `Enabled` state change, omitted for now. `tty1` with no
+/// link is found from the presets, which this scan does not do.
+#[test]
+fn t39_getty_instances_on_both_releases() {
+    const GETTY: &str = "[Service]\nExecStart=-/sbin/agetty %I\n\n[Install]\n\
+                         WantedBy=getty.target\nDefaultInstance=tty1\n";
+    const PRESET_DIR: &str = "/usr/lib/systemd/system-preset";
+    let release = |rhel_98: bool| {
+        let mut host = UnitHost::new()
+            .unit("getty@.service", "indirect")
+            .vendor_unit("getty@.service", GETTY, Some("systemd"))
+            .file(
+                &format!("{PRESET_DIR}/90-systemd.preset"),
+                "enable getty@.service\n",
+            )
+            .file(
+                &format!("{PRESET_DIR}/99-default-disable.preset"),
+                "disable *\n",
+            );
+        if rhel_98 {
+            host = host.preset("enable getty@tty1.service");
+        }
+        for tty in ["tty1", "tty2"] {
+            host = instance_link(
+                host,
+                "/etc/systemd/system",
+                "getty.target",
+                &format!("getty@{tty}.service"),
+                "/usr/lib/systemd/system/getty@.service",
+            );
+        }
+        host
+    };
+    for (label, rhel_98) in [("RHEL 9.8", true), ("RHEL 10.2", false)] {
+        let snap = scan(release(rhel_98));
+        assert_t39(
+            &snap,
+            "getty@tty1.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Enable),
+            None,
+            &format!("{label}: tty1"),
+        );
+        assert_t39(
+            &snap,
+            "getty@tty2.service",
+            UnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some(UnitState::Enabled),
+            &format!("{label}: tty2"),
+        );
+    }
+}
+
+/// T23 through the scan: an `/etc` link to an instance of
+/// `systemd-fsck@.service` is a `HostDevice` link whose advisory has no
+/// command line, with no state change, no inventory entry and no
+/// placeholder line. Control: the same link to an instance of a template
+/// on no list, wanted by `local-fs.target`, is an `Enabled` state change.
+#[test]
+fn t23_a_host_device_instance_link_through_the_scan() {
+    const FSCK: &str = "systemd-fsck@dev-vdb1.service";
+    const FSCK_TEMPLATE: &str = "/usr/lib/systemd/system/systemd-fsck@.service";
+    let fsck = "[Unit]\nDescription=File System Check on %f\n\n[Service]\nType=oneshot\n\
+                ExecStart=/usr/lib/systemd/systemd-fsck %f\n";
+    let host = UnitHost::new()
+        .unit("systemd-fsck@.service", "static")
+        .preset("disable *")
+        .vendor_unit("systemd-fsck@.service", fsck, Some("systemd"));
+    let snap = scan(instance_link(
+        host,
+        "/etc/systemd/system",
+        "local-fs.target",
+        FSCK,
+        FSCK_TEMPLATE,
+    ));
+    assert_eq!(
+        links_of(&snap)
+            .iter()
+            .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [(
+            LinkRelation::Wants,
+            "local-fs.target",
+            FSCK,
+            ManualLinkCause::HostDevice
+        )]
+    );
+    assert_eq!(changes_named(&snap, FSCK), 0);
+    assert!(inventory_entry(&snap, FSCK).is_none());
+    let advisory =
+        format!("# Advisory: {FSCK} is tied to a device of the source host. Not carried.");
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, &advisory),
+            std::slice::from_ref(&advisory),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            count_lines(&containerfile, &placeholder_line(FSCK)),
+            0,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, FSCK),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let local_fs = "[Service]\nExecStart=/usr/bin/t %i\n\n[Install]\nWantedBy=local-fs.target\n";
+    let control = scan(instance_link(
+        UnitHost::new()
+            .unit(T_TEMPLATE, "indirect")
+            .preset("disable *")
+            .vendor_unit(T_TEMPLATE, local_fs, None),
+        "/etc/systemd/system",
+        "local-fs.target",
+        "t@dev-vdb1.service",
+        T_TEMPLATE_PATH,
+    ));
+    assert!(
+        links_of(&control)
+            .iter()
+            .all(|l| l.cause != ManualLinkCause::HostDevice)
+    );
+    assert_eq!(changes_named(&control, "t@dev-vdb1.service"), 1);
+}
+
+/// T24 through the scan: a concrete `worker@site.service` under `/etc`
+/// beside a vendor template is a `Local` fragment whose file is the
+/// instance; an instance with no file of its own has the template as its
+/// file. Both rows are omitted with the placeholder, which decides before
+/// rule 5 does.
+#[test]
+fn t24_the_effective_file_of_an_instance_through_the_scan() {
+    const UNIT: &str = "worker@site.service";
+    const TEMPLATE_PATH: &str = "/usr/lib/systemd/system/worker@.service";
+    let base = || {
+        UnitHost::new()
+            .unit("worker@.service", "indirect")
+            .preset("disable *")
+            .vendor_unit("worker@.service", WANTS_MULTI_USER, Some("workerpkg"))
+    };
+    let snap = scan(
+        base()
+            .unit(UNIT, "enabled")
+            .etc_unit(UNIT, WANTS_MULTI_USER),
+    );
+    assert_eq!(
+        fragment_of(&snap, UNIT),
+        &UnitFragment::Local { file: name(UNIT) }
+    );
+    assert_placeholder_omits(&snap, UNIT, "a concrete instance under /etc");
+
+    let snap = scan(instance_link(
+        base(),
+        "/etc/systemd/system",
+        "multi-user.target",
+        UNIT,
+        TEMPLATE_PATH,
+    ));
+    assert_eq!(
+        fragment_of(&snap, UNIT),
+        &UnitFragment::Vendor {
+            file: name("worker@.service"),
+            owning_package: Some("workerpkg".into()),
+        }
+    );
+    assert_placeholder_omits(&snap, UNIT, "the template");
+}
+
+/// T24's search-path cases for an instance, through the scan: an instance
+/// found by its `/etc` link with its own file under `/run` beside the
+/// vendor template, or under `/usr/local/lib` beside an `/etc` template,
+/// or with an `[Install]` drop-in in the template's `.d` under `/run`, is
+/// refused with the structured warning naming it and the path, and has no
+/// state change. Control: with none of those, or with a drop-in holding no
+/// `[Install]` there, it is a state change.
+#[test]
+fn t24_the_search_path_refuses_an_instance_through_the_scan() {
+    const UNIT: &str = "worker@site.service";
+    const VENDOR_TEMPLATE: &str = "/usr/lib/systemd/system/worker@.service";
+    const ETC_TEMPLATE: &str = "/etc/systemd/system/worker@.service";
+    let linked = |host: UnitHost, template: &str| {
+        instance_link(
+            host.unit("worker@.service", "indirect").preset("disable *"),
+            "/etc/systemd/system",
+            "multi-user.target",
+            UNIT,
+            template,
+        )
+    };
+    let vendor = || {
+        linked(
+            UnitHost::new().vendor_unit("worker@.service", WANTS_MULTI_USER, None),
+            VENDOR_TEMPLATE,
+        )
+    };
+    let local = || {
+        linked(
+            UnitHost::new().etc_unit("worker@.service", WANTS_MULTI_USER),
+            ETC_TEMPLATE,
+        )
+    };
+
+    let refused = [
+        (
+            "an instance file under /run",
+            vendor().file("/run/systemd/system/worker@site.service", WANTS_MULTI_USER),
+            "/run/systemd/system/worker@site.service",
+        ),
+        (
+            "an instance file under /usr/local/lib",
+            local().file(
+                "/usr/local/lib/systemd/system/worker@site.service",
+                WANTS_MULTI_USER,
+            ),
+            "/usr/local/lib/systemd/system/worker@site.service",
+        ),
+        (
+            "an [Install] drop-in in the template's .d under /run",
+            vendor().file(
+                "/run/systemd/system/worker@.service.d/50-x.conf",
+                "[Install]\nWantedBy=multi-user.target\n",
+            ),
+            "/run/systemd/system/worker@.service.d/50-x.conf",
+        ),
+    ];
+    for (label, host, path) in refused {
+        let snap = scan(host);
+        assert_eq!(changes_named(&snap, UNIT), 0, "{label}");
+        let warned = snap.warnings.iter().any(|w| {
+            w.message.starts_with(&format!("unit {UNIT} "))
+                && w.message.contains("is on the systemd search path")
+                && w.extra.get("path") == Some(&serde_json::json!(path))
+        });
+        assert!(warned, "{label}: {:?}", snap.warnings);
+    }
+
+    let carried = [
+        ("the vendor template", vendor()),
+        ("the /etc template", local()),
+        (
+            "a drop-in with no [Install] in the template's .d under /run",
+            vendor().file(
+                "/run/systemd/system/worker@.service.d/50-x.conf",
+                "[Service]\nNice=5\n",
+            ),
+        ),
+    ];
+    for (label, host) in carried {
+        let snap = scan(host);
+        assert_eq!(changes_named(&snap, UNIT), 1, "{label}");
+        assert!(
+            !snap
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("is on the systemd search path")),
+            "{label}: {:?}",
+            snap.warnings
+        );
+    }
 }

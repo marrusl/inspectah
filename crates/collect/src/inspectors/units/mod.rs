@@ -67,8 +67,10 @@ const LINK_READ_STATES: &[&str] = &["static", "indirect"];
 /// package's. The name must parse
 /// as a [`UnitName`] and not be a D-Bus activation alias. A template is
 /// recorded only when masked, since its mask masks every instance;
-/// enabling a template means nothing without an instance. An instance is
-/// not recorded yet.
+/// enabling a template means nothing without an instance. A listed
+/// instance (a concrete instance file, or its mask) is recorded like any
+/// unit; an instance backed only by its template has no row, and the links
+/// find it ([`linked_instances`]).
 ///
 /// The words `enabled` and `disabled` are kept only for a unit whose
 /// `[Install]` cannot be read as text; every other unit's install state is
@@ -103,13 +105,39 @@ fn gate(
             return None;
         }
     };
-    if name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX) || name.instance().is_some() {
+    if name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX) {
         return None;
     }
     if name.is_template() && state != Some(UnitState::Masked) {
         return None;
     }
     Some((name, state))
+}
+
+/// The state word recorded, for warnings only, for an instance found by a
+/// link under `/etc/systemd/system`: `list-unit-files` has no row for it,
+/// and systemd reads any unit with such a link as `enabled`.
+const LINKED_INSTANCE_STATE: &str = "enabled";
+
+/// The instances a link under `/etc/systemd/system` names that `seen`, the
+/// names the listing gave, does not hold (§ 7.1, § 7.3 and § 7.5 of the
+/// units spec). `list-unit-files` shows an instance backed only by its
+/// template as the template reading `indirect`, so its links are what find
+/// it. Its install state is read from the links like any unit's, so it has
+/// no listing word ([`Listed::listed`] is `None`). A link under `/run` is
+/// not read, and an instance with no link under `/etc` is not found.
+fn linked_instances(host_links: &HostLinks, seen: &HashSet<UnitName>) -> Vec<Listed> {
+    host_links
+        .admin
+        .keys()
+        .filter(|name| name.instance().is_some() && !seen.contains(*name))
+        .filter(|name| !name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX))
+        .map(|name| Listed {
+            name: name.clone(),
+            raw_state: LINKED_INSTANCE_STATE.to_owned(),
+            listed: None,
+        })
+        .collect()
 }
 
 /// Result of parsing a raw systemd unit state string into the typed contract.
@@ -1187,6 +1215,9 @@ impl Inspector for UnitsInspector {
                 });
             }
         }
+        // 4a. The enabled instances the listing has no row for, found by
+        //     their links (§ 7.5).
+        listed.extend(linked_instances(&host_links, &seen));
 
         // 4b. Each unit's file, install state and preset: the inventory,
         //     the state changes and the enabled storage units.
@@ -2607,8 +2638,9 @@ mod tests {
             ("dbus-org.bluez.service", "masked", false),
             ("getty@.service", "enabled", false),
             ("getty@.service", "disabled", false),
-            ("getty@tty1.service", "enabled", false),
-            ("getty@tty1.service", "masked", false),
+            // A listed instance: a concrete instance file, or its mask.
+            ("getty@tty1.service", "enabled", true),
+            ("getty@tty1.service", "masked", true),
             // Kinds § 5 excludes, in any state, durable or not.
             ("session-7.scope", "transient", false),
             ("init.scope", "static", false),

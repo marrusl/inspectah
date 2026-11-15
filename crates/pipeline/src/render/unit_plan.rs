@@ -212,6 +212,10 @@ pub fn effective_target_packages(rpm: &RpmSection) -> std::collections::BTreeSet
 // The unit plan: every `systemctl` line for a collected unit
 // ---------------------------------------------------------------------------
 
+/// The placeholder reason of [`OmissionReason::InstanceNotCarriedYet`]
+/// (§ 15 of the units spec).
+const INSTANCE_NOT_CARRIED_YET: &str = "template instances are not carried yet";
+
 /// Why the plan writes no command for a unit it was asked to act on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OmissionReason {
@@ -262,6 +266,10 @@ pub enum OmissionReason {
         name: UnitName,
         reserved_by: Reservation,
     },
+    /// The unit is a template instance. Instances are collected and not
+    /// yet carried (§ 15 of the units spec, phase 4), so every instance
+    /// row is omitted with this reason until they are.
+    InstanceNotCarriedYet,
 }
 
 impl OmissionReason {
@@ -312,6 +320,7 @@ impl OmissionReason {
                  unit and its file",
                 name = name.as_str()
             ),
+            Self::InstanceNotCarriedYet => INSTANCE_NOT_CARRIED_YET.to_owned(),
             Self::GeneratedNameCollision {
                 name,
                 reserved_by: Reservation::Inventory,
@@ -343,6 +352,7 @@ impl OmissionReason {
             Self::TimerTriggerNotStaged { .. } => "TimerTriggerNotStaged",
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
+            Self::InstanceNotCarriedYet => "InstanceNotCarriedYet",
         }
     }
 
@@ -361,7 +371,8 @@ impl OmissionReason {
             | Self::TimerTriggerUnresolved
             | Self::TimerTriggerNotStaged { .. }
             | Self::MaskPathOccupied { .. }
-            | Self::GeneratedNameCollision { .. } => None,
+            | Self::GeneratedNameCollision { .. }
+            | Self::InstanceNotCarriedYet => None,
         }
     }
 }
@@ -1881,8 +1892,10 @@ impl<'a> Presence<'a> {
 /// single authority for which unit-state `systemctl` lines the
 /// Containerfile carries; refine reads the same plan.
 ///
-/// Per state change, the rules of the § 10.2 table in its order; the first
-/// that fails decides:
+/// A template instance's row is declined with
+/// [`OmissionReason::InstanceNotCarriedYet`] before any rule is read:
+/// instances are not carried yet. Per other state change, the rules of the
+/// § 10.2 table in its order; the first that fails decides:
 ///
 /// 1. Rule 2 ([`rule_2_storage_file`]), every verb: a package-owned
 ///    storage unit with a unit file staged at its name is declined.
@@ -1931,6 +1944,13 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
     {
         let name = sc.unit().name().clone();
         let action = sc.implied_action();
+        // § 15, phase 4: instances are collected and not carried yet, so
+        // the placeholder decides before every rule.
+        if name.instance().is_some() {
+            plan.declined
+                .push((name, action, OmissionReason::InstanceNotCarriedYet));
+            continue;
+        }
         let rules_2_to_4 = rule_2_storage_file(sc.unit(), staged)
             .and_then(|()| rule_3_target_needs_unit(&name, action))
             .and_then(|()| rule_4_mask_path(&name, action, staged));

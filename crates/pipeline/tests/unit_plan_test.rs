@@ -3682,8 +3682,8 @@ fn rule_5_outcome(snap: &InspectionSnapshot, unit: &str) -> Result<(), OmissionR
 /// section, by the lexical test, or carries a recorded vendor drop-in's
 /// name. Files in the type-wide and dash-prefix directories, and a
 /// `[Service]` override under a name of its own, are not install files.
-/// For an instance recorded from its template, a unit file staged at the
-/// instance's own name fails too.
+/// The instance cases are omitted with the placeholder for now
+/// ([`every_instance_row_is_omitted_with_the_placeholder`]).
 #[test]
 fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     use UnitState::{Disabled, Enabled};
@@ -3695,7 +3695,6 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     let dotdot = "/etc/systemd/system/app.service.d/../10-install.conf";
     let typewide = "/etc/systemd/system/service.d/10-install.conf";
     let dash = "/etc/systemd/system/a-.service.d/10-install.conf";
-    let template_dir = etc_drop_in("w@.service", "10-install.conf");
     let evidence = |path: &str| {
         Err(OmissionReason::InstallEvidenceChanged {
             path: path.to_owned(),
@@ -3800,11 +3799,32 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
             vec![(&extra, "[Install]\nWantedBy=a.target \\\n  b.target\n")],
             evidence(&extra),
         ),
+    ];
+    for (label, change, files, expected) in cases {
+        let unit = change.unit().name().as_str().to_owned();
+        let snap = units_snapshot(vec![change], files);
+        assert_eq!(rule_5_outcome(&snap, &unit), expected, "{label}");
+    }
+}
+
+/// § 15, phase 4: every instance row is omitted with the placeholder,
+/// which decides before every other rule, whatever the files staged for
+/// it and whatever its verb. Rule 5's instance cases (the template's `.d`,
+/// a local template staged alone, a unit file at the instance's own name)
+/// are decided by the placeholder until instances are carried. Control:
+/// the same rows under a name that is not an instance are planned or
+/// declined by rule 5.
+#[test]
+fn every_instance_row_is_omitted_with_the_placeholder() {
+    use UnitState::{Disabled, Enabled, Masked};
+    let install = "[Install]\nWantedBy=multi-user.target\n";
+    let template_dir = etc_drop_in("w@.service", "10-install.conf");
+    type Case<'a> = (&'a str, UnitStateChange, Vec<(&'a str, &'a str)>);
+    let cases: Vec<Case> = vec![
         (
             "an unrecorded [Install] drop-in in the template's .d",
             change_with("w@a.service", vendor("w@.service"), Enabled),
             vec![(&template_dir, install)],
-            evidence(&template_dir),
         ),
         (
             "the template's .d drop-in recorded and staged",
@@ -3814,13 +3834,11 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
                 &[],
             ),
             vec![(&template_dir, install)],
-            Ok(()),
         ),
         (
             "a local template recorded for an instance, staged alone",
             change_with("w@a.service", local("w@.service"), Enabled),
             vec![("/etc/systemd/system/w@.service", install)],
-            Ok(()),
         ),
         (
             "a unit file staged at the instance's own name",
@@ -3829,14 +3847,45 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
                 ("/etc/systemd/system/w@.service", install),
                 ("/etc/systemd/system/w@a.service", install),
             ],
-            evidence("/etc/systemd/system/w@a.service"),
+        ),
+        (
+            "a disable",
+            change_with("w@a.service", vendor("w@.service"), Disabled),
+            vec![],
+        ),
+        (
+            "a mask",
+            change_with("w@a.service", UnitFragment::Absent, Masked),
+            vec![],
         ),
     ];
-    for (label, change, files, expected) in cases {
-        let unit = change.unit().name().as_str().to_owned();
+    for (label, change, files) in cases {
         let snap = units_snapshot(vec![change], files);
-        assert_eq!(rule_5_outcome(&snap, &unit), expected, "{label}");
+        assert_eq!(
+            rule_5_outcome(&snap, "w@a.service"),
+            Err(OmissionReason::InstanceNotCarriedYet),
+            "{label}"
+        );
     }
+    assert_eq!(
+        OmissionReason::InstanceNotCarriedYet.describe(),
+        "template instances are not carried yet"
+    );
+
+    // The controls: not instances, so rule 5 decides.
+    let planned = units_snapshot(
+        vec![change_with("w.service", local("w.service"), Enabled)],
+        vec![("/etc/systemd/system/w.service", install)],
+    );
+    assert_eq!(rule_5_outcome(&planned, "w.service"), Ok(()));
+    let declined = units_snapshot(
+        vec![change_with("w.service", local("w.service"), Enabled)],
+        vec![],
+    );
+    assert_eq!(
+        rule_5_outcome(&declined, "w.service"),
+        Err(OmissionReason::UnitFileNotStaged)
+    );
 }
 
 /// § 10.2 rule 5: in a fleet aggregate, a recorded install drop-in whose
