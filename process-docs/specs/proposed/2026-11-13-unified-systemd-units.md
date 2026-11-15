@@ -750,7 +750,7 @@ read from a host file has one of three answers:
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
-| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`, or the marker `unresolved` when the value cannot be made into one. The raw value is not stored. |
+| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`, or the marker `unresolved` when the value cannot be made into one. The raw value is not stored. A snapshot that lacks the field loads it as `unresolved`, so a snapshot written before the field omits its timers' `enable` lines until it is rescanned (§ 8). |
 | `SystemdTimer.trigger_drop_ins` | A directory listing | Paths of `.conf` files under `/etc/systemd/system`, read through `Destination` before use. Classified as identifiers. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
 | `attention_reason`, advisory strings | Generated | Built from the fields above and fixed text only. Never from file content. |
@@ -1342,6 +1342,24 @@ name. Accepting an operation and applying nothing, which is what the
 session's validation does today for these rows, in the same arm § 4
 describes for the timer toggle, is not allowed for any of the three.
 
+The invariant is met this way, and this is the contract for each row:
+
+- **Generated-timer row.** Applies, as above. Including a generated unit
+  whose cron job is excluded is refused with `BadRequest`, naming both
+  rows.
+- **Cron-job row.** Applies, with a cascade: the cron job is the source of
+  its generated units, so excluding it drops every unit generated from it
+  and including it brings them back (a locked unit stays out). Refine's
+  projection also excludes the units of an excluded cron job, so the two
+  rows cannot disagree. A cron job that generates no unit has no export
+  effect, and its operation is refused with `NoopTarget`, naming it.
+- **At-job row.** Refused with `BadRequest`, naming the file. The export
+  never carries an at job: the Containerfile lists every at job in a FIXME
+  whatever its row says, so there is nothing to apply.
+- **Bulk toggle.** The services-and-scheduling toggle sends no at-job
+  operation, and no cron-job operation for a cron job that generates
+  nothing, since each would only be refused.
+
 **A carried timer needs its trigger. (Mark Russell, 2026-11-14)** The
 second writer used to put a local timer's service file in the image
 whatever its row said. With one writer, the operator can exclude the
@@ -1357,12 +1375,16 @@ pub enum TimerTrigger {
     /// The unit the timer starts.
     Unit(UnitName),
     /// `Unit=` holds a value the inspector cannot make into a unit name.
+    /// Also what a description with no recorded trigger reads as.
+    #[default]
     Unresolved,
 }
 // on SystemdTimer:
+#[serde(default)]
 pub trigger: TimerTrigger,
 /// Drop-ins under `/etc/systemd/system` that assign `Unit=` for this
 /// timer.
+#[serde(default, skip_serializing_if = "Vec::is_empty")]
 pub trigger_drop_ins: Vec<String>,
 ```
 
@@ -1389,6 +1411,21 @@ staged. The plan does not read unit files to find the trigger again.
   result that is not a unit name this model admits, makes the trigger
   `Unresolved`. A value that cannot be resolved is never read as "no
   local trigger".
+- **Where `Unit=` is read.** The timer's own file, then the `.conf` files
+  in `<name>.timer.d` under `/etc/systemd/system` and
+  `/usr/lib/systemd/system`, in file-name order, an `/etc` file
+  overriding a vendor file of the same name. The last assignment in
+  `[Timer]` wins and an empty one resets to the default. No other drop-in
+  directory is read (§ 17).
+- **An unrecorded trigger.** A timer with no description, or a
+  description from a snapshot written before the field, has trigger
+  `Unresolved`, so its `enable` is omitted as `TimerTriggerUnresolved`
+  with its `# Omitted:` comment. A snapshot written before the field
+  therefore loses its timers' `enable` lines until it is rescanned. That
+  is accepted under the standing decision: **no upgrade or migration code
+  for pre-1.0 file breaks while the spec is still moving (Mark Russell,
+  2026-11-14)**. Reading the missing field as "no trigger to check"
+  would pass exactly the timers the check exists for.
 
 ## 9. Snapshot schema
 
@@ -1567,7 +1604,10 @@ pub enum WithheldWhy {
     /// directory.
     Conflict { other: Destination },
     /// A unit inspectah generates has the name of a collected unit.
-    GeneratedNameCollision { unit: UnitName },
+    /// `unit` is the collected unit whose name the file has (the paired
+    /// service, when only it collides); `reserved_by` is where that name
+    /// came from, which chooses the FIXME's advice.
+    GeneratedNameCollision { unit: UnitName, reserved_by: Reservation },
     /// The destination is `/etc/machine-id`.
     MachineId,
     /// An unmanaged file offered a path under `/etc/systemd/system`.
@@ -1624,7 +1664,9 @@ lands on disk.**
   withholds the entry, and only that entry, before a scan bundles its
   payload, before refine extracts it, and before render: it is not in the
   export and gets no `COPY`, and the Containerfile names it in a FIXME
-  that says a unit file belongs under Configuration Files. Nothing else
+  that says a unit file belongs under Configuration Files. The FIXME is
+  written in the Configuration Files section, through the existing
+  `unstaged_files` route, and not in the unmanaged-files section. Nothing else
   under the directory changes owner: drop-ins, shadows, local unit files
   and links are handled as § 7.7 says. Two types grow for it, neither of
   which has the field today: the withheld record gains an unmanaged
@@ -1669,12 +1711,21 @@ the Containerfile comes from anywhere else.
    name would replace it in the image just the same. Such a pair is
    withheld, both files. The collision reason carries the conflicting
    name and where the reservation came from, a row or the inventory, so
-   the two FIXMEs can differ. For a row it says to exclude the collected
-   unit and its file, as before, and the flatpak case below is unchanged.
-   For an inventory name there is no row to exclude, and it says the name
-   belongs to a unit the host already has and that the job is carried by
-   writing its timer and its service under another name, with the pairing
-   or `Unit=` kept consistent. Nowhere else does this spec widen
+   the two FIXMEs can differ. Both name the collected unit. For a row it
+   says to exclude the collected unit and its file, and the flatpak case
+   below is unchanged: `inspectah generates this unit, and a unit
+   collected from the host, <name>, has the name of one of its files, so
+   the generated files are not written and the unit is not enabled here;
+   to carry the generated unit, exclude the collected unit and its file`.
+   For an inventory name there is no row to exclude: `inspectah generates
+   this unit, and <name>, a unit the host already has, has the name of one
+   of its files, so the generated files are not written and the unit is
+   not enabled here; <name> has no row to exclude, so to carry the job,
+   write its timer and its service by hand under other names, keeping the
+   timer's Unit= or their shared name consistent`. A mount finding counts
+   as an inventory reservation. It cannot meet a generated name today,
+   since generated names end in `.timer` or `.service` and a mount
+   finding's in `.mount`, `.automount` or `.swap`. Nowhere else does this spec widen
    "collected unit": § 10.1 and § 10.7 mean the units that have a row. A
    known case is not designed around: a host built from an inspectah
    image has a local, enabled `flatpak-provision.service`, so a rescan of
@@ -1794,7 +1845,11 @@ recorded trigger (§ 8), in three steps. Each omits the `enable` with an
    `/etc/systemd/system` with no vendor file of that name, that file is
    not in the final `staged_writes`, and nothing else provides the unit:
    no generated unit of that name is staged, and no package in the image
-   owns it. A trigger the base image or an included package ships, and
+   owns it. "No package in the image owns it" reads the `package` of the
+   trigger's config entry against the presence tiers' target package set.
+   With no baseline the package is taken as present, as the tiers take an
+   unproved absence for `enable` (Tier 6 emits the line with its
+   `BaselineUnavailable` advisory). A trigger the base image or an included package ships, and
    one that is a full shadow, pass, since the vendor file loads. The line
    reads `# Omitted: report.timer (its unit report.service is not in the
    export, and a timer whose unit is missing does not start)`. It says
@@ -2320,8 +2375,12 @@ keeps its cascade to drop-ins and its membership check before it applies.
 `ItemId::DefaultTarget` is added; it toggles the recorded target and takes
 no target name of its own. `ItemId::SystemdTimer` is removed. `SetInclude`
 on a mount finding or a hand-made link does not exist, so there is nothing
-to refuse. `SetInclude` on a generated-timer row applies, and on a cron-job
-or at-job row it applies or is refused by name (§ 8).
+to refuse. `SetInclude` on a generated-timer row applies, and is refused
+with `BadRequest` when its cron job is excluded. On a cron-job row it
+applies to every unit generated from the cron job, and is refused with
+`NoopTarget` when the cron job generates none. On an at-job row it is
+refused with `BadRequest`. The bulk scheduling toggle sends neither
+refused kind (§ 8).
 
 The cascade from a unit row to its drop-ins is kept, full shadows
 included. It cannot produce an enable on an administrator's storage file:
@@ -2613,11 +2672,18 @@ Phase 3 (one control per fact):
 - **T35. The scheduled controls apply.** Through `RefineSession` and the
   refine export: `SetInclude(false)` on a generated-timer row removes its
   timer and service from the staged tree and its `enable` from the
-  Containerfile, and `SetInclude(true)` restores all three. The same
-  operation on a cron-job row and on an at-job row either changes the
-  export, shown by a difference in the staged tree or the Containerfile,
-  or returns an error naming the row. No such operation returns success
-  with the export unchanged.
+  Containerfile, and `SetInclude(true)` restores all three. On the cron
+  job it is generated from, `SetInclude(false)` removes the same three and
+  `SetInclude(true)` restores them; with the cron job excluded,
+  `SetInclude(true)` on the generated-timer row returns `BadRequest`
+  naming both rows and leaves the export unchanged. On a cron job that
+  generates no unit, `SetInclude` in either direction returns
+  `NoopTarget` naming it, and on an at job `BadRequest` naming the file;
+  the Containerfile is unchanged in each. Through the production
+  handlers, the scheduling bulk toggle sends the cron-job and
+  generated-timer operations and no at-job operation and no cron-job
+  operation for a cron job that generates nothing, and its exclude and
+  include change the staged tree and the plan.
 - **T36. An inventory name blocks a generated pair.** A package timer at
   its preset, in the inventory with no state change, and a generated cron
   pair of the same name: neither generated file is in the staged tree,
@@ -2638,7 +2704,11 @@ Phase 3 (one control per fact):
   the enable returns. A timer whose `Unit=` holds a specifier the
   inspector does not expand: `trigger` is `unresolved`,
   `TimerTriggerUnresolved`, and no enable. An instance timer with
-  `Unit=worker@%i.service`: the trigger is the expanded name. These pass
+  `Unit=worker@%i.service`: the trigger is the expanded name. No scan
+  records a description for an instance timer, which has no timer file
+  of its own, so this case is tested at the reader only; a scan-built
+  case waits on instance timers being recorded, which the carried
+  instances of phase 5 need. These pass
   the trigger check, and are carried when no later rule declines them: a
   timer whose trigger a package in the image owns, one whose trigger is a
   full shadow with the shadow excluded, and one whose trigger is a
@@ -3189,7 +3259,9 @@ Other objections worth weighing:
   an error where it used to appear to work. Counting inventory names
   withholds a generated cron job whenever any package unit at its preset
   has its name, and the operator cannot exclude that unit: the job has to
-  be renamed by hand. Declining a timer's `enable` when its local trigger
+  be renamed by hand, and that FIXME says "timer and its service" even
+  for an `@reboot` service or the flatpak service, where there is no
+  timer. Declining a timer's `enable` when its local trigger
   is excluded rests on systemd behavior read from source; if a timer in
   that state does start, the line is omitted for nothing. The check also
   omits a working timer whose trigger an alias, a template, an implicit
@@ -3198,7 +3270,16 @@ Other objections worth weighing:
   `Unit=`. It is conservative the other way too: excluding a drop-in that
   sets `Unit=` omits the timer's `enable` even when a later drop-in
   overrides it and the effective trigger is unchanged, and that omission
-  carries its comment. Excluding a generated timer does not exclude the cron entry
+  carries its comment. The inspector reads `Unit=` only from
+  `<name>.timer.d` under `/etc/systemd/system` and
+  `/usr/lib/systemd/system`, not from `/run`, `/usr/local/lib`, a
+  template's `<prefix>@.timer.d` or the type-wide `timer.d`, so a
+  `Unit=` set only there is not seen and the recorded trigger is the
+  timer file's or the default; the template directory matters once
+  instance timers are recorded. And a timer with no recorded trigger is
+  declined, so an older snapshot omits every timer `enable` until it is
+  rescanned, where reading the missing field as passing would have kept
+  them. Excluding a generated timer does not exclude the cron entry
   it came from: if cron is carried and running, the job still runs, and
   carrying both can run it twice. And refusing an
   unmanaged file under `/etc/systemd/system` drops a file an imported
