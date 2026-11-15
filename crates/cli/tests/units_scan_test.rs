@@ -6565,3 +6565,67 @@ fn t34_a_mask_follows_its_package_through_the_scan_and_refine() {
     );
     assert!(omitted(&cf, PROTECTED).is_none(), "{cf}");
 }
+
+// ---------------------------------------------------------------------
+// A generated name's lock: the view agrees with what the session enforces.
+// ---------------------------------------------------------------------
+
+/// The scan of the [`CRON_FILE`] host with a second record of the
+/// generated name `cron-backup`, as a second cron file of the same name
+/// gives one, and only the record at `locked_at` locked.
+fn two_records_of_one_name(locked_at: usize) -> InspectionSnapshot {
+    let mut snap = scan(with_cron_backup(UnitHost::new().preset("disable *")));
+    let units = &mut snap
+        .scheduled_tasks
+        .as_mut()
+        .expect("a scheduled section")
+        .generated_timer_units;
+    assert_eq!(units.len(), 1, "presence: one generated record");
+    let mut second = units[0].clone();
+    second.source_path = "/var/spool/cron/backup".into();
+    units.push(second);
+    for (i, unit) in units.iter_mut().enumerate() {
+        unit.locked = i == locked_at;
+    }
+    snap
+}
+
+/// Two records of one generated name with only one of them locked, in
+/// both orders. The session enforces a lock when any record of the name
+/// is locked: `SetInclude(true)` on the name is a silent no-op
+/// (`RefineSession::apply`), so after an exclusion the row cannot be
+/// included again. The generated-timer row in refine's decisions must say
+/// `locked` too, so the UI offers no toggle the server ignores.
+#[test]
+fn a_generated_name_is_shown_locked_when_any_of_its_records_is() {
+    for locked_at in [1, 0] {
+        let snap = two_records_of_one_name(locked_at);
+        let mut refine = session(&snap);
+        let row = |refine: &RefineSession| {
+            refine
+                .decisions()
+                .generated_timers
+                .iter()
+                .find(|row| row.name == CRON_BACKUP)
+                .cloned()
+                .expect("the generated-timer row")
+        };
+        let shown_locked = row(&refine).locked;
+        refine
+            .apply(set_include(generated_item(CRON_BACKUP), false))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(!row(&refine).include, "presence: the exclusion applies");
+        refine
+            .apply(set_include(generated_item(CRON_BACKUP), true))
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let enforced_locked = !row(&refine).include;
+        assert!(
+            enforced_locked,
+            "record {locked_at} locked: the session keeps the name excluded"
+        );
+        assert_eq!(
+            shown_locked, enforced_locked,
+            "record {locked_at} locked: the view agrees with the session"
+        );
+    }
+}
