@@ -1163,10 +1163,11 @@ fn bundle_unmanaged_files(
     use inspectah_core::types::nonrpm::FileType;
 
     for item in items {
-        // A file under `/etc/systemd/system` is withheld on the render's
-        // own decision, so the tarball carries no payload for it.
+        // A file under `/etc/systemd/system`, or at the machine-id, is
+        // withheld on the render's own decision, so the tarball carries no
+        // payload for it.
         if !item.disposition.is_included()
-            || inspectah_pipeline::render::configtree::unmanaged_unit_path(&item.path)
+            || inspectah_pipeline::render::configtree::unmanaged_withheld(&item.path).is_some()
         {
             continue;
         }

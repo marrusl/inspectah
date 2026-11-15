@@ -12,7 +12,7 @@ use inspectah_pipeline::build::extract::{
     is_single_normal_component,
 };
 use inspectah_pipeline::export_warning::{ExportWarning, sanitize_bounded};
-use inspectah_pipeline::render::configtree::unmanaged_unit_path;
+use inspectah_pipeline::render::configtree::unmanaged_withheld;
 use inspectah_pipeline::render::containerfile::{
     render_containerfile, render_containerfile_with_originals,
 };
@@ -3883,7 +3883,7 @@ fn extract_payload_dirs_with_budget(
         .map(|s| {
             s.items
                 .iter()
-                .filter(|f| f.disposition.is_included() && !unmanaged_unit_path(&f.path))
+                .filter(|f| f.disposition.is_included() && unmanaged_withheld(&f.path).is_none())
                 .map(|f| f.path.trim_start_matches('/').to_string())
                 .collect()
         })
@@ -3962,8 +3962,8 @@ fn extract_payload_dirs_with_budget(
                 ))
             })?;
             // The render's decision, asked of the entry's own path too, so
-            // no spelling of a path under the unit directory is extracted.
-            if !included_unmanaged.contains(file_rel) || unmanaged_unit_path(file_rel) {
+            // no spelling of a withheld path is extracted.
+            if !included_unmanaged.contains(file_rel) || unmanaged_withheld(file_rel).is_some() {
                 continue;
             }
             // An unmanaged file legitimately can be a symlink; a hardlink

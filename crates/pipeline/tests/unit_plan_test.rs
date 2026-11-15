@@ -3362,3 +3362,132 @@ fn an_excluded_runtime_updater_is_named_in_an_omitted_line() {
     );
     assert!(render(&other).lines.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// § 10.2 "Never the machine-id" (T33, the stager's half)
+// ---------------------------------------------------------------------------
+
+/// Each spelling T33 names for `path`: plain, relative, with a doubled
+/// separator, with an interior `.`, and with a trailing separator.
+fn t33_spellings(path: &str) -> [String; 5] {
+    let (dir, name) = path.rsplit_once('/').expect("an absolute path");
+    [
+        path.to_owned(),
+        path.trim_start_matches('/').to_owned(),
+        format!("{dir}//{name}"),
+        format!("{dir}/./{name}"),
+        format!("{path}/"),
+    ]
+}
+
+/// A snapshot that offers `path`, at every [`t33_spellings`] spelling and
+/// with one content, through a config entry, a drop-in row, a repo file and
+/// an unmanaged file: every section of an imported snapshot that can name
+/// a path under `/etc`.
+fn offering_everywhere(path: &str, content: &str) -> InspectionSnapshot {
+    use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
+    use inspectah_core::types::rpm::RepoFile;
+    let spellings = t33_spellings(path);
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: spellings
+            .iter()
+            .map(|p| ConfigFileEntry {
+                path: p.clone(),
+                category: ConfigCategory::Other,
+                content: content.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+    });
+    snap.units = Some(UnitSection {
+        drop_ins: spellings
+            .iter()
+            .map(|p| SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: p.clone(),
+                content: content.into(),
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    snap.rpm = Some(RpmSection {
+        repo_files: vec![RepoFile {
+            path: path.into(),
+            content: content.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: spellings
+            .iter()
+            .map(|p| UnmanagedFile {
+                path: p.clone(),
+                file_type: FileType::Config,
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    snap
+}
+
+/// T33, the stager: `/etc/machine-id`, offered by every section that can
+/// name it and in every spelling, is never a write. Every offer is
+/// withheld as `MachineId`, one entry per offer: the guard runs before
+/// offers of one destination are deduplicated, so offers with one content
+/// do not collapse into one write and keep their reason each. The FIXME
+/// text says why. Control: `/etc/machine-info`, offered the same ways, is
+/// one write and withholds nothing (its unmanaged offers are the
+/// unmanaged section's to copy).
+#[test]
+fn t33_the_stager_never_writes_the_machine_id() {
+    use inspectah_pipeline::render::configtree::{Destination, StagedFileKind, WithheldWhy};
+    let machine_id = Destination::new("/etc/machine-id").expect("a destination");
+    let snap = offering_everywhere("/etc/machine-id", "uninitialized\n");
+    let staged = staged_writes(&snap);
+    assert!(
+        !staged.writes.contains_key(&machine_id),
+        "{:?}",
+        staged.writes
+    );
+    assert!(staged.refused.is_empty(), "{:?}", staged.refused);
+    let mut kinds: Vec<StagedFileKind> = Vec::new();
+    for (dest, kind, why) in &staged.withheld {
+        assert_eq!(dest, &machine_id, "{kind:?}");
+        assert_eq!(why, &WithheldWhy::MachineId, "{kind:?}");
+        kinds.push(*kind);
+    }
+    kinds.sort();
+    let mut expected = [
+        [StagedFileKind::ConfigFile; 5].as_slice(),
+        &[StagedFileKind::RepoFile],
+        &[StagedFileKind::DropIn; 5],
+        &[StagedFileKind::UnmanagedFile; 5],
+    ]
+    .concat();
+    expected.sort();
+    assert_eq!(kinds, expected, "one withheld entry per offer");
+    assert_eq!(WithheldWhy::MachineId.name(), "MachineId");
+    assert_eq!(
+        WithheldWhy::MachineId.describe(&machine_id),
+        "the image keeps the base image's empty /etc/machine-id, which is what makes first \
+         boot keep the rendered unit states; the source host's machine identity is not copied"
+    );
+
+    let control = offering_everywhere("/etc/machine-info", "PRETTY_HOSTNAME=web\n");
+    let staged = staged_writes(&control);
+    let machine_info = Destination::new("/etc/machine-info").expect("a destination");
+    assert!(
+        staged.writes.contains_key(&machine_info),
+        "control: {:?}",
+        staged.writes
+    );
+    assert!(staged.withheld.is_empty(), "control: {:?}", staged.withheld);
+}

@@ -91,14 +91,30 @@ written; every other clash at one destination is an ordinary
 
 **No other writer under `/etc/systemd/system`.** The unmanaged-files
 section copies its own tree after the unit state section, outside
-`staged_writes`. `configtree::unmanaged_unit_path`, by `Destination` and
-covering every path below the directory, is the one decision on an
-unmanaged path there: the scan's bundling, refine's payload extraction
-(asked of the snapshot path and of the tarball entry's own path) and the
-unmanaged section all skip the file, and `staged_writes` lists it as
-withheld (`StagedFileKind::UnmanagedFile`, `WithheldWhy::UnmanagedUnitPath`)
-so the configuration FIXME names it. A new payload route for unmanaged
-files must ask the same function.
+`staged_writes`. `configtree::unmanaged_withheld`, by `Destination`, is
+the one decision on an unmanaged path: a path under the unit directory
+(`unmanaged_unit_path`, every path below it) is `UnmanagedUnitPath`, and
+the machine-id is `MachineId`. The scan's bundling, refine's payload
+extraction (asked of the snapshot path and of the tarball entry's own
+path) and the unmanaged section all skip the file, and `staged_writes`
+lists it as withheld (`StagedFileKind::UnmanagedFile`) so the
+configuration FIXME names it. A new payload route for unmanaged files
+must ask the same function.
+
+**The machine-id is never staged.** Rendered unit state survives first
+boot only because the image keeps the base image's zero-length
+`/etc/machine-id`; a file that reads `uninitialized`, or none, makes
+first boot apply the presets and undo rendered `enable` and `disable`
+lines (measured, [real-host-validation-runs](real-host-validation-runs.md)).
+The config walk excludes the path on a scan (`UNOWNED_EXCLUDE_EXACT` in
+`walk.rs`), but an imported snapshot can offer it from any section, so
+`staged_writes` withholds every offer whose `Destination` is
+`MACHINE_ID_PATH` as `WithheldWhy::MachineId`. The check runs right after
+the `Destination` is built, before a config entry yields to a drop-in at
+its path and before identical offers collapse into one write, so every
+row that offered the path keeps its own withheld reason. Do not move it
+later: two rows with one content would otherwise become one write, and
+a config entry under a drop-in of the same path would show no reason.
 
 Identical content offered twice at one destination is one write, not a
 conflict. A custom repo file is both a config entry and an

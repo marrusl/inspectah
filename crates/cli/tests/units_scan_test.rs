@@ -2415,12 +2415,14 @@ fn a_full_shadow_is_enabled_after_the_copy_of_its_shadow() {
     );
 }
 
-/// § 10.1's two sentences about what a carried unit state means on the
-/// target.
+/// § 10.1's sentences about what a carried unit state means on the
+/// target: the two first-boot sentences of § 10.2 "Never the machine-id",
+/// then `preset-all`.
 const README_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
-     section survive first boot: on both bootc base images, installed with `bootc install \
-     to-existing-root`, first boot does not re-apply presets. A later `systemctl \
-     preset-all` puts every unit back to preset.";
+     section survive first boot with the base image's empty `/etc/machine-id`. A later layer or \
+     installer script that removes that file or writes `uninitialized` to it makes first boot \
+     apply the presets, which undoes the rendered `enable` and `disable` lines. A later \
+     `systemctl preset-all` puts every unit back to preset.";
 const README_DISABLE: &str = "A `disable` removes the administrator's links and nothing more: \
      a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
      `disabled` afterwards and is still wanted.";
@@ -6194,4 +6196,276 @@ fn t37_timers_whose_trigger_is_provided_are_carried() {
         &[(config_item(&etc_path("report.service")), false)],
     ));
     assert!(acts(&cf, "mask", "report.timer"), "mask:\n{cf}");
+}
+
+// ---------------------------------------------------------------------
+// § 10.2 "Never the machine-id" (T33).
+// ---------------------------------------------------------------------
+
+const MACHINE_ID: &str = "/etc/machine-id";
+/// The control path: a file beside the machine-id that the stager writes.
+const MACHINE_INFO: &str = "/etc/machine-info";
+
+/// What T33's offers hold: the value whose presence makes first boot apply
+/// the presets (§ 10.1), so a write of it anywhere would show.
+const UNINITIALIZED: &str = "uninitialized";
+
+/// T33's odd spellings of `path`: relative, a doubled separator, an
+/// interior `.`, a trailing separator.
+fn t33_spellings(path: &str) -> [String; 4] {
+    let (dir, name) = path.rsplit_once('/').expect("an absolute path");
+    [
+        path.trim_start_matches('/').to_owned(),
+        format!("{dir}//{name}"),
+        format!("{dir}/./{name}"),
+        format!("{path}/"),
+    ]
+}
+
+/// The two routes a T33 snapshot offers a path through.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum T33Route {
+    ConfigEntry,
+    DropIn,
+}
+
+/// `snap` with two included rows of `route` offering one destination: one
+/// at `spelling` and one at the plain `path`, with one content.
+fn offering(
+    snap: &InspectionSnapshot,
+    route: T33Route,
+    path: &str,
+    spelling: &str,
+) -> InspectionSnapshot {
+    let mut imported = snap.clone();
+    let content = format!("{UNINITIALIZED}\n");
+    for p in [spelling, path] {
+        match route {
+            T33Route::ConfigEntry => imported = with_config_entry(&imported, p, &content),
+            T33Route::DropIn => imported
+                .units
+                .as_mut()
+                .expect("a units section")
+                .drop_ins
+                .push(inspectah_core::types::units::SystemdDropIn {
+                    unit: "sshd.service".into(),
+                    path: p.into(),
+                    content: content.clone(),
+                    disposition: FindingKind::included(),
+                    ..Default::default()
+                }),
+        }
+    }
+    imported
+}
+
+/// The withheld view of the included row of `route` at `path`, as offered.
+fn row_withheld(
+    refine: &RefineSession,
+    route: T33Route,
+    path: &str,
+) -> Option<inspectah_refine::projection::WithheldView> {
+    let decisions = refine.decisions();
+    match route {
+        T33Route::ConfigEntry => decisions
+            .config_withheld
+            .iter()
+            .find(|v| v.path == path)
+            .map(|v| v.withheld.clone()),
+        T33Route::DropIn => decisions
+            .unit_dropins
+            .iter()
+            .find(|v| v.entry.path == path)
+            .and_then(|v| v.withheld.clone()),
+    }
+}
+
+/// The FIXME the Containerfile writes for a `route` row offering the
+/// machine-id.
+fn machine_id_fixme(route: T33Route) -> String {
+    let label = match route {
+        T33Route::ConfigEntry => "config file",
+        T33Route::DropIn => "unit drop-in",
+    };
+    format!(
+        "# FIXME: {label} {MACHINE_ID} not copied: the image keeps the base image's empty \
+         /etc/machine-id, which is what makes first boot keep the rendered unit states; the \
+         source host's machine identity is not copied"
+    )
+}
+
+/// Every file under the export's staged trees (`config/`, `drop-ins/`,
+/// `unmanaged/`, `flatpak/`) whose content holds `needle`.
+fn staged_files_holding(tree: &tempfile::TempDir, needle: &str) -> Vec<String> {
+    ["config", "drop-ins", "unmanaged", "flatpak"]
+        .iter()
+        .flat_map(|root| files_holding(&tree.path().join(root), needle))
+        .collect()
+}
+
+/// T33 through the scan export and the refine export: a snapshot that
+/// offers `/etc/machine-id` through two config entries, and separately
+/// through two drop-in rows, one at each odd spelling and one at the
+/// plain path, stages nothing there; the Containerfile names each in a
+/// FIXME; each offering row shows `withheld` with `MachineId`, both rows of
+/// the one destination included. No staged file and no instruction holds
+/// `uninitialized`, and the scan export's README holds the two first-boot
+/// sentences (the refine export writes no README). Control: `/etc/machine-info`, offered in each of the same ways, is
+/// staged and its rows are not withheld.
+#[test]
+fn t33_the_machine_id_is_never_staged() {
+    let snap = scan(t5_host());
+    for route in [T33Route::ConfigEntry, T33Route::DropIn] {
+        for spelling in t33_spellings(MACHINE_ID) {
+            let label = format!("{route:?} at {spelling:?}");
+            let imported = offering(&snap, route, MACHINE_ID, &spelling);
+            let refine = session(&imported);
+            for (via, tree) in [
+                ("scan", render_export(&imported)),
+                ("refine", export_session(&refine)),
+            ] {
+                assert!(!staged_at(&tree, MACHINE_ID), "{label}, {via}");
+                assert!(
+                    staged_files_holding(&tree, UNINITIALIZED).is_empty(),
+                    "{label}, {via}: {:?}",
+                    staged_files_holding(&tree, UNINITIALIZED)
+                );
+                let cf = containerfile_in(&tree);
+                assert_eq!(
+                    cf.lines().filter(|l| *l == machine_id_fixme(route)).count(),
+                    2,
+                    "{label}, {via}: one FIXME per row:\n{cf}"
+                );
+                assert!(
+                    cf.lines()
+                        .filter(|l| !l.trim_start().starts_with('#'))
+                        .all(|l| !l.contains(UNINITIALIZED) && !l.contains("machine-id")),
+                    "{label}, {via}:\n{cf}"
+                );
+                // The refine export's file set has no README (its
+                // contract, `render_refine_export`).
+                if via == "scan" {
+                    let readme =
+                        std::fs::read_to_string(tree.path().join("README.md")).expect("README.md");
+                    assert!(
+                        readme.contains(README_FIRST_BOOT),
+                        "{label}, {via}:\n{readme}"
+                    );
+                }
+            }
+            for row in [spelling.as_str(), MACHINE_ID] {
+                assert!(
+                    matches!(
+                        row_withheld(&refine, route, row),
+                        Some(inspectah_refine::projection::WithheldView::Withheld { ref why, .. })
+                            if why == "MachineId"
+                    ),
+                    "{label}, row {row:?}: {:?}",
+                    row_withheld(&refine, route, row)
+                );
+            }
+
+            let spelling = spelling.replace("machine-id", "machine-info");
+            let control = offering(&snap, route, MACHINE_INFO, &spelling);
+            let refine = session(&control);
+            for (via, tree) in [
+                ("scan", render_export(&control)),
+                ("refine", export_session(&refine)),
+            ] {
+                assert!(staged_at(&tree, MACHINE_INFO), "control {label}, {via}");
+            }
+            for row in [spelling.as_str(), MACHINE_INFO] {
+                assert_eq!(
+                    row_withheld(&refine, route, row),
+                    None,
+                    "control {label}, row {row:?}"
+                );
+            }
+        }
+    }
+}
+
+/// T33, the scan: the config walk records no entry for `/etc/machine-id`
+/// on a host that has one (`walk.rs`'s exact-exclusion list). Presence
+/// first: an unowned file beside it, `/etc/app.conf`, is recorded.
+#[test]
+fn t33_a_host_scan_records_no_machine_id() {
+    let snap = scan(
+        t5_host()
+            .file(MACHINE_ID, "4c4c4544004d3510804bc4c04f383432\n")
+            .file("/etc/app.conf", "a=1\n"),
+    );
+    let paths: Vec<&str> = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .map(|f| f.path.as_str())
+        .chain(
+            snap.units
+                .iter()
+                .flat_map(|u| &u.drop_ins)
+                .map(|d| d.path.as_str()),
+        )
+        .collect();
+    assert!(paths.contains(&"/etc/app.conf"), "presence: {paths:?}");
+    assert!(!paths.contains(&MACHINE_ID), "{paths:?}");
+}
+
+/// An imported snapshot's unmanaged-files section that offers
+/// `/etc/machine-id`: the shared decision withholds it as `MachineId`
+/// before the scan bundles a payload, before refine extracts one, and
+/// before render, so no `COPY` names it, the Containerfile names it in a
+/// FIXME, and refine's unmanaged row shows `withheld` with `MachineId`.
+/// Control: an unmanaged `/etc/machine-info` is copied.
+#[test]
+fn t33_an_unmanaged_machine_id_is_withheld() {
+    use inspectah_core::types::nonrpm::{FileType, UnmanagedFile, UnmanagedFileSection};
+    let mut snap = scan(t5_host());
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        total_count: 2,
+        items: [MACHINE_ID, MACHINE_INFO]
+            .iter()
+            .map(|path| UnmanagedFile {
+                path: (*path).into(),
+                size: 14,
+                file_type: FileType::Config,
+                disposition: FindingKind::included(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    });
+    let fixme = format!(
+        "# FIXME: unmanaged file {MACHINE_ID} not copied: the image keeps the base image's \
+         empty /etc/machine-id, which is what makes first boot keep the rendered unit states; \
+         the source host's machine identity is not copied"
+    );
+    let cf = containerfile_in(&render_export(&snap));
+    assert!(cf.lines().any(|l| l == fixme), "{cf}");
+    assert!(
+        cf.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .all(|l| !l.contains("machine-id")),
+        "{cf}"
+    );
+    assert!(
+        cf.lines()
+            .any(|l| l.starts_with("COPY") && l.contains("machine-info")),
+        "control: the machine-info file is copied:\n{cf}"
+    );
+    let refine = session(&snap);
+    let views = &refine.decisions().unmanaged_withheld;
+    assert!(
+        views.iter().any(|v| v.path == MACHINE_ID
+            && matches!(
+                &v.withheld,
+                inspectah_refine::projection::WithheldView::Withheld { why, .. }
+                    if why == "MachineId"
+            )),
+        "{views:?}"
+    );
+    assert!(
+        !views.iter().any(|v| v.path == MACHINE_INFO),
+        "control: {views:?}"
+    );
 }

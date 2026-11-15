@@ -8,12 +8,14 @@ use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
 use super::selinux;
 
-/// § 10.1: a carried unit state holds through first boot (measured on both
-/// bootc bases, installed with `bootc install to-existing-root`, run R3).
+/// § 10.1 and § 10.2 "Never the machine-id": a carried unit state holds
+/// through first boot while the image keeps the base image's empty
+/// `/etc/machine-id` (measured, run R3), and what undoes it.
 const UNIT_STATE_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
-     section survive first boot: on both bootc base images, installed with `bootc install \
-     to-existing-root`, first boot does not re-apply presets. A later `systemctl preset-all` \
-     puts every unit back to preset.";
+     section survive first boot with the base image's empty `/etc/machine-id`. A later layer or \
+     installer script that removes that file or writes `uninitialized` to it makes first boot \
+     apply the presets, which undoes the rendered `enable` and `disable` lines. A later \
+     `systemctl preset-all` puts every unit back to preset.";
 
 /// § 10.1: what a carried `disable` does and does not do (measured).
 const UNIT_STATE_DISABLE: &str = "A `disable` removes the administrator's links and nothing \

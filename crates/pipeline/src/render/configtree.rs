@@ -147,6 +147,10 @@ pub enum WithheldWhy {
     /// files after the unit state section, outside this decision, so it
     /// would be a second writer of a unit path.
     UnmanagedUnitPath,
+    /// The destination is [`MACHINE_ID_PATH`]. The image keeps the base
+    /// image's empty file, which is what makes first boot keep the
+    /// rendered unit states (§ 10.1, § 10.2 "Never the machine-id").
+    MachineId,
 }
 
 /// How the collected unit a generated unit's name collides with is known
@@ -172,6 +176,7 @@ impl WithheldWhy {
             Self::Conflict { .. } => "Conflict",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
             Self::UnmanagedUnitPath => "UnmanagedUnitPath",
+            Self::MachineId => "MachineId",
         }
     }
 
@@ -210,6 +215,7 @@ impl WithheldWhy {
                 unit.as_str()
             ),
             Self::UnmanagedUnitPath => UNMANAGED_UNIT_PATH.to_owned(),
+            Self::MachineId => MACHINE_ID_KEPT.to_owned(),
         }
     }
 }
@@ -218,6 +224,16 @@ impl WithheldWhy {
 const UNMANAGED_UNIT_PATH: &str = "an unmanaged file is not written under /etc/systemd/system, \
      where the export writes unit files only from their own rows; a unit file belongs under \
      Configuration Files";
+
+/// The machine identity file. The export never writes it, so the image
+/// keeps the base image's zero-length file (§ 10.2 "Never the
+/// machine-id").
+pub const MACHINE_ID_PATH: &str = "/etc/machine-id";
+
+/// [`WithheldWhy::MachineId`]'s text.
+const MACHINE_ID_KEPT: &str = "the image keeps the base image's empty /etc/machine-id, which is \
+     what makes first boot keep the rendered unit states; the source host's machine identity is \
+     not copied";
 
 /// The one decision on an unmanaged file's path (§ 10.2 "No other writer
 /// under `/etc/systemd/system`"): whether it is `/etc/systemd/system` or
@@ -233,6 +249,27 @@ pub fn unmanaged_unit_path(path: &str) -> bool {
             .strip_prefix(ETC_UNIT_DIR)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     })
+}
+
+/// Whether `dest` is [`MACHINE_ID_PATH`], however the path was spelled.
+fn is_machine_id(dest: &Destination) -> bool {
+    dest.as_str() == MACHINE_ID_PATH
+}
+
+/// The one decision on whether an unmanaged file is withheld, and why: a
+/// path under `/etc/systemd/system` ([`unmanaged_unit_path`]), or the
+/// machine-id, which no section of an imported snapshot writes (§ 10.2
+/// "Never the machine-id"). The scan does not bundle such a file, refine
+/// does not extract it, and the Containerfile copies or links nothing for
+/// it.
+pub fn unmanaged_withheld(path: &str) -> Option<WithheldWhy> {
+    if Destination::new(path).is_ok_and(|dest| is_machine_id(&dest)) {
+        Some(WithheldWhy::MachineId)
+    } else if unmanaged_unit_path(path) {
+        Some(WithheldWhy::UnmanagedUnitPath)
+    } else {
+        None
+    }
 }
 
 /// One file the export writes: what offered it, and its content, borrowed
@@ -906,9 +943,15 @@ fn generated_name_collisions(
 ///    unit is a mask, and is withheld as `ZeroLengthUnitFile` whichever
 ///    section offered it (§ 10.2 rule 1).
 ///
+/// Between 1 and 2, an offer whose destination is [`MACHINE_ID_PATH`] is
+/// withheld as `MachineId`, whichever section offered it and before any
+/// offer of one destination yields to another or is deduplicated, so
+/// every offering row keeps its reason (§ 10.2 "Never the machine-id").
+///
 /// An included unmanaged file whose path is under `/etc/systemd/system`
 /// ([`unmanaged_unit_path`]) is listed in `withheld` as
-/// `UnmanagedUnitPath`. It is not one of this decision's offers: the
+/// `UnmanagedUnitPath`, and one at the machine-id as `MachineId`
+/// ([`unmanaged_withheld`]). It is not one of this decision's offers: the
 /// unmanaged-files section writes its own files, and leaves that one out.
 ///
 /// Everything else is written. [`write_config_tree`] writes `writes` and
@@ -927,6 +970,13 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
                 continue;
             }
         };
+        // Before any offer of one destination yields to another, so every
+        // offer of the machine-id keeps its own reason.
+        if is_machine_id(&dest) {
+            out.withheld
+                .push((dest, offer.kind, WithheldWhy::MachineId));
+            continue;
+        }
         if offer.kind == StagedFileKind::ConfigFile
             && (owned.contains(&dest) || dest.as_str().starts_with(QUADLET_PREFIX))
         {
@@ -938,20 +988,18 @@ pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_> {
     let collected = collected_unit_paths(snap, &resolved);
     let collisions = generated_name_collisions(&generated_unit_groups(snap), &collected);
 
-    // An unmanaged file under the unit directory is withheld by name; the
-    // unmanaged-files section skips it on the same decision.
+    // An unmanaged file under the unit directory, or at the machine-id, is
+    // withheld by name; the unmanaged-files section skips it on the same
+    // decision.
     out.withheld.extend(
         snap.unmanaged_files
             .iter()
             .flat_map(|section| &section.items)
-            .filter(|file| file.disposition.is_included() && unmanaged_unit_path(&file.path))
-            .filter_map(|file| Destination::new(&file.path).ok())
-            .map(|dest| {
-                (
-                    dest,
-                    StagedFileKind::UnmanagedFile,
-                    WithheldWhy::UnmanagedUnitPath,
-                )
+            .filter(|file| file.disposition.is_included())
+            .filter_map(|file| {
+                let why = unmanaged_withheld(&file.path)?;
+                let dest = Destination::new(&file.path).ok()?;
+                Some((dest, StagedFileKind::UnmanagedFile, why))
             }),
     );
 
