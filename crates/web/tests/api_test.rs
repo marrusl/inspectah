@@ -1263,6 +1263,69 @@ async fn a_generated_timer_row_is_decided_on_its_row() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
 }
 
+/// D4 through the production handlers: an included unmanaged file under
+/// `/etc/systemd/system` carries the stager's `withheld` on its row, by the
+/// row's own path as recorded. Controls: an unmanaged file elsewhere is
+/// written and has none, and an excluded file at a unit path offers
+/// nothing to withhold.
+#[tokio::test]
+async fn an_unmanaged_file_at_a_unit_path_is_withheld_on_its_row() {
+    use inspectah_core::types::nonrpm::{UnmanagedFile, UnmanagedFileSection};
+    const UNIT_PATH: &str = "/etc/systemd/system/backup.service";
+    const EXCLUDED_UNIT_PATH: &str = "/etc/systemd/system/other.service";
+    const OPT_PATH: &str = "/opt/app/bin/run";
+    let file = |path: &str, disposition: FindingKind| UnmanagedFile {
+        path: path.into(),
+        size: 10,
+        disposition,
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.unmanaged_files = Some(UnmanagedFileSection {
+        items: vec![
+            file(UNIT_PATH, FindingKind::included()),
+            file(EXCLUDED_UNIT_PATH, FindingKind::excluded()),
+            file(OPT_PATH, FindingKind::included()),
+        ],
+        usr_entries: Vec::new(),
+        total_size: 30,
+        total_count: 3,
+    });
+    let app = app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    }));
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let rows: Vec<&serde_json::Value> = view["unmanaged_files"]
+        .as_array()
+        .expect("unmanaged_files")
+        .iter()
+        .flat_map(|g| g["items"].as_array().expect("group items").iter())
+        .collect();
+    let row = |path: &str| {
+        *rows
+            .iter()
+            .find(|r| r["path"] == path)
+            .unwrap_or_else(|| panic!("no unmanaged row {path}: {view}"))
+    };
+
+    let withheld = &row(UNIT_PATH)["withheld"];
+    assert_eq!(withheld["outcome"], "withheld", "{withheld}");
+    assert_eq!(withheld["why"], "UnmanagedUnitPath", "{withheld}");
+    assert!(
+        withheld["text"].as_str().is_some_and(
+            |t| t.contains("an unmanaged file is not written under /etc/systemd/system")
+        ),
+        "{withheld}"
+    );
+    assert!(row(OPT_PATH).get("withheld").is_none(), "{}", row(OPT_PATH));
+    assert!(
+        row(EXCLUDED_UNIT_PATH).get("withheld").is_none(),
+        "{}",
+        row(EXCLUDED_UNIT_PATH)
+    );
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 

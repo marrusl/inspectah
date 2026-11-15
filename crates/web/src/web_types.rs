@@ -67,6 +67,11 @@ pub struct UnmanagedFileItemDto {
     pub is_var_path: bool,
     pub include: bool,
     pub provenance: ProvenanceSignalsDto,
+    /// Why the export does not write this included file, as the config
+    /// rows' `withheld` says it (§ 11.1). Absent when the file is written
+    /// or the row is excluded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withheld: Option<WithheldView>,
 }
 
 /// Directory group for unmanaged files.

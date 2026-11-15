@@ -521,3 +521,47 @@ describe("UnmanagedFileList", () => {
     vi.useRealTimers();
   });
 });
+
+describe("UnmanagedFileList withheld file", () => {
+  const UNIT_PATH = "/etc/systemd/system/backup.service";
+  const TEXT =
+    "an unmanaged file is not written under /etc/systemd/system, where the " +
+    "export writes unit files only from their own rows";
+
+  it("shows the server's text on the withheld row only", () => {
+    render(
+      <UnmanagedFileList
+        groups={[
+          {
+            directory: "/etc/systemd/system",
+            items: [
+              makeFile(UNIT_PATH, {
+                withheld: {
+                  outcome: "withheld",
+                  why: "UnmanagedUnitPath",
+                  text: TEXT,
+                },
+              }),
+            ],
+          },
+          { directory: "/opt/app", items: [makeFile("/opt/app/run")] },
+        ]}
+        onToggleItem={vi.fn()}
+        onToggleGroup={vi.fn()}
+        isPending={false}
+      />,
+    );
+    const note = screen.getByTestId(`unmanaged-withheld-${UNIT_PATH}`);
+    expect(note).toHaveTextContent(TEXT);
+    expect(note).toHaveClass("inspectah-unit-note--withheld");
+    expect(screen.getByTestId(`unmanaged-item-${UNIT_PATH}`)).toHaveAttribute(
+      "aria-describedby",
+      note.id,
+    );
+    // Control: a written file has no note.
+    expect(screen.queryByTestId("unmanaged-withheld-/opt/app/run")).toBeNull();
+    expect(
+      screen.getByTestId("unmanaged-item-/opt/app/run"),
+    ).not.toHaveAttribute("aria-describedby");
+  });
+});

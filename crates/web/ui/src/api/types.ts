@@ -1077,6 +1077,11 @@ export interface UnmanagedFileItem {
   include: boolean;
   /** Provenance signals from Plan 2's backend. */
   provenance: ProvenanceSignals;
+  /**
+   * Why the export does not write this included file, as a config row's
+   * `withheld` says it. `text` is shown as given.
+   */
+  withheld?: WithheldView;
 }
 
 /** Directory group for unmanaged files. */

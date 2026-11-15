@@ -472,6 +472,19 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
                         writable_mount: file.provenance.writable_mount,
                         service_working_dir: file.provenance.service_working_dir,
                     },
+                    // Keyed by the row's own path as recorded; only an
+                    // included row offers a file to withhold.
+                    withheld: file
+                        .disposition
+                        .is_included()
+                        .then(|| {
+                            decisions
+                                .unmanaged_withheld
+                                .iter()
+                                .find(|w| w.path == file.path)
+                                .map(|w| w.withheld.clone())
+                        })
+                        .flatten(),
                 });
             }
             let mut result: Vec<UnmanagedFileGroupDto> = groups

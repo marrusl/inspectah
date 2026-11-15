@@ -1455,10 +1455,16 @@ body,
 
 .inspectah-unmanaged-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--pf-t--global--spacer--sm);
   padding: 2px 0;
   font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+/* A withheld file's reason takes its own line under the row. */
+.inspectah-unmanaged-row .inspectah-unit-note {
+  flex-basis: 100%;
 }
 
 .inspectah-unmanaged-row:focus-visible {
