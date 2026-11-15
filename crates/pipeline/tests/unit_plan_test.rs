@@ -4294,6 +4294,55 @@ fn rule_7_never_suggests_disabling_a_protected_member() {
     );
 }
 
+/// The collector's drop-in name rule holds in the export's checks: a
+/// staged `.conf` whose name starts with `.` (an editor's
+/// `.#override.conf`) is no drop-in systemd reads, so it is not an install
+/// file for rule 5's added-file half or rule 7's condition 3, whatever it
+/// holds. Control: the same file without the leading `.` is one, and
+/// declines the command each way.
+#[test]
+fn hidden_drop_in_names_are_never_install_files() {
+    use inspectah_core::types::units::MemberLinks::Installed;
+    let install = "[Install]\nWantedBy=multi-user.target\n";
+    for (file, hidden) in [(".#override.conf", true), ("override.conf", false)] {
+        let path = etc_drop_in("app.service", file);
+        let rule_5 = units_snapshot(
+            vec![change_with(
+                "app.service",
+                vendor("app.service"),
+                UnitState::Enabled,
+            )],
+            vec![(&path, install)],
+        );
+        let expected = if hidden {
+            Ok(())
+        } else {
+            Err(OmissionReason::InstallEvidenceChanged { path: path.clone() })
+        };
+        assert_eq!(rule_5_outcome(&rule_5, "app.service"), expected, "{file}");
+
+        let member = etc_drop_in("m.service", file);
+        let rule_7 = units_snapshot(
+            vec![owner(
+                "app.service",
+                UnitState::Enabled,
+                vec![also_member("m.service", Installed)],
+            )],
+            vec![(&member, install)],
+        );
+        let why = also_why(&rule_7, "app.service");
+        if hidden {
+            assert_eq!(why, None, "{file}: {:?}", declined_of(&rule_7));
+        } else {
+            assert_eq!(
+                why,
+                Some(("m.service".into(), AlsoWhy::InstallFile { path: member })),
+                "{file}"
+            );
+        }
+    }
+}
+
 /// § 10.2 rule 7, condition 2 in the plural: two members whose rows are
 /// excluded are named together; two instance members with no row are
 /// named together. Condition 1 decides before condition 2, and condition 2

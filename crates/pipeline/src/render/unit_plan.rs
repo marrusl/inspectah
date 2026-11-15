@@ -14,7 +14,7 @@ use inspectah_core::types::units::{
     AlsoMember, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
     MemberLinks, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, TargetUnitName,
     UndeterminedInstall, UnitAction, UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
-    holds_install_section,
+    holds_install_section, systemd_reads_drop_in,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -1936,9 +1936,6 @@ fn own_name_free(
     no_file_at(etc_unit_path(name), staged)
 }
 
-/// The suffix of a drop-in file systemd reads.
-const DROP_IN_FILE_SUFFIX: &str = ".conf";
-
 /// The `/etc` drop-in directories `enable` reads `[Install]` from for
 /// `name`: its own `.d` and, for an instance, its template's. The
 /// type-wide and dash-prefix directories are never among them (§ 10.2,
@@ -1958,10 +1955,11 @@ fn install_drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// - Each recorded path is read through [`Destination`]; one that does not
 ///   parse, or is not staged, fails. In a fleet aggregate, one whose path
 ///   holds more than one content variant fails too ([`one_variant`]).
-/// - A staged `.conf` directly in one of [`install_drop_in_dirs`] that the
-///   row does not record fails when it is an install file: it holds an
-///   `[Install]` section ([`holds_install_section`]), or it has the file
-///   name of one of the row's `vendor_drop_ins`.
+/// - A staged drop-in systemd reads ([`systemd_reads_drop_in`]: a `.conf`
+///   name that is not hidden) directly in one of [`install_drop_in_dirs`]
+///   that the row does not record fails when it is an install file: it
+///   holds an `[Install]` section ([`holds_install_section`]), or it has
+///   the file name of one of the row's `vendor_drop_ins`.
 ///
 /// Every failure is [`OmissionReason::InstallEvidenceChanged`] naming the
 /// path.
@@ -1999,8 +1997,7 @@ fn rule_5_drop_ins(
             let Some(file) = dest.as_str().strip_prefix(&prefix) else {
                 continue;
             };
-            if file.contains('/') || !file.ends_with(DROP_IN_FILE_SUFFIX) || recorded.contains(dest)
-            {
+            if file.contains('/') || !systemd_reads_drop_in(file) || recorded.contains(dest) {
                 continue;
             }
             if holds_install_section(&write.content)
@@ -2651,9 +2648,9 @@ fn rule_7_also(
 /// The first file the snapshot holds, staged or excluded, that is an
 /// install file for `name` (§ 10.2 "Install files"): a unit file at
 /// `/etc/systemd/system/<name>` or, for an instance, at its template's
-/// name; or a `.conf` directly in one of [`install_drop_in_dirs`] that
-/// holds an `[Install]` section or has one of `vendor_drop_ins`' file
-/// names. Config entries, then drop-in rows, then the files the export
+/// name; or a drop-in systemd reads ([`systemd_reads_drop_in`]) directly
+/// in one of [`install_drop_in_dirs`] that holds an `[Install]` section or
+/// has one of `vendor_drop_ins`' file names. Config entries, then drop-in rows, then the files the export
 /// writes, each by [`Destination`]; a path that does not parse is none.
 fn install_file_in_snapshot(
     snap: &InspectionSnapshot,
@@ -2681,7 +2678,7 @@ fn install_file_in_snapshot(
                     .and_then(|rest| rest.strip_prefix('/'))
                     .is_some_and(|file| {
                         !file.contains('/')
-                            && file.ends_with(DROP_IN_FILE_SUFFIX)
+                            && systemd_reads_drop_in(file)
                             && (holds_install_section(content)
                                 || vendor_drop_ins.iter().any(|vendor| vendor == file))
                     })

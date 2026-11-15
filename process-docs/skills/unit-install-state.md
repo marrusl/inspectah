@@ -105,7 +105,11 @@ measured; the order across the two names was read from systemd's source
 - **Hidden drop-ins are skipped.** `conf_files` drops a name starting with
   `.`, as systemd does when it lists drop-ins, so an editor's
   `.#override.conf` is never read. That was read from systemd's source,
-  not measured.
+  not measured. The rule is `systemd_reads_drop_in` in core, and the
+  plan's rule 5 and rule 7 install-file checks use the same function: a
+  hidden file can still be collected and staged as a drop-in row, and a
+  check that counted it would decline a command over a file systemd never
+  reads.
 
 **One line model, in core.** `logical_lines` and `holds_install_section`
 are in `crates/core/src/types/units.rs`, and the collector, the scheduled

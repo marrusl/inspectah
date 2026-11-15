@@ -6740,6 +6740,52 @@ fn t24_a_wanted_by_from_a_drop_in_is_carried_with_that_drop_in() {
     assert!(acts(&restored, "enable", "app.service"), "{restored}");
 }
 
+/// The collector's hidden-name rule, carried through the render and
+/// refine: an `/etc` `.#override.conf` holding `[Install]` (an editor's
+/// lock file) is not recorded and, although the export copies it, is no
+/// install file there either, so the unit's enable is carried on both
+/// routes, with the file excluded or not. Control: the visible
+/// `override.conf` is recorded, carried with the enable, and excluding it
+/// through refine leaves the enable out with `InstallEvidenceChanged`.
+#[test]
+fn hidden_drop_in_names_are_not_install_files_through_both_exports() {
+    const HIDDEN: &str = "/etc/systemd/system/app.service.d/.#override.conf";
+    const VISIBLE: &str = "/etc/systemd/system/app.service.d/override.conf";
+
+    let control = scan(install_host("app.service", WANTED_UNIT).file(VISIBLE, INSTALL_DROP_IN));
+    assert_eq!(change(&control, "app.service").install_drop_ins, [VISIBLE]);
+    for (route, containerfile) in both_routes(&control) {
+        assert!(
+            acts(&containerfile, "enable", "app.service"),
+            "control {route}:\n{containerfile}"
+        );
+    }
+    let excluded = containerfile_in(&exported_after(&control, &[(drop_in_item(VISIBLE), false)]));
+    assert!(
+        omitted(&excluded, "app.service").is_some_and(|l| l.ends_with(&evidence_changed(VISIBLE))),
+        "the visible file is guarded:\n{excluded}"
+    );
+
+    let snap = scan(install_host("app.service", WANTED_UNIT).file(HIDDEN, INSTALL_DROP_IN));
+    assert!(change(&snap, "app.service").install_drop_ins.is_empty());
+    let scanned = render_export(&snap);
+    assert!(
+        staged_at(&scanned, HIDDEN),
+        "the export copies the hidden file"
+    );
+    let refined = export_session(&session(&snap));
+    assert!(staged_at(&refined, HIDDEN), "refine copies it too");
+    for (route, tree) in [("scan", &scanned), ("refine", &refined)] {
+        let containerfile = containerfile_in(tree);
+        assert!(
+            acts(&containerfile, "enable", "app.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+    let without = containerfile_in(&exported_after(&snap, &[(drop_in_item(HIDDEN), false)]));
+    assert!(acts(&without, "enable", "app.service"), "{without}");
+}
+
 /// T24 and T25 (k) first half: an `/etc` drop-in with no `[Install]` and
 /// the file name of a vendor drop-in in the unit's own `.d` is an install
 /// file, since it hides the vendor one's section; the vendor name is in

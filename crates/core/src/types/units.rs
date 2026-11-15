@@ -1023,6 +1023,20 @@ fn is_drop_in_file_name(name: &str) -> bool {
         && name.ends_with(DROP_IN_FILE_SUFFIX)
 }
 
+/// The first character of a hidden file name, which systemd's drop-in
+/// listing skips.
+const HIDDEN_FILE_PREFIX: char = '.';
+
+/// Whether systemd reads a file named `file_name` in a drop-in directory:
+/// a `.conf` name that is not hidden. systemd skips a name starting with
+/// `.` when it lists drop-ins, so an editor's `.#override.conf` is never
+/// read; that rule was read from systemd's source and not measured on RHEL
+/// 9 or 10. The one name rule for drop-ins, shared by the collector's
+/// listing and the plan's install-file checks, so the two cannot disagree.
+pub fn systemd_reads_drop_in(file_name: &str) -> bool {
+    !file_name.starts_with(HIDDEN_FILE_PREFIX) && file_name.ends_with(DROP_IN_FILE_SUFFIX)
+}
+
 /// The header of the section `systemctl enable` reads.
 const INSTALL_SECTION_HEADER: &str = "[Install]";
 

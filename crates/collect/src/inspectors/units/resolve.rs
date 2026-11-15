@@ -7,7 +7,9 @@
 
 use super::install::{DropInRoot, drop_in_dirs};
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::types::units::{UnitFragment, UnitName, holds_install_section};
+use inspectah_core::types::units::{
+    UnitFragment, UnitName, holds_install_section, systemd_reads_drop_in,
+};
 use std::io;
 use std::path::Path;
 
@@ -35,13 +37,6 @@ pub(super) const UNREAD_SEARCH_PATH: [(&str, DropInRoot); 9] = [
     ("/run/systemd/generator", DropInRoot::Vendor),
     ("/usr/local/lib/systemd/system", DropInRoot::Vendor),
 ];
-
-/// The suffix of a drop-in file systemd reads.
-const DROP_IN_FILE_SUFFIX: &str = ".conf";
-
-/// The first character of a hidden file name, which systemd's drop-in
-/// listing skips.
-const HIDDEN_FILE_PREFIX: char = '.';
 
 /// A link to this path masks the unit.
 const DEV_NULL: &str = "/dev/null";
@@ -246,17 +241,14 @@ fn search_path_change(
     Ok(None)
 }
 
-/// The `.conf` file names in the directory `path`; none when it does not
-/// exist. A name starting with `.` is skipped: systemd skips hidden files
-/// when it lists drop-ins, so an editor's `.#override.conf` lock file is
-/// never read. That rule was read from systemd's source and not measured on
-/// RHEL 9 or 10.
+/// The `.conf` file names in the directory `path` that systemd reads
+/// ([`systemd_reads_drop_in`]: a hidden name is skipped); none when it
+/// does not exist.
 pub(super) fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
     match exec.read_dir(Path::new(path)) {
         Ok(entries) => Ok(entries
             .into_iter()
-            .filter(|entry| !entry.starts_with(HIDDEN_FILE_PREFIX))
-            .filter(|entry| entry.ends_with(DROP_IN_FILE_SUFFIX))
+            .filter(|entry| systemd_reads_drop_in(entry))
             .collect()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(ResolveError::Read {
