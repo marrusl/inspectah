@@ -46,8 +46,10 @@ The units inspector decides by the form of what is at
   carried and does not bring the parent back.
 - A `.conf` in a type-wide directory (`service.d`) or a dash-prefix
   directory (`a-.service.d`) belongs to no unit. It is not a drop-in row:
-  it reaches the snapshot as a config entry like any unowned file under
-  `/etc`. It is never an install file, because `enable` does not read
+  an unowned one reaches the snapshot as a config entry like any other
+  unowned file under `/etc`. Whether a package-owned, unmodified one
+  reaches a single-host snapshot is not verified (§ 13 run R2). Either way
+  it is never an install file, because `enable` does not read
   `[Install]` there (measured).
 - Which drop-ins are install files, and what excluding one does to a
   unit's command, is in
@@ -64,9 +66,10 @@ state and the link findings ([unit-install-state](unit-install-state.md)).
 **The config walk excludes all three** (`UNOWNED_EXCLUDE_GLOBS` in
 `crates/collect/src/inspectors/config/walk.rs`). The walk follows links, so
 without the exclusion it records the linked unit's content at the link's
-path, and the export stages a plain file where the link was. `*.upholds/*`
-was missing from the list until the units work found it; a new dependency
-directory systemd adds belongs there too.
+path, and the export stages a plain file where the link was. Every
+dependency directory systemd reads links from belongs in the list, for that
+reason: `*.upholds/*` is as much a link directory as `*.wants/*`, and a new
+one systemd adds goes there too.
 
 ## What stays with the scheduled inspector
 

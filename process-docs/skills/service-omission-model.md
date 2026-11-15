@@ -132,9 +132,14 @@ and dash-prefix directories are never install files (`install_drop_in_dirs`).
   In a fleet aggregate, a recorded file whose path holds more than one
   content variant fails (`one_variant`).
 - § 10.2 says a file whose content was not captured counts as an install
-  file. Such a file can never be staged (its config row is a
-  `content_not_captured` advisory with no toggle), so the case cannot
-  reach either rule today.
+  file, and it does reach rule 5. The collector records an `/etc` drop-in
+  it cannot read as text in `install_drop_ins` (`install_evidence`:
+  unreadable text counts). Such a file can never be staged, so rule 5's
+  first loop omits the row with `InstallEvidenceChanged`, which is the
+  right outcome; keep that branch. A file between 256 KiB and 1 MiB is
+  over the config walk's cap but is read through its drop-in row, which
+  holds the content. Rule 7 runs only on rows that passed rule 5, so no
+  scan feeds empty uncaptured content to `holds_install_section`.
 
 **Every rule that asks whether a file is staged asks `is_staged`**, which
 looks the path up in `staged_writes.writes` by `Destination`, never by a

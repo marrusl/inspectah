@@ -92,10 +92,10 @@ two directories).
 are in `crates/core/src/types/units.rs`, and the collector, the scheduled
 inspector and the pipeline all use them. Lines end at `\n`, `\r` or `\0`,
 comments are skipped, a trailing backslash continues the line.
-`holds_install_section` once split on `\n` only, so a drop-in whose
-`[Install]` header followed a lone `\r` changed the section the collector
-read and still escaped `install_drop_ins` and rule 5. Never write a
-second splitter.
+A splitter that ends lines at `\n` alone misreads an `[Install]` header
+after a lone `\r`, so the drop-in changes the section the collector reads
+and still escapes `install_drop_ins` and rule 5. Never write a second
+splitter.
 
 ## Install files and the search path
 
@@ -188,7 +188,8 @@ every rule; Task 5.2 removes it. Preset lines that list instances
 that is not a target with a unit file the scan reads is a warning and no
 record. In the plan, `PlannedTarget` is built only in
 `plan_default_target`, and `systemctl_lines` takes the planned target
-first, so `set-default` is the first line of the unit state section.
+first, so `set-default` is the section's first command; the section's
+`# Omitted:` lines come before it.
 
 ## Test hosts must carry the enable links
 
