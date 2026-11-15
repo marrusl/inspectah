@@ -24,9 +24,9 @@ vi.mock("../../api/client", () => ({
 function collisionText(unit: string): string {
   return (
     `${unit} (inspectah generates this unit, and a unit collected from the ` +
-    "host has its name, so the generated files are not written and the unit " +
-    "is not enabled here; to carry the generated unit, exclude the collected " +
-    "unit and its file)"
+    `host, ${unit}, has the name of one of its files, so the generated ` +
+    "files are not written and the unit is not enabled here; to carry the " +
+    "generated unit, exclude the collected unit and its file)"
   );
 }
 
@@ -53,14 +53,14 @@ const FLATPAK_DECLINE: DeclinedGeneratedView = {
 /**
  * The Scheduled Tasks section as the server sends it: the collected
  * `cron-backup` timer, the generated `cron-backup` row of the same name
- * (its id names its kind), and another generated row.
+ * (each id is its kind and source), and another generated row.
  */
 const SCHEDULED: ReferenceSection = {
   id: "scheduled_tasks",
   display_name: "Scheduled Tasks",
   items: [
     {
-      id: "cron-backup",
+      id: "timer:cron-backup",
       title: "cron-backup",
       subtitle: "daily",
       detail: null,
@@ -69,18 +69,20 @@ const SCHEDULED: ReferenceSection = {
       unit_row: true,
     },
     {
-      id: "generated:cron-backup",
+      id: "generated:0:cron-backup",
       title: "cron-backup",
       subtitle: "0 2 * * *",
       detail: null,
       searchable_text: "cron-backup 0 2 * * * generated-timer",
+      generated_timer: "cron-backup",
     },
     {
-      id: "generated:cron-cleanup",
+      id: "generated:1:cron-cleanup",
       title: "cron-cleanup",
       subtitle: "0 3 * * *",
       detail: null,
       searchable_text: "cron-cleanup 0 3 * * * generated-timer",
+      generated_timer: "cron-cleanup",
     },
   ],
 };
@@ -126,8 +128,10 @@ describe("declined generated unit on its scheduled row", () => {
       emptyView({ declined_generated: [TIMER_DECLINE] }),
       vi.fn(),
     );
-    const generated = screen.getByTestId("context-item-generated:cron-backup");
-    const collected = screen.getByTestId("context-item-cron-backup");
+    const generated = screen.getByTestId(
+      "context-item-generated:0:cron-backup",
+    );
+    const collected = screen.getByTestId("context-item-timer:cron-backup");
     const notes = screen.getAllByText(collisionText("cron-backup.timer"));
     expect(notes).toHaveLength(1);
     expect(notes[0]).toHaveClass("inspectah-unit-declined--fixme");
@@ -137,14 +141,14 @@ describe("declined generated unit on its scheduled row", () => {
     expect(collected).not.toContainElement(notes[0]);
     // Control: another generated row in the same section has no note.
     expect(
-      screen.getByTestId("context-item-generated:cron-cleanup").textContent,
+      screen.getByTestId("context-item-generated:1:cron-cleanup").textContent,
     ).not.toContain("inspectah generates this unit");
   });
 
   it("shows no note when nothing is declined", () => {
     renderSection("scheduled_tasks", emptyView(), vi.fn());
     expect(
-      screen.getByTestId("context-item-generated:cron-backup"),
+      screen.getByTestId("context-item-generated:0:cron-backup"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/inspectah generates this unit/)).toBeNull();
   });
@@ -180,14 +184,14 @@ describe("declined flatpak provisioning service", () => {
 describe("scheduled timer unit link without navigation", () => {
   it("names the unit as text when the view cannot navigate", () => {
     renderSection("scheduled_tasks", emptyView());
-    const row = screen.getByTestId("context-item-cron-backup");
+    const row = screen.getByTestId("context-item-timer:cron-backup");
     expect(within(row).getByText("cron-backup.timer")).toBeInTheDocument();
     expect(within(row).queryByRole("link")).toBeNull();
   });
 
   it("links the unit when the view can navigate", () => {
     renderSection("scheduled_tasks", emptyView(), vi.fn());
-    const row = screen.getByTestId("context-item-cron-backup");
+    const row = screen.getByTestId("context-item-timer:cron-backup");
     expect(
       within(row).getByRole("link", { name: "cron-backup.timer" }),
     ).toBeInTheDocument();

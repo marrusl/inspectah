@@ -1,12 +1,12 @@
 /**
- * A generated timer row and the collected timer of its name are two rows
- * with two ids (spec § 11.1). The generated row's id names its kind, so
- * the rows share no key, DOM id or search entry, the declined note sits
- * under the generated row, and search reaches the generated row.
+ * Scheduled rows that share a name are distinct rows (spec § 11.1). The
+ * server gives each row an id of its kind and its source, so no two rows
+ * share a key, DOM id or search entry; the declined note joins on the
+ * generated row's `generated_timer` name, not on an id; and search and
+ * reveal land on the row searched for.
  *
- * Mounts `App` with `fetch` as the only thing replaced. The section is
- * the one the server sends for that host: see
- * `api_test::a_generated_scheduled_row_has_its_own_id`.
+ * Mounts `App` with `fetch` as the only thing replaced. The ids are the
+ * ones the server sends: see `api_test::each_scheduled_row_has_its_own_id`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -15,15 +15,19 @@ import App from "../App";
 import type { DeclinedGeneratedView, ReferenceSection } from "../api/types";
 import { emptyView } from "../test-utils/emptyView";
 
-const COLLECTED_ID = "cron-backup";
-const GENERATED_ID = "generated:cron-backup";
+/** The ids the server sends: each row's kind and source. */
+const ETC_TIMER_ID = "timer:/etc/systemd/system/backup.timer";
+const VENDOR_TIMER_ID = "timer:/usr/lib/systemd/system/backup.timer";
+const PREFIXED_TIMER_ID =
+  "timer:/etc/systemd/system/generated:cron-backup.timer";
+const GENERATED_ID = "generated:0:cron-backup";
 
 /** The text the server sends for the collision, as the plan writes it. */
 const COLLISION_TEXT =
   "cron-backup.timer (inspectah generates this unit, and a unit collected " +
-  "from the host has its name, so the generated files are not written and " +
-  "the unit is not enabled here; to carry the generated unit, exclude the " +
-  "collected unit and its file)";
+  "from the host, cron-backup.timer, has the name of one of its files, so " +
+  "the generated files are not written and the unit is not enabled here; " +
+  "to carry the generated unit, exclude the collected unit and its file)";
 
 const DECLINED: DeclinedGeneratedView = {
   row: { row: "scheduled", name: "cron-backup" },
@@ -35,18 +39,41 @@ const DECLINED: DeclinedGeneratedView = {
   },
 };
 
+/**
+ * Every pair of rows that once shared an id: a shadowed timer's `/etc`
+ * and vendor descriptions, and a collected timer named
+ * `generated:cron-backup.timer` beside the generated `cron-backup` row.
+ */
 const SECTIONS: ReferenceSection[] = [
   {
     id: "scheduled_tasks",
     display_name: "Scheduled Tasks",
     items: [
       {
-        id: COLLECTED_ID,
-        title: "cron-backup",
+        id: ETC_TIMER_ID,
+        title: "backup",
         subtitle: "daily",
-        detail: "/usr/bin/vendor-backup",
-        searchable_text: "cron-backup daily /usr/bin/vendor-backup timer",
-        unit: "cron-backup.timer",
+        detail: null,
+        searchable_text: "backup daily local backup timer",
+        unit: "backup.timer",
+        unit_row: false,
+      },
+      {
+        id: VENDOR_TIMER_ID,
+        title: "backup",
+        subtitle: "weekly",
+        detail: null,
+        searchable_text: "backup weekly vendor backup timer",
+        unit: "backup.timer",
+        unit_row: false,
+      },
+      {
+        id: PREFIXED_TIMER_ID,
+        title: "generated:cron-backup",
+        subtitle: "hourly",
+        detail: null,
+        searchable_text: "generated:cron-backup hourly timer",
+        unit: "generated:cron-backup.timer",
         unit_row: false,
       },
       {
@@ -55,6 +82,7 @@ const SECTIONS: ReferenceSection[] = [
         subtitle: "0 2 * * *",
         detail: null,
         searchable_text: "cron-backup 0 2 * * * generated-timer",
+        generated_timer: "cron-backup",
       },
     ],
   },
@@ -125,41 +153,74 @@ afterEach(() => {
   expect(mutatingRequests).toEqual([]);
 });
 
-describe("a generated row and the collected timer of its name", () => {
-  it("are two rows, with the declined note under the generated one", async () => {
-    render(<App />);
-    const nav = await screen.findByRole("navigation", { name: "Sections" });
-    await userEvent.click(
-      await within(nav).findByRole("link", { name: /^Scheduled Tasks/ }),
-    );
-    const list = await screen.findByRole("list", {
-      name: "Scheduled Tasks context items",
-    });
-    const rows = within(list).getAllByRole("listitem");
+/** Open Scheduled Tasks and return its rows. */
+async function scheduledRows() {
+  render(<App />);
+  const nav = await screen.findByRole("navigation", { name: "Sections" });
+  await userEvent.click(
+    await within(nav).findByRole("link", { name: /^Scheduled Tasks/ }),
+  );
+  const list = await screen.findByRole("list", {
+    name: "Scheduled Tasks context items",
+  });
+  return within(list).getAllByRole("listitem");
+}
+
+/** Search all sections for `query`, select its one result. */
+async function searchAndSelect(query: string) {
+  const input = await screen.findByLabelText("Search all sections");
+  await userEvent.type(input, query);
+  const results = await screen.findByTestId("global-search-results");
+  const options = within(results).getAllByRole("option");
+  expect(options).toHaveLength(1);
+  await userEvent.click(options[0]);
+}
+
+describe("scheduled rows that share a name", () => {
+  it("are distinct rows, with the declined note under the generated one", async () => {
+    const rows = await scheduledRows();
     expect(rows.map((r) => r.getAttribute("data-testid"))).toEqual([
-      `context-item-${COLLECTED_ID}`,
+      `context-item-${ETC_TIMER_ID}`,
+      `context-item-${VENDOR_TIMER_ID}`,
+      `context-item-${PREFIXED_TIMER_ID}`,
       `context-item-${GENERATED_ID}`,
     ]);
-    expect(
-      document.querySelectorAll(`[id="context-item-${COLLECTED_ID}"]`),
-    ).toHaveLength(1);
-    const note = within(list).getByText(COLLISION_TEXT);
-    expect(rows[1]).toContainElement(note);
-    expect(rows[0]).not.toContainElement(note);
+    for (const id of [
+      ETC_TIMER_ID,
+      VENDOR_TIMER_ID,
+      PREFIXED_TIMER_ID,
+      GENERATED_ID,
+    ]) {
+      expect(
+        document.querySelectorAll(`[id="context-item-${id}"]`),
+      ).toHaveLength(1);
+    }
+    const notes = screen.getAllByText(COLLISION_TEXT);
+    expect(notes).toHaveLength(1);
+    expect(rows[3]).toContainElement(notes[0]);
   });
 
   it("search reaches and focuses the generated row", async () => {
     render(<App />);
-    const input = await screen.findByLabelText("Search all sections");
-    await userEvent.type(input, "generated-timer");
-    const results = await screen.findByTestId("global-search-results");
-    const options = within(results).getAllByRole("option");
-    expect(options).toHaveLength(1);
-    await userEvent.click(options[0]);
+    await searchAndSelect("generated-timer");
     const row = await screen.findByTestId(`context-item-${GENERATED_ID}`);
     await waitFor(() => expect(row).toHaveFocus());
+  });
+
+  it("search reaches and focuses the vendor description of a shadowed timer", async () => {
+    render(<App />);
+    await searchAndSelect("vendor backup");
+    const row = await screen.findByTestId(`context-item-${VENDOR_TIMER_ID}`);
+    await waitFor(() => expect(row).toHaveFocus());
     expect(
-      screen.getByTestId(`context-item-${COLLECTED_ID}`),
+      screen.getByTestId(`context-item-${ETC_TIMER_ID}`),
     ).not.toHaveFocus();
+  });
+
+  it("search reaches the collected timer whose name starts with generated:", async () => {
+    render(<App />);
+    await searchAndSelect("hourly");
+    const row = await screen.findByTestId(`context-item-${PREFIXED_TIMER_ID}`);
+    await waitFor(() => expect(row).toHaveFocus());
   });
 });

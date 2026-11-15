@@ -57,6 +57,7 @@ fn plain_context_item_is_byte_identical() {
         decision: None,
         advisory: None,
         unit_link: None,
+        generated_timer: None,
     };
     insta::assert_snapshot!(
         serde_json::to_string(&item).expect("ContextItem serializes"),

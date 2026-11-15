@@ -18,7 +18,7 @@ use super::types::{
     RefLvmVolume, RefMountPoint, RefNMConnection, RefNetwork, RefOmittedService, RefProxyEnv,
     RefQuadletItem, RefRunningContainerItem, RefServiceAdvisory, RefServiceItem, RefServiceWarning,
     RefServices, RefStaticRoute, RefStorage, RefVarDirectory, RefVersionChangeItem,
-    RefVersionChanges, ReferenceProjection, TimerUnitLink,
+    RefVersionChanges, ReferenceProjection, ScheduledSource, TimerUnitLink,
 };
 
 /// Project version changes from snapshot into reference format.
@@ -643,6 +643,9 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             content: None,
             tags: vec!["cron".into(), cj.path.clone()],
             unit_link: None,
+            scheduled: Some(ScheduledSource::CronJob {
+                path: cj.path.clone(),
+            }),
         });
     }
 
@@ -669,6 +672,10 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             },
             tags: vec!["timer".into()],
             unit_link: timer_unit_link(snap, &st.name),
+            scheduled: Some(ScheduledSource::Timer {
+                path: st.path.clone(),
+                name: st.name.clone(),
+            }),
         });
     }
 
@@ -684,10 +691,13 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             },
             tags: vec!["at".into()],
             unit_link: None,
+            scheduled: Some(ScheduledSource::AtJob {
+                file: aj.file.clone(),
+            }),
         });
     }
 
-    for gtu in &sched.generated_timer_units {
+    for (index, gtu) in sched.generated_timer_units.iter().enumerate() {
         let mut content_parts = Vec::new();
         if !gtu.source_path.is_empty() {
             content_parts.push(gtu.source_path.clone());
@@ -710,6 +720,10 @@ fn project_ref_scheduled_tasks(snap: &InspectionSnapshot) -> Vec<GenericRefItem>
             },
             tags: vec!["generated-timer".into()],
             unit_link: None,
+            scheduled: Some(ScheduledSource::GeneratedTimer {
+                index,
+                name: gtu.name.clone(),
+            }),
         });
     }
 
@@ -768,6 +782,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: detail,
             tags,
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -794,6 +809,7 @@ fn project_ref_non_rpm(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             },
             tags: vec!["env-file".into(), ef.path.clone()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -831,6 +847,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["mode".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -844,6 +861,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["fips".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -857,6 +875,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["port-label".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -879,6 +898,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["boolean".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -891,6 +911,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["module".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -914,6 +935,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec!["fcontext".into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 
@@ -935,6 +957,7 @@ fn project_ref_selinux(snap: &InspectionSnapshot) -> Vec<GenericRefItem> {
             content: None,
             tags: vec![tag.into()],
             unit_link: None,
+            scheduled: None,
         });
     }
 

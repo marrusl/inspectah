@@ -375,6 +375,11 @@ export interface ContextItem {
   unit?: string;
   /** With `unit`: whether `unit_states` holds a row for that unit. */
   unit_row?: boolean;
+  /**
+   * On a generated timer row only: the generated-timer name, which the
+   * view's `generated_timers` and `declined_generated` are keyed by.
+   */
+  generated_timer?: string;
 }
 
 export interface ContextSubsection {

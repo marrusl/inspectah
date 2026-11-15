@@ -606,6 +606,27 @@ pub struct GenericRefItem {
     /// link to its control. `None` on every other row, and on a timer
     /// whose `<name>.timer` is not a unit name.
     pub unit_link: Option<TimerUnitLink>,
+    /// On a scheduled row only: which record the row describes, by its
+    /// kind and its source. `None` on every other row.
+    pub scheduled: Option<ScheduledSource>,
+}
+
+/// The record a scheduled row describes (§ 11.1): its kind and what
+/// identifies it among records of that kind. Two rows can share a name
+/// (a shadowed timer's `/etc` and vendor files, a collected timer and a
+/// generated one, two lines of one cron file), never a source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduledSource {
+    /// A cron file, by its path.
+    CronJob { path: String },
+    /// A collected timer, by its file's path; by its name when the
+    /// snapshot records no path.
+    Timer { path: String, name: String },
+    /// An at job, by its spool file.
+    AtJob { file: String },
+    /// A generated timer, by its place in `generated_timer_units`, and the
+    /// name its decision and any decline are keyed by.
+    GeneratedTimer { index: usize, name: String },
 }
 
 /// The unit a scheduled timer row describes (§ 11.1). The row has no

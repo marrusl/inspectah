@@ -128,6 +128,10 @@ pub struct ContextItem {
     /// other row.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub unit_link: Option<ContextUnitLink>,
+    /// On a generated timer row only: the generated-timer name, which the
+    /// view's `generated_timers` and `declined_generated` are keyed by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_timer: Option<String>,
 }
 
 /// The unit a scheduled timer row describes, so the row can link to the

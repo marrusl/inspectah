@@ -65,25 +65,16 @@ const SECTION_LABELS: Record<string, string> = {
 };
 
 /**
- * Prefix of a generated timer row's id in Scheduled Tasks (Rust:
- * `GENERATED_ROW_ID_PREFIX` in the web adapter). It keeps the row apart
- * from a collected timer of the same name, which is exactly the timer a
- * declined generated unit collides with.
- */
-const GENERATED_ROW_ID_PREFIX = "generated:";
-
-/**
  * The declined generated unit a Scheduled Tasks row shows: the one whose
- * request came from the generated-timer row with that id.
+ * request came from the generated timer this row describes.
  */
 function scheduledDeclined(
   declined: DeclinedGeneratedView[],
   item: ContextItem,
 ): DeclinedView | undefined {
+  if (item.generated_timer === undefined) return undefined;
   return declined.find(
-    (d) =>
-      d.row.row === "scheduled" &&
-      `${GENERATED_ROW_ID_PREFIX}${d.row.name}` === item.id,
+    (d) => d.row.row === "scheduled" && d.row.name === item.generated_timer,
   )?.declined;
 }
 

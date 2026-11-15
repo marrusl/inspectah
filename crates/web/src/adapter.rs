@@ -24,7 +24,7 @@ use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
     GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
-    RefVarDirectory, RefVersionChanges, ReferenceProjection, config_ref_summary,
+    RefVarDirectory, RefVersionChanges, ReferenceProjection, ScheduledSource, config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinedView};
@@ -1661,21 +1661,32 @@ fn unbacked_var_row(vd: &RefVarDirectory, rationale: String, state: Option<Strin
 
 // -- Generic sections (scheduled_tasks, non_rpm_software, selinux) ---------
 
-/// The tag the reference projection puts on a generated timer row.
-const GENERATED_TIMER_TAG: &str = "generated-timer";
-/// Prefix of a generated timer row's id. A generated timer is declined
-/// exactly when a collected unit has its name, so its row and the
-/// collected timer's row would otherwise share one id in the scheduled
-/// section. The frontend joins a declined generated unit on this id.
-const GENERATED_ROW_ID_PREFIX: &str = "generated:";
-
-/// A row's id in the web response: a generated timer row's id names its
-/// kind, every other row keeps the projection's id.
+/// A row's id in the web response. A scheduled row's id is its kind and
+/// its source (`cron:<path>`, `timer:<path>`, `at:<file>`,
+/// `generated:<index>:<name>`): the kind ends at the first `:` and holds
+/// none itself, so rows of two kinds never share an id, and within a kind
+/// the source is unique. A timer recorded without a path is identified by
+/// its name. Every other row keeps the projection's id.
 fn generic_row_id(item: &GenericRefItem) -> String {
-    if item.tags.iter().any(|t| t == GENERATED_TIMER_TAG) {
-        format!("{GENERATED_ROW_ID_PREFIX}{}", item.id)
-    } else {
-        item.id.clone()
+    match &item.scheduled {
+        None => item.id.clone(),
+        Some(ScheduledSource::CronJob { path }) => format!("cron:{path}"),
+        Some(ScheduledSource::Timer { path, name }) => {
+            format!("timer:{}", if path.is_empty() { name } else { path })
+        }
+        Some(ScheduledSource::AtJob { file }) => format!("at:{file}"),
+        Some(ScheduledSource::GeneratedTimer { index, name }) => {
+            format!("generated:{index}:{name}")
+        }
+    }
+}
+
+/// The generated-timer name a scheduled row describes, which its decision
+/// and any declined request are keyed by. `None` on every other row.
+fn generated_timer_name(item: &GenericRefItem) -> Option<String> {
+    match &item.scheduled {
+        Some(ScheduledSource::GeneratedTimer { name, .. }) => Some(name.clone()),
+        _ => None,
     }
 }
 
@@ -1714,6 +1725,7 @@ pub fn web_generic_section(
                     unit: link.unit.clone(),
                     unit_row: link.unit_row,
                 }),
+            generated_timer: generated_timer_name(item),
             ..Default::default()
         })
         .collect();

@@ -738,10 +738,10 @@ async fn a_scheduled_timer_row_names_its_unit_and_offers_no_include() {
             .clone()
     };
 
-    let backup = row("backup");
+    let backup = row("timer:backup");
     assert_eq!(backup["unit"], "backup.timer", "{backup}");
     assert_eq!(backup["unit_row"], true, "{backup}");
-    let cleanup = row("cleanup");
+    let cleanup = row("timer:cleanup");
     assert_eq!(cleanup["unit"], "cleanup.timer", "{cleanup}");
     assert_eq!(cleanup["unit_row"], false, "{cleanup}");
     for timer in [&backup, &cleanup] {
@@ -749,7 +749,7 @@ async fn a_scheduled_timer_row_names_its_unit_and_offers_no_include() {
         assert!(timer.get("decision").is_none(), "{timer}");
     }
     // A cron row is not a unit and names none.
-    let cron = row(TIMER_CRON_PATH);
+    let cron = row(&format!("cron:{TIMER_CRON_PATH}"));
     assert!(cron.get("unit").is_none(), "{cron}");
     assert!(cron.get("unit_row").is_none(), "{cron}");
 
@@ -1074,49 +1074,126 @@ async fn a_declined_generated_unit_is_carried_for_its_row() {
     );
 }
 
-/// A generated timer row and the collected timer of its name are two
-/// scheduled rows with two ids: the generated row's id carries its kind,
-/// so no key, DOM id or search entry is shared. Control: cron and
-/// collected timer rows keep the id they had.
-#[tokio::test]
-async fn a_generated_scheduled_row_has_its_own_id() {
-    let scheduled_ids = |sections: &serde_json::Value| -> Vec<String> {
-        sections
-            .as_array()
-            .expect("sections is an array")
-            .iter()
-            .find(|s| s["id"] == "scheduled_tasks")
-            .expect("a scheduled_tasks section")["items"]
-            .as_array()
-            .expect("scheduled items")
-            .iter()
-            .map(|i| i["id"].as_str().expect("an id").to_owned())
-            .collect()
-    };
-    let (status, sections) = get_json(
-        &app(generated_collision_state(true)),
-        "/api/snapshot/sections",
-    )
-    .await;
+/// Every scheduled row of [`scheduled_identity_state`]'s sections
+/// response, as `(id, generated_timer)`.
+async fn scheduled_rows(state: Arc<AppState>) -> Vec<(String, Option<String>)> {
+    let (status, sections) = get_json(&app(state), "/api/snapshot/sections").await;
     assert_eq!(status, StatusCode::OK);
+    sections
+        .as_array()
+        .expect("sections is an array")
+        .iter()
+        .find(|s| s["id"] == "scheduled_tasks")
+        .expect("a scheduled_tasks section")["items"]
+        .as_array()
+        .expect("scheduled items")
+        .iter()
+        .map(|i| {
+            (
+                i["id"].as_str().expect("an id").to_owned(),
+                i["generated_timer"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+/// A host whose scheduled section holds every pair of rows that once
+/// shared an id: a shadowed timer's `/etc` and vendor descriptions, a
+/// collected timer named `generated:cron-backup.timer` beside the
+/// generated `cron-backup` row, and two generated rows of one name from
+/// two lines of one cron file.
+fn scheduled_identity_state() -> Arc<AppState> {
+    use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit};
+    let timer = |name: &str, path: &str| SystemdTimer {
+        name: name.into(),
+        path: path.into(),
+        on_calendar: "daily".into(),
+        ..Default::default()
+    };
+    let generated = |command: &str| GeneratedTimerUnit {
+        name: "cron-backup".into(),
+        cron_expr: "0 2 * * *".into(),
+        source_path: "etc/cron.d/backup".into(),
+        command: command.into(),
+        disposition: FindingKind::included(),
+        ..Default::default()
+    };
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "/etc/cron.d/backup".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![
+            timer("backup", "/etc/systemd/system/backup.timer"),
+            timer("backup", "/usr/lib/systemd/system/backup.timer"),
+            timer(
+                "generated:cron-backup",
+                "/etc/systemd/system/generated:cron-backup.timer",
+            ),
+        ],
+        at_jobs: vec![AtJob {
+            file: "a00001".into(),
+            ..Default::default()
+        }],
+        generated_timer_units: vec![generated("/usr/bin/backup"), generated("/usr/bin/prune")],
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+    })
+}
+
+/// Each scheduled row's id is its kind and its source: the cron file, the
+/// timer file's path, the at job's file, and the generated row's place in
+/// the section. No two rows share an id, and only a generated row names
+/// the generated unit it is, which is what a decline and the row's
+/// control join on.
+#[tokio::test]
+async fn each_scheduled_row_has_its_own_id() {
+    let rows = scheduled_rows(scheduled_identity_state()).await;
+    let none = None::<String>;
+    let generated = Some("cron-backup".to_owned());
     assert_eq!(
-        scheduled_ids(&sections),
+        rows,
         [
-            GENERATED_TIMER.to_owned(),
-            format!("generated:{GENERATED_TIMER}")
+            ("cron:/etc/cron.d/backup".to_owned(), none.clone()),
+            (
+                "timer:/etc/systemd/system/backup.timer".to_owned(),
+                none.clone()
+            ),
+            (
+                "timer:/usr/lib/systemd/system/backup.timer".to_owned(),
+                none.clone()
+            ),
+            (
+                "timer:/etc/systemd/system/generated:cron-backup.timer".to_owned(),
+                none.clone()
+            ),
+            ("at:a00001".to_owned(), none.clone()),
+            ("generated:0:cron-backup".to_owned(), generated.clone()),
+            ("generated:1:cron-backup".to_owned(), generated),
         ]
     );
+    let mut ids: Vec<&String> = rows.iter().map(|(id, _)| id).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), rows.len(), "{rows:?}");
+}
 
-    let (_, sections) = get_json(&app(scheduled_timer_state()), "/api/snapshot/sections").await;
+/// A timer recorded without its file's path, as an imported snapshot may
+/// be, is identified by its name.
+#[tokio::test]
+async fn a_scheduled_timer_without_a_path_is_identified_by_name() {
+    let rows = scheduled_rows(scheduled_timer_state()).await;
+    let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
     assert_eq!(
-        scheduled_ids(&sections),
+        ids,
         [
-            TIMER_CRON_PATH,
-            "backup",
-            "cleanup",
-            "generated:cron-backup"
-        ],
-        "cron and collected timer rows keep their ids"
+            "cron:/etc/cron.d/backup",
+            "timer:backup",
+            "timer:cleanup",
+            "generated:0:cron-backup"
+        ]
     );
 }
 
@@ -2460,14 +2537,14 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
     let cron = sched
         .items
         .iter()
-        .find(|i| i.id == "/etc/cron.d/backup")
+        .find(|i| i.id == "cron:/etc/cron.d/backup")
         .unwrap();
     assert_eq!(cron.title, "backup");
 
     let timer = sched
         .items
         .iter()
-        .find(|i| i.id == "logrotate.timer")
+        .find(|i| i.id == "timer:logrotate.timer")
         .unwrap();
     assert_eq!(timer.subtitle.as_deref(), Some("daily"));
 }
