@@ -22,9 +22,11 @@ form where it is serialized:
 - `UnitStateChange`: its `unit` and `current_state`. A struct literal
   with public fields could pair a unit with a state the collector never
   produces.
-- `PlannedUnit` (`crates/pipeline/src/render/unit_plan.rs`): only
-  `plan_units` builds one, so `systemctl_lines`, which takes nothing
-  else, cannot write a command the plan did not pass.
+- `PlannedUnit` and `PlannedTarget`
+  (`crates/pipeline/src/render/unit_plan.rs`): only `plan_units` builds a
+  `PlannedUnit`, and only `plan_default_target` a `PlannedTarget`, so
+  `systemctl_lines`, which takes nothing else, cannot write a command the
+  plan did not pass.
 - `Destination` (`crates/pipeline/src/render/configtree.rs`): only
   `Destination::new` normalizes a path, so two spellings of one path are
   one destination everywhere.

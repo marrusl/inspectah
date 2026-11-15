@@ -18,8 +18,10 @@ the collector reads the state the rows carry is in
 ## Every `systemctl` line is the plan's
 
 **`RUN systemctl` is written by `unit_plan::systemctl_lines` and by
-nothing else.** `systemctl_lines` takes only `PlannedUnit`, which only
-`plan_units` builds, so a line cannot name a unit the plan did not pass.
+nothing else.** `systemctl_lines` takes only the two checked types:
+`PlannedUnit`, which only `plan_units` builds, and `PlannedTarget`, the
+default target, which only `plan_default_target` builds. So a line cannot
+name a unit or a target the plan did not pass.
 `t21_every_systemctl_command_in_the_containerfile_is_planned` in
 `crates/cli/tests/units_scan_test.rs` enforces it: it reads every
 `systemctl` instruction out of the rendered Containerfile, comments
@@ -172,6 +174,14 @@ conditions hold, the first that fails giving the `AlsoWhy`:
   `named` lists every member failing it the same way and `further` the
   members failing it the other way it can fail (a condition fails at most
   two ways). `add` lists the members that get a line of the opposite verb.
+- **The recipe never suggests a command § 10.3 refuses.** A member in
+  `add` for which `target_needs_unit` holds under the opposite verb (a
+  protected unit an owner's `enable` reaches) gets no line; it gets "No
+  disable line for <unit>: the image needs this unit." instead. When a
+  line is withheld, or a member is `LinksDiffer(Other)` (in `why` or
+  `further`), the lines cannot reproduce the source host, so
+  `ALSO_PARTIAL` heads them in place of `ALSO_TO_REPRODUCE` and the
+  `ALSO_EACH_FOLLOWS` footer is dropped (Mark Russell, 2026-11-15).
 - **Every rule 7 sentence is an `ALSO_*` constant, and
   `also_advisory_lines` is the only renderer**, for the Containerfile and
   refine. Its blocks follow the `systemctl` lines. The wording beyond the
@@ -183,7 +193,11 @@ conditions hold, the first that fails giving the `AlsoWhy`:
 Beside the commands, the plan renders the collector's link findings and
 undetermined install records (`link_advisories`,
 `undetermined_advisories`), each a `FindingAdvisory` built from
-`manual_link_lines` or `undetermined_install_lines`. While one of the
+`manual_link_lines` or `undetermined_install_lines`. A `VendorInstallOnly`
+link's removal line is `RUN test -L '<path>' && rm -- '<path>'`, so it
+removes only a link; when `staged_writes` writes a file at that path, the
+line is replaced by one saying the copied file replaces the link, so
+advice never deletes a carried file. While one of the
 unit's install files is not staged (`excluded_install_files`, per unit, by
 `Destination`), its advisories give way to one `install_omitted_line`
 naming the excluded files, with those files in `not_applied`, and

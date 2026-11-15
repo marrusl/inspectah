@@ -44,13 +44,17 @@ The units inspector decides by the form of what is at
   is `Inventory` with `shadowed_by` set (`shadow_service_owned_paths` in
   `crates/pipeline/src/collect.rs`). A drop-in on a generated parent is
   carried and does not bring the parent back.
-- A `.conf` in a type-wide directory (`service.d`) or a dash-prefix
-  directory (`a-.service.d`) belongs to no unit. It is not a drop-in row:
-  an unowned one reaches the snapshot as a config entry like any other
-  unowned file under `/etc`. Whether a package-owned, unmodified one
-  reaches a single-host snapshot is not verified (§ 13 run R2). Either way
-  it is never an install file, because `enable` does not read
-  `[Install]` there (measured).
+- A `.conf` in a type-wide directory (`service.d`) belongs to no unit.
+  It is not a drop-in row: an unowned one reaches the snapshot as a config
+  entry like any other unowned file under `/etc`. Whether a
+  package-owned, unmodified one reaches a single-host snapshot is not
+  verified (§ 13 run R2).
+- A `.conf` in a dash-prefix directory (`a-.service.d`) is a drop-in row
+  like any other: `collect_drop_ins` skips only the type-wide names, so
+  `a-.service` is the row's `unit` and the config entry at the path is
+  shadowed by it. Its toggle and writer are the drop-in row's.
+- Neither is ever an install file of the units sharing that prefix or
+  type, because `enable` does not read `[Install]` there (measured).
 - Which drop-ins are install files, and what excluding one does to a
   unit's command, is in
   [service-omission-model](service-omission-model.md) (rule 5's drop-in
