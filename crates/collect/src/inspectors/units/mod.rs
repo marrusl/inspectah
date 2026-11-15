@@ -12,8 +12,9 @@ use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
     AdminStorageFragment, AdvisoryUnit, Classified, MountUnitFinding, PresetDefault, StorageKind,
-    SystemdDropIn, UNIT_TYPE_SUFFIXES, UnitFragment, UnitInventoryEntry, UnitKind, UnitName,
-    UnitSection, UnitState, UnitStateChange, UnitSubject, holds_install_section,
+    SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UnitFragment, UnitInventoryEntry,
+    UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
+    holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeSet, HashSet};
@@ -1312,74 +1313,6 @@ fn storage_section(kind: StorageKind) -> &'static str {
         StorageKind::Automount => "Automount",
         StorageKind::Swap => "Swap",
     }
-}
-
-/// The characters systemd's unit file parser strips from the ends of a
-/// line, a key and a value.
-pub(crate) const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
-
-/// The characters that start a comment line in a unit file.
-const UNIT_FILE_COMMENT_STARTS: &[char] = &['#', ';'];
-
-/// The characters that end a line in a unit file, as systemd reads it.
-const UNIT_FILE_LINE_ENDS: &[char] = &['\n', '\r', '\0'];
-
-/// The lines of a unit file as systemd's `read_line` splits them: `\n`,
-/// `\r` and `\0` each end a line, and a run of them is one line end while
-/// no character repeats in it and no `\0` came before, so `\r\n` and
-/// `\n\r` are one line end and `\n\n` is two.
-fn physical_lines(content: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut rest = content;
-    while !rest.is_empty() {
-        let end = rest.find(UNIT_FILE_LINE_ENDS).unwrap_or(rest.len());
-        lines.push(&rest[..end]);
-        rest = &rest[end..];
-        let mut seen = Vec::new();
-        while let Some(c) = rest
-            .chars()
-            .next()
-            .filter(|c| UNIT_FILE_LINE_ENDS.contains(c) && !seen.contains(c))
-        {
-            rest = &rest[c.len_utf8()..];
-            seen.push(c);
-            if c == '\0' {
-                break;
-            }
-        }
-    }
-    lines
-}
-
-/// The logical lines of a unit file, joined as systemd's config parser
-/// joins them (systemd.syntax(7)): a line that ends in a backslash which
-/// is not itself escaped continues onto the next, the backslash read as a
-/// space. A comment line is skipped wherever it is, inside a continuation
-/// too, so it neither ends nor continues one. A continuation still open at
-/// the end of the file is a line of its own.
-pub(crate) fn logical_lines(content: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut pending: Option<String> = None;
-    for line in physical_lines(content) {
-        if line
-            .trim_start_matches(UNIT_FILE_WHITESPACE)
-            .starts_with(UNIT_FILE_COMMENT_STARTS)
-        {
-            continue;
-        }
-        let mut joined = pending.take().unwrap_or_default();
-        joined.push_str(line);
-        let trailing_backslashes = line.len() - line.trim_end_matches('\\').len();
-        if trailing_backslashes % 2 == 1 {
-            joined.pop();
-            joined.push(' ');
-            pending = Some(joined);
-        } else {
-            lines.push(joined);
-        }
-    }
-    lines.extend(pending);
-    lines
 }
 
 /// Read `Where=` and `Options=` from a storage unit file as systemd reads

@@ -322,8 +322,9 @@ fn state_change_vendor_drop_ins_are_file_names_on_load() {
 
 /// § 10.2: "holds an `[Install]` section" is one lexical test. True for
 /// the header with surrounding whitespace, with a trailing CR, before a
-/// backslash-continued assignment, and after a comment ending in a
-/// backslash (a comment continues nothing). False for a `[Service]`-only
+/// backslash-continued assignment, after a comment ending in a backslash
+/// (a comment continues nothing), and with a lone CR or a NUL as the line
+/// end, as systemd's `read_line` splits lines. False for a `[Service]`-only
 /// drop-in, a commented-out header, and a header text that is the
 /// continuation of another line.
 #[test]
@@ -340,6 +341,9 @@ fn holds_install_section_is_one_lexical_test() {
         ("[Service]\nNice=5\n", false),
         ("# [Install]\n", false),
         ("[Service]\nExecStart=/bin/echo \\\n[Install]\n", false),
+        ("[Service]\rNice=5\r[Install]\rWantedBy=a.target\r", true),
+        ("[Service]\0[Install]\0WantedBy=a.target\0", true),
+        ("[Service]\rNice=5\r", false),
     ] {
         assert_eq!(holds_install_section(text), expected, "{text:?}");
     }

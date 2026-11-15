@@ -7,14 +7,13 @@
 //! directories [`drop_in_dirs`] names under both unit directories and
 //! reads the files; nothing here touches the host.
 
-// The scan reads only whether the section is undetermined until install
-// state is read from the links; the section's lists are read by the tests
-// alone until then.
+// Today the scan asks only whether a section is undetermined, so no
+// production code reads `InstallSection`'s lists. Remove this allow when
+// the install state compares those lists with the links on the host.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use super::{UNIT_FILE_WHITESPACE, logical_lines};
 use crate::inspectors::scheduled::expand_timer_specifiers;
-use inspectah_core::types::units::{InstallUnknown, UnitName};
+use inspectah_core::types::units::{InstallUnknown, UNIT_FILE_WHITESPACE, UnitName, logical_lines};
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 

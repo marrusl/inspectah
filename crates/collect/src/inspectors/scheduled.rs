@@ -840,7 +840,7 @@ const ETC_TIMER_DROP_IN_DIR: &str = "/etc/systemd/system";
 /// Every `Unit=` value assigned in the `[Timer]` section of `content`, in
 /// order, read by logical line as systemd reads keys.
 fn timer_unit_assignments(content: &str) -> Vec<String> {
-    use super::units::{UNIT_FILE_WHITESPACE, logical_lines};
+    use inspectah_core::types::units::{UNIT_FILE_WHITESPACE, logical_lines};
     let mut in_timer = false;
     let mut values = Vec::new();
     for line in logical_lines(content) {

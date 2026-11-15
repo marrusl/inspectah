@@ -6886,3 +6886,37 @@ fn t24_resets_through_the_scan() {
         "{scanned}"
     );
 }
+
+/// T24 with Review focus 3: a drop-in whose lines end in a lone CR is read
+/// as systemd reads it, so its `[Install]` makes it an install file. It is
+/// in `install_drop_ins`, and with it excluded, `InstallEvidenceChanged`
+/// naming it and no enable.
+#[test]
+fn t24_a_lone_cr_install_drop_in_is_an_install_file() {
+    const DROP_IN: &str = "/etc/systemd/system/app.service.d/10-install.conf";
+    let snap = scan(
+        install_host("app.service", NO_INSTALL_UNIT)
+            .file(DROP_IN, "[Install]\rWantedBy=multi-user.target\r"),
+    );
+    assert_eq!(change(&snap, "app.service").install_drop_ins, [DROP_IN]);
+    let scanned = containerfile_in(&render_export(&snap));
+    assert!(acts(&scanned, "enable", "app.service"), "{scanned}");
+
+    let excluded = containerfile_in(&exported_after(
+        &snap,
+        &[(
+            ItemId::DropIn {
+                path: DROP_IN.into(),
+            },
+            false,
+        )],
+    ));
+    assert!(
+        in_no_systemctl_instruction(&excluded, "app.service"),
+        "{excluded}"
+    );
+    assert!(
+        omitted(&excluded, "app.service").is_some_and(|l| l.ends_with(&evidence_changed(DROP_IN))),
+        "{excluded}"
+    );
+}

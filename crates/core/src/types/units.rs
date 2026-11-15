@@ -953,37 +953,81 @@ fn is_drop_in_file_name(name: &str) -> bool {
 const INSTALL_SECTION_HEADER: &str = "[Install]";
 
 /// The characters systemd's unit file parser strips from the ends of a
-/// line.
-const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
+/// line, a key and a value.
+pub const UNIT_FILE_WHITESPACE: &[char] = &[' ', '\t', '\n', '\r'];
 
-/// Whether a unit file or drop-in holds an `[Install]` section: after
-/// lines that end in an unescaped backslash are joined to the next, and
-/// with comment lines skipped, some line's trimmed text is `[Install]`.
-/// The keys are not read. The one lexical test of an install file, shared
-/// by the collector and the plan.
-pub fn holds_install_section(text: &str) -> bool {
-    let mut pending = String::new();
-    for line in text.split('\n') {
-        let line = line.trim_end_matches('\r');
+/// The characters that start a comment line in a unit file.
+const UNIT_FILE_COMMENT_STARTS: &[char] = &['#', ';'];
+
+/// The characters that end a line in a unit file, as systemd reads it.
+const UNIT_FILE_LINE_ENDS: &[char] = &['\n', '\r', '\0'];
+
+/// The lines of a unit file as systemd's `read_line` splits them: `\n`,
+/// `\r` and `\0` each end a line, and a run of them is one line end while
+/// no character repeats in it and no `\0` came before, so `\r\n` and
+/// `\n\r` are one line end and `\n\n` is two.
+fn physical_lines(content: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut rest = content;
+    while !rest.is_empty() {
+        let end = rest.find(UNIT_FILE_LINE_ENDS).unwrap_or(rest.len());
+        lines.push(&rest[..end]);
+        rest = &rest[end..];
+        let mut seen = Vec::new();
+        while let Some(c) = rest
+            .chars()
+            .next()
+            .filter(|c| UNIT_FILE_LINE_ENDS.contains(c) && !seen.contains(c))
+        {
+            rest = &rest[c.len_utf8()..];
+            seen.push(c);
+            if c == '\0' {
+                break;
+            }
+        }
+    }
+    lines
+}
+
+/// The logical lines of a unit file, joined as systemd's config parser
+/// joins them (systemd.syntax(7)): a line that ends in a backslash which
+/// is not itself escaped continues onto the next, the backslash read as a
+/// space. A comment line is skipped wherever it is, inside a continuation
+/// too, so it neither ends nor continues one. A continuation still open at
+/// the end of the file is a line of its own.
+pub fn logical_lines(content: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut pending: Option<String> = None;
+    for line in physical_lines(content) {
         if line
             .trim_start_matches(UNIT_FILE_WHITESPACE)
-            .starts_with(['#', ';'])
+            .starts_with(UNIT_FILE_COMMENT_STARTS)
         {
             continue;
         }
-        pending.push_str(line);
-        let trailing = line.len() - line.trim_end_matches('\\').len();
-        if trailing % 2 == 1 {
-            pending.pop();
-            pending.push(' ');
-            continue;
+        let mut joined = pending.take().unwrap_or_default();
+        joined.push_str(line);
+        let trailing_backslashes = line.len() - line.trim_end_matches('\\').len();
+        if trailing_backslashes % 2 == 1 {
+            joined.pop();
+            joined.push(' ');
+            pending = Some(joined);
+        } else {
+            lines.push(joined);
         }
-        if pending.trim_matches(UNIT_FILE_WHITESPACE) == INSTALL_SECTION_HEADER {
-            return true;
-        }
-        pending.clear();
     }
-    pending.trim_matches(UNIT_FILE_WHITESPACE) == INSTALL_SECTION_HEADER
+    lines.extend(pending);
+    lines
+}
+
+/// Whether a unit file or drop-in holds an `[Install]` section: some
+/// logical line ([`logical_lines`]), trimmed of the whitespace systemd
+/// strips, is `[Install]`. The keys are not read. The one lexical test of
+/// an install file, shared by the collector and the plan.
+pub fn holds_install_section(text: &str) -> bool {
+    logical_lines(text)
+        .iter()
+        .any(|line| line.trim_matches(UNIT_FILE_WHITESPACE) == INSTALL_SECTION_HEADER)
 }
 
 impl UnitStateChange {
