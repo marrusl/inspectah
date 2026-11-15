@@ -3789,3 +3789,83 @@ fn an_unreadable_link_directory_under_etc_withholds_install_states() {
         );
     }
 }
+
+/// An unknown preset line names, in its one warning, only the units whose
+/// result its preset decides: here two vendor units, one line. An enabled
+/// local unit and a mask the same line matches keep their state changes,
+/// which do not depend on a preset, and are not named.
+#[test]
+fn an_unknown_preset_line_names_only_the_units_it_decides() {
+    let mut exec = unlinked_host(
+        &[
+            ("a.service", "enabled"),
+            ("b.service", "enabled"),
+            ("local.service", "enabled"),
+            ("gone.service", "masked"),
+        ],
+        "frobnicate *\ndisable *\n",
+    );
+    for unit in ["a.service", "b.service", "gone.service"] {
+        exec = exec.with_file(&format!("{VENDOR}/{unit}"), WANTS_MULTI_USER);
+    }
+    exec = exec
+        .with_dir_entry(ETC, "local.service")
+        .with_file(&format!("{ETC}/local.service"), WANTS_MULTI_USER);
+    exec =
+        with_mask(exec, "gone.service", MaskForm::DevNullLink).with_dir_entry(ETC, "gone.service");
+    for unit in ["a.service", "b.service", "local.service"] {
+        exec = with_link_in(exec, ETC, "multi-user.target.wants", unit);
+    }
+
+    let (section, _) = scan(&exec);
+    for unit in ["a.service", "b.service"] {
+        assert_eq!(
+            entry_of(&section, unit),
+            Some((UnitState::Enabled, None)),
+            "{unit}"
+        );
+        assert_eq!(change_of(&section, unit), None, "{unit}");
+    }
+    assert_eq!(
+        change_of(&section, "local.service"),
+        Some((UnitState::Enabled, None))
+    );
+    assert_eq!(
+        change_of(&section, "gone.service"),
+        Some((UnitState::Masked, None))
+    );
+    let warnings = scan_warnings(&exec);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].extra["line"], serde_json::json!(1));
+    assert_eq!(
+        warnings[0].extra["units"],
+        serde_json::json!(["a.service", "b.service"])
+    );
+}
+
+/// A preset line starting with `;` is a comment, as one starting with `#`
+/// is: `;enable app.service` before `disable app.service` changes
+/// nothing, and no warning is raised. Control: the same line without the
+/// `;` decides the preset.
+#[test]
+fn a_semicolon_preset_line_is_a_comment() {
+    let host = |preset: &str| {
+        with_link_in(
+            unlinked_host(&[("app.service", "enabled")], preset)
+                .with_file(&format!("{VENDOR}/app.service"), WANTS_MULTI_USER),
+            ETC,
+            "multi-user.target.wants",
+            "app.service",
+        )
+    };
+    let (control, _) = scan(&host("enable app.service\ndisable app.service\n"));
+    assert_eq!(change_of(&control, "app.service"), None);
+
+    let exec = host(";enable app.service\ndisable app.service\n");
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        change_of(&section, "app.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+    );
+    assert!(scan_warnings(&exec).is_empty());
+}

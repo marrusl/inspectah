@@ -499,10 +499,16 @@ fn build_state_changes(
         let preset = match preset_for(&subject.name, own_file, default_instance, rules) {
             PresetLookup::Rule(preset) => Some(preset),
             PresetLookup::NoRule => None,
-            // A mask is a state change whatever the presets say, so only
-            // the other units are named as not compared.
+            // The line decides only a unit whose result depends on its
+            // preset: a `Vendor` or `Shadowed` one that is not masked. A
+            // mask and an enabled local unit are state changes whatever the
+            // presets say, and a local unit is never compared with one.
             PresetLookup::Unknown { file, line } => {
-                if state != UnitState::Masked {
+                let preset_decides = matches!(
+                    fragment,
+                    UnitFragment::Vendor { .. } | UnitFragment::Shadowed { .. }
+                );
+                if state != UnitState::Masked && preset_decides {
                     unknown_lines
                         .entry((file, line))
                         .or_default()
@@ -1253,7 +1259,9 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     for (_filename, path, content) in &preset_files {
         for (index, line) in content.lines().enumerate() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            // `#` and `;` both start a comment line; the second is read from
+            // systemd's preset reader, not measured on RHEL 9 or 10.
+            if line.is_empty() || line.starts_with(['#', ';']) {
                 continue;
             }
             rules.extend(PresetRule::parse(line, path, index + 1));
