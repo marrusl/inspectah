@@ -750,6 +750,7 @@ read from a host file has one of three answers:
 | `vendor_drop_ins`, on a state change and on an `AlsoMember` | A directory listing under `/usr/lib/systemd/system` | File names only, each one path component ending in `.conf`; a value that is not fails to load. No content is read into the snapshot. Classified as identifiers. |
 | `AlsoMember.unit`, `UnitFragment::file`, `ManualLink.parent`, `ManualLink.unit`, `DefaultTarget.target` | `[Install]` values, link names and a directory listing | Proved `UnitName`s. |
 | `SystemdTimer.exec_start`, `description` | The timer and service files | Scrubbed by the existing scheduled pass, unchanged. |
+| `SystemdTimer.trigger` | The timer's `Unit=`, or its own name | A proved `UnitName`. A value that does not parse is not recorded, and the timer is then treated as having no local trigger. |
 | `SystemdDropIn.content` | The drop-in or shadow file | Scrubbed by the existing drop-in pass, renamed with the section. |
 | `attention_reason`, advisory strings | Generated | Built from the fields above and fixed text only. Never from file content. |
 
@@ -1306,8 +1307,9 @@ unit. The same rule is why the kernel section stops enabling
 What changes in scheduled:
 
 - `SystemdTimer` becomes a description: `name`, `on_calendar`, `exec_start`,
-  `description`, `source`, `path`, `aggregate`. It loses `disposition` and
-  `locked`, since it controls nothing, and `timer_content` and
+  `description`, `source`, `path`, `trigger`, `aggregate`. It loses
+  `disposition` and `locked`, since it controls nothing, and
+  `timer_content` and
   `service_content`, since the local file's content is already in
   `config.files` and a second copy is a second thing to redact.
 - `scan_systemd_timers` keeps reading the files to fill those fields.
@@ -1327,6 +1329,27 @@ What changes in scheduled:
 The cron-to-timer conversion (`make_timer_service`, `scheduled.rs:676`) is
 untouched. A generated unit does not exist on the host, so it has no host
 state to collect, and the scheduled section stays its single control.
+
+**The generated-timer row's control applies. (Mark Russell, 2026-11-14)**
+`SetInclude(false)` on a generated-timer row removes its generated files
+from the staged tree and its `enable` from the Containerfile, and
+`SetInclude(true)` restores both, through the refine export. The same
+holds for the other scheduled rows that take an operation, cron jobs and
+at jobs: an operation on one either changes the export or is refused by
+name. Accepting an operation and applying nothing, which is what the
+session's validation does today for these rows, in the same arm § 4
+describes for the timer toggle, is not allowed for any of the three.
+
+**A carried timer needs its trigger. (Mark Russell, 2026-11-14)** The
+second writer used to put a local timer's service file in the image
+whatever its row said. With one writer, the operator can exclude the
+service and keep the timer, and systemd refuses to start a timer whose
+trigger unit did not load (read from the systemd 252 and 257 sources, not
+measured: § 13 run R5). The scheduled inspector therefore records each
+timer's trigger on its description, `trigger`: the `Unit=` value when the
+timer sets one, the same-named `.service` otherwise. § 10.2 rule 5 omits
+the timer's `enable` when that trigger is a local unit whose file is not
+staged.
 
 ## 9. Snapshot schema
 
@@ -1508,6 +1531,8 @@ pub enum WithheldWhy {
     GeneratedNameCollision { unit: UnitName },
     /// The destination is `/etc/machine-id`.
     MachineId,
+    /// An unmanaged file offered a path under `/etc/systemd/system`.
+    UnmanagedUnitPath,
 }
 
 pub fn staged_writes(snap: &InspectionSnapshot) -> StagedWrites<'_>;
@@ -1546,6 +1571,19 @@ lands on disk.**
   5), and the Containerfile names both in a FIXME through the existing
   `unstaged_files` route. Any write that then fails, the flatpak writer's
   included, is an I/O error and fails the export.
+- **No other writer under `/etc/systemd/system`.** **An unmanaged file
+  whose destination is under `/etc/systemd/system` is refused by name
+  before extraction and render. (Mark Russell, 2026-11-14)** The
+  unmanaged-files section copies its files after the unit state section,
+  from its own tree, without passing `staged_writes`. A scan does not
+  collect unmanaged files there, but an imported snapshot can offer one,
+  and it would be a second writer of a unit path that no rule above
+  sees: it could replace a unit whose command was just planned, or put a
+  zero-length file where rule 1 withheld one. The entry is tested by
+  `Destination`. A refused entry is not extracted into the export and
+  gets no `COPY`, the Containerfile names it in a FIXME that says a unit
+  file belongs under Configuration Files, and its refine row shows
+  `withheld`.
 - **Never the machine-id.** The image keeps the base's zero-length
   `/etc/machine-id`, which is what makes first boot keep the rendered unit
   state (§ 10.1). inspectah never stages the source host's machine-id and
@@ -1578,7 +1616,17 @@ the Containerfile comes from anywhere else.
    generated timer included, the request is declined with a FIXME, and the
    collected unit is then planned against the files that remain. So a
    collected vendor timer is never enabled over a generated file of its
-   name. A known case is not designed around: a host built from an
+   name. **For this rule a collected unit is any unit the units section
+   names: a state change, a mount finding, or an inventory entry. (Mark
+   Russell, 2026-11-14)** A package's unit at its preset has no row and
+   is only in the inventory, and a generated `cron-*` pair that took its
+   name would replace it in the image just the same. Such a pair is
+   withheld, both files, and its FIXME says the name belongs to a unit the
+   host already has, that there is no row to exclude, and that the job is
+   carried by writing its timer under another name. Nowhere else does
+   this spec widen "collected unit": § 10.1 and § 10.7 mean the units
+   that have a row. A known case is not designed around: a host built
+   from an
    inspectah image has a local, enabled `flatpak-provision.service`, so a
    rescan of it carries the collected copy and withholds the generated
    one until the operator excludes the collected row and its file.
@@ -1606,7 +1654,7 @@ fails decides.
 | 2 | **Storage units act only on a package's file.** If the export stages a unit file at the name of a `PackagedStorage` unit, the administrator's file is what the image would load. | `enable`, `disable`, `mask` on a storage kind | Omitted: `the export carries an administrator's unit file for it (<path>)`. The mount advisory (§ 10.6) is rendered for the staged file. |
 | 3 | **Units the target needs are not switched off** (§ 10.3). | `disable` and `mask` on a protected unit; `mask` on `tmp.mount` | A FIXME line, no command. |
 | 4 | **A mask needs the path free.** `systemctl mask` makes a link at `/etc/systemd/system/<name>`, after every `COPY` (§ 10.7), and exits 1 when a regular file is there (measured). | `mask` when a unit file is staged at the name | Omitted: `the export also carries a unit file at <path>; exclude one of the two`. |
-| 5 | **The command acts on the file the row was recorded from, and its package is in the image.** See below. | `enable`, `disable`, `set-default`; the package half also `mask` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, or the package reason the presence tiers give today. |
+| 5 | **The command acts on the file the row was recorded from, and its package is in the image.** See below. | `enable`, `disable`, `set-default`; the package half also `mask` | Omitted: `UnitFileNotStaged`, `InstallEvidenceChanged`, `TimerTriggerNotStaged`, or the package reason the presence tiers give today. |
 | 6 | **An instance needs its configuration** (§ 10.8). | `enable` on an instance | Omitted, naming the path. |
 | 7 | **`Also=` members match, and nothing in `/etc` changes what `Also=` means.** See below. | `enable`, `disable` with a non-empty `also` list | An advisory, no command. |
 
@@ -1675,6 +1723,22 @@ whose install drop-in is excluded gets no `enable` that would exit 0 and
 link nothing. A generated unit's request needs only its own file, which is
 in `staged_writes` by construction. `disable` on an absent unit exits 1 on
 RHEL 9 (0 on RHEL 10), as `enable` does on both (all measured).
+
+**A timer's trigger is held to the same rule.** After the timer's own
+file and package pass, an `enable` on a timer asks the same two questions
+of its recorded trigger (§ 8). The enable is omitted as
+`TimerTriggerNotStaged` when the snapshot holds the trigger as a local
+unit, a unit file under `/etc/systemd/system` with no vendor file of that
+name, that file is not in `staged_writes`, and nothing else provides the
+unit: no generated unit of that name is staged, and no package in the
+image owns it. A trigger the base image or an included package ships, and
+one that is a full shadow, pass, since the vendor file loads. The line
+reads `# Omitted: report.timer (its service report.service is not in the
+export, and a timer whose unit is missing does not start)`. The check
+sits here, and not as a rule of its own, because it is rule 5's question
+asked of a second unit, and it comes after the timer's own file so that a
+timer whose file is missing is reported for that. `disable` and `mask` on
+a timer need no trigger.
 
 **A mask follows the package check. (Mark Russell, 2026-11-14)** `mask`
 reads no `[Install]`, so the file and drop-in halves of this rule do not
@@ -1782,6 +1846,9 @@ InstallEvidenceChanged { path: String },
 StorageFileStaged { path: String },
 /// The target needs the unit, or needs it unmasked (rule 3). A FIXME.
 TargetNeedsUnit,
+/// A timer's trigger unit is local and its file is not in the export
+/// (rule 5).
+TimerTriggerNotStaged { trigger: UnitName },
 /// A mask and a unit file claim one path (rule 4).
 MaskPathOccupied { path: String },
 /// A unit inspectah generates has a collected unit's name. A FIXME.
@@ -2168,7 +2235,8 @@ keeps its cascade to drop-ins and its membership check before it applies.
 `ItemId::DefaultTarget` is added; it toggles the recorded target and takes
 no target name of its own. `ItemId::SystemdTimer` is removed. `SetInclude`
 on a mount finding or a hand-made link does not exist, so there is nothing
-to refuse.
+to refuse. `SetInclude` on a generated-timer row applies, and on a cron-job
+or at-job row it applies or is refused by name (§ 8).
 
 The cascade from a unit row to its drop-ins is kept, full shadows
 included. It cannot produce an enable on an administrator's storage file:
@@ -2457,6 +2525,40 @@ Phase 3 (one control per fact):
   FIXME, neither generated file is in the staged tree, and the vendor
   timer's enable is carried against the package's unit.
 
+- **T35. The scheduled controls apply.** Through `RefineSession` and the
+  refine export: `SetInclude(false)` on a generated-timer row removes its
+  timer and service from the staged tree and its `enable` from the
+  Containerfile, and `SetInclude(true)` restores all three. The same
+  operation on a cron-job row and on an at-job row either changes the
+  export, shown by a difference in the staged tree or the Containerfile,
+  or returns an error naming the row. No such operation returns success
+  with the export unchanged.
+- **T36. An inventory name blocks a generated pair.** A package timer at
+  its preset, in the inventory with no state change, and a generated cron
+  pair of the same name: neither generated file is in the staged tree,
+  the request is declined with the FIXME and its rename advice, and no
+  `enable` names the unit. The same with only the generated service's
+  name in the inventory: both files withheld, and the FIXME names the
+  service. The control: a generated pair whose names are in no list is
+  staged and enabled.
+- **T37. A timer whose trigger is not in the export.** A local enabled
+  timer whose paired local service's config row is excluded: no `enable`
+  for the timer, the `TimerTriggerNotStaged` line naming the service, and
+  the reason on the timer's refine row; the service row included again:
+  the enable returns. The same with `Unit=other.service`. A timer whose
+  trigger a package in the image owns, one whose trigger is a full
+  shadow with the shadow excluded, and one whose trigger is a staged
+  generated service: carried. A `disable` and a `mask` on a timer with
+  its service excluded: carried.
+- **T38. An unmanaged file under `/etc/systemd/system` is refused.** An
+  imported snapshot whose unmanaged-files section offers
+  `/etc/systemd/system/x.service`, and one spelled with an interior `.`:
+  the file is not in the export, no `COPY` names it, the Containerfile
+  holds the FIXME, and its row shows `withheld`. The control: an
+  unmanaged file under `/opt` in the same snapshot is extracted and
+  copied. A zero-length unmanaged file at a masked unit's path does not
+  reach the image.
+
 Phase 4 (the `/etc/systemd/system` scan):
 
 - **T22. Install state.** `backup.service` with
@@ -2725,6 +2827,14 @@ or fedora44 VMs for them.**
   The expected result is one new link and the existing ones untouched. If
   `enable` fails, or changes the existing links, the additive case stops
   being a row and becomes a `HostInstallOnly` advisory per added link.
+  A timer enabled in an image that lacks its service file: whether the
+  timer starts, and what the journal says, on each release. The
+  `TimerTriggerNotStaged` omission rests on systemd refusing it, which
+  was read from source. And in each bootc base, after `dnf install
+  tuned`: what `systemctl is-enabled tuned.service` reads. The removal of
+  the kernel section's enable (§ 10.2) rests on the stock preset enabling
+  the unit, which is known from a package-mode fixture and has not been
+  verified on either base.
 
 ## 14. Backlog items
 
@@ -2800,7 +2910,12 @@ takes": the scheduled section's generated units and the flatpak
 provisioning service become requests to `plan_units`, their files join
 `staged_writes` and are withheld on a name collision, and the tuned enable
 is removed, so that after this phase every `systemctl` line in the
-Containerfile is a planned one. Tests T19 to T21.
+Containerfile is a planned one. Four things follow from having one writer
+and land with it: the scheduled rows' operations apply or are refused
+(§ 8), an inventory name blocks a generated pair (§ 10.2), a timer's
+`enable` needs its trigger (§ 8, § 10.2 rule 5), and an unmanaged file
+under `/etc/systemd/system` is refused (§ 10.2). Tests T19 to T21 and T35
+to T38.
 
 **Phase 4: the `/etc/systemd/system` scan. Size L, at the upper end.**
 The `[Install]` reader with `install_drop_ins`, `vendor_drop_ins` and the
@@ -2970,6 +3085,18 @@ Other objections worth weighing:
   not taken: presets cannot express a mask, a unit with no `[Install]`, a
   hand-made link, `add-wants`, an alias link or the default target, so it
   would be a partial guarantee beside a complete one.
+- **Four rules that come with the single writer each have a cost.** A
+  cron or at job row whose operation cannot be given an export effect is
+  refused by name, so a control the operator can see stops working with
+  an error where it used to appear to work. Counting inventory names
+  withholds a generated cron job whenever any package unit at its preset
+  has its name, and the operator cannot exclude that unit: the job has to
+  be renamed by hand. Declining a timer's `enable` when its local service
+  is excluded rests on systemd behavior read from source; if a timer in
+  that state does start, the line is omitted for nothing. And refusing an
+  unmanaged file under `/etc/systemd/system` drops a file an imported
+  snapshot asked for, with a FIXME, when routing it through
+  `staged_writes` would have carried it.
 - **A mask is dropped with its package.** A mask on a unit whose package
   is not in the image is a harmless link. Once it is omitted, nothing
   keeps the unit off if a dependency, another package that provides the
