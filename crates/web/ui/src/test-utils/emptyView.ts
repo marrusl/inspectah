@@ -19,6 +19,8 @@ export function emptyView(overrides: Partial<ViewResponse> = {}): ViewResponse {
     unit_states: [],
     unit_dropins: [],
     mount_findings: [],
+    manual_links: [],
+    undetermined_installs: [],
     quadlets: [],
     flatpaks: [],
     declined_generated: [],

@@ -4,6 +4,10 @@ import type {
   ServiceDecisionDto,
   DropInDecisionDto,
   MountFindingDto,
+  ManualLinkView,
+  ManualLinkCause,
+  UndeterminedInstallView,
+  DefaultTargetView,
   ViewResponse,
   RefinementOp,
   TriageTag,
@@ -25,6 +29,12 @@ export interface ServiceSectionProps {
    * toggle: they are not decisions.
    */
   mountFindings: MountFindingDto[];
+  /** The links inspectah reports and does not carry. Rows with no toggle. */
+  manualLinks: ManualLinkView[];
+  /** The units whose `[Install]` cannot be relied on. Rows with no toggle. */
+  undeterminedInstalls: UndeterminedInstallView[];
+  /** The default target and its toggle, when the host records one. */
+  defaultTarget?: DefaultTargetView;
   /** Opens the config row at a path (a finding's unit file). */
   onNavigateToConfig?: (path: string) => void;
   onViewUpdate: (view: ViewResponse) => void;
@@ -44,6 +54,17 @@ function serviceKey(unit: string): string {
 /** Guard key for a drop-in: the whole of its op's item_id key. */
 function dropinKey(path: string): string {
   return JSON.stringify(["dropin", path]);
+}
+
+/** Guard key for the default target, whose op has no item_id key. */
+const DEFAULT_TARGET_KEY = JSON.stringify(["default_target"]);
+
+/**
+ * The name of a link's cause. `undetermined` is served as an object that
+ * carries its reason; every other cause is a bare string.
+ */
+function causeName(cause: ManualLinkCause): string {
+  return typeof cause === "string" ? cause : "undetermined";
 }
 
 /** Group drop-ins by their parent unit name. */
@@ -118,6 +139,8 @@ interface DropInRowProps {
   parentExcluded: boolean;
   /** The parent service row is locked, which locks its drop-ins too. */
   parentLocked: boolean;
+  /** The drop-in is one of the parent unit's install drop-ins. */
+  isInstallDropIn?: boolean;
   isPending: boolean;
   onToggle: (path: string, currentInclude: boolean) => void;
 }
@@ -126,6 +149,7 @@ function DropInRow({
   dropin: di,
   parentExcluded,
   parentLocked,
+  isInstallDropIn = false,
   isPending,
   onToggle,
 }: DropInRowProps) {
@@ -223,6 +247,17 @@ function DropInRow({
         {!parentExcluded && !diLocked && diBadge && (
           <div role="gridcell" className="inspectah-decision-row__badge">
             <Label color={attentionLabelColor(diLevel)}>{diBadge}</Label>
+          </div>
+        )}
+        {isInstallDropIn && (
+          <div
+            role="gridcell"
+            className="inspectah-decision-row__badge"
+            data-testid="install-dropin-badge"
+          >
+            <Label color="blue" isCompact>
+              [Install]
+            </Label>
           </div>
         )}
         {isShadow && (
@@ -359,10 +394,225 @@ function MountFindingRow({ finding: f, onNavigateToConfig }: MountFindingRowProp
   );
 }
 
+/**
+ * Paths the export does not stage, which keep a row's advisory out of the
+ * Containerfile. The row's `# Omitted:` line says why.
+ */
+function NotAppliedPaths({
+  id,
+  testId,
+  paths,
+}: {
+  id: string;
+  testId: string;
+  paths: string[];
+}) {
+  return (
+    <div id={id} data-testid={testId} className="inspectah-unit-paths">
+      <span className="inspectah-unit-paths__label">Not in the export:</span>
+      {paths.map((p) => (
+        <code key={p} data-testid="not-applied-path">
+          {p}
+        </code>
+      ))}
+    </div>
+  );
+}
+
+/** The server's advisory lines for a row, as given, one per line. */
+function AdvisoryLines({
+  id,
+  testId,
+  lines,
+}: {
+  id: string;
+  testId: string;
+  lines: string[];
+}) {
+  return (
+    <div id={id} className="inspectah-mount-finding__advisories">
+      {lines.map((line, i) => (
+        <div key={i} data-testid={testId}>
+          {line}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A link inspectah reports and does not carry, an `Also=` name included:
+ * its relation, its parent and the export's lines, as given. No toggle
+ * and no keyboard action: the export decides nothing here.
+ */
+function ManualLinkRow({ link }: { link: ManualLinkView }) {
+  const baseId = useId();
+  const advisoriesId = `${baseId}-advisories`;
+  const notAppliedId = `${baseId}-not-applied`;
+  const notApplied = link.not_applied ?? [];
+  return (
+    <div
+      role="row"
+      aria-label={link.unit}
+      aria-describedby={describedBy(
+        link.advisories.length > 0 && advisoriesId,
+        notApplied.length > 0 && notAppliedId,
+      )}
+      tabIndex={-1}
+      data-testid={`manual-link-${link.relation}-${link.parent}-${link.unit}`}
+      data-cause={causeName(link.cause)}
+      className="inspectah-decision-row inspectah-manual-link"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{link.unit}</span>
+          <span className="inspectah-unit-kind" data-testid="manual-link-relation">
+            {link.relation}
+          </span>
+          <code className="inspectah-manual-link__parent" data-testid="manual-link-parent">
+            {link.parent}
+          </code>
+        </div>
+      </div>
+      {link.advisories.length > 0 && (
+        <AdvisoryLines
+          id={advisoriesId}
+          testId="manual-link-advisory"
+          lines={link.advisories}
+        />
+      )}
+      {notApplied.length > 0 && (
+        <NotAppliedPaths
+          id={notAppliedId}
+          testId="manual-link-not-applied"
+          paths={notApplied}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A unit whose `[Install]` cannot be relied on: its reason, its install
+ * files and the export's block, as given. No toggle and no keyboard
+ * action.
+ */
+function UndeterminedInstallRow({ record: r }: { record: UndeterminedInstallView }) {
+  const baseId = useId();
+  const advisoriesId = `${baseId}-advisories`;
+  const notAppliedId = `${baseId}-not-applied`;
+  const notApplied = r.not_applied ?? [];
+  return (
+    <div
+      role="row"
+      aria-label={r.unit}
+      aria-describedby={describedBy(
+        r.advisories.length > 0 && advisoriesId,
+        notApplied.length > 0 && notAppliedId,
+      )}
+      tabIndex={-1}
+      data-testid={`undetermined-install-${r.unit}`}
+      data-reason={r.reason}
+      className="inspectah-decision-row inspectah-undetermined-install"
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span>{r.unit}</span>
+          <span className="inspectah-unit-kind" data-testid="undetermined-install-reason">
+            {r.reason.replace(/_/g, " ")}
+          </span>
+          {r.install_files.map((f) => (
+            <code key={f} className="inspectah-unit-paths__path" data-testid="install-file">
+              {f}
+            </code>
+          ))}
+        </div>
+      </div>
+      {r.advisories.length > 0 && (
+        <AdvisoryLines
+          id={advisoriesId}
+          testId="undetermined-install-advisory"
+          lines={r.advisories}
+        />
+      )}
+      {notApplied.length > 0 && (
+        <NotAppliedPaths
+          id={notAppliedId}
+          testId="undetermined-install-not-applied"
+          paths={notApplied}
+        />
+      )}
+    </div>
+  );
+}
+
+interface DefaultTargetRowProps {
+  target: DefaultTargetView;
+  isPending: boolean;
+  onToggle: (currentInclude: boolean) => void;
+}
+
+/**
+ * The default target the export sets with `systemctl set-default`, and
+ * its toggle. `declined` is the export's reason when it writes no line.
+ */
+function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowProps) {
+  const declinedId = "declined-default-target";
+  return (
+    <div
+      role="row"
+      aria-label={t.target}
+      tabIndex={0}
+      data-testid="default-target"
+      data-locked={t.locked ? "true" : undefined}
+      className={`inspectah-decision-row${t.locked ? " inspectah-decision-row--locked" : ""}`}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (t.locked || isPending) return;
+        if (e.key === " " || e.key === "x") {
+          e.preventDefault();
+          onToggle(t.include);
+        }
+      }}
+    >
+      <div className="inspectah-decision-row__main">
+        <div role="gridcell" className="inspectah-decision-row__toggle">
+          <input
+            type="checkbox"
+            role="checkbox"
+            id="switch-default-target"
+            checked={t.include}
+            onChange={() => onToggle(t.include)}
+            disabled={isPending || t.locked}
+            aria-label={t.locked ? `${t.target} (locked)` : `Toggle ${t.target}`}
+            aria-describedby={describedBy(t.declined && declinedId)}
+            style={{ minWidth: 20, minHeight: 20 }}
+          />
+        </div>
+        <div role="gridcell" className="inspectah-decision-row__name">
+          <span data-testid="default-target-name">{t.target}</span>
+          <span className="inspectah-unit-kind">default target</span>
+        </div>
+      </div>
+      {t.declined && (
+        <RowNote
+          id={declinedId}
+          testId={declinedId}
+          className={`inspectah-unit-declined inspectah-unit-declined--${t.declined.renders}`}
+          text={t.declined.text}
+        />
+      )}
+    </div>
+  );
+}
+
 export function ServiceSection({
   services,
   dropins,
   mountFindings,
+  manualLinks,
+  undeterminedInstalls,
+  defaultTarget,
   onNavigateToConfig,
   onViewUpdate,
   onMutationError,
@@ -418,10 +668,26 @@ export function ServiceSection({
     [sendInclude],
   );
 
+  const handleToggleDefaultTarget = useCallback(
+    (currentInclude: boolean) => {
+      sendInclude(DEFAULT_TARGET_KEY, {
+        op: "SetInclude",
+        target: {
+          item_id: { kind: "DefaultTarget" },
+          include: !currentInclude,
+        },
+      });
+    },
+    [sendInclude],
+  );
+
   if (
     services.length === 0 &&
     dropins.length === 0 &&
-    mountFindings.length === 0
+    mountFindings.length === 0 &&
+    manualLinks.length === 0 &&
+    undeterminedInstalls.length === 0 &&
+    !defaultTarget
   ) {
     return (
       <div className="inspectah-service-section" data-testid="service-section">
@@ -439,6 +705,14 @@ export function ServiceSection({
       aria-label="Services"
       data-testid="service-section"
     >
+      {defaultTarget && (
+        <DefaultTargetRow
+          target={defaultTarget}
+          isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
+          onToggle={handleToggleDefaultTarget}
+        />
+      )}
+
       {services.map((svc, idx) => {
         const unitDropins = dropinsByUnit.get(svc.unit) ?? [];
         const bucket = extractTriageBucket(svc.triage);
@@ -465,7 +739,7 @@ export function ServiceSection({
               role="row"
               aria-rowindex={idx + 1}
               aria-label={svc.unit}
-              tabIndex={idx === 0 ? 0 : -1}
+              tabIndex={idx === 0 && !defaultTarget ? 0 : -1}
               data-testid={`service-item-${svc.unit}`}
               data-locked={svcLocked ? "true" : undefined}
               className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
@@ -565,6 +839,19 @@ export function ServiceSection({
                   text={svc.declined.text}
                 />
               )}
+              {svc.also && svc.also.length > 0 && (
+                <div className="inspectah-unit-paths inspectah-unit-also">
+                  <span className="inspectah-unit-paths__label">Also=</span>
+                  {svc.also.map((m) => (
+                    <span key={m.unit} data-testid="also-member">
+                      <code data-testid="also-member-unit">{m.unit}</code>{" "}
+                      <span className="inspectah-unit-state" data-testid="also-member-links">
+                        {m.links}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Drop-in children */}
@@ -574,6 +861,7 @@ export function ServiceSection({
                 dropin={di}
                 parentExcluded={!svc.include}
                 parentLocked={svcLocked}
+                isInstallDropIn={svc.install_drop_ins?.includes(di.path) ?? false}
                 isPending={pendingKeys.has(dropinKey(di.path))}
                 onToggle={handleToggleDropin}
               />
@@ -588,6 +876,17 @@ export function ServiceSection({
           finding={f}
           onNavigateToConfig={onNavigateToConfig}
         />
+      ))}
+
+      {manualLinks.map((link) => (
+        <ManualLinkRow
+          key={JSON.stringify([link.relation, link.parent, link.unit])}
+          link={link}
+        />
+      ))}
+
+      {undeterminedInstalls.map((r) => (
+        <UndeterminedInstallRow key={r.unit} record={r} />
       ))}
 
       {/* Drop-ins whose unit produced no state change: a unit sitting at

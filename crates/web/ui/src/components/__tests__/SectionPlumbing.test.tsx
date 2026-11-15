@@ -412,6 +412,8 @@ describe("MainContent: unit section", () => {
             unit_states: unitStates,
             unit_dropins: [],
             mount_findings: [],
+            manual_links: [],
+            undetermined_installs: [],
           })
         }
         {...defaultProps}
@@ -432,6 +434,8 @@ describe("MainContent: unit section", () => {
             unit_states: unitStates,
             unit_dropins: unitDropins,
             mount_findings: [],
+            manual_links: [],
+            undetermined_installs: [],
           })
         }
         {...defaultProps}

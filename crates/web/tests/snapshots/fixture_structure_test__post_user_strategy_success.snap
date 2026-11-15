@@ -93,6 +93,7 @@ expression: value
   "flatpaks": [],
   "generated_timers": [],
   "generation": 1,
+  "manual_links": [],
   "mount_findings": [],
   "packages": [
     {
@@ -337,6 +338,7 @@ expression: value
     "vendor_replacements": []
   },
   "tuned": [],
+  "undetermined_installs": [],
   "unit_dropins": [],
   "unit_states": [
     {

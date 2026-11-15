@@ -146,6 +146,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             owning_package: s.owning_package.clone(),
             default_state: s.default_state.map(|d| d.to_string()),
             current_state: s.current_state.to_string(),
+            also: s.also.clone(),
+            install_drop_ins: s.install_drop_ins.clone(),
         })
         .collect();
 
@@ -541,6 +543,9 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         unit_states,
         unit_dropins,
         mount_findings: decisions.mount_findings.clone(),
+        manual_links: decisions.manual_links.clone(),
+        undetermined_installs: decisions.undetermined_installs.clone(),
+        default_target: decisions.default_target.clone(),
         quadlets,
         flatpaks,
         declined_generated: decisions.declined_generated.clone(),

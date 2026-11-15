@@ -5464,3 +5464,451 @@ async fn unusual_unit_names_round_trip_through_the_view_and_an_op() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// Links, `UndeterminedInstall` records, `Also=` members and the default
+// target on `/api/view` (§ 11.1, Task 4.11), from scanned hosts.
+// ---------------------------------------------------------------------
+
+/// The package that owns the vendor units of the link hosts.
+const LINK_PACKAGE: &str = "apppkg";
+/// A service with no `[Install]` section.
+const NO_INSTALL_SERVICE: &str = "[Service]\nExecStart=/bin/true\n";
+/// A service wanted by `multi-user.target`.
+const WANTED_SERVICE: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+
+/// An app over a refine session opened from `host`'s scan.
+fn scanned_app(host: unit_hosts::UnitHost) -> axum::Router {
+    let snap = unit_hosts::scan(host);
+    app(Arc::new(AppState {
+        session: Arc::new(Mutex::new(unit_hosts::session(&snap))),
+    }))
+}
+
+/// A host with `LINK_PACKAGE` installed over a base image holding glibc,
+/// so refine keeps the package included.
+fn link_host() -> unit_hosts::UnitHost {
+    unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .package(LINK_PACKAGE)
+}
+
+/// `host` with a link to `unit` in `<parent>.wants` under `/etc`.
+fn with_wants_link(host: unit_hosts::UnitHost, parent: &str, unit: &str) -> unit_hosts::UnitHost {
+    host.link(
+        &format!("/etc/systemd/system/{parent}.wants/{unit}"),
+        &format!("/usr/lib/systemd/system/{unit}"),
+    )
+}
+
+/// The view's `containerfile_preview`.
+fn preview_of(json: &serde_json::Value) -> &str {
+    json["containerfile_preview"].as_str().expect("a preview")
+}
+
+/// The one row of `rows` matching every `(key, value)` of `by`.
+fn row_where<'a>(rows: &'a serde_json::Value, by: &[(&str, &str)]) -> &'a serde_json::Value {
+    let found: Vec<_> = rows
+        .as_array()
+        .expect("an array")
+        .iter()
+        .filter(|r| by.iter().all(|(k, v)| r[*k] == *v))
+        .collect();
+    assert_eq!(found.len(), 1, "one row with {by:?}: {rows}");
+    found[0]
+}
+
+/// Each of `row`'s `advisories`, which must be lines of `preview`.
+fn advisories_in_preview(row: &serde_json::Value, preview: &str) -> Vec<String> {
+    let lines: Vec<String> = row["advisories"]
+        .as_array()
+        .expect("advisories")
+        .iter()
+        .map(|l| l.as_str().expect("a string").to_owned())
+        .collect();
+    assert!(!lines.is_empty(), "{row}");
+    for line in &lines {
+        assert!(
+            preview.lines().any(|l| l == line),
+            "{line}\nis not a line of\n{preview}"
+        );
+    }
+    lines
+}
+
+/// A `.wants` link to a unit with no `[Install]` is a `manual_links[]`
+/// row with its relation, parent, the bare-string cause, the
+/// Containerfile's lines and no `include` key, while the unit row beside
+/// it has one. A link of an `UpheldBy=` unit carries the object cause
+/// with its reason.
+#[tokio::test]
+async fn the_view_serves_hand_made_links_with_no_toggle() {
+    let host = with_wants_link(
+        link_host()
+            .unit("backup.service", "static")
+            .vendor_unit("backup.service", NO_INSTALL_SERVICE, None)
+            .unit("app.service", "enabled")
+            .preset("disable *")
+            .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE)),
+        "multi-user.target",
+        "backup.service",
+    );
+    let app = scanned_app(host);
+    let (status, json) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    let link = row_where(&json["manual_links"], &[("unit", "backup.service")]);
+    assert_eq!(link["relation"], "wants", "{link}");
+    assert_eq!(link["parent"], "multi-user.target", "{link}");
+    assert_eq!(link["cause"], "static_unit", "{link}");
+    let lines = advisories_in_preview(link, preview_of(&json));
+    assert!(
+        lines.iter().any(|l| l.contains("add-wants")),
+        "the command to carry it: {lines:?}"
+    );
+    assert!(link.get("not_applied").is_none(), "{link}");
+    // Presence of a toggle key on the unit row first, then its absence.
+    assert!(
+        row_by(&json["unit_states"], "unit", "app.service")
+            .get("include")
+            .is_some()
+    );
+    assert!(link.get("include").is_none(), "{link}");
+
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                  UpheldBy=multi-user.target\n";
+    let host = with_wants_link(
+        unit_hosts::UnitHost::new()
+            .base_package("needpkg")
+            .unit("need.service", "disabled")
+            .preset("enable need.service")
+            .vendor_unit("need.service", upheld, Some("needpkg")),
+        "multi-user.target",
+        "need.service",
+    );
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let link = row_where(&json["manual_links"], &[("unit", "need.service")]);
+    assert_eq!(
+        link["cause"],
+        serde_json::json!({"undetermined": {"reason": "upheld_by"}}),
+        "{link}"
+    );
+    advisories_in_preview(link, preview_of(&json));
+}
+
+/// The install-difference rows of Task 4.5b: `also` with
+/// `vendor_install_only`, and a `.wants` link each way (T41's host). With
+/// one install file excluded through `/api/op`, both link rows hold its
+/// path in `not_applied` and the unit's `# Omitted:` line, which is in the
+/// preview once; included again, `not_applied` goes and the blocks return.
+#[tokio::test]
+async fn the_view_serves_install_difference_links_and_their_omission() {
+    let vendor = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
+                  Also=helper.service\n";
+    let host = with_wants_link(
+        link_host()
+            .unit("app.service", "enabled")
+            .preset("enable app.service")
+            .vendor_unit("app.service", vendor, Some(LINK_PACKAGE)),
+        "multi-user.target",
+        "app.service",
+    )
+    .etc_unit("app.service", WANTED_SERVICE);
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let also = row_where(&json["manual_links"], &[("relation", "also")]);
+    assert_eq!(also["parent"], "app.service", "{also}");
+    assert_eq!(also["unit"], "helper.service", "{also}");
+    assert_eq!(also["cause"], "vendor_install_only", "{also}");
+    assert_eq!(
+        advisories_in_preview(also, preview_of(&json)),
+        [
+            "# Advisory: app.service's package unit names helper.service in Also=, and its \
+             files under /etc/systemd/system do not. The package install in the image acted \
+             on the package's list.",
+            "#   Check helper.service with systemctl is-enabled in the image.",
+        ]
+    );
+
+    let reset = "/etc/systemd/system/app.service.d/10-reset.conf";
+    let add = "/etc/systemd/system/app.service.d/20-add.conf";
+    let host = with_wants_link(
+        link_host()
+            .unit("app.service", "enabled")
+            .preset("enable app.service")
+            .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE)),
+        "graphical.target",
+        "app.service",
+    )
+    .file(reset, "[Install]\nWantedBy=\n")
+    .file(add, "[Install]\nWantedBy=graphical.target\n");
+    let app = scanned_app(host);
+    let (_, json) = get_json(&app, "/api/view").await;
+    let preview = preview_of(&json).to_owned();
+    let host_only = row_where(
+        &json["manual_links"],
+        &[
+            ("parent", "graphical.target"),
+            ("cause", "host_install_only"),
+        ],
+    );
+    let vendor_only = row_where(
+        &json["manual_links"],
+        &[
+            ("parent", "multi-user.target"),
+            ("cause", "vendor_install_only"),
+        ],
+    );
+    let host_only_lines = advisories_in_preview(host_only, &preview);
+    let vendor_only_lines = advisories_in_preview(vendor_only, &preview);
+    for row in [host_only, vendor_only] {
+        assert_eq!(row["relation"], "wants", "{row}");
+        assert!(row.get("not_applied").is_none(), "{row}");
+    }
+
+    let drop_in = |path: &str| serde_json::json!({"kind": "DropIn", "key": {"path": path}});
+    let (status, body) = set_include(&app, drop_in(add), false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let preview = preview_of(&json);
+    let rows = json["manual_links"].as_array().expect("manual_links");
+    assert_eq!(rows.len(), 2, "both rows stay: {rows:?}");
+    let omitted = format!(
+        "# Omitted: app.service links (excluded from the export: {add}; the [Install] the \
+         image reads is not the one recorded, so the source host's links for app.service are \
+         not reproduced, and links its package install made may remain in the image. Check \
+         them with systemctl is-enabled in the image.)"
+    );
+    for row in rows {
+        assert_eq!(row["not_applied"], serde_json::json!([add]), "{row}");
+        assert_eq!(row["advisories"], serde_json::json!([omitted]), "{row}");
+    }
+    assert_eq!(
+        preview.lines().filter(|l| *l == omitted).count(),
+        1,
+        "{preview}"
+    );
+    assert!(!preview.contains("add-wants"), "{preview}");
+
+    let (status, body) = set_include(&app, drop_in(add), true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    for row in json["manual_links"].as_array().expect("manual_links") {
+        assert!(row.get("not_applied").is_none(), "{row}");
+    }
+    let preview = preview_of(&json);
+    for line in host_only_lines.iter().chain(&vendor_only_lines) {
+        assert!(preview.lines().any(|l| l == line), "{line}\n{preview}");
+    }
+    assert!(!preview.contains(&omitted), "{preview}");
+}
+
+/// T40's `RequiredBy=`-reset unit: an `undetermined_installs[]` row with
+/// its reason, its install file and the Containerfile's block, and no
+/// `include` key. With the drop-in excluded, `not_applied` holds it and
+/// `advisories` the unit's `# Omitted:` line, which the preview holds.
+#[tokio::test]
+async fn the_view_serves_undetermined_installs_and_their_omission() {
+    const DROP_IN: &str = "/etc/systemd/system/need.service.d/10-reset.conf";
+    let host = unit_hosts::UnitHost::new()
+        .base_package("needpkg")
+        .unit("need.service", "disabled")
+        .preset("enable need.service")
+        .vendor_unit(
+            "need.service",
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
+            Some("needpkg"),
+        )
+        .file(DROP_IN, "[Install]\nRequiredBy=\n");
+    let app = scanned_app(host);
+    let (_, json) = get_json(&app, "/api/view").await;
+    let row = row_by(&json["undetermined_installs"], "unit", "need.service");
+    assert_eq!(row["reason"], "required_by_reset", "{row}");
+    assert_eq!(row["install_files"], serde_json::json!([DROP_IN]), "{row}");
+    let block = advisories_in_preview(row, preview_of(&json));
+    assert!(
+        block[0].starts_with("# Advisory: need.service is not carried:"),
+        "{block:?}"
+    );
+    assert!(row.get("not_applied").is_none(), "{row}");
+    // Presence of a toggle key on the drop-in row first, then its absence.
+    assert!(
+        row_by(&json["unit_dropins"], "path", DROP_IN)
+            .get("include")
+            .is_some()
+    );
+    assert!(row.get("include").is_none(), "{row}");
+
+    let (status, body) = set_include(
+        &app,
+        serde_json::json!({"kind": "DropIn", "key": {"path": DROP_IN}}),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let row = row_by(&json["undetermined_installs"], "unit", "need.service");
+    assert_eq!(row["not_applied"], serde_json::json!([DROP_IN]), "{row}");
+    let lines = advisories_in_preview(row, preview_of(&json));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("# Omitted: need.service"), "{lines:?}");
+    assert!(lines[0].contains(DROP_IN), "{lines:?}");
+}
+
+/// A host whose base-image `systemd` ships `graphical.target`, with
+/// `app.service` enabled and `default.target` linked to `link` when given.
+fn default_target_host(link: Option<&str>) -> unit_hosts::UnitHost {
+    let host = link_host()
+        .base_package("systemd")
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE))
+        .vendor_unit(
+            "graphical.target",
+            "[Unit]\nDescription=Graphical Interface\n",
+            Some("systemd"),
+        );
+    match link {
+        Some(target) => host.link("/etc/systemd/system/default.target", target),
+        None => host,
+    }
+}
+
+/// T26 through the handlers: the view's `default_target` row, and its
+/// toggle, `ItemId::DefaultTarget` on the wire as a kind with no key,
+/// takes the `set-default` line out of the preview and puts it back. With
+/// no default target the key is absent and the operation is refused.
+#[tokio::test]
+async fn the_default_target_row_toggles_its_set_default_line() {
+    const SET_DEFAULT: &str = "RUN systemctl set-default -- 'graphical.target'";
+    let app = scanned_app(default_target_host(Some(
+        "/usr/lib/systemd/system/graphical.target",
+    )));
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(
+        json["default_target"],
+        serde_json::json!({
+            "target": "graphical.target",
+            "include": true,
+            "locked": false,
+            "declined": null,
+        })
+    );
+    assert!(preview_of(&json).lines().any(|l| l == SET_DEFAULT));
+
+    let item = serde_json::json!({"kind": "DefaultTarget"});
+    let (status, body) = set_include(&app, item.clone(), false).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["include"], false);
+    assert!(!preview_of(&json).contains("set-default"), "{json}");
+
+    let (status, body) = set_include(&app, item.clone(), true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["include"], true);
+    assert!(preview_of(&json).lines().any(|l| l == SET_DEFAULT));
+
+    let none = scanned_app(default_target_host(None));
+    let (_, json) = get_json(&none, "/api/view").await;
+    assert!(json.get("default_target").is_none(), "{json}");
+    let (status, body) = set_include(&none, item, false).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.to_string().contains("default target"), "{body}");
+}
+
+/// T26 (§ 10.5): a local target whose config row is excluded is declined,
+/// and the row's `declined` text is the preview's `# Omitted:` line.
+#[tokio::test]
+async fn a_declined_default_target_shows_the_omitted_line() {
+    const LOCAL: &str = "/etc/systemd/system/custom.target";
+    let app = scanned_app(
+        default_target_host(Some(LOCAL)).etc_unit("custom.target", "[Unit]\nDescription=Custom\n"),
+    );
+    let (_, json) = get_json(&app, "/api/view").await;
+    assert_eq!(json["default_target"]["target"], "custom.target");
+    assert!(json["default_target"]["declined"].is_null(), "{json}");
+
+    let (status, body) = set_include(
+        &app,
+        serde_json::json!({"kind": "Config", "key": {"path": LOCAL}}),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, json) = get_json(&app, "/api/view").await;
+    let declined = &json["default_target"]["declined"];
+    assert_eq!(declined["renders"], "omitted", "{declined}");
+    let text = declined["text"].as_str().expect("a text");
+    assert!(
+        preview_of(&json)
+            .lines()
+            .any(|l| l == format!("# Omitted: {text}")),
+        "{text}\n{}",
+        preview_of(&json)
+    );
+    assert!(
+        json["default_target"]["include"] == true,
+        "the record stays included"
+    );
+}
+
+/// A unit row carries its `Also=` members with what their links say (T25
+/// (a)'s owner with one member unlinked), and a unit whose `WantedBy=`
+/// comes from an `/etc` drop-in carries that drop-in in
+/// `install_drop_ins`. Each row lacks the other's list.
+#[tokio::test]
+async fn a_unit_row_serves_its_also_members_and_install_drop_ins() {
+    let wanted_also = format!("{WANTED_SERVICE}Also=a.service b.service c.service\n");
+    let mut host = link_host();
+    for (name, state) in [
+        ("bundle.service", "enabled"),
+        ("a.service", "enabled"),
+        ("b.service", "enabled"),
+        ("c.service", "disabled"),
+    ] {
+        host = host.unit(name, state);
+    }
+    for rule in [
+        "enable bundle.service",
+        "enable a.service",
+        "enable b.service",
+        "disable *",
+    ] {
+        host = host.preset(rule);
+    }
+    for (name, text) in [
+        ("bundle.service", wanted_also.as_str()),
+        ("a.service", WANTED_SERVICE),
+        ("b.service", WANTED_SERVICE),
+        ("c.service", WANTED_SERVICE),
+    ] {
+        host = host.vendor_unit(name, text, Some(LINK_PACKAGE));
+    }
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let owner = row_by(&json["unit_states"], "unit", "bundle.service");
+    assert_eq!(
+        owner["also"],
+        serde_json::json!([
+            {"unit": "a.service", "links": "installed"},
+            {"unit": "b.service", "links": "installed"},
+            {"unit": "c.service", "links": "unlinked"},
+        ]),
+        "{owner}"
+    );
+    assert!(owner.get("install_drop_ins").is_none(), "{owner}");
+
+    const DROP_IN: &str = "/etc/systemd/system/app.service.d/10-install.conf";
+    let host = link_host()
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", NO_INSTALL_SERVICE, Some(LINK_PACKAGE))
+        .file(DROP_IN, "[Install]\nWantedBy=multi-user.target\n");
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", "app.service");
+    assert_eq!(
+        row["install_drop_ins"],
+        serde_json::json!([DROP_IN]),
+        "{row}"
+    );
+    assert!(row.get("also").is_none(), "{row}");
+}

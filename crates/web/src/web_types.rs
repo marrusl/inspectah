@@ -13,8 +13,8 @@ use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::projection::{
-    DeclinedGeneratedView, DeclinedView, FragmentView, MountFindingView, NotCarriedRow,
-    WithheldView,
+    AlsoView, DeclinedGeneratedView, DeclinedView, DefaultTargetView, FragmentView, ManualLinkView,
+    MountFindingView, NotCarriedRow, UndeterminedInstallView, WithheldView,
 };
 use inspectah_refine::types::{
     ItemId, RefineStats, RefinedConfig, RefinedPackage, RepoProvenance, RepoTier, TriageTag,
@@ -237,6 +237,14 @@ pub struct ServiceDecisionDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_state: Option<String>,
     pub current_state: String,
+    /// Every unit `Also=` reaches from this one, with what its links on
+    /// the source host say. Absent when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<AlsoView>,
+    /// The unit's install drop-ins under `/etc/systemd/system`. Absent
+    /// when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub install_drop_ins: Vec<String>,
 }
 
 /// A classified service drop-in override, projected for the view response.
@@ -616,6 +624,16 @@ pub struct ViewResponse {
     /// The administrator's mount, automount and swap units. No `include`:
     /// these rows have no toggle.
     pub mount_findings: Vec<MountFindingView>,
+    /// The links inspectah reports and does not carry, `Also=` names
+    /// included. No `include`: these rows have no toggle.
+    pub manual_links: Vec<ManualLinkView>,
+    /// The units whose `[Install]` cannot be relied on. No `include`:
+    /// these rows have no toggle.
+    pub undetermined_installs: Vec<UndeterminedInstallView>,
+    /// The default target the export sets, with its toggle
+    /// (`ItemId::DefaultTarget`). Absent when the snapshot records none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_target: Option<DefaultTargetView>,
     pub quadlets: Vec<QuadletDecisionDto>,
     pub flatpaks: Vec<FlatpakDecisionDto>,
     /// Each request for a unit inspectah generates that the export does

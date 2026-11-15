@@ -539,6 +539,85 @@ export interface MountFindingDto {
   advisories: string[];
 }
 
+/** What the links on the source host say about an `Also=` member. */
+export type MemberLinks = "installed" | "unlinked" | "inert" | "other";
+
+/** One `Also=` member of a unit row (Rust: `AlsoView`). */
+export interface AlsoView {
+  unit: string;
+  links: MemberLinks;
+}
+
+/** A link's relation (Rust: `LinkRelation`); `also` is a name in `Also=`. */
+export type LinkRelation = "wants" | "requires" | "upholds" | "alias" | "also";
+
+/** Why an `[Install]` section cannot be relied on (Rust: `InstallUnknown`). */
+export type InstallUnknown =
+  | "specifier"
+  | "required_by_reset"
+  | "foreign_name"
+  | "upheld_by";
+
+/**
+ * Why a link is not carried (Rust: `ManualLinkCause`, externally tagged).
+ * Every cause is a bare string except `undetermined`, which is an object
+ * carrying its reason: `{"undetermined": {"reason": "upheld_by"}}`.
+ */
+export type ManualLinkCause =
+  | "static_unit"
+  | "not_in_install"
+  | "partial_install"
+  | "host_device"
+  | "host_install_only"
+  | "vendor_install_only"
+  | { undetermined: { reason: InstallUnknown } };
+
+/**
+ * A link inspectah reports and does not carry (Rust: `ManualLinkView`).
+ * No `include`: the row has no toggle.
+ */
+export interface ManualLinkView {
+  relation: LinkRelation;
+  /** The unit whose dependency directory holds the link, or the alias. */
+  parent: string;
+  unit: string;
+  cause: ManualLinkCause;
+  /** The Containerfile's lines, shown as given, one per line. */
+  advisories: string[];
+  /**
+   * The unit's install files the export does not stage. While present,
+   * `advisories` holds the unit's `# Omitted:` line.
+   */
+  not_applied?: string[];
+}
+
+/**
+ * A unit whose `[Install]` cannot be relied on (Rust:
+ * `UndeterminedInstallView`). No `include`: the row has no toggle.
+ */
+export interface UndeterminedInstallView {
+  unit: string;
+  reason: InstallUnknown;
+  /** The unit's install files under `/etc/systemd/system`. */
+  install_files: string[];
+  /** The Containerfile's block, shown as given, one per line. */
+  advisories: string[];
+  /** As on `ManualLinkView`. */
+  not_applied?: string[];
+}
+
+/**
+ * The default target the export sets (Rust: `DefaultTargetView`), decided
+ * by `SetInclude` on `ItemId::DefaultTarget`.
+ */
+export interface DefaultTargetView {
+  target: string;
+  include: boolean;
+  locked: boolean;
+  /** Present when the export writes no `set-default`. */
+  declined: DeclinedView | null;
+}
+
 /** A classified unit state change, projected for the view response. */
 export interface ServiceDecisionDto {
   unit: string;
@@ -558,6 +637,10 @@ export interface ServiceDecisionDto {
   owning_package?: string | null;
   default_state?: string | null;
   current_state: string;
+  /** Every unit `Also=` reaches from this one. Absent when none. */
+  also?: AlsoView[];
+  /** The unit's install drop-ins under `/etc/systemd/system`. Absent when none. */
+  install_drop_ins?: string[];
 }
 
 /** A classified service drop-in override, projected for the view response. */
@@ -804,6 +887,12 @@ export interface ViewResponse extends RefinedView {
   unit_dropins: DropInDecisionDto[];
   /** The administrator's mount, automount and swap units. Always present. */
   mount_findings: MountFindingDto[];
+  /** The links inspectah reports and does not carry. Always present. */
+  manual_links: ManualLinkView[];
+  /** The units whose `[Install]` cannot be relied on. Always present. */
+  undetermined_installs: UndeterminedInstallView[];
+  /** The default target and its toggle. Absent when the host records none. */
+  default_target?: DefaultTargetView;
   quadlets: QuadletDecisionDto[];
   flatpaks: FlatpakDecisionDto[];
   /**
@@ -922,6 +1011,11 @@ export interface ItemIdVersionLock {
 export interface ItemIdUnit {
   kind: "Unit";
   key: { unit: string };
+}
+
+/** The recorded default target. It names no target, so it has no `key`. */
+export interface ItemIdDefaultTarget {
+  kind: "DefaultTarget";
 }
 
 export interface ItemIdDropIn {
@@ -1180,6 +1274,7 @@ export type ItemId =
   | ItemIdVersionLock
   | ItemIdUnit
   | ItemIdDropIn
+  | ItemIdDefaultTarget
   | ItemIdQuadlet
   | ItemIdCompose
   | ItemIdFlatpak

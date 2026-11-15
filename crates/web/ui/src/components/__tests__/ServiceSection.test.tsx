@@ -83,6 +83,8 @@ const MOCK_VIEW: ViewResponse = {
   unit_states: [],
   unit_dropins: [],
   mount_findings: [],
+  manual_links: [],
+  undetermined_installs: [],
   quadlets: [],
   flatpaks: [],
   declined_generated: [],
@@ -100,6 +102,8 @@ const defaultProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
   mountFindings: [] as MountFindingDto[],
+  manualLinks: [],
+  undeterminedInstalls: [],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };

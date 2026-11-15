@@ -79,6 +79,8 @@ export function itemDisplayName(itemId: ItemId): string {
       return itemId.key.unit;
     case "DropIn":
       return itemId.key.path;
+    case "DefaultTarget":
+      return "default.target";
     case "Quadlet":
       return itemId.key.path;
     case "Compose":

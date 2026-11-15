@@ -82,6 +82,8 @@ const baseProps = {
   services: [] as ServiceDecisionDto[],
   dropins: [] as DropInDecisionDto[],
   mountFindings: [] as MountFindingDto[],
+  manualLinks: [],
+  undeterminedInstalls: [],
   onViewUpdate: vi.fn(),
   onMutationError: vi.fn(),
 };

@@ -103,6 +103,7 @@ expression: json
       "system_site_packages": false
     }
   ],
+  "manual_links": [],
   "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
@@ -194,6 +195,7 @@ expression: json
     "state": "unavailable"
   },
   "tuned": [],
+  "undetermined_installs": [],
   "unit_dropins": [],
   "unit_states": [
     {

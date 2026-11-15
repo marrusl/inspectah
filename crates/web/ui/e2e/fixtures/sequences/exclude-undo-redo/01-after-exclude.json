@@ -256,6 +256,8 @@
   ],
   "unit_dropins": [],
   "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": [],
   "quadlets": [],
   "declined_generated": [],
   "generated_timers": [],

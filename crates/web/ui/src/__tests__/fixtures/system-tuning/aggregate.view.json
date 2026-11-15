@@ -86,6 +86,7 @@
   "generated_timers": [],
   "generation": 0,
   "has_unmanaged_scan": false,
+  "manual_links": [],
   "mount_findings": [],
   "not_carried_notice": null,
   "not_carried_packages": [],
@@ -121,6 +122,7 @@
     "state": "aggregate"
   },
   "tuned": [],
+  "undetermined_installs": [],
   "unit_dropins": [],
   "unit_states": [],
   "users_groups_decisions": [],

@@ -69,6 +69,8 @@ const MOCK_VIEW = {
   unit_states: [],
   unit_dropins: [],
   mount_findings: [],
+  manual_links: [],
+  undetermined_installs: [],
   quadlets: [],
   flatpaks: [],
   declined_generated: [],

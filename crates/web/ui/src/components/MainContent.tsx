@@ -761,6 +761,8 @@ export function MainContent({
     // No fallback for a view that lacks the field: the type requires it,
     // and an empty default would hide a server that stopped sending it.
     const mountFindings = viewData ? viewData.mount_findings : [];
+    const manualLinks = viewData ? viewData.manual_links : [];
+    const undeterminedInstalls = viewData ? viewData.undetermined_installs : [];
     const shadowCount = dropins.filter(
       (d) => d.shadow_type === "full_shadow",
     ).length;
@@ -778,6 +780,9 @@ export function MainContent({
           services={services}
           dropins={dropins}
           mountFindings={mountFindings}
+          manualLinks={manualLinks}
+          undeterminedInstalls={undeterminedInstalls}
+          defaultTarget={viewData?.default_target}
           onNavigateToConfig={(configPath) =>
             onNavigateToItem?.("config", `configs:${configPath}`)
           }
