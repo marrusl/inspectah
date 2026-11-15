@@ -19,6 +19,7 @@ use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::HashSet;
 use std::path::Path;
 
+mod install;
 mod resolve;
 
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};

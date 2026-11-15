@@ -864,7 +864,7 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
 /// `value` with the specifiers the `[Install]` reader expands, `%i`, `%I`,
 /// `%p` and `%N`, and `%%`, expanded for the timer `name` (its unit name
 /// without `.timer`), or `None` for any other specifier.
-fn expand_timer_specifiers(value: &str, name: &str) -> Option<String> {
+pub(crate) fn expand_timer_specifiers(value: &str, name: &str) -> Option<String> {
     let (prefix, instance) = match name.split_once('@') {
         Some((prefix, instance)) => (prefix, instance),
         None => (name, ""),
