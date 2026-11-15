@@ -1137,6 +1137,12 @@ const UNDETERMINED_CHECK: &str = "can differ from the source host's, including l
 const UNDETERMINED_ASSIGNS_ALSO: &str = "It assigns Also=, so the units it names are enabled \
      or disabled with it in the image, and inspectah could not list them to check.";
 
+/// The sentence for an undetermined record with no install file whose
+/// unit file could not be read as text: whether it assigns `Also=` is not
+/// known (Mark Russell, 2026-11-15).
+const UNDETERMINED_MAY_ASSIGN_ALSO: &str = "It may assign Also=, so units it names may be \
+     enabled or disabled with it in the image, and inspectah could not read it to check.";
+
 /// Why a section cannot be relied on, in the words § 10.9 gives each
 /// [`InstallUnknown`] reason.
 pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
@@ -1145,6 +1151,7 @@ pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
         InstallUnknown::RequiredByReset => "an empty RequiredBy= whose effect was not measured",
         InstallUnknown::ForeignName => "a name this model does not admit",
         InstallUnknown::UpheldBy => "enabling the unit would also make an .upholds link",
+        InstallUnknown::Unreadable => "a file of it inspectah could not read as text",
     }
 }
 
@@ -1391,7 +1398,11 @@ pub fn undetermined_install_lines(record: &UndeterminedInstall) -> Vec<String> {
         install_unknown_words(record.reason)
     );
     let first = if record.install_files.is_empty() {
-        format!("{opening}. {UNDETERMINED_ASSIGNS_ALSO}")
+        let also = match record.reason {
+            InstallUnknown::Unreadable => UNDETERMINED_MAY_ASSIGN_ALSO,
+            _ => UNDETERMINED_ASSIGNS_ALSO,
+        };
+        format!("{opening}. {also}")
     } else {
         format!(
             "{opening}, and these files under /etc/systemd/system change it: {}.",

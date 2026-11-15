@@ -11,10 +11,11 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, DefaultTarget, ManualLink,
-    MountUnitFinding, PresetDefault, StorageKind, SystemdDropIn, TargetUnit, UNIT_FILE_WHITESPACE,
-    UNIT_TYPE_SUFFIXES, UndeterminedInstall, UnitFragment, UnitInventoryEntry, UnitKind, UnitName,
-    UnitSection, UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
+    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, DefaultTarget, InstallUnknown,
+    ManualLink, MountUnitFinding, PresetDefault, StorageKind, SystemdDropIn, TargetUnit,
+    UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UndeterminedInstall, UnitFragment,
+    UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
+    holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -493,6 +494,12 @@ fn build_state_changes(
                         continue;
                     }
                 };
+                if !evidence.unreadable.is_empty() {
+                    warnings.push(unreadable_install_warning(warn, &evidence.unreadable));
+                    // Its state is not known, so the storage pass must not
+                    // record it as a unit that is not enabled.
+                    reported.insert(subject.name.clone());
+                }
                 let mut additive = false;
                 let state = match &evidence.read {
                     Some(read) => {
@@ -522,9 +529,9 @@ fn build_state_changes(
                         undetermined_installs.extend(found.undetermined);
                         found.state
                     }
-                    // The section could not be read as text: the listing's
-                    // word is all there is.
-                    None => subject.listed,
+                    // A unit file always resolves to a fragment with a file,
+                    // so its section is always read; none is no state.
+                    None => None,
                 };
                 // No install state: the unit has no enablement of its own,
                 // or neither verb reproduces its links (§ 7.3).
@@ -887,9 +894,13 @@ fn unknown_preset_warning(file: &str, line: usize, units: &[UnitName]) -> Warnin
 /// from (§ 7.2 of the units spec, step 4 and the install evidence).
 #[derive(Debug, Default)]
 struct InstallEvidence {
-    /// The effective section, or `None` when the unit file or a drop-in
-    /// that applies could not be read as text.
+    /// The effective section; `None` only for a mask, which reads none. A
+    /// unit file or drop-in that applies and cannot be read as text makes
+    /// it `Undetermined(Unreadable)` with `Also=` taken as assigned.
     read: Option<InstallRead>,
+    /// The unit file and the drop-ins that apply that could not be read as
+    /// text, for the warning.
+    unreadable: Vec<String>,
     /// The section the package alone provides (§ 7.2, "The vendor-side
     /// read"), for a `Vendor` or `Shadowed` unit with an install file under
     /// `/etc`; `None` otherwise, or when a file it reads is not text.
@@ -908,7 +919,10 @@ struct InstallEvidence {
 /// one when it holds an `[Install]` section, or a vendor drop-in of its
 /// file name exists in one of those directories (§ 10.2, "Install files").
 /// One that cannot be read as text counts, since its `[Install]` cannot be
-/// ruled out. An `Err` names a file or directory that could not be read.
+/// ruled out. When the unit file or a drop-in that applies cannot be read
+/// as text, the section is `Undetermined(Unreadable)` with `Also=` taken as
+/// assigned, and the state is read from the links alone (Mark Russell,
+/// 2026-11-15). An `Err` names a file or directory that could not be read.
 fn install_evidence(
     exec: &dyn Executor,
     name: &UnitName,
@@ -927,7 +941,7 @@ fn install_evidence(
     }
 
     let mut drop_ins = Vec::new();
-    let mut every_text_read = true;
+    let mut unreadable = Vec::new();
     let mut install_drop_ins = Vec::new();
     for (root, base) in [
         (DropInRoot::Etc, ETC_UNIT_DIR),
@@ -941,7 +955,7 @@ fn install_evidence(
                     && (vendor_names.contains(&file_name)
                         || text.as_deref().is_none_or(holds_install_section))
                 {
-                    install_drop_ins.push(path);
+                    install_drop_ins.push(path.clone());
                 }
                 match text {
                     Some(text) => drop_ins.push((
@@ -952,7 +966,7 @@ fn install_evidence(
                         },
                         text,
                     )),
-                    None => every_text_read = false,
+                    None => unreadable.push(path),
                 }
             }
         }
@@ -965,8 +979,14 @@ fn install_evidence(
         UnitFragment::Vendor { file, .. } => Some(format!("{VENDOR_UNIT_DIR}/{}", file.as_str())),
         UnitFragment::Absent => None,
     };
-    let fragment_text = match fragment_path {
-        Some(path) => unit_text(exec, &path)?,
+    let fragment_text = match &fragment_path {
+        Some(path) => {
+            let text = unit_text(exec, path)?;
+            if text.is_none() {
+                unreadable.insert(0, path.clone());
+            }
+            text
+        }
         None => None,
     };
     let drop_ins: Vec<(DropInSource, &str)> = drop_ins
@@ -976,7 +996,7 @@ fn install_evidence(
     // The vendor-side read (§ 7.2): for a packaged unit file with an
     // install file under `/etc`, a shadow or an install drop-in.
     let vendor_text = match fragment {
-        _ if !every_text_read => None,
+        _ if !unreadable.is_empty() => None,
         UnitFragment::Vendor { .. } if !install_drop_ins.is_empty() => fragment_text.clone(),
         UnitFragment::Shadowed { file, .. } => {
             unit_text(exec, &format!("{VENDOR_UNIT_DIR}/{}", file.as_str()))?
@@ -984,12 +1004,18 @@ fn install_evidence(
         _ => None,
     };
     let vendor_read = vendor_text.map(|text| read_vendor_install(name, &text, &drop_ins));
-    let read = fragment_text
-        .filter(|_| every_text_read)
-        .map(|text| read_install(name, &text, &drop_ins));
+    let read = match fragment_text {
+        _ if !unreadable.is_empty() => Some(InstallRead::Undetermined {
+            reason: InstallUnknown::Unreadable,
+            assigns_also: true,
+        }),
+        Some(text) => Some(read_install(name, &text, &drop_ins)),
+        None => None,
+    };
     install_drop_ins.sort();
     Ok(InstallEvidence {
         read,
+        unreadable,
         vendor_read,
         install_drop_ins,
         vendor_drop_ins: vendor_names.into_iter().collect(),
@@ -1085,6 +1111,22 @@ fn etc_unit_file_warning(name: &UnitName, detail: &str) -> Warning {
         severity: Some(WarningSeverity::Warning),
         extra: std::collections::HashMap::from([("unit".into(), serde_json::json!(name))]),
     }
+}
+
+/// The warning for a unit whose unit file or `[Install]` drop-in
+/// `paths` cannot be read as text, built by `warn`, with `paths` among its
+/// fields: its section is undetermined and its state is read from its
+/// links alone (Mark Russell, 2026-11-15).
+fn unreadable_install_warning(warn: impl FnOnce(&str) -> Warning, paths: &[String]) -> Warning {
+    let mut warning = warn(&format!(
+        "{} cannot be read as text, so its [Install] section is undetermined \
+         and its state is read from its links alone",
+        paths.join(", ")
+    ));
+    warning
+        .extra
+        .insert("paths".into(), serde_json::json!(paths));
+    warning
 }
 
 /// The closing clause of the search-path warning from the state-change

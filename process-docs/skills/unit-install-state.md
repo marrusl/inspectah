@@ -60,10 +60,16 @@ under `/etc/systemd/system`, and the links packages ship under
   missing link would read as `Disabled` and carry a command the host never
   had.
 
-The listing's `enabled` and `disabled` are kept only for a unit whose
-`[Install]` cannot be read as text, and on the degraded path where no
-preset rule could be read (`partial_inventory`). Both are open points for
-the spec owner, not rules to copy.
+**A unit file or drop-in that cannot be read as text decides nothing
+from the listing.** `install_evidence` makes the section
+`Undetermined(Unreadable)` with `assigns_also` true, so the unit has no
+install state, its `/etc` links are `Undetermined` findings, it always
+gets an `UndeterminedInstall` record, and a warning names the files
+(`unreadable_install_warning`, with a `paths` field). Such a unit is put in
+`reported`, so the storage pass never records it as "not enabled".
+(Mark Russell, 2026-11-15.) The listing's word is still kept on the
+degraded path where no preset rule could be read (`partial_inventory`);
+that is an open point for the spec owner, not a rule to copy.
 
 ## The `[Install]` reader
 
@@ -117,7 +123,8 @@ its template's too), or a `.conf` in `N.d` (or the template's `.d`) that
 holds an `[Install]` section or has the file name of a vendor drop-in
 there. `install_evidence` reads each directory once and feeds both the
 reader and the list, so the two cannot disagree. A drop-in whose text
-cannot be read counts as an install file and the reader steps aside.
+cannot be read counts as an install file and makes the section
+`Undetermined(Unreadable)`.
 `vendor_drop_ins` on a row holds file names only; the plan checks names,
 never content. `HostLinks::has_etc_files` is the gate for a unit with a
 file or drop-in directory of its own name under `/etc`.

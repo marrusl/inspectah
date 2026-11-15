@@ -1254,8 +1254,10 @@ fn a_shadowed_unit_keeps_its_enable_when_its_package_is_excluded() {
 
 /// A `Shadowed` unit whose `/etc` file cannot be read as text has no
 /// drop-in row, and its config entry (a `ContentNotCaptured` advisory)
-/// stages nothing, so the shadow is not staged: the enable is declined
-/// with `InstallEvidenceChanged`. Control: the readable twin is enabled.
+/// stages nothing, so the shadow is not staged. Its `[Install]` cannot be
+/// read either, so the unit has no state change and an undetermined record
+/// listing the shadow, which the export omits by that file: no
+/// `systemctl` line names the unit. Control: the readable twin is enabled.
 #[test]
 fn a_shadow_that_could_not_be_read_declines_its_enable() {
     const BLOB_UNIT: &str = "/etc/systemd/system/blob.service";
@@ -1279,18 +1281,22 @@ fn a_shadow_that_could_not_be_read_declines_its_enable() {
     };
 
     let snap = scan(host(false));
-    assert!(
-        matches!(
-            fragment_of(&snap, "blob.service"),
-            UnitFragment::Shadowed { .. }
-        ),
-        "{:?}",
-        fragment_of(&snap, "blob.service")
+    let units = snap.units.as_ref().expect("a units section");
+    assert_eq!(changes_named(&snap, "blob.service"), 0);
+    assert_eq!(
+        units
+            .undetermined_installs
+            .iter()
+            .map(|r| (r.unit.as_str(), r.reason, r.install_files.clone()))
+            .collect::<Vec<_>>(),
+        [(
+            "blob.service",
+            InstallUnknown::Unreadable,
+            vec![BLOB_UNIT.to_owned()]
+        )]
     );
     assert!(
-        snap.units
-            .as_ref()
-            .is_some_and(|u| u.drop_ins.iter().all(|d| d.path != BLOB_UNIT)),
+        units.drop_ins.iter().all(|d| d.path != BLOB_UNIT),
         "no drop-in row for a shadow that was not read"
     );
     let containerfile = containerfile_in(&render_export(&snap));
@@ -1298,9 +1304,12 @@ fn a_shadow_that_could_not_be_read_declines_its_enable() {
         in_no_systemctl_instruction(&containerfile, "blob.service"),
         "{containerfile}"
     );
-    assert!(
-        omitted(&containerfile, "blob.service")
-            .is_some_and(|l| l.ends_with(&evidence_changed(BLOB_UNIT))),
+    assert_eq!(
+        count_lines(
+            &containerfile,
+            &install_omitted("blob.service", &[BLOB_UNIT])
+        ),
+        1,
         "{containerfile}"
     );
 
@@ -2889,10 +2898,11 @@ fn t8_an_administrators_storage_unit_gets_the_advisory_and_no_instruction() {
 }
 
 /// A swap unit whose file in `/etc/systemd/system` is not text (or is over
-/// the size cap) was not read, so its advisory has the fact line and no
-/// `nofail` line: nothing is known of its options. The control on the same
-/// host and routes is a readable swap file without `nofail`, which gets the
-/// line. The scan export and a refine export.
+/// the size cap) was not read, so nothing is known of its options or its
+/// `[Install]`: it is an undetermined record with no mount finding, and no
+/// advisory states whether it is enabled or claims a `nofail` line. The
+/// control on the same host and routes is a readable swap file without
+/// `nofail`, which gets the line. The scan export and a refine export.
 #[test]
 fn an_unread_swap_unit_file_gets_no_nofail_line() {
     const UNREAD: &str = "dev-vdb5.swap";
@@ -2910,30 +2920,39 @@ fn an_unread_swap_unit_file_gets_no_nofail_line() {
                 "[Swap]\nWhat=/dev/vdb1\n[Install]\nWantedBy=swap.target\n",
             ),
     );
-    let findings = &snap.units.as_ref().expect("a units section").mount_findings;
-    let nofail_of = |unit: &str| {
-        findings
+    let units = snap.units.as_ref().expect("a units section");
+    let finding = |unit: &str| {
+        units
+            .mount_findings
             .iter()
             .find(|f| f.unit.name().as_unit_name().as_str() == unit)
-            .unwrap_or_else(|| panic!("no finding for {unit}: {findings:?}"))
-            .nofail
     };
-    assert_eq!(nofail_of(UNREAD), None, "the file was not read");
-    assert_eq!(nofail_of(READ), Some(false), "the control was read");
+    assert_eq!(
+        finding(READ).map(|f| f.nofail),
+        Some(Some(false)),
+        "the control was read"
+    );
+    assert!(
+        units
+            .undetermined_installs
+            .iter()
+            .any(|r| r.unit.as_str() == UNREAD && r.reason == InstallUnknown::Unreadable),
+        "{:?}",
+        units.undetermined_installs
+    );
+    assert!(finding(UNREAD).is_none(), "the file was not read");
     for (route, containerfile) in both_routes(&snap) {
         let control = advisory_for(&containerfile, READ);
         assert!(
             control.contains(&NOFAIL_LINE.to_owned()),
             "{route}, control:\n{containerfile}"
         );
-        let advisory = advisory_for(&containerfile, UNREAD);
-        assert_eq!(
-            advisory.first(),
-            Some(&advisory_fact(UNREAD, "enabled")),
+        assert!(
+            advisory_for(&containerfile, UNREAD).is_empty(),
             "{route}:\n{containerfile}"
         );
         assert!(
-            !advisory.contains(&NOFAIL_LINE.to_owned()),
+            in_no_systemctl_instruction(&containerfile, UNREAD),
             "{route}:\n{containerfile}"
         );
     }
@@ -7361,6 +7380,82 @@ fn an_alias_chain_installs_its_unit_through_both_exports() {
         );
         assert!(
             !acts(&containerfile, "disable", "real.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// A vendor unit file that cannot be read as text, with the link its
+/// `[Install]` names and no file under `/etc`, through the scan, the render
+/// and refine. Its section is undetermined and `Also=` is not known: no
+/// state change, one record with no files, whose block says inspectah
+/// could not tell whether it assigns `Also=` (never that it does), the
+/// link reported with the same reason, and no `systemctl` line on either
+/// route, although the listing says `enabled` against a `disable` preset.
+/// Control: the readable file is enabled on both routes.
+#[test]
+fn an_unreadable_unit_file_is_an_undetermined_record_through_both_exports() {
+    const FILE: &str = "/usr/lib/systemd/system/need.service";
+    let host = |readable: bool| {
+        let host = UnitHost::new()
+            .unit("need.service", "enabled")
+            .preset("disable need.service")
+            .base_package("needpkg")
+            .vendor_unit("need.service", WANTS_MULTI_USER, Some("needpkg"));
+        if readable {
+            host
+        } else {
+            host.file_error(FILE, std::io::ErrorKind::InvalidData)
+        }
+    };
+
+    let control = scan(host(true));
+    for (route, containerfile) in both_routes(&control) {
+        assert!(
+            acts(&containerfile, "enable", "need.service"),
+            "{route}, control:\n{containerfile}"
+        );
+    }
+
+    let snap = scan(host(false));
+    assert_eq!(changes_named(&snap, "need.service"), 0);
+    let expected = [
+        "# Advisory: need.service is not carried: its [Install] section on the source host \
+         cannot be relied on (a file of it inspectah could not read as text). It may assign \
+         Also=, so units it names may be enabled or disabled with it in the image, and \
+         inspectah could not read it to check."
+            .to_owned(),
+        undetermined_second_line("need.service"),
+    ];
+    let refine = session(&snap);
+    let rows = &refine.decisions().undetermined_installs;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.unit.as_str(), r.reason, r.install_files.len()))
+            .collect::<Vec<_>>(),
+        [("need.service", InstallUnknown::Unreadable, 0)]
+    );
+    assert_eq!(rows[0].advisories, expected);
+    assert_eq!(
+        links_of(&snap)
+            .iter()
+            .map(|l| (l.parent.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [(
+            "multi-user.target",
+            ManualLinkCause::Undetermined {
+                reason: InstallUnknown::Unreadable
+            }
+        )]
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, &expected[0]),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "need.service"),
             "{route}:\n{containerfile}"
         );
     }

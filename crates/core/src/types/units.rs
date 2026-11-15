@@ -755,7 +755,8 @@ impl From<AdvisoryUnit> for UnitSubject {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallUnknown {
-    /// A value holds a specifier other than `%i`, `%I`, `%p` or `%N`.
+    /// A value holds a specifier other than `%i`, `%p` or `%N`. `systemctl
+    /// enable` does not expand `%I`.
     Specifier,
     /// An empty `RequiredBy=` follows a `RequiredBy=` value in load order.
     /// Whether it clears the value was not measured.
@@ -764,6 +765,10 @@ pub enum InstallUnknown {
     ForeignName,
     /// The section assigns `UpheldBy=`, an empty assignment included.
     UpheldBy,
+    /// The unit file, or a drop-in it reads `[Install]` from, could not be
+    /// read as text, so whether the section assigns `Also=` is not known
+    /// either.
+    Unreadable,
 }
 
 /// How a link on the source host ties a unit to its parent (§ 6.6 of the
@@ -2248,6 +2253,7 @@ mod tests {
             (InstallUnknown::RequiredByReset, "\"required_by_reset\""),
             (InstallUnknown::ForeignName, "\"foreign_name\""),
             (InstallUnknown::UpheldBy, "\"upheld_by\""),
+            (InstallUnknown::Unreadable, "\"unreadable\""),
         ] {
             assert_eq!(serde_json::to_string(&reason).expect("serializes"), text);
             assert_eq!(

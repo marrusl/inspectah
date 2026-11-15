@@ -1338,11 +1338,16 @@ fn unit_with_no_file_is_reported_not_dropped() {
 /// systemd loads a unit file whose bytes are not UTF-8 (a Latin-1 comment
 /// or `Description=`), and the collector refuses a file over its size cap,
 /// both as `InvalidData`. Neither says the file is empty, so neither is a
-/// mask and neither loses the unit: an `/etc` unit is `Local`, a vendor
-/// unit is `Vendor`, and a mask over such a vendor file hides that file.
-/// The scan is not degraded (`scan` expects success).
+/// mask and neither loses the unit. Its `[Install]` cannot be read, so the
+/// section is undetermined, with `Also=` taken as assigned: each enabled
+/// unit, `/etc` or vendor, gets no state change, one
+/// `UndeterminedInstall` record with reason `Unreadable` (the `/etc` unit
+/// with its file), each of its links reported with that reason, and one
+/// warning naming the file. The listing's `enabled` decides nothing. A
+/// mask over such a vendor file hides that file. The scan is not degraded
+/// (`scan` expects success).
 #[test]
-fn unit_file_that_is_not_text_keeps_its_state_change() {
+fn unit_file_that_is_not_text_is_an_undetermined_section() {
     let exec = listing_mock(&[
         ("etc-latin1.service", "enabled"),
         ("vendor-latin1.service", "enabled"),
@@ -1360,31 +1365,11 @@ fn unit_file_that_is_not_text_keeps_its_state_change() {
     .with_file_error(
         "/usr/lib/systemd/system/masked-latin1.service",
         std::io::ErrorKind::InvalidData,
-    )
-    .with_command(
-        "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/vendor-latin1.service \
-         /usr/lib/systemd/system/masked-latin1.service",
-        ExecResult {
-            stdout: "a\nb\n".into(),
-            exit_code: 0,
-            ..Default::default()
-        },
     );
-    let (section, warnings) = scan(&exec);
+    let exec = owner_answer(exec, "masked-latin1.service", Some("b"));
+    let (section, _) = scan(&exec);
+    let warnings = scan_warnings(&exec);
 
-    assert_eq!(
-        fragment_of(&section, "etc-latin1.service"),
-        &UnitFragment::Local {
-            file: file("etc-latin1.service")
-        }
-    );
-    assert_eq!(
-        fragment_of(&section, "vendor-latin1.service"),
-        &UnitFragment::Vendor {
-            file: file("vendor-latin1.service"),
-            owning_package: Some("a".into()),
-        }
-    );
     assert_eq!(
         fragment_of(&section, "masked-latin1.service"),
         &UnitFragment::Vendor {
@@ -1392,7 +1377,118 @@ fn unit_file_that_is_not_text_keeps_its_state_change() {
             owning_package: Some("b".into()),
         }
     );
-    assert!(warnings.is_empty(), "no warnings: {warnings:?}");
+    assert_eq!(state_change_names(&section), ["masked-latin1.service"]);
+    let etc_file = "/etc/systemd/system/etc-latin1.service";
+    let vendor_file = "/usr/lib/systemd/system/vendor-latin1.service";
+    assert_eq!(
+        undetermined(&section),
+        [
+            (
+                "etc-latin1.service",
+                InstallUnknown::Unreadable,
+                vec![etc_file]
+            ),
+            ("vendor-latin1.service", InstallUnknown::Unreadable, vec![]),
+        ]
+    );
+    let cause = ManualLinkCause::Undetermined {
+        reason: InstallUnknown::Unreadable,
+    };
+    assert_eq!(
+        manual_links(&section),
+        [
+            (
+                LinkRelation::Wants,
+                "multi-user.target",
+                "etc-latin1.service",
+                cause
+            ),
+            (
+                LinkRelation::Wants,
+                "multi-user.target",
+                "vendor-latin1.service",
+                cause
+            ),
+        ]
+    );
+    for (unit, path) in [
+        ("etc-latin1.service", etc_file),
+        ("vendor-latin1.service", vendor_file),
+    ] {
+        assert!(
+            has_unreadable_install_warning(&warnings, unit, path),
+            "{unit}: {warnings:?}"
+        );
+    }
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+}
+
+/// Whether `warnings` holds the warning for `unit` whose install file
+/// `path` cannot be read as text: the message names both, and the
+/// warning's fields carry both.
+fn has_unreadable_install_warning(warnings: &[Warning], unit: &str, path: &str) -> bool {
+    warnings.iter().any(|w| {
+        w.message.contains(unit)
+            && w.message.contains(path)
+            && w.extra.get("unit") == Some(&serde_json::json!(unit))
+            && w.extra
+                .get("paths")
+                .and_then(|p| p.as_array())
+                .is_some_and(|paths| paths.contains(&serde_json::json!(path)))
+    })
+}
+
+/// An `/etc` drop-in that cannot be read as text makes the unit's section
+/// undetermined, with `Also=` taken as assigned, whatever the listing
+/// says: an enabled vendor unit under a `disable` preset gets no `enable`
+/// row, and a disabled one with no link under an `enable` preset gets no
+/// `disable` row. Each gets one `UndeterminedInstall` record listing the
+/// drop-in, and a warning naming it. Control: the same hosts with a
+/// readable drop-in that changes no `[Install]` key are the two rows.
+#[test]
+fn an_install_drop_in_that_is_not_text_gives_the_listing_no_say() {
+    let drop_in = "/etc/systemd/system/app.service.d/latin1.conf";
+    let host = |state: &str, preset: &str, readable: bool| {
+        let exec = with_vendor_units(
+            kinds_mock(&[("app.service", state)], preset),
+            &["app.service"],
+        )
+        .with_dir_entry("/etc/systemd/system", "app.service.d")
+        .with_dir("/etc/systemd/system/app.service.d", vec!["latin1.conf"]);
+        let exec = if readable {
+            exec.with_file(drop_in, "[Service]\nNice=5\n")
+        } else {
+            exec.with_file_error(drop_in, std::io::ErrorKind::InvalidData)
+        };
+        owner_answer(exec, "app.service", Some("apppkg"))
+    };
+    for (state, preset, action) in [
+        ("enabled", "disable *\n", UnitAction::Enable),
+        ("disabled", "enable *\n", UnitAction::Disable),
+    ] {
+        let (control, _) = scan(&host(state, preset, true));
+        assert_eq!(state_change_names(&control), ["app.service"], "{state}");
+        assert_eq!(control.state_changes[0].implied_action(), action, "{state}");
+        assert!(control.undetermined_installs.is_empty(), "{state}");
+
+        let exec = host(state, preset, false);
+        let (section, _) = scan(&exec);
+        assert!(
+            section.state_changes.is_empty(),
+            "{state}: {:?}",
+            state_change_names(&section)
+        );
+        assert_eq!(
+            undetermined(&section),
+            [("app.service", InstallUnknown::Unreadable, vec![drop_in])],
+            "{state}"
+        );
+        let warnings = scan_warnings(&exec);
+        assert!(
+            has_unreadable_install_warning(&warnings, "app.service", drop_in),
+            "{state}: {warnings:?}"
+        );
+    }
 }
 
 /// A unit file that cannot be read for any other reason hides where the
@@ -2846,15 +2942,17 @@ fn drop_ins_are_collected_for_every_kind_and_for_names_that_do_not_parse() {
 }
 
 /// A full shadow over a vendor unit whose `/etc` file is not text, or is
-/// over the executor's size cap (`InvalidData`), keeps its state change and
-/// does not degrade the scan. Its content cannot be carried, so it is no
+/// over the executor's size cap (`InvalidData`), does not degrade the
+/// scan. Its `[Install]` cannot be read, so the unit is an
+/// `UndeterminedInstall` record listing the shadow, with a warning naming
+/// it, and no state change. Its content cannot be carried, so it is no
 /// drop-in row: an empty drop-in would stage an empty file, which systemd
 /// reads as a mask. The config entry the config inspector records for it,
 /// a `ContentNotCaptured` advisory, is its one row, as for any file under
 /// `/etc` that cannot be read as text. The readable twin is a full shadow
 /// row.
 #[test]
-fn full_shadow_that_is_not_text_keeps_its_state_change_and_does_not_degrade() {
+fn full_shadow_that_is_not_text_is_undetermined_and_does_not_degrade() {
     let exec = kinds_mock(
         &[("latin1.service", "enabled"), ("twin.service", "enabled")],
         "disable *\n",
@@ -2868,8 +2966,14 @@ fn full_shadow_that_is_not_text_keeps_its_state_change_and_does_not_degrade() {
     let exec = with_vendor_units(exec, &["latin1.service", "twin.service"]);
     let exec = owner_answer(exec, "latin1.service", Some("a"));
     let exec = owner_answer(exec, "twin.service", Some("b"));
-    let (section, warnings) = scan(&exec);
-    assert!(warnings.is_empty(), "{warnings:?}");
+    let (section, _) = scan(&exec);
+    let warnings = scan_warnings(&exec);
+    let latin1 = "/etc/systemd/system/latin1.service";
+    assert!(
+        has_unreadable_install_warning(&warnings, "latin1.service", latin1),
+        "{warnings:?}"
+    );
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
 
     // Control: the readable twin.
     assert_eq!(
@@ -2884,12 +2988,10 @@ fn full_shadow_that_is_not_text_keeps_its_state_change_and_does_not_degrade() {
         vec!["/etc/systemd/system/twin.service"]
     );
 
+    assert_eq!(state_change_names(&section), ["twin.service"]);
     assert_eq!(
-        fragment_of(&section, "latin1.service"),
-        &UnitFragment::Shadowed {
-            file: file("latin1.service"),
-            owning_package: Some("a".into()),
-        }
+        undetermined(&section),
+        [("latin1.service", InstallUnknown::Unreadable, vec![latin1])]
     );
     let config = config_entries_not_degraded(&exec);
     let entry = config
