@@ -1,4 +1,4 @@
-use super::units::specifiers::expand_unit_specifiers;
+use super::units::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
@@ -902,7 +902,7 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
     }
     let unit = match assigned {
         None => Some(format!("{name}.service")),
-        Some(value) => expand_unit_specifiers(&value, name),
+        Some(value) => expand_unit_specifiers(&value, name, SpecifierSet::Runtime),
     };
     let trigger = unit
         .and_then(|unit| UnitName::try_from(unit).ok())
@@ -1468,7 +1468,7 @@ mod tests {
             ["a.service", "c.service"]
         );
         let resolved = |value: &str, name: &str| {
-            expand_unit_specifiers(value, name)
+            expand_unit_specifiers(value, name, SpecifierSet::Runtime)
                 .and_then(|unit| UnitName::try_from(unit).ok())
                 .map(|unit| unit.as_str().to_owned())
         };

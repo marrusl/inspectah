@@ -23,7 +23,7 @@ All under `crates/collect/src/inspectors/units/`:
 | `install.rs` | The `[Install]` reader: `read_install`, `read_vendor_install`, `drop_in_dirs`, `InstallRead`, `InstallSection` |
 | `links.rs` | The links and what they mean: `read_host_links` (`HostLinks`), `expected_links`, `install_state`, `link_findings`, `compare_install`, `apply_install_difference`, `HOST_DEVICE_TEMPLATES` |
 | `also.rs` | The `Also=` walk: `also_name`, `also_members`, `is_off` |
-| `specifiers.rs` | `expand_unit_specifiers`, shared with the scheduled inspector's timer trigger |
+| `specifiers.rs` | `expand_unit_specifiers` and its `SpecifierSet`: `Install` for the reader, `Runtime` for the scheduled inspector's timer trigger |
 | `resolve.rs` | The file a name loads, and the search-path test (`UNREAD_SEARCH_PATH`) |
 | `mod.rs` | The name gate (`gate`), `linked_instances`, `install_evidence`, `install_difference`, `build_state_changes`, `default_target` |
 
@@ -81,8 +81,12 @@ measured; the order across the two names was read from systemd's source
   `[Install]` there (measured), so `drop_in_dirs` never lists them and the
   reader skips a source from any other directory.
 - **`Undetermined`** for any `UpheldBy=`, that `RequiredBy=` reset, a
-  specifier other than `%i`, `%I`, `%p`, `%N` and `%%`, or a value that is
-  not a `UnitName`. The first reason in load order stands, even if a later
+  specifier other than `%i`, `%p`, `%N` and `%%`, or a value that is not a
+  `UnitName`. `%I` is undetermined here: `systemctl enable` does not expand
+  it (systemd's install expansion table, 252 and 257), while the scheduled
+  inspector expands it in a timer's `Unit=`. `SpecifierSet` in
+  `specifiers.rs` holds the two sets; never pass `Runtime` to the
+  `[Install]` reader. The first reason in load order stands, even if a later
   reset clears the value that caused it. `assigns_also` is true for any
   `Also=` line, an empty one included, which sends the unit to the
   advisory side rather than a `disable`.

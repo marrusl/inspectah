@@ -7,7 +7,7 @@
 //! directories [`drop_in_dirs`] names under both unit directories and
 //! reads the files; nothing here touches the host.
 
-use super::specifiers::expand_unit_specifiers;
+use super::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::types::units::{InstallUnknown, UNIT_FILE_WHITESPACE, UnitName, logical_lines};
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -79,7 +79,8 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 }
 
 /// The effective `[Install]` section of `name`, whose unit file reads
-/// `fragment`, with `%i`, `%I`, `%p` and `%N` expanded.
+/// `fragment`, with `%i`, `%p` and `%N` expanded. `systemctl enable` does
+/// not expand `%I`, so a value holding one is undetermined.
 ///
 /// Load order: the unit file first, then one drop-in per file name, in
 /// file-name order across every directory of [`drop_in_dirs`] and both
@@ -217,10 +218,12 @@ impl<'a> Reader<'a> {
             "RequiredBy" => self.extend(value, |s| &mut s.required_by),
             "UpheldBy" => self.decline(InstallUnknown::UpheldBy),
             "DefaultInstance" if value.is_empty() => self.section.default_instance = None,
-            "DefaultInstance" => match expand_unit_specifiers(value, self.stem) {
-                Some(instance) => self.section.default_instance = Some(instance),
-                None => self.decline(InstallUnknown::Specifier),
-            },
+            "DefaultInstance" => {
+                match expand_unit_specifiers(value, self.stem, SpecifierSet::Install) {
+                    Some(instance) => self.section.default_instance = Some(instance),
+                    None => self.decline(InstallUnknown::Specifier),
+                }
+            }
             _ => {}
         }
     }
@@ -229,7 +232,8 @@ impl<'a> Reader<'a> {
     /// `list` picks, once.
     fn extend(&mut self, value: &str, list: fn(&mut InstallSection) -> &mut Vec<UnitName>) {
         for word in value.split(UNIT_FILE_WHITESPACE).filter(|w| !w.is_empty()) {
-            let Some(expanded) = expand_unit_specifiers(word, self.stem) else {
+            let Some(expanded) = expand_unit_specifiers(word, self.stem, SpecifierSet::Install)
+            else {
                 self.decline(InstallUnknown::Specifier);
                 continue;
             };
@@ -703,6 +707,59 @@ mod tests {
             let drop_ins: Vec<(DropInSource, &str)> = drop_ins
                 .iter()
                 .map(|&(root, dir, file, text)| (source(root, dir, file), text))
+                .collect();
+            assert_eq!(
+                &read_install(&unit(name), fragment, &drop_ins),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    /// `systemctl enable` expands no `%I` in `[Install]` (systemd's install
+    /// expansion table, 252 and 257), so a value holding one is
+    /// undetermined, in the unit file, a drop-in or `DefaultInstance=`.
+    /// Control: `%i`, `%p` and `%N` on the same instance expand.
+    #[test]
+    fn percent_capital_i_in_install_is_undetermined() {
+        let cases: &[(&str, &str, &str, Option<&str>, InstallRead)] = &[
+            (
+                "WantedBy= in the unit file",
+                "t@x.service",
+                "[Install]\nWantedBy=multi-user%I.target\n",
+                None,
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "Alias= in a drop-in",
+                "t@x.service",
+                WANTS_MULTI_USER,
+                Some("[Install]\nAlias=alias-%I.service\n"),
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "DefaultInstance=",
+                "t@.service",
+                "[Install]\nWantedBy=multi-user.target\nDefaultInstance=%I\n",
+                None,
+                undetermined(InstallUnknown::Specifier, false),
+            ),
+            (
+                "control: %i, %p and %N expand",
+                "t@x.service",
+                "[Install]\nWantedBy=%p.target\nAlias=%N-alias.service alias-%i.service\n",
+                None,
+                InstallRead::Known(InstallSection {
+                    wanted_by: units(&["t.target"]),
+                    alias: units(&["t@x-alias.service", "alias-x.service"]),
+                    ..InstallSection::default()
+                }),
+            ),
+        ];
+        for (label, name, fragment, drop_in, expected) in cases {
+            let drop_ins: Vec<(DropInSource, &str)> = drop_in
+                .iter()
+                .map(|text| (source(Etc, &format!("{name}.d"), "10-a.conf"), *text))
                 .collect();
             assert_eq!(
                 &read_install(&unit(name), fragment, &drop_ins),

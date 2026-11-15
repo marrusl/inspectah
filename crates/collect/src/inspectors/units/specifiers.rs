@@ -1,13 +1,26 @@
-//! The unit specifiers inspectah expands when it reads a unit file: `%i`,
-//! `%I`, `%p`, `%N` and `%%`. The `[Install]` reader expands them in
+//! The unit specifiers inspectah expands when it reads a unit file. The
+//! `[Install]` reader expands `%i`, `%p`, `%N` and `%%` in
 //! `DefaultInstance=` and in the names its keys assign (§ 7.2 of the units
-//! spec), and the scheduled inspector in a timer's `Unit=` (§ 8). Any other
-//! specifier is not expanded, and the caller declines the value.
+//! spec); the scheduled inspector expands those and `%I` in a timer's
+//! `Unit=` (§ 8). Any other specifier is not expanded, and the caller
+//! declines the value.
 
-/// `value` with `%i`, `%I`, `%p`, `%N` and `%%` expanded for the unit
-/// `name`, given without its type suffix (`worker@a` for
-/// `worker@a.service`), or `None` for any other specifier.
-pub(crate) fn expand_unit_specifiers(value: &str, name: &str) -> Option<String> {
+/// The specifiers one kind of read expands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpecifierSet {
+    /// A unit setting systemd reads when it loads the unit, such as a
+    /// timer's `Unit=`: `%i`, `%I`, `%p`, `%N` and `%%`.
+    Runtime,
+    /// `[Install]`, as `systemctl enable` expands it: `%i`, `%p`, `%N` and
+    /// `%%`. systemd's install expansion table has no `%I` (252 and 257,
+    /// `install-printf.c`), so a value holding one is not expanded.
+    Install,
+}
+
+/// `value` with the specifiers of `set` expanded for the unit `name`,
+/// given without its type suffix (`worker@a` for `worker@a.service`), or
+/// `None` for any other specifier.
+pub(crate) fn expand_unit_specifiers(value: &str, name: &str, set: SpecifierSet) -> Option<String> {
     let (prefix, instance) = match name.split_once('@') {
         Some((prefix, instance)) => (prefix, instance),
         None => (name, ""),
@@ -21,7 +34,7 @@ pub(crate) fn expand_unit_specifiers(value: &str, name: &str) -> Option<String> 
         }
         match chars.next()? {
             'i' => out.push_str(instance),
-            'I' => out.push_str(&unescape_unit_text(instance)?),
+            'I' if set == SpecifierSet::Runtime => out.push_str(&unescape_unit_text(instance)?),
             'p' => out.push_str(prefix),
             'N' => out.push_str(name),
             '%' => out.push('%'),
