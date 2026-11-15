@@ -1449,7 +1449,8 @@ pub fn install_omitted_line(unit: &UnitName, excluded: &[String]) -> String {
 /// install files come from a directory listing, so each surface escapes the
 /// finished line for itself. A record with install files names them at
 /// the end of the first line; one with none assigns `Also=`, which the
-/// first line says instead.
+/// first line says instead, or, for a file that could not be read as text
+/// ([`InstallUnknown::Unreadable`]), may assign it.
 pub fn undetermined_install_lines(record: &UndeterminedInstall) -> Vec<String> {
     let unit = record.unit.as_str();
     let opening = format!(
