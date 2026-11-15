@@ -247,9 +247,10 @@ fn search_path_change(
 }
 
 /// The `.conf` file names in the directory `path`; none when it does not
-/// exist. A name starting with `.` is skipped: systemd's drop-in listing
-/// (`conf_files_list`, through `dirent_is_file_with_suffix`) ignores hidden
-/// files, so an editor's `.#override.conf` lock file is never read.
+/// exist. A name starting with `.` is skipped: systemd skips hidden files
+/// when it lists drop-ins, so an editor's `.#override.conf` lock file is
+/// never read. That rule was read from systemd's source and not measured on
+/// RHEL 9 or 10.
 pub(super) fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
     match exec.read_dir(Path::new(path)) {
         Ok(entries) => Ok(entries
