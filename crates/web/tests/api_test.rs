@@ -5381,8 +5381,7 @@ fn withheld_lands_on_the_included_variant_rows_only() {
 /// production `/api/view` handler byte for byte, and a `SetInclude` naming
 /// each through `/api/op` is accepted and moves that row alone.
 ///
-/// Built by hand: the collector records no instance state changes until a
-/// later phase, so the instance is a vendor unit whose file is its
+/// Built by hand, with the instance a vendor unit whose file is its
 /// template, which the state change type admits for an enabled instance.
 #[tokio::test]
 async fn unusual_unit_names_round_trip_through_the_view_and_an_op() {

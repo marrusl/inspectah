@@ -8294,11 +8294,12 @@ fn t22_the_install_state_cases_repeat_for_an_instance() {
     );
     assert_eq!(found(&snap), std::slice::from_ref(&rescue_link));
     assert_eq!(changes_named(&snap, UNIT), 0);
-    let containerfile = containerfile_in(&render_export(&snap));
-    assert!(
-        in_no_systemctl_instruction(&containerfile, UNIT),
-        "{containerfile}"
-    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
 
     // The same under a list-form `enable` naming it.
     let snap = scan(rescue_only(&["enable backup@.service x", "disable *"]));
@@ -8730,6 +8731,33 @@ fn t23_a_host_device_instance_link_through_the_scan() {
             .all(|l| l.cause != ManualLinkCause::HostDevice)
     );
     assert_eq!(changes_named(&control, "t@dev-vdb1.service"), 1);
+
+    // The fsck template's text under a name on no list: a link to a unit
+    // with no `[Install]`, not a device link.
+    const CHECK: &str = "check@dev-vdb1.service";
+    let host = UnitHost::new()
+        .unit("check@.service", "static")
+        .preset("disable *")
+        .vendor_unit("check@.service", fsck, None);
+    let renamed = scan(instance_link(
+        host,
+        "/etc/systemd/system",
+        "local-fs.target",
+        CHECK,
+        "/usr/lib/systemd/system/check@.service",
+    ));
+    assert_eq!(
+        links_of(&renamed)
+            .iter()
+            .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [(
+            LinkRelation::Wants,
+            "local-fs.target",
+            CHECK,
+            ManualLinkCause::StaticUnit
+        )]
+    );
 }
 
 /// T24 through the scan: a concrete `worker@site.service` under `/etc`
@@ -8864,6 +8892,59 @@ fn t24_the_search_path_refuses_an_instance_through_the_scan() {
                 .any(|w| w.message.contains("is on the systemd search path")),
             "{label}: {:?}",
             snap.warnings
+        );
+    }
+}
+
+/// A listed instance the name gate refuses stays refused: `t@site.service`
+/// listed `bad` beside its `/etc` link gets today's warning, no state
+/// change and no inventory entry. The control is
+/// `t27_an_enabled_instance_found_by_its_link_is_omitted_for_now`, the same
+/// link with no listing row.
+#[test]
+fn a_listed_instance_the_gate_refuses_is_not_found_by_its_link() {
+    const UNIT: &str = "t@site.service";
+    let snap = scan(template_host(&["disable *"], None, &["site"]).unit(UNIT, "bad"));
+    assert!(
+        snap.warnings.iter().any(|w| w.message
+            == format!("unit {UNIT} has state 'bad' - unit file is invalid or unreadable")),
+        "{:?}",
+        snap.warnings
+    );
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    assert!(inventory_entry(&snap, UNIT).is_none());
+}
+
+/// § 7.5 paragraph 2 through the scan: a listed `getty@tty3.service`
+/// `masked`, with its `/dev/null` link and a leftover `getty.target.wants`
+/// link, is one `Masked` state change, omitted with the placeholder on
+/// both routes and in refine, and no `systemctl mask` names it. The link
+/// does not find it a second time.
+#[test]
+fn a_masked_instance_is_one_state_change_omitted_for_now() {
+    const UNIT: &str = "getty@tty3.service";
+    const GETTY: &str = "[Service]\nExecStart=-/sbin/agetty %I\n\n[Install]\n\
+                         WantedBy=getty.target\nDefaultInstance=tty1\n";
+    let host = UnitHost::new()
+        .unit("getty@.service", "indirect")
+        .unit(UNIT, "masked")
+        .preset("enable getty@.service")
+        .vendor_unit("getty@.service", GETTY, Some("systemd"))
+        .mask(UNIT);
+    let snap = scan(instance_link(
+        host,
+        "/etc/systemd/system",
+        "getty.target",
+        UNIT,
+        "/usr/lib/systemd/system/getty@.service",
+    ));
+    assert_eq!(changes_named(&snap, UNIT), 1);
+    assert_eq!(change(&snap, UNIT).current_state(), UnitState::Masked);
+    assert_placeholder_omits(&snap, UNIT, "a masked instance");
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            !acts(&containerfile, "mask", UNIT),
+            "{route}:\n{containerfile}"
         );
     }
 }

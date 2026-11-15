@@ -119,18 +119,21 @@ fn gate(
 /// and systemd reads any unit with such a link as `enabled`.
 const LINKED_INSTANCE_STATE: &str = "enabled";
 
-/// The instances a link under `/etc/systemd/system` names that `seen`, the
-/// names the listing gave, does not hold (§ 7.1, § 7.3 and § 7.5 of the
-/// units spec). `list-unit-files` shows an instance backed only by its
-/// template as the template reading `indirect`, so its links are what find
-/// it. Its install state is read from the links like any unit's, so it has
-/// no listing word ([`Listed::listed`] is `None`). A link under `/run` is
-/// not read, and an instance with no link under `/etc` is not found.
-fn linked_instances(host_links: &HostLinks, seen: &HashSet<UnitName>) -> Vec<Listed> {
+/// The instances a link under `/etc/systemd/system` names that the listing
+/// does not (§ 7.1, § 7.3 and § 7.5 of the units spec). `listing` holds
+/// every name `list-unit-files` gave, before the name gate: a listed
+/// instance the gate refused (`bad`, `transient`, a runtime state) stays
+/// refused, and one it kept is read once. `list-unit-files` shows an
+/// instance backed only by its template as the template reading
+/// `indirect`, so its links are what find it. Its install state is read
+/// from the links like any unit's, so it has no listing word
+/// ([`Listed::listed`] is `None`). A link under `/run` is not read, and an
+/// instance with no link under `/etc` is not found.
+fn linked_instances(host_links: &HostLinks, listing: &HashSet<UnitName>) -> Vec<Listed> {
     host_links
         .admin
         .keys()
-        .filter(|name| name.instance().is_some() && !seen.contains(*name))
+        .filter(|name| name.instance().is_some() && !listing.contains(*name))
         .filter(|name| !name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX))
         .map(|name| Listed {
             name: name.clone(),
@@ -370,7 +373,9 @@ fn query_owning_package(exec: &dyn Executor, path: &str) -> Option<String> {
 }
 
 /// A unit past the name gate: its name, the state word `systemctl`
-/// printed, and that word as a state when it is a durable one.
+/// printed, and that word as a state when it is a durable one. An instance
+/// found by its links ([`linked_instances`]) has no listing row: its word is
+/// [`LINKED_INSTANCE_STATE`], for warnings only, and it has no state.
 struct Listed {
     name: UnitName,
     raw_state: String,
@@ -1202,6 +1207,11 @@ impl Inspector for UnitsInspector {
             .collect();
         let mut listed = Vec::new();
         let mut seen = HashSet::new();
+        // Every name the listing gave, kept by the gate or not.
+        let listing: HashSet<UnitName> = units
+            .iter()
+            .filter_map(|unit| UnitName::try_from(unit.unit.clone()).ok())
+            .collect();
         for unit in &units {
             let Some((name, state)) = gate(unit, &host_links, &mut warnings) else {
                 continue;
@@ -1217,7 +1227,7 @@ impl Inspector for UnitsInspector {
         }
         // 4a. The enabled instances the listing has no row for, found by
         //     their links (§ 7.5).
-        listed.extend(linked_instances(&host_links, &seen));
+        listed.extend(linked_instances(&host_links, &listing));
 
         // 4b. Each unit's file, install state and preset: the inventory,
         //     the state changes and the enabled storage units.

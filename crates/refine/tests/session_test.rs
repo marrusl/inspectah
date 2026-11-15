@@ -2941,9 +2941,9 @@ mod unit_rows {
         );
     }
 
-    /// The derived fields: `kind`, `instance_of` from the name (instances
-    /// are not collected yet, so built by hand), and `fragment` with
-    /// `unit_file_path` for each fragment.
+    /// The derived fields: `kind`, `instance_of` from the name (the rows
+    /// built by hand), and `fragment` with `unit_file_path` for each
+    /// fragment.
     #[test]
     fn a_unit_row_derives_kind_instance_and_fragment() {
         let session = RefineSession::new(snapshot(
