@@ -9912,3 +9912,187 @@ fn a_fleet_aggregate_advises_a_disable_and_carries_a_mask() {
         );
     }
 }
+
+// ---------------------------------------------------------------------
+// § 7.6 and § 10.5: the default target (T26).
+// ---------------------------------------------------------------------
+
+/// The link `systemctl set-default` writes.
+const DEFAULT_TARGET_LINK: &str = "/etc/systemd/system/default.target";
+
+/// A host whose `systemd` package (in the base image) ships
+/// `graphical.target` and `cockpit.socket`, with `app.service` enabled
+/// against `disable *`, and `default.target` linked to `link` when given.
+fn target_host(link: Option<&str>) -> UnitHost {
+    let host = UnitHost::new()
+        .base_package("glibc")
+        .base_package("systemd")
+        .package(INSTALL_PACKAGE)
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", WANTED_UNIT, Some(INSTALL_PACKAGE))
+        .vendor_unit(
+            "graphical.target",
+            "[Unit]\nDescription=Graphical Interface\n",
+            Some("systemd"),
+        )
+        .vendor_unit(
+            "cockpit.socket",
+            "[Socket]\nListenStream=9090\n",
+            Some("systemd"),
+        );
+    match link {
+        Some(target) => host.link(DEFAULT_TARGET_LINK, target),
+        None => host,
+    }
+}
+
+/// The `set-default` line for `target`.
+fn set_default_line(target: &str) -> String {
+    format!("RUN systemctl set-default -- '{target}'")
+}
+
+/// The lines of `containerfile` that name `unit`.
+fn lines_naming<'a>(containerfile: &'a str, unit: &str) -> Vec<&'a str> {
+    containerfile.lines().filter(|l| l.contains(unit)).collect()
+}
+
+/// T26: a `default.target` link to `graphical.target` is recorded as an
+/// included default target and yields `RUN systemctl set-default --
+/// 'graphical.target'`, the only line naming the target, after the unit
+/// state section's `# Omitted:` lines and before its `enable` (§ 10.1).
+/// No link: no record and no `set-default`.
+#[test]
+fn t26_the_default_target_is_set_in_the_image() {
+    let snap = scan(target_host(Some(
+        "/usr/lib/systemd/system/graphical.target",
+    )));
+    let recorded = snap
+        .units
+        .as_ref()
+        .and_then(|u| u.default_target.as_ref())
+        .expect("a default target");
+    assert_eq!(
+        recorded.target.name().as_unit_name().as_str(),
+        "graphical.target"
+    );
+    assert!(recorded.disposition.is_included());
+    assert!(recorded.aggregate.is_none());
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            lines_naming(&containerfile, "graphical.target"),
+            [set_default_line("graphical.target")],
+            "{route}:\n{containerfile}"
+        );
+        let at = |needle: &str| {
+            containerfile
+                .find(needle)
+                .unwrap_or_else(|| panic!("{route}: no {needle}:\n{containerfile}"))
+        };
+        assert!(
+            at("# === Systemd Unit State ===") < at("RUN systemctl set-default")
+                && at("RUN systemctl set-default") < at("RUN systemctl enable"),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let none = scan(target_host(None));
+    assert!(
+        none.units
+            .as_ref()
+            .is_some_and(|u| u.default_target.is_none())
+    );
+    for (route, containerfile) in both_routes(&none) {
+        assert!(
+            !containerfile.contains("set-default"),
+            "{route}:\n{containerfile}"
+        );
+        assert!(acts(&containerfile, "enable", "app.service"), "{route}");
+    }
+}
+
+/// T26: the row's toggle removes and restores the line. A refine operation
+/// on a snapshot with no default target is refused, naming it.
+#[test]
+fn t26_the_default_target_toggle_removes_and_restores_the_line() {
+    let snap = scan(target_host(Some(
+        "/usr/lib/systemd/system/graphical.target",
+    )));
+    let line = set_default_line("graphical.target");
+    let off = containerfile_in(&exported_after(&snap, &[(ItemId::DefaultTarget, false)]));
+    assert!(!off.contains("set-default"), "{off}");
+    assert!(acts(&off, "enable", "app.service"), "{off}");
+    let on = containerfile_in(&exported_after(
+        &snap,
+        &[
+            (ItemId::DefaultTarget, false),
+            (ItemId::DefaultTarget, true),
+        ],
+    ));
+    assert!(on.lines().any(|l| l == line), "{on}");
+
+    let none = scan(target_host(None));
+    let err = session(&none)
+        .apply(set_include(ItemId::DefaultTarget, false))
+        .expect_err("no default target to toggle");
+    assert!(err.to_string().contains("default target"), "{err}");
+}
+
+/// T26: a local target, `default.target` linked to its file under `/etc`:
+/// carried while its config row is included, and omitted with
+/// `UnitFileNotStaged` when the row is excluded (§ 10.5, rule 5).
+#[test]
+fn t26_a_local_default_target_follows_its_config_row() {
+    const LOCAL: &str = "/etc/systemd/system/custom.target";
+    let snap =
+        scan(target_host(Some(LOCAL)).etc_unit("custom.target", "[Unit]\nDescription=Custom\n"));
+    assert_eq!(
+        snap.units
+            .as_ref()
+            .and_then(|u| u.default_target.as_ref())
+            .map(|t| t.target.fragment().clone()),
+        Some(UnitFragment::Local {
+            file: "custom.target".to_owned().try_into().expect("a unit name"),
+        })
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            containerfile
+                .lines()
+                .any(|l| l == set_default_line("custom.target")),
+            "{route}:\n{containerfile}"
+        );
+    }
+    let excluded = containerfile_in(&exported_after(&snap, &[(config_item(LOCAL), false)]));
+    assert!(!excluded.contains("set-default"), "{excluded}");
+    assert_eq!(
+        omitted(&excluded, "custom.target"),
+        Some("# Omitted: custom.target (its unit file is not in the export)"),
+        "{excluded}"
+    );
+}
+
+/// § 7.6: a `default.target` link to anything but a target gives a
+/// structured warning naming the link and no record.
+#[test]
+fn a_default_target_link_to_a_socket_is_a_warning() {
+    let snap = scan(target_host(Some("/usr/lib/systemd/system/cockpit.socket")));
+    assert!(
+        snap.units
+            .as_ref()
+            .is_some_and(|u| u.default_target.is_none())
+    );
+    assert!(
+        snap.warnings.iter().any(|w| w.inspector == "units"
+            && w.message.contains(DEFAULT_TARGET_LINK)
+            && w.message.contains("cockpit.socket")),
+        "{:?}",
+        snap.warnings
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            !containerfile.contains("set-default"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}

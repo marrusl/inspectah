@@ -1105,7 +1105,7 @@ use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
 use crate::types::storage::StorageSection;
 use crate::types::units::{
-    AlsoMember, MemberLinks, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+    AlsoMember, DefaultTarget, MemberLinks, UnitInventoryEntry, UnitName, UnitSection, UnitState,
 };
 use crate::types::users::UserGroupSection;
 
@@ -1595,7 +1595,55 @@ pub fn merge_service_sections(
         mount_findings,
         manual_links,
         undetermined_installs,
+        default_target: merge_default_target(&sections, total_hosts, hostnames),
     })
+}
+
+/// The default target of an aggregate (§ 12): the target the most hosts
+/// set, a tie going to the first host in hostname order, as that host
+/// recorded it. Its prevalence counts the hosts that set it, and it is
+/// excluded unless every host did, the rule [`narrow_non_universal`]
+/// applies: a host that sets another target, or none, disagrees. `None`
+/// when no host sets one.
+fn merge_default_target(
+    sections: &[Option<UnitSection>],
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<DefaultTarget> {
+    let mut groups: Vec<(DefaultTarget, Vec<String>)> = Vec::new();
+    for (host_idx, target) in sections.iter().enumerate().filter_map(|(idx, section)| {
+        section
+            .as_ref()
+            .and_then(|s| s.default_target.as_ref())
+            .map(|t| (idx, t))
+    }) {
+        let host = hostnames[host_idx].clone();
+        match groups
+            .iter_mut()
+            .find(|(first, _)| first.target.name() == target.target.name())
+        {
+            Some((_, hosts)) => hosts.push(host),
+            None => groups.push((target.clone(), vec![host])),
+        }
+    }
+    // The first group with the most hosts: `max_by_key` keeps the last of
+    // equals, so the search runs from the end.
+    let (mut target, mut hosts) = groups
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, hosts)| hosts.len())?;
+    hosts.sort();
+    let count = hosts.len();
+    if count < total_hosts {
+        target.disposition = target.disposition.with_include(false);
+    }
+    target.aggregate = Some(AggregatePrevalence {
+        count: count as i32,
+        total: total_hosts as i32,
+        hosts,
+        ..Default::default()
+    });
+    Some(target)
 }
 
 /// Gives the merged `change` the union of the list fields of every row

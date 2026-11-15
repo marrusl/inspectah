@@ -650,6 +650,16 @@ impl TryFrom<UnitSubject> for TargetUnit {
     }
 }
 
+/// A target is an ordinary unit, so it is always carried.
+impl From<TargetUnit> for CarriedUnit {
+    fn from(unit: TargetUnit) -> Self {
+        Self::Ordinary(OrdinaryUnit {
+            name: OrdinaryUnitName(unit.name.0),
+            fragment: unit.fragment,
+        })
+    }
+}
+
 impl From<TargetUnit> for UnitSubject {
     fn from(unit: TargetUnit) -> Self {
         Self {
@@ -1241,6 +1251,23 @@ pub struct UnitSection {
     /// links can differ from the host's with nothing else to say so
     /// (§ 6.6, § 7.3).
     pub undetermined_installs: Vec<UndeterminedInstall>,
+    /// The default target, when the host sets one (§ 7.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_target: Option<DefaultTarget>,
+}
+
+/// The target `/etc/systemd/system/default.target` links to on the source
+/// host (§ 7.6 of the units spec). Not an enable and not compared with a
+/// preset: the export sets it as the image's default whatever it is
+/// (§ 10.5). Recorded as included.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DefaultTarget {
+    pub target: TargetUnit,
+    #[serde(default)]
+    pub disposition: FindingKind,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub locked: bool,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 /// Why a link on the source host is reported and not carried (§ 6.6 of
@@ -1634,6 +1661,7 @@ mod tests {
             mount_findings: vec![],
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         };
 
         let json = serde_json::to_string(&section).unwrap();
@@ -1731,6 +1759,7 @@ mod tests {
             mount_findings: Vec::new(),
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: UnitSection = serde_json::from_str(&json).unwrap();

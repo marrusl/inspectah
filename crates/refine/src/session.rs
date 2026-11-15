@@ -320,6 +320,11 @@ fn is_item_locked(snapshot: &InspectionSnapshot, item_id: &ItemId) -> bool {
             .and_then(|s| s.drop_ins.iter().find(|d| d.path == *path))
             .map(|d| d.locked)
             .unwrap_or(false),
+        ItemId::DefaultTarget => snapshot
+            .units
+            .as_ref()
+            .and_then(|s| s.default_target.as_ref())
+            .is_some_and(|t| t.locked),
         ItemId::Quadlet { path } => snapshot
             .containers
             .as_ref()
@@ -2168,6 +2173,20 @@ impl RefineSession {
                             return Err(RefineError::UnknownTarget(unit.as_str().to_owned()));
                         }
                     }
+                    // The snapshot records at most one default target, so
+                    // the item names none: the check is that there is one.
+                    ItemId::DefaultTarget => {
+                        let found = self
+                            .original
+                            .units
+                            .as_ref()
+                            .is_some_and(|s| s.default_target.is_some());
+                        if !found {
+                            return Err(RefineError::UnknownTarget(
+                                "default target (the snapshot records none)".into(),
+                            ));
+                        }
+                    }
                     ItemId::DropIn { path } => {
                         let found = self
                             .original
@@ -2924,6 +2943,15 @@ impl RefineSession {
                                     {
                                         dropin.disposition = FindingKind::from_bool(*include);
                                     }
+                                }
+                            }
+                            ItemId::DefaultTarget => {
+                                if let Some(target) = snap
+                                    .units
+                                    .as_mut()
+                                    .and_then(|units| units.default_target.as_mut())
+                                {
+                                    target.disposition = FindingKind::from_bool(*include);
                                 }
                             }
                             ItemId::DropIn { path } => {
@@ -5413,6 +5441,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         }
@@ -6051,6 +6080,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -6135,6 +6165,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -6555,6 +6586,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             config: Some(ConfigSection { files: vec![] }),
             ..Default::default()

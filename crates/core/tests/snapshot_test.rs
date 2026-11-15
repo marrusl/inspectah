@@ -669,3 +669,41 @@ fn schema_28_format_guard_pins_package_and_unit_keys() {
         expected_keys(UNIT_SECTION_KEYS)
     );
 }
+
+/// T26: `default_target` holds a `TargetUnit`, so a snapshot whose default
+/// target names anything but a `.target` fails to load, naming the unit.
+/// Control: the same record naming `graphical.target` loads, included.
+#[test]
+fn a_default_target_naming_a_socket_fails_to_load() {
+    let with_target = |name: &str| {
+        let mut payload: serde_json::Value = serde_json::from_str(&payload_with_state_change(
+            subject("app.service", "vendor", Some("apppkg")),
+            "enabled",
+        ))
+        .expect("the payload is JSON");
+        payload["units"]["default_target"] = serde_json::json!({
+            "target": subject(name, "vendor", Some("systemd")),
+            "disposition": {"kind": "actionable", "include": true},
+            "aggregate": null,
+        });
+        payload.to_string()
+    };
+
+    let snap = InspectionSnapshot::load(&with_target("graphical.target"))
+        .expect("a target loads as the default target");
+    let target = snap
+        .units
+        .expect("units present")
+        .default_target
+        .expect("a default target");
+    assert_eq!(
+        target.target.name().as_unit_name().as_str(),
+        "graphical.target"
+    );
+    assert!(target.disposition.is_included());
+
+    let err = InspectionSnapshot::load(&with_target("cockpit.socket"))
+        .expect_err("a socket is not a default target")
+        .to_string();
+    assert!(err.contains("cockpit.socket"), "{err}");
+}

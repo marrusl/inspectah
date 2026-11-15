@@ -12,8 +12,8 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
     AlsoMember, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
-    MemberLinks, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, UndeterminedInstall,
-    UnitAction, UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
+    MemberLinks, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, TargetUnitName,
+    UndeterminedInstall, UnitAction, UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
     holds_install_section,
 };
 
@@ -467,7 +467,7 @@ pub enum AdvisoryReason {
 /// use inspectah_pipeline::render::unit_plan::systemctl_lines;
 ///
 /// let name = UnitName::try_from("sshd.service".to_string()).unwrap();
-/// let _ = systemctl_lines(&[name]);
+/// let _ = systemctl_lines(None, &[name]);
 /// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct PlannedUnit {
@@ -487,11 +487,31 @@ impl PlannedUnit {
     }
 }
 
+/// The default target the plan sets (§ 10.5). Built only by
+/// [`plan_units`], after rule 5, so [`systemctl_lines`] writes
+/// `set-default` only for a target that passed it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PlannedTarget {
+    name: TargetUnitName,
+}
+
+impl PlannedTarget {
+    /// The target `set-default` names.
+    pub fn name(&self) -> &TargetUnitName {
+        &self.name
+    }
+}
+
 /// What [`plan_units`] decided for every included state change.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct UnitPlan {
     /// The commands the Containerfile writes.
     pub planned: Vec<PlannedUnit>,
+    /// The included default target, when it passed rule 5 (§ 10.5).
+    pub default_target: Option<PlannedTarget>,
+    /// The included default target, when rule 5 declined it, and why.
+    /// Written as an `# Omitted:` line ([`default_target_line`]).
+    pub default_target_declined: Option<(TargetUnitName, OmissionReason)>,
     /// Every command the plan did not write, and why.
     pub declined: Vec<(UnitName, UnitAction, OmissionReason)>,
     /// Planned units whose package's presence could not be proved.
@@ -670,16 +690,28 @@ enum PresenceDecision {
     },
 }
 
-/// One `RUN systemctl <verb> --` per verb, enable then disable then mask,
+/// `RUN systemctl set-default --` for `default_target` on one line, then
+/// one `RUN systemctl <verb> --` per verb, enable then disable then mask,
 /// each unit single-quoted on its own continuation line, ordered by kind
-/// and then by name (§ 10.1). Takes only [`PlannedUnit`]s, which only
-/// [`plan_units`] builds.
+/// and then by name (§ 10.1). Takes only a [`PlannedTarget`] and
+/// [`PlannedUnit`]s, which only [`plan_units`] builds.
 ///
 /// [`single_quote`] is total on a [`UnitName`]: its character set holds no
 /// quote and no line break. `--` ends the options, so a name that starts
 /// with `-` (`-.slice`) is an operand.
-pub fn systemctl_lines(units: &[PlannedUnit]) -> Vec<String> {
-    let mut lines = Vec::new();
+pub fn systemctl_lines(
+    default_target: Option<&PlannedTarget>,
+    units: &[PlannedUnit],
+) -> Vec<String> {
+    let mut lines: Vec<String> = default_target
+        .map(|target| {
+            format!(
+                "RUN systemctl set-default -- {}",
+                single_quote(target.name.as_unit_name().as_str())
+            )
+        })
+        .into_iter()
+        .collect();
     for action in [UnitAction::Enable, UnitAction::Disable, UnitAction::Mask] {
         let mut names: Vec<&UnitName> = units
             .iter()
@@ -774,11 +806,23 @@ pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReaso
             marker: DeclinedMarker::Fixme,
             text: format!("{} ({})", name.as_str(), reason.describe()),
         },
-        _ => DeclinedLine {
-            marker: DeclinedMarker::Omitted,
-            text: format!("{} ({})", name.as_str(), reason.describe()),
-        },
+        _ => omitted_line(name, reason),
     }
+}
+
+/// An `# Omitted:` line: the unit, then the reason's text in parentheses.
+fn omitted_line(name: &UnitName, reason: &OmissionReason) -> DeclinedLine {
+    DeclinedLine {
+        marker: DeclinedMarker::Omitted,
+        text: format!("{} ({})", name.as_str(), reason.describe()),
+    }
+}
+
+/// The line for [`UnitPlan::default_target_declined`]. Rule 5 is the only
+/// rule a default target meets, and each of its reasons is an
+/// `# Omitted:` line.
+pub fn default_target_line(target: &TargetUnitName, reason: &OmissionReason) -> DeclinedLine {
+    omitted_line(target.as_unit_name(), reason)
 }
 
 /// § 10.4's reason for an excluded runtime package updater, after its name
@@ -818,12 +862,15 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             escape_comment_text(&declined_line(name, *action, reason).comment())
         })
         .collect();
+    lines.extend(plan.default_target_declined.iter().map(|(target, reason)| {
+        escape_comment_text(&default_target_line(target, reason).comment())
+    }));
     lines.extend(
         plan.excluded_updaters
             .iter()
             .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
-    lines.extend(systemctl_lines(&plan.planned));
+    lines.extend(systemctl_lines(plan.default_target.as_ref(), &plan.planned));
     // Rule 7's blocks (§ 10.1's order). An install file's path comes from
     // the snapshot, so each line is escaped.
     lines.extend(
@@ -1988,13 +2035,13 @@ fn one_variant(snap: &InspectionSnapshot, path: String) -> Result<(), OmissionRe
 /// 7. Package not found anywhere + baseline available → Omit with
 ///    `OmissionReason::NotInTargetImage`
 fn classify_service_presence(
-    sc: &UnitStateChange,
+    unit: &CarriedUnit,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
     baseline_unavailable: bool,
 ) -> PresenceDecision {
-    let pkg_name = match sc.unit().owning_package() {
+    let pkg_name = match unit.owning_package() {
         Some(name) => name,
         // Tier 1: unknown owner — always emit conservatively
         None => {
@@ -2041,7 +2088,7 @@ fn classify_service_presence(
         // Tier 2: all entries are excluded. A baseline that still ships the
         // package (another arch excluded, say) keeps the unit present, so
         // fall through to Tier 5 in that case.
-        if let Some(omit) = excluded_owner(sc, rpm, target_packages, not_carried) {
+        if let Some(omit) = excluded_owner(unit, rpm, target_packages, not_carried) {
             return omit;
         }
     }
@@ -2083,12 +2130,12 @@ fn classify_service_presence(
 /// [`OmissionReason::NotCarried`] when every entry of the name is listed,
 /// [`OmissionReason::PackageExcluded`] otherwise.
 fn excluded_owner(
-    sc: &UnitStateChange,
+    unit: &CarriedUnit,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
 ) -> Option<PresenceDecision> {
-    let pkg_name = sc.unit().owning_package()?;
+    let pkg_name = unit.owning_package()?;
     let mut entries = rpm
         .packages_added
         .iter()
@@ -2114,12 +2161,12 @@ fn excluded_owner(
 /// entry that is present, which leaf filtering cannot fake, so it applies
 /// here as it does to a single host; every other unit emits.
 fn aggregate_presence(
-    sc: &UnitStateChange,
+    unit: &CarriedUnit,
     rpm: &RpmSection,
     target_packages: &std::collections::BTreeSet<String>,
     not_carried: &std::collections::HashSet<String>,
 ) -> PresenceDecision {
-    excluded_owner(sc, rpm, target_packages, not_carried).unwrap_or(PresenceDecision::Emit {
+    excluded_owner(unit, rpm, target_packages, not_carried).unwrap_or(PresenceDecision::Emit {
         advisory_reasons: None,
     })
 }
@@ -2152,12 +2199,12 @@ impl<'a> Presence<'a> {
         }
     }
 
-    fn decide(&self, sc: &UnitStateChange) -> PresenceDecision {
+    fn decide(&self, unit: &CarriedUnit) -> PresenceDecision {
         if self.is_aggregate {
-            aggregate_presence(sc, self.rpm, &self.target_packages, &self.not_carried)
+            aggregate_presence(unit, self.rpm, &self.target_packages, &self.not_carried)
         } else {
             classify_service_presence(
-                sc,
+                unit,
                 self.rpm,
                 &self.target_packages,
                 &self.not_carried,
@@ -2201,7 +2248,8 @@ impl<'a> Presence<'a> {
 ///    members, once every row's result under the rules above is known:
 ///    the command becomes an advisory unless its members agree.
 ///
-/// Every other command is planned. Each mount finding gets its § 10.6
+/// Every other command is planned. The included default target is held
+/// to rule 5 ([`plan_default_target`]). Each mount finding gets its § 10.6
 /// advisory lines against `staged`, in `mount_advisories`. The enables of
 /// the units inspectah generates are planned first ([`plan_generated`]),
 /// in `scheduled` and `workloads`, or declined in `generated_declined`:
@@ -2261,7 +2309,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         let decision = presence
             .as_ref()
             .filter(|_| needs_its_package(sc.unit()))
-            .map(|p| p.decide(sc));
+            .map(|p| p.decide(sc.unit()));
         let advisory = match decision {
             Some(PresenceDecision::Omit(reason)) => {
                 plan.declined.push((name, action, reason));
@@ -2310,6 +2358,7 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         }
     }
     plan.declined.extend(also_declined);
+    plan_default_target(snap, staged, presence.as_ref(), &mut plan);
     plan.mount_advisories = units
         .mount_findings
         .iter()
@@ -2352,6 +2401,55 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         })
         .collect();
     plan
+}
+
+/// The included default target (§ 10.5), held to rule 5 as any row is:
+/// the file half ([`rule_5_file`]), then, for a `Vendor` target, the
+/// package half (the presence tiers). `set-default` reads no `[Install]`,
+/// so rule 5's drop-in half has nothing to compare, and no other rule
+/// applies to it. A target that passes is `default_target`; one that fails
+/// is `default_target_declined` with the reason.
+fn plan_default_target(
+    snap: &InspectionSnapshot,
+    staged: &StagedWrites<'_>,
+    presence: Option<&Presence<'_>>,
+    plan: &mut UnitPlan,
+) {
+    let Some(default) = snap
+        .units
+        .as_ref()
+        .and_then(|units| units.default_target.as_ref())
+        .filter(|default| default.disposition.is_included())
+    else {
+        return;
+    };
+    let name = default.target.name().clone();
+    let unit = CarriedUnit::from(default.target.clone());
+    if let Err(reason) = rule_5_file(snap, &unit, staged) {
+        plan.default_target_declined = Some((name, reason));
+        return;
+    }
+    match presence
+        .filter(|_| needs_its_package(&unit))
+        .map(|p| p.decide(&unit))
+    {
+        Some(PresenceDecision::Omit(reason)) => {
+            plan.default_target_declined = Some((name, reason));
+            return;
+        }
+        Some(PresenceDecision::Emit {
+            advisory_reasons: Some((owning_package, reasons)),
+        }) => plan.advisories.push(ServiceAdvisory {
+            unit: name.as_unit_name().clone(),
+            owning_package,
+            reasons,
+        }),
+        Some(PresenceDecision::Emit {
+            advisory_reasons: None,
+        })
+        | None => {}
+    }
+    plan.default_target = Some(PlannedTarget { name });
 }
 
 // ---------------------------------------------------------------------------

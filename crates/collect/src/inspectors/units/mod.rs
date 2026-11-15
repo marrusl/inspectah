@@ -11,10 +11,10 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, ManualLink, MountUnitFinding,
-    PresetDefault, StorageKind, SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES,
-    UndeterminedInstall, UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection,
-    UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
+    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, DefaultTarget, ManualLink,
+    MountUnitFinding, PresetDefault, StorageKind, SystemdDropIn, TargetUnit, UNIT_FILE_WHITESPACE,
+    UNIT_TYPE_SUFFIXES, UndeterminedInstall, UnitFragment, UnitInventoryEntry, UnitKind, UnitName,
+    UnitSection, UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -1274,6 +1274,7 @@ impl Inspector for UnitsInspector {
                             mount_findings: Vec::new(),
                             manual_links: Vec::new(),
                             undetermined_installs: Vec::new(),
+                            default_target: None,
                         }),
                         warnings,
                         redaction_hints: Vec::new(),
@@ -1363,7 +1364,10 @@ impl Inspector for UnitsInspector {
         //    under /etc/systemd/system (§ 7.7 of the units spec).
         let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
 
-        // 6. Build result
+        // 6. The default target (§ 7.6 of the units spec).
+        let default_target = default_target(exec, &mut warnings);
+
+        // 7. Build result
         let section = UnitSection {
             state_changes,
             inventory,
@@ -1371,6 +1375,7 @@ impl Inspector for UnitsInspector {
             mount_findings,
             manual_links,
             undetermined_installs,
+            default_target,
         };
 
         // Preset file read failures are correctness-bearing — a missing
@@ -1430,6 +1435,78 @@ impl Inspector for UnitsInspector {
             warnings,
             redaction_hints,
         })
+    }
+}
+
+/// The link `systemctl set-default` writes (§ 7.6 of the units spec).
+const DEFAULT_TARGET_LINK: &str = "/etc/systemd/system/default.target";
+
+/// The default target the host sets (§ 7.6 of the units spec): the target
+/// [`DEFAULT_TARGET_LINK`] links to, named by the link's last path
+/// component, with the unit file that loads for it and that file's owner.
+/// Recorded as included. `None` when there is no link; a link that names
+/// no target, or a target with no unit file this scan reads, gives a
+/// warning and no record.
+fn default_target(exec: &dyn Executor, warnings: &mut Vec<Warning>) -> Option<DefaultTarget> {
+    let link = match exec.read_link(Path::new(DEFAULT_TARGET_LINK)) {
+        Ok(link) => link,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warnings.push(default_target_warning(
+                None,
+                &format!("is not a link ({e})"),
+            ));
+            return None;
+        }
+    };
+    let file_name = link.rsplit('/').next().unwrap_or(&link);
+    let target = UnitName::try_from(file_name.to_owned())
+        .map_err(|e| e.to_string())
+        .and_then(|name| match resolve::resolve(exec, &name) {
+            Ok(Resolved::File { fragment }) => {
+                let mut fragments = [fragment];
+                populate_owning_packages(exec, &mut fragments);
+                let [fragment] = fragments;
+                UnitSubject::new(name, fragment)
+                    .and_then(TargetUnit::try_from)
+                    .map_err(|e| e.to_string())
+            }
+            _ => Err(format!(
+                "{} has no unit file this scan reads",
+                name.as_str()
+            )),
+        });
+    match target {
+        Ok(target) => Some(DefaultTarget {
+            target,
+            disposition: FindingKind::included(),
+            locked: false,
+            aggregate: None,
+        }),
+        Err(detail) => {
+            warnings.push(default_target_warning(Some(&link), &detail));
+            None
+        }
+    }
+}
+
+/// The warning for a [`DEFAULT_TARGET_LINK`] that records no default
+/// target, with the link's target among its fields when it was read.
+fn default_target_warning(link: Option<&str>, detail: &str) -> Warning {
+    let subject = match link {
+        Some(link) => format!("{DEFAULT_TARGET_LINK} links to {link}"),
+        None => DEFAULT_TARGET_LINK.to_owned(),
+    };
+    let mut extra =
+        std::collections::HashMap::from([("path".into(), serde_json::json!(DEFAULT_TARGET_LINK))]);
+    if let Some(link) = link {
+        extra.insert("target".into(), serde_json::json!(link));
+    }
+    Warning {
+        inspector: "units".into(),
+        message: format!("{subject} - {detail}; the default target is not carried"),
+        severity: Some(WarningSeverity::Warning),
+        extra,
     }
 }
 

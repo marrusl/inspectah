@@ -2102,6 +2102,7 @@ fn full_shadow_snapshot() -> InspectionSnapshot {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap
 }
@@ -2427,6 +2428,7 @@ fn cascade_snapshot() -> InspectionSnapshot {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap
 }

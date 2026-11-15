@@ -309,8 +309,8 @@ mod tests {
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
         use inspectah_core::types::units::{
-            AlsoMember, ManualLink, MountUnitFinding, SystemdDropIn, UndeterminedInstall,
-            UnitInventoryEntry,
+            AlsoMember, DefaultTarget, ManualLink, MountUnitFinding, SystemdDropIn,
+            UndeterminedInstall, UnitInventoryEntry,
         };
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
@@ -427,6 +427,16 @@ mod tests {
                 install_files: _, // identifiers: paths from a directory listing
                 aggregate: _,     // fleet counts
             } = record;
+        }
+
+        // `units.default_target`: a proved target and its toggle.
+        fn _classify_default_target(target: DefaultTarget) {
+            let DefaultTarget {
+                target: _,      // exempt: a proved target name and its fragment
+                disposition: _, // exempt: the toggle
+                locked: _,      // exempt: a flag
+                aggregate: _,   // fleet counts
+            } = target;
         }
 
         // `scheduled_tasks.generated_timer_units[]`.

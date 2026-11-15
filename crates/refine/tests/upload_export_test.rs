@@ -1798,6 +1798,7 @@ fn an_uploaded_package_installs_before_its_units_and_its_dependents() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
     let mut h = Harness::with_snapshot(snap);
     h.set_include("openh264", "x86_64", true);

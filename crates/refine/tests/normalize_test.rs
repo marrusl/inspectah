@@ -498,6 +498,7 @@ fn incompatible_units_are_locked_out_and_others_left_alone() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     normalize_incompatible_services(&mut snap);

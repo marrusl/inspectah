@@ -1652,6 +1652,7 @@ mod anaconda_classification {
             mount_findings: Vec::new(),
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         }
     }
 
@@ -1793,6 +1794,7 @@ mod anaconda_classification {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             Some(ConfigSection {
                 files: vec![ConfigFileEntry {
@@ -2121,6 +2123,7 @@ mod anaconda_classification {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {
@@ -2180,6 +2183,7 @@ mod anaconda_classification {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             Some(ConfigSection { files: vec![] }),
             vec![FileOwnershipEntry {

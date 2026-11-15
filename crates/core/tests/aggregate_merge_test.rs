@@ -1237,6 +1237,7 @@ fn test_merge_service_sections_dedup_units() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     };
     let s2 = UnitSection {
         state_changes: vec![make_sc("httpd.service")],
@@ -1248,6 +1249,7 @@ fn test_merge_service_sections_dedup_units() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
@@ -3333,6 +3335,7 @@ fn a_runtime_updater_excluded_on_every_host_merges_excluded() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result =
@@ -3807,4 +3810,95 @@ fn undetermined_installs_merge_by_unit() {
             ("v.service", UpheldBy, vec![], (1, 2, vec!["h2".to_owned()])),
         ]
     );
+}
+
+/// The default target `name`, recorded included, from a vendor file.
+fn default_target(name: &str) -> inspectah_core::types::units::DefaultTarget {
+    use inspectah_core::types::units::{TargetUnit, UnitFragment, UnitSubject};
+    let fragment = UnitFragment::Vendor {
+        file: unit_name(name),
+        owning_package: Some("systemd".into()),
+    };
+    inspectah_core::types::units::DefaultTarget {
+        target: TargetUnit::try_from(
+            UnitSubject::new(unit_name(name), fragment).expect("file is the unit"),
+        )
+        .expect("a target"),
+        disposition: FindingKind::included(),
+        locked: false,
+        aggregate: None,
+    }
+}
+
+/// A section holding a default target alone, or none.
+fn target_section(name: Option<&str>) -> Option<UnitSection> {
+    Some(UnitSection {
+        default_target: name.map(default_target),
+        ..Default::default()
+    })
+}
+
+/// § 12: `default_target` takes the most prevalent target, and is excluded
+/// when the hosts do not all agree, the rule `narrow_non_universal`
+/// applies. Three hosts, two agreeing: their target, prevalence two of
+/// three, excluded. Every host agreeing: included. A tie goes to the first
+/// host in hostname order. A host with no default target disagrees too. No
+/// host with one: none.
+#[test]
+fn the_default_target_merges_to_the_most_prevalent_one() {
+    let merged = |names: &[Option<&str>]| {
+        merge_service_sections(
+            names.iter().map(|n| target_section(*n)).collect(),
+            names.len(),
+            &host_names(names.len()),
+        )
+        .expect("a merged section")
+        .default_target
+    };
+    let summary = |target: Option<inspectah_core::types::units::DefaultTarget>| {
+        target.map(|t| {
+            (
+                t.target.name().as_unit_name().as_str().to_owned(),
+                t.disposition.is_included(),
+                prevalence(&t.aggregate),
+            )
+        })
+    };
+    let hosts = |names: &[&str]| names.iter().map(|h| (*h).to_owned()).collect::<Vec<_>>();
+
+    assert_eq!(
+        summary(merged(&[
+            Some("multi-user.target"),
+            Some("graphical.target"),
+            Some("graphical.target"),
+        ])),
+        Some((
+            "graphical.target".to_owned(),
+            false,
+            (2, 3, hosts(&["h2", "h3"]))
+        ))
+    );
+    assert_eq!(
+        summary(merged(&[
+            Some("graphical.target"),
+            Some("graphical.target")
+        ])),
+        Some(("graphical.target".to_owned(), true, (2, 2, host_names(2))))
+    );
+    assert_eq!(
+        summary(merged(&[
+            Some("multi-user.target"),
+            Some("graphical.target")
+        ])),
+        Some((
+            "multi-user.target".to_owned(),
+            false,
+            (1, 2, hosts(&["h1"]))
+        ))
+    );
+    assert_eq!(
+        summary(merged(&[Some("graphical.target"), None])),
+        Some(("graphical.target".to_owned(), false, (1, 2, hosts(&["h1"]))))
+    );
+    assert_eq!(summary(merged(&[None, None])), None);
 }

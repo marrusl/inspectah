@@ -1164,6 +1164,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1207,6 +1208,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1247,6 +1249,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1286,6 +1289,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1327,6 +1331,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1379,6 +1384,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1440,6 +1446,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };
@@ -1467,6 +1474,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             warnings: vec![
                 Warning {
@@ -1513,6 +1521,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             }),
             ..Default::default()
         };

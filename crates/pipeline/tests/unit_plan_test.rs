@@ -176,6 +176,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -230,6 +231,7 @@ fn test_service_render_plan_emits_package_unreachable_service() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -270,6 +272,7 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -327,6 +330,7 @@ fn test_service_render_plan_proven_present_emits_clean() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -372,6 +376,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -431,6 +436,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -485,6 +491,7 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
 
     let plan = render(&snap);
@@ -547,6 +554,7 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
             mount_findings: Vec::new(),
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         });
         snap
     };
@@ -826,6 +834,7 @@ fn test_service_presence_tiers_table() {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             });
 
             let plan = render(&snap);
@@ -990,6 +999,7 @@ fn leaf_snapshot(
         mount_findings: Vec::new(),
         manual_links: Vec::new(),
         undetermined_installs: Vec::new(),
+        default_target: None,
     });
     snap
 }
@@ -1500,6 +1510,7 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             mount_findings: Vec::new(),
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         };
 
         let mut excluded = InspectionSnapshot::new();

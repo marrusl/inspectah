@@ -1468,7 +1468,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             reboot_services.join(", ")
         ));
     }
-    body.extend(systemctl_lines(&plan.scheduled));
+    body.extend(systemctl_lines(None, &plan.scheduled));
 
     if !st.at_jobs.is_empty() {
         body.push(format!(
@@ -1724,7 +1724,7 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
                 "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
                     .into(),
             );
-            body.extend(systemctl_lines(&plan.workloads));
+            body.extend(systemctl_lines(None, &plan.workloads));
         }
     }
     let total_workloads = included_quadlets + included_flatpaks;
@@ -2804,6 +2804,7 @@ mod tests {
                 mount_findings: Vec::new(),
                 manual_links: Vec::new(),
                 undetermined_installs: Vec::new(),
+                default_target: None,
             });
             snap
         };
@@ -3408,6 +3409,7 @@ mod tests {
             mount_findings: Vec::new(),
             manual_links: Vec::new(),
             undetermined_installs: Vec::new(),
+            default_target: None,
         });
 
         let output = render_containerfile(&snap, None, None);

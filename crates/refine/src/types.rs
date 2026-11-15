@@ -83,6 +83,9 @@ pub enum ItemId {
     DropIn {
         path: String,
     },
+    /// The recorded default target (§ 7.6). It names no target of its
+    /// own: the snapshot holds at most one.
+    DefaultTarget,
 
     // Containers section
     Quadlet {
