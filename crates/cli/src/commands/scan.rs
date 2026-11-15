@@ -2063,4 +2063,73 @@ VARIANT_ID="workstation"
             "/var/www must NOT suppress sibling /var/www2/data via --scan-path"
         );
     }
+
+    /// D4 on the scan route: the bundler writes no payload for an included
+    /// unmanaged file or symlink under `/etc/systemd/system`, however the
+    /// path is spelled. Controls: an ordinary file is copied byte for byte,
+    /// and an ordinary symlink is recreated, so the bundler does bundle
+    /// both kinds when the destination is allowed.
+    #[test]
+    fn bundling_writes_no_payload_under_the_unit_directory() {
+        use inspectah_core::types::FindingKind;
+        use inspectah_core::types::nonrpm::{FileType, UnmanagedFile};
+
+        const CONTROL_BYTES: &[u8] = b"#!/bin/sh\necho control\n";
+        let src = tempfile::tempdir().expect("a source directory");
+        let control = src.path().join("run.sh");
+        std::fs::write(&control, CONTROL_BYTES).expect("the control file is written");
+        let control_path = control.to_string_lossy().into_owned();
+        let render = tempfile::tempdir().expect("a render directory");
+
+        let file = |path: &str| UnmanagedFile {
+            path: path.into(),
+            file_type: FileType::Script,
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let link = |path: &str, target: &str| UnmanagedFile {
+            path: path.into(),
+            file_type: FileType::Symlink,
+            link_target: target.into(),
+            disposition: FindingKind::included(),
+            ..Default::default()
+        };
+        let items = vec![
+            file("/etc/systemd/system/backup.service"),
+            file("/etc/systemd/./system/dotted.service"),
+            file("/etc//systemd/system/doubled.service"),
+            file("/etc/systemd/system/./here.service"),
+            link(
+                "/etc/systemd/system/multi-user.target.wants/backup.service",
+                "/usr/lib/systemd/system/backup.service",
+            ),
+            link(
+                "/etc/systemd//system/linked.service",
+                "/usr/lib/systemd/system/linked.service",
+            ),
+            file(&control_path),
+            link("/opt/app/current", "/opt/app/releases/1"),
+        ];
+
+        bundle_unmanaged_files(&items, render.path()).expect("bundling succeeds");
+
+        let unmanaged = render.path().join("unmanaged");
+        assert!(
+            !unmanaged.join("etc").exists(),
+            "no payload under etc/: {:?}",
+            std::fs::read_dir(&unmanaged)
+                .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        );
+        let copied = unmanaged.join(control_path.trim_start_matches('/'));
+        assert_eq!(
+            std::fs::read(&copied).expect("the control file is bundled"),
+            CONTROL_BYTES
+        );
+        let recreated = unmanaged.join("opt/app/current");
+        assert_eq!(
+            std::fs::read_link(&recreated).expect("the control symlink is bundled"),
+            std::path::Path::new("/opt/app/releases/1")
+        );
+    }
 }
