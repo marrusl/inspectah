@@ -3195,7 +3195,10 @@ Other objections worth weighing:
   omits a working timer whose trigger an alias, a template, an implicit
   mount or a boot generator would have provided, since it cannot see
   those, and it does not notice another fleet host's drop-in that sets
-  `Unit=`. Excluding a generated timer does not exclude the cron entry
+  `Unit=`. It is conservative the other way too: excluding a drop-in that
+  sets `Unit=` omits the timer's `enable` even when a later drop-in
+  overrides it and the effective trigger is unchanged, and that omission
+  carries its comment. Excluding a generated timer does not exclude the cron entry
   it came from: if cron is carried and running, the job still runs, and
   carrying both can run it twice. And refusing an
   unmanaged file under `/etc/systemd/system` drops a file an imported
