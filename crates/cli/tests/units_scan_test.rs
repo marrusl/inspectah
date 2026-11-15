@@ -248,8 +248,8 @@ const PRESET_MATCHED_UNIT: &str = "httpd.service";
 const PRESET_DIVERGING_UNIT: &str = "custom.service";
 
 const DROP_IN_CONTENT: &str = "[Service]\nLimitNOFILE=65535\n";
-const FULL_SHADOW_CONTENT: &str =
-    "[Unit]\nDescription=Local custom unit\n\n[Service]\nExecStart=/usr/local/bin/custom\n";
+const FULL_SHADOW_CONTENT: &str = "[Unit]\nDescription=Local custom unit\n\n[Service]\n\
+     ExecStart=/usr/local/bin/custom\n\n[Install]\nWantedBy=multi-user.target\n";
 const PLAIN_CONFIG_CONTENT: &str = "ServerRoot \"/etc/httpd\"\n";
 
 /// A host carrying one drop-in, one full unit shadow, and one ordinary
@@ -277,7 +277,12 @@ fn overlapping_host() -> UnitHost {
         .file(PLAIN_CONFIG, PLAIN_CONFIG_CONTENT)
         .vendor_unit(
             "custom.service",
-            "[Unit]\nDescription=Vendor custom unit\n",
+            "[Unit]\nDescription=Vendor custom unit\n\n[Install]\nWantedBy=multi-user.target\n",
+            None,
+        )
+        .vendor_unit(
+            "httpd.service",
+            "[Unit]\nDescription=Vendor httpd unit\n\n[Install]\nWantedBy=multi-user.target\n",
             None,
         )
 }
@@ -1263,7 +1268,10 @@ fn a_shadow_that_could_not_be_read_declines_its_enable() {
                 Some("blobpkg"),
             );
         if readable {
-            host.etc_unit("blob.service", "[Service]\nExecStart=/usr/bin/blob -v\n")
+            host.etc_unit(
+                "blob.service",
+                "[Service]\nExecStart=/usr/bin/blob -v\n[Install]\nWantedBy=multi-user.target\n",
+            )
         } else {
             host.file_error(BLOB_UNIT, std::io::ErrorKind::InvalidData)
         }
@@ -3018,7 +3026,7 @@ fn t11_an_unowned_storage_mask_gets_the_advisory_and_no_instruction() {
 
         let enabled = scan(UnitHost::new().unit(unit, "enabled").vendor_unit(
             unit,
-            &vendor_file,
+            &format!("{vendor_file}\n[Install]\nWantedBy=multi-user.target\n"),
             None,
         ));
         let mut expected = vec![advisory_fact(unit, "enabled")];
@@ -4057,7 +4065,10 @@ fn an_aggregate_row_shows_the_merged_exports_reason() {
             UnitHost::new()
                 .unit(UNIT, "enabled")
                 .preset("disable *")
-                .etc_unit(UNIT, "[Service]\nExecStart=/usr/local/bin/kdump\n"),
+                .etc_unit(
+                    UNIT,
+                    "[Service]\nExecStart=/usr/local/bin/kdump\n[Install]\nWantedBy=multi-user.target\n",
+                ),
             "host-b",
         ),
     );
@@ -6660,6 +6671,9 @@ fn install_host(unit: &str, vendor_content: &str) -> UnitHost {
 
 /// A unit file with no `[Install]` section.
 const NO_INSTALL_UNIT: &str = "[Service]\nExecStart=/usr/bin/app\n";
+/// A unit file wanted by `multi-user.target`.
+const WANTED_UNIT: &str =
+    "[Service]\nExecStart=/usr/bin/app\n\n[Install]\nWantedBy=multi-user.target\n";
 /// A drop-in that sets an `[Install]` section.
 const INSTALL_DROP_IN: &str = "[Install]\nWantedBy=multi-user.target\n";
 /// A drop-in that changes no `[Install]` key.
@@ -6703,14 +6717,15 @@ fn t24_a_wanted_by_from_a_drop_in_is_carried_with_that_drop_in() {
 /// file, since it hides the vendor one's section; the vendor name is in
 /// `vendor_drop_ins`. With the `/etc` file included the enable is carried;
 /// excluded, `InstallEvidenceChanged`. An `/etc` `[Service]` drop-in under
-/// a name of its own is not an install file.
+/// a name of its own is not an install file. The unit file names its own
+/// link, so the unit has an install state with the vendor drop-in hidden.
 #[test]
 fn t25_k_an_etc_file_named_like_a_vendor_drop_in_is_an_install_file() {
     const VENDOR: &str = "/usr/lib/systemd/system/bundle.service.d/10-members.conf";
     const HIDING: &str = "/etc/systemd/system/bundle.service.d/10-members.conf";
     const OWN: &str = "/etc/systemd/system/bundle.service.d/20-limits.conf";
     let snap = scan(
-        install_host("bundle.service", NO_INSTALL_UNIT)
+        install_host("bundle.service", WANTED_UNIT)
             .file(
                 VENDOR,
                 "[Install]\nWantedBy=multi-user.target\nAlso=helper.service\n",

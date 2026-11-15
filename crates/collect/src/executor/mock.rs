@@ -89,6 +89,17 @@ impl MockExecutor {
         self
     }
 
+    /// Add `entry` to the listing of the directory `path`, once, keeping
+    /// what is already listed there; the listing is created when there is
+    /// none.
+    pub fn with_dir_entry(mut self, path: &str, entry: &str) -> Self {
+        let entries = self.dirs.entry(path.to_string()).or_default();
+        if !entries.iter().any(|e| e == entry) {
+            entries.push(entry.to_string());
+        }
+        self
+    }
+
     pub fn with_link(mut self, path: &str, target: &str) -> Self {
         self.links.insert(path.to_string(), target.to_string());
         self

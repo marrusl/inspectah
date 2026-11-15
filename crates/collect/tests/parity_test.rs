@@ -57,14 +57,32 @@ const TUNED_FIXTURE: &str = include_str!("../../../testdata/fixtures/kernelboot/
 // ── Mock builders ───────────────────────────────────────────────────
 
 fn services_mock() -> MockExecutor {
-    // A vendor unit file for every listed unit, as its package installs it.
+    // A vendor unit file for every listed unit, as its package installs it,
+    // wanted by `multi-user.target`, and the link `systemctl enable` made
+    // for every unit the listing calls `enabled`.
+    let wants = "/etc/systemd/system/multi-user.target.wants";
     let mut exec = MockExecutor::new();
-    for unit in SYSTEMCTL_FIXTURE
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|name| name.ends_with(".service"))
-    {
-        exec = exec.with_file(&format!("/usr/lib/systemd/system/{unit}"), "[Unit]\n");
+    for line in SYSTEMCTL_FIXTURE.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let [unit, state, ..] = words.as_slice() else {
+            continue;
+        };
+        if !unit.ends_with(".service") {
+            continue;
+        }
+        exec = exec.with_file(
+            &format!("/usr/lib/systemd/system/{unit}"),
+            "[Unit]\n\n[Install]\nWantedBy=multi-user.target\n",
+        );
+        if *state == "enabled" {
+            exec = exec
+                .with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+                .with_dir_entry(wants, unit)
+                .with_link(
+                    &format!("{wants}/{unit}"),
+                    &format!("/usr/lib/systemd/system/{unit}"),
+                );
+        }
     }
     exec.with_command(
         "systemctl list-unit-files --no-pager",
@@ -79,7 +97,7 @@ fn services_mock() -> MockExecutor {
         "/usr/lib/systemd/system-preset/90-default.preset",
         PRESET_FIXTURE,
     )
-    .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+    .with_dir_entry("/etc/systemd/system", "httpd.service.d")
     .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
     .with_file(
         "/etc/systemd/system/httpd.service.d/override.conf",

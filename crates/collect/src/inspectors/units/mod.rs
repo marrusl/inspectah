@@ -17,13 +17,15 @@ use inspectah_core::types::units::{
     holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 mod install;
+mod links;
 mod resolve;
 
 use install::{DropInRoot, DropInSource, InstallRead, drop_in_dirs, read_install};
+use links::HostLinks;
 use resolve::{ETC_UNIT_DIR, Entry, ResolveError, Resolved, VENDOR_UNIT_DIR};
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
@@ -43,17 +45,33 @@ const DBUS_ACTIVATION_ALIAS_PREFIX: &str = "dbus-org.";
 /// nothing of their state.
 const EXCLUDED_KIND_SUFFIXES: &[&str] = &["device", "scope"];
 
-/// The name gate (§ 7.4 of the units spec): the name and state of a listed
-/// unit the section records, or `None` for one it does not. A unit of a
-/// kind the scan excludes ([`EXCLUDED_KIND_SUFFIXES`]) is dropped first,
-/// with no warning whatever its state, so an open login session's
-/// transient scope is not reported on every scan. A state that is not
-/// durable is then dropped or warned about by [`parse_unit_state`]. The
-/// name must parse as a [`UnitName`] and not be a D-Bus activation alias. A
-/// template is recorded only when masked, since its mask masks every
-/// instance; enabling a template means nothing without an instance. An
-/// instance is not recorded: reading its install state is a later step.
-fn gate(unit: &UnitFileEntry, warnings: &mut Vec<Warning>) -> Option<(UnitName, UnitState)> {
+/// The `list-unit-files` states, dropped without a warning, that a unit
+/// is still read under when a link under `/etc/systemd/system` names it
+/// (§ 7.3 of the units spec): systemctl's word is not what decides its
+/// install state.
+const LINK_READ_STATES: &[&str] = &["static", "indirect"];
+
+/// The name gate (§ 7.4 of the units spec): the name of a listed unit the
+/// section reads, with the listing's state word, or `None` for one it does
+/// not. A unit of a kind the scan excludes ([`EXCLUDED_KIND_SUFFIXES`]) is
+/// dropped first, with no warning whatever its state, so an open login
+/// session's transient scope is not reported on every scan. A state that is
+/// not durable is then dropped or warned about by [`parse_unit_state`],
+/// except that a `static` or `indirect` unit a link under `/etc` names
+/// ([`LINK_READ_STATES`]) is kept with no state word. The name must parse
+/// as a [`UnitName`] and not be a D-Bus activation alias. A template is
+/// recorded only when masked, since its mask masks every instance;
+/// enabling a template means nothing without an instance. An instance is
+/// not recorded yet.
+///
+/// The words `enabled` and `disabled` are kept only for a unit whose
+/// `[Install]` cannot be read as text; every other unit's install state is
+/// read from the links ([`links::install_state`]).
+fn gate(
+    unit: &UnitFileEntry,
+    host_links: &HostLinks,
+    warnings: &mut Vec<Warning>,
+) -> Option<(UnitName, Option<UnitState>)> {
     if unit
         .unit
         .rsplit_once('.')
@@ -61,19 +79,28 @@ fn gate(unit: &UnitFileEntry, warnings: &mut Vec<Warning>) -> Option<(UnitName, 
     {
         return None;
     }
-    let state = match parse_unit_state(&unit.unit, &unit.state) {
-        ParsedUnitState::Durable(state) => state,
+    let (name, state) = match parse_unit_state(&unit.unit, &unit.state) {
+        ParsedUnitState::Durable(state) => (
+            proved_unit_name(&unit.unit, &unit.state, warnings)?,
+            Some(state),
+        ),
+        ParsedUnitState::SilentDrop if LINK_READ_STATES.contains(&unit.state.as_str()) => {
+            let name = UnitName::try_from(unit.unit.clone()).ok()?;
+            if !host_links.admin.contains_key(&name) {
+                return None;
+            }
+            (name, None)
+        }
         ParsedUnitState::SilentDrop => return None,
         ParsedUnitState::Warn(warning) => {
             warnings.push(warning);
             return None;
         }
     };
-    let name = proved_unit_name(&unit.unit, &unit.state, warnings)?;
     if name.as_str().starts_with(DBUS_ACTIVATION_ALIAS_PREFIX) || name.instance().is_some() {
         return None;
     }
-    if name.is_template() && state != UnitState::Masked {
+    if name.is_template() && state != Some(UnitState::Masked) {
         return None;
     }
     Some((name, state))
@@ -147,18 +174,90 @@ fn proved_unit_name(unit: &str, raw_state: &str, warnings: &mut Vec<Warning>) ->
     }
 }
 
-/// Maps preset rule action strings to typed enum values.
-fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefault> {
-    for rule in rules {
-        if glob_match(&rule.pattern, unit) {
-            return match rule.action.as_str() {
-                "enable" => Some(PresetDefault::Enable),
-                "disable" => Some(PresetDefault::Disable),
-                _ => None, // Unknown action → no preset rule found
-            };
+/// What the host's presets give one unit (§ 7.4 of the units spec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PresetLookup {
+    Rule(PresetDefault),
+    /// The first matching line has a verb this scan does not read. The
+    /// lookup stops there, with no preset.
+    Unknown {
+        file: String,
+        line: usize,
+    },
+    NoRule,
+}
+
+/// The preset of `unit` from `rules`, in the order systemd reads them
+/// (§ 7.4 of the units spec). A unit that is not an instance, and an
+/// instance with its own unit file (`own_file`), take the first rule that
+/// matches their own name: a rule naming it, a glob matching it, or a
+/// list-form rule listing the instance. A bare or list-form template rule
+/// that does not list such an instance does not match it, and later rules
+/// decide. An instance backed only by its template takes the template's
+/// first matching rule: a plain `enable` gives `enable` to
+/// `default_instance` only, the list form to the listed instances only,
+/// and `disable` reaches every instance. Rules that name an instance are
+/// not read for it.
+fn preset_for(
+    unit: &UnitName,
+    own_file: bool,
+    default_instance: Option<&str>,
+    rules: &[PresetRule],
+) -> PresetLookup {
+    let lookup = |rule: &PresetRule, verb| match rule {
+        PresetRule::Unknown { file, line, .. } => PresetLookup::Unknown {
+            file: file.clone(),
+            line: *line,
+        },
+        _ => PresetLookup::Rule(verb),
+    };
+    match unit.instance() {
+        Some(parts) if !own_file => {
+            let template = parts.template();
+            let instance = parts.instance();
+            match first_rule(template.as_str(), rules) {
+                None => PresetLookup::NoRule,
+                Some(rule @ PresetRule::Unknown { .. }) => lookup(rule, PresetDefault::Disable),
+                Some(PresetRule::Plain {
+                    verb: PresetDefault::Enable,
+                    ..
+                }) if default_instance == Some(instance) => {
+                    PresetLookup::Rule(PresetDefault::Enable)
+                }
+                Some(PresetRule::EnableInstances { instances, .. })
+                    if instances.iter().any(|listed| listed == instance) =>
+                {
+                    PresetLookup::Rule(PresetDefault::Enable)
+                }
+                Some(_) => PresetLookup::Rule(PresetDefault::Disable),
+            }
+        }
+        _ => {
+            let found = rules.iter().find(|rule| match (rule, unit.instance()) {
+                (
+                    PresetRule::EnableInstances {
+                        template,
+                        instances,
+                    },
+                    Some(parts),
+                ) => {
+                    parts.template().as_str() == template
+                        && instances.iter().any(|listed| listed == parts.instance())
+                }
+                _ => rule.matches(unit.as_str()),
+            });
+            match found {
+                None => PresetLookup::NoRule,
+                Some(rule @ PresetRule::Plain { verb, .. }) => lookup(rule, *verb),
+                Some(rule) => lookup(rule, PresetDefault::Enable),
+            }
         }
     }
-    None
+}
+
+/// The first rule that matches `name` as a name of its own.
+fn first_rule<'r>(name: &str, rules: &'r [PresetRule]) -> Option<&'r PresetRule> {
+    rules.iter().find(|rule| rule.matches(name))
 }
 
 const OWNING_PACKAGE_QUERY: &str = "%{NAME}\n";
@@ -236,8 +335,15 @@ fn query_owning_package(exec: &dyn Executor, path: &str) -> Option<String> {
     result.stdout.lines().next().and_then(package_name)
 }
 
-/// A unit that may be a state change, depending on where its file is: a
-/// mask, an enabled unit, or a unit disabled against an `enable` preset.
+/// A unit past the name gate: its name, the state word `systemctl`
+/// printed, and that word as a state when it is a durable one.
+struct Listed {
+    name: UnitName,
+    raw_state: String,
+    listed: Option<UnitState>,
+}
+
+/// A unit with an install state or a mask, and its preset.
 struct Candidate {
     name: UnitName,
     /// The state word `systemctl` printed, for warnings.
@@ -281,82 +387,143 @@ fn is_enabled_storage(candidate: &Candidate) -> bool {
     matches!(candidate.name.kind(), UnitKind::Storage(_)) && candidate.state == UnitState::Enabled
 }
 
-/// Resolve each candidate's unit file, keep the state changes and the
-/// enabled storage units, look up the owners, then classify: a carried unit
-/// is a state change, an administrator's storage unit a mount finding. A
-/// candidate that cannot be resolved or classified is reported through
-/// `warnings`; a unit file that could not be read goes to `read_failures`.
-/// The names refused by the search path or unreadable go to `reported`,
-/// so the storage pass does not report them again.
+/// Resolve each listed unit's file, read its install state from the links
+/// (§ 7.3 of the units spec) and its preset, and record it in the
+/// inventory; keep the state changes and the enabled storage units, look
+/// up the owners, then classify: a carried unit is a state change, an
+/// administrator's storage unit a mount finding. A unit with no install
+/// state has no inventory entry. A unit that cannot be resolved or
+/// classified is reported through `warnings`; a unit file that could not
+/// be read goes to `read_failures`. The names refused by the search path
+/// or unreadable go to `reported`, so the storage pass does not report
+/// them again.
 fn build_state_changes(
     exec: &dyn Executor,
-    candidates: Vec<Candidate>,
+    listed: Vec<Listed>,
+    host_links: &HostLinks,
+    rules: &[PresetRule],
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
     reported: &mut HashSet<UnitName>,
-) -> (Vec<UnitStateChange>, Vec<MountUnitFinding>) {
+) -> (
+    Vec<UnitInventoryEntry>,
+    Vec<UnitStateChange>,
+    Vec<MountUnitFinding>,
+) {
+    let mut inventory = Vec::new();
+    let mut unknown_lines: BTreeMap<(String, usize), Vec<UnitName>> = BTreeMap::new();
     let mut found = Vec::new();
     let mut fragments = Vec::new();
-    for candidate in candidates {
+    for subject in listed {
         let warn =
-            |detail: &str| service_warning(candidate.name.as_str(), &candidate.raw_state, detail);
-        match resolve::resolve(exec, &candidate.name) {
+            |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
+        let (fragment, state, evidence) = match resolve::resolve(exec, &subject.name) {
+            Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => {
+                (fragment, UnitState::Masked, InstallEvidence::default())
+            }
             Ok(Resolved::File { fragment }) => {
-                let mut state_change = is_state_change(&candidate, &fragment);
-                let mut evidence = InstallEvidence::default();
-                if state_change {
-                    match install_evidence(exec, &candidate.name, &fragment) {
-                        Ok(read) => evidence = read,
-                        Err(failure) => {
-                            read_failures.push(failure);
-                            reported.insert(candidate.name.clone());
-                            continue;
-                        }
+                let evidence = match install_evidence(exec, &subject.name, &fragment) {
+                    Ok(evidence) => evidence,
+                    Err(failure) => {
+                        read_failures.push(failure);
+                        reported.insert(subject.name.clone());
+                        continue;
                     }
-                    // § 7.3: an enabled unit has a link to it, and a link
-                    // to a unit whose `[Install]` cannot be relied on gives
-                    // no state change.
-                    if candidate.state == UnitState::Enabled
-                        && matches!(evidence.read, Some(InstallRead::Undetermined { .. }))
-                    {
-                        state_change = false;
-                    }
-                }
-                if state_change || is_enabled_storage(&candidate) {
-                    fragments.push(fragment);
-                    found.push((candidate, state_change, evidence));
-                }
+                };
+                let state = match &evidence.read {
+                    Some(read) => links::install_state(
+                        read,
+                        host_links.admin(&subject.name),
+                        host_links.vendor(&subject.name),
+                    ),
+                    // The section could not be read as text: the listing's
+                    // word is all there is.
+                    None => subject.listed,
+                };
+                // No install state: the unit has no enablement of its own,
+                // or neither verb reproduces its links (§ 7.3).
+                let Some(state) = state else {
+                    continue;
+                };
+                (fragment, state, evidence)
             }
             // A mask reads no `[Install]`, so it records no install files.
-            Ok(Resolved::Masked { hidden: fragment }) => {
-                let state_change = is_state_change(&candidate, &fragment);
-                if state_change || is_enabled_storage(&candidate) {
-                    fragments.push(fragment);
-                    found.push((candidate, state_change, InstallEvidence::default()));
-                }
+            Ok(Resolved::Masked { hidden }) => {
+                (hidden, UnitState::Masked, InstallEvidence::default())
             }
-            Ok(Resolved::AliasOf(target)) => warnings.push(warn(&format!(
-                "unit is an alias of {}; its state is not carried on its own",
-                target.as_str()
-            ))),
-            Ok(Resolved::NotFound) => warnings.push(warn(
-                "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
-            )),
+            Ok(Resolved::AliasOf(target)) => {
+                warnings.push(warn(&format!(
+                    "unit is an alias of {}; its state is not carried on its own",
+                    target.as_str()
+                )));
+                continue;
+            }
+            Ok(Resolved::NotFound) => {
+                warnings.push(warn(
+                    "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
+                ));
+                continue;
+            }
             Ok(Resolved::Unsupported { path }) => {
                 warnings.push(search_path_warning(warn, path, STATE_NOT_CARRIED));
-                reported.insert(candidate.name.clone());
+                reported.insert(subject.name.clone());
+                continue;
             }
             // Today's warning for a `linked` unit.
-            Err(ResolveError::Linked { .. }) => warnings.push(service_warning(
-                candidate.name.as_str(),
-                "linked",
-                "linked unit requires manual handling",
-            )),
+            Err(ResolveError::Linked { .. }) => {
+                warnings.push(service_warning(
+                    subject.name.as_str(),
+                    "linked",
+                    "linked unit requires manual handling",
+                ));
+                continue;
+            }
             Err(ResolveError::Read { path, error }) => {
                 read_failures.push(format!("{path}: {error}"));
-                reported.insert(candidate.name.clone());
+                reported.insert(subject.name.clone());
+                continue;
             }
+        };
+
+        let default_instance = match &evidence.read {
+            Some(InstallRead::Known(section)) => section.default_instance.as_deref(),
+            _ => None,
+        };
+        let own_file = fragment_file(&fragment) == Some(&subject.name);
+        let preset = match preset_for(&subject.name, own_file, default_instance, rules) {
+            PresetLookup::Rule(preset) => Some(preset),
+            PresetLookup::NoRule => None,
+            // A mask is a state change whatever the presets say, so only
+            // the other units are named as not compared.
+            PresetLookup::Unknown { file, line } => {
+                if state != UnitState::Masked {
+                    unknown_lines
+                        .entry((file, line))
+                        .or_default()
+                        .push(subject.name.clone());
+                }
+                None
+            }
+        };
+        inventory.push(UnitInventoryEntry {
+            unit: subject.name.clone(),
+            state,
+            preset,
+        });
+        let candidate = Candidate {
+            name: subject.name,
+            raw_state: subject.raw_state,
+            state,
+            default_state: preset,
+        };
+        let state_change = is_state_change(&candidate, &fragment);
+        if state_change || is_enabled_storage(&candidate) {
+            fragments.push(fragment);
+            found.push((candidate, state_change, evidence));
         }
+    }
+    for ((file, line), units) in unknown_lines {
+        warnings.push(unknown_preset_warning(&file, line, &units));
     }
 
     populate_owning_packages(exec, &mut fragments);
@@ -414,7 +581,39 @@ fn build_state_changes(
             Err(e) => warnings.push(warn(&e.to_string())),
         }
     }
-    (state_changes, mount_findings)
+    (inventory, state_changes, mount_findings)
+}
+
+/// The unit file a fragment names, if any.
+fn fragment_file(fragment: &UnitFragment) -> Option<&UnitName> {
+    match fragment {
+        UnitFragment::Local { file }
+        | UnitFragment::Shadowed { file, .. }
+        | UnitFragment::Vendor { file, .. } => Some(file),
+        UnitFragment::Absent => None,
+    }
+}
+
+/// The warning for one preset line whose verb this scan does not read and
+/// that decided `units` (§ 7.4 of the units spec): it names the line, its
+/// file and the units, and says their state was not compared with a
+/// preset.
+fn unknown_preset_warning(file: &str, line: usize, units: &[UnitName]) -> Warning {
+    let names: Vec<&str> = units.iter().map(UnitName::as_str).collect();
+    Warning {
+        inspector: "units".into(),
+        message: format!(
+            "preset line {line} of {file} starts with a verb this scan does not read and is \
+             the first rule matching {}; their state was not compared with a preset",
+            names.join(", ")
+        ),
+        severity: Some(WarningSeverity::Warning),
+        extra: std::collections::HashMap::from([
+            ("file".into(), serde_json::json!(file)),
+            ("line".into(), serde_json::json!(line)),
+            ("units".into(), serde_json::json!(names)),
+        ]),
+    }
 }
 
 /// What a state change records about the files `enable` reads `[Install]`
@@ -657,11 +856,70 @@ struct UnitFileEntry {
     _preset: String,
 }
 
-/// A parsed preset rule from a `.preset` file.
-#[derive(Debug)]
-struct PresetRule {
-    action: String,
-    pattern: String,
+/// One line of the host's `.preset` files, in the order systemd reads
+/// them (§ 7.1 source 2 of the units spec).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PresetRule {
+    /// `enable` or `disable` and one unit name or glob. A template name
+    /// here is the bare form.
+    Plain {
+        verb: PresetDefault,
+        pattern: String,
+    },
+    /// `enable`, a template name and the instances that follow it.
+    EnableInstances {
+        template: String,
+        instances: Vec<String>,
+    },
+    /// A first word that is neither verb. Kept with where it came from,
+    /// for the warning.
+    Unknown {
+        pattern: String,
+        file: String,
+        line: usize,
+    },
+}
+
+impl PresetRule {
+    /// Read one preset line: `None` for a line of fewer than two words. An
+    /// `enable` line is the list form when its second word is a template
+    /// name and more words follow; every other line is read by its first
+    /// two words. `file` and `line` (from 1) say where it came from.
+    fn parse(text: &str, file: &str, line: usize) -> Option<Self> {
+        let mut words = text.split_whitespace();
+        let (verb, pattern) = (words.next()?, words.next()?.to_owned());
+        let rest: Vec<String> = words.map(str::to_owned).collect();
+        let verb = match verb {
+            "enable" => PresetDefault::Enable,
+            "disable" => PresetDefault::Disable,
+            _ => {
+                return Some(Self::Unknown {
+                    pattern,
+                    file: file.to_owned(),
+                    line,
+                });
+            }
+        };
+        let template = UnitName::try_from(pattern.clone()).is_ok_and(|name| name.is_template());
+        if verb == PresetDefault::Enable && template && !rest.is_empty() {
+            return Some(Self::EnableInstances {
+                template: pattern,
+                instances: rest,
+            });
+        }
+        Some(Self::Plain { verb, pattern })
+    }
+
+    /// Whether the rule matches the unit `name` by its pattern: a glob for
+    /// `Plain` and `Unknown`, the template's own name for the list form.
+    fn matches(&self, name: &str) -> bool {
+        match self {
+            Self::Plain { pattern, .. } | Self::Unknown { pattern, .. } => {
+                glob_match(pattern, name)
+            }
+            Self::EnableInstances { template, .. } => template == name,
+        }
+    }
 }
 
 impl Inspector for UnitsInspector {
@@ -741,51 +999,34 @@ impl Inspector for UnitsInspector {
             }
         };
 
-        // 4. Every unit past the name gate is in the inventory once, with its
-        //    preset. A unit that may be a state change, depending on where
-        //    its file is, is a candidate; the rest have no evidence of an
-        //    administrator's change and only the inventory records them.
-        let mut candidates = Vec::new();
-        let mut inventory = Vec::new();
-        let mut inventoried = HashSet::new();
+        // 4. The links under both unit directories (§ 7.1 sources 3 and 4),
+        //    then every unit past the name gate once, in listing order.
+        let (host_links, mut unit_file_read_failures) = links::read_host_links(exec);
         let mut warnings = Vec::new();
-
+        let mut listed = Vec::new();
+        let mut seen = HashSet::new();
         for unit in &units {
-            let Some((name, current_state)) = gate(unit, &mut warnings) else {
+            let Some((name, state)) = gate(unit, &host_links, &mut warnings) else {
                 continue;
             };
-            let preset = resolve_preset_default(&unit.unit, &preset_rules);
-
             // A name systemctl lists again keeps its first entry.
-            if inventoried.insert(name.clone()) {
-                inventory.push(UnitInventoryEntry {
-                    unit: name.clone(),
-                    state: current_state,
-                    preset,
-                });
-            }
-
-            let candidate = match current_state {
-                UnitState::Masked | UnitState::Enabled => true,
-                UnitState::Disabled => preset == Some(PresetDefault::Enable),
-            };
-            if candidate {
-                candidates.push(Candidate {
+            if seen.insert(name.clone()) {
+                listed.push(Listed {
                     name,
                     raw_state: unit.state.clone(),
-                    state: current_state,
-                    default_state: preset,
+                    listed: state,
                 });
             }
         }
 
-        // 4b. Resolve each candidate's unit file and owning package, then
-        //     build the state changes.
-        let mut unit_file_read_failures = Vec::new();
+        // 4b. Each unit's file, install state and preset: the inventory,
+        //     the state changes and the enabled storage units.
         let mut reported = HashSet::new();
-        let (state_changes, mut mount_findings) = build_state_changes(
+        let (inventory, state_changes, mut mount_findings) = build_state_changes(
             exec,
-            candidates,
+            listed,
+            &host_links,
+            &preset_rules,
             &mut warnings,
             &mut unit_file_read_failures,
             &mut reported,
@@ -928,7 +1169,7 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     let usr_dir = Path::new("/usr/lib/systemd/system-preset");
     let etc_dir = Path::new("/etc/systemd/system-preset");
 
-    let mut preset_files: Vec<(String, String)> = Vec::new(); // (filename, content)
+    let mut preset_files: Vec<(String, String, String)> = Vec::new(); // (filename, path, content)
     let mut read_failures: Vec<String> = Vec::new();
 
     let usr_ok = match exec.read_dir(usr_dir) {
@@ -937,7 +1178,11 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
                 if entry.ends_with(".preset") {
                     let path = usr_dir.join(entry);
                     match exec.read_file(&path) {
-                        Ok(content) => preset_files.push((entry.clone(), content)),
+                        Ok(content) => preset_files.push((
+                            entry.clone(),
+                            path.to_string_lossy().into_owned(),
+                            content,
+                        )),
                         Err(e) => {
                             read_failures.push(format!("{}: {e}", path.to_string_lossy()));
                         }
@@ -964,7 +1209,11 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
                 if entry.ends_with(".preset") {
                     let path = etc_dir.join(entry);
                     match exec.read_file(&path) {
-                        Ok(content) => preset_files.push((entry.clone(), content)),
+                        Ok(content) => preset_files.push((
+                            entry.clone(),
+                            path.to_string_lossy().into_owned(),
+                            content,
+                        )),
                         Err(e) => {
                             read_failures.push(format!("{}: {e}", path.to_string_lossy()));
                         }
@@ -995,26 +1244,18 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     preset_files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut rules = Vec::new();
-    for (_filename, content) in &preset_files {
-        for line in content.lines() {
+    for (_filename, path, content) in &preset_files {
+        for (index, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                rules.push(PresetRule {
-                    action: parts[0].to_string(),
-                    pattern: parts[1].to_string(),
-                });
-            }
+            rules.extend(PresetRule::parse(line, path, index + 1));
         }
     }
 
     Ok((rules, read_failures))
 }
-
-// resolve_preset_default() is defined above, near the parse gate functions.
 
 /// Simple glob matching supporting `*` (any chars) and `?` (single char).
 fn glob_match(pattern: &str, text: &str) -> bool {
@@ -1040,16 +1281,18 @@ fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
 }
 
 /// The inventory of enabled, disabled and masked units when no preset rule
-/// could be read: every entry has no preset. A name that does not parse is
-/// reported through `warnings` and has no entry.
+/// could be read: every entry has no preset, and its state is the
+/// listing's word, since the degraded scan reads no links. A name that
+/// does not parse is reported through `warnings` and has no entry.
 fn partial_inventory(
     units: &[UnitFileEntry],
     warnings: &mut Vec<Warning>,
 ) -> Vec<UnitInventoryEntry> {
     let mut inventory = Vec::new();
     let mut inventoried = HashSet::new();
+    let no_links = HostLinks::default();
     for u in units {
-        let Some((name, state)) = gate(u, warnings) else {
+        let Some((name, Some(state))) = gate(u, &no_links, warnings) else {
             continue;
         };
         if inventoried.insert(name.clone()) {
@@ -1860,7 +2103,7 @@ mod tests {
     }
 
     fn svc_base_mock() -> MockExecutor {
-        MockExecutor::new()
+        let exec = MockExecutor::new()
             .with_command(
                 "systemctl list-unit-files --no-pager",
                 ExecResult {
@@ -1878,6 +2121,39 @@ mod tests {
             .with_file(
                 "/usr/lib/systemd/system-preset/90-default.preset",
                 "enable sshd.service\ndisable *\n",
+            );
+        with_enabled_vendor_unit(
+            with_enabled_vendor_unit(exec, "sshd.service"),
+            "httpd.service",
+        )
+    }
+
+    /// The `[Install]` section of an enabled unit in these tests.
+    const WANTED_BY_MULTI_USER: &str = "[Install]\nWantedBy=multi-user.target\n";
+
+    /// `exec` with a vendor `unit` wanted by `multi-user.target` and the
+    /// link `systemctl enable` makes for it, added to what
+    /// `/etc/systemd/system` already lists: the host on which
+    /// `list-unit-files` says `enabled`.
+    fn with_enabled_vendor_unit(exec: MockExecutor, unit: &str) -> MockExecutor {
+        with_enable_link(
+            exec.with_file(
+                &format!("/usr/lib/systemd/system/{unit}"),
+                &format!("[Unit]\nDescription={unit}\n\n{WANTED_BY_MULTI_USER}"),
+            ),
+            unit,
+        )
+    }
+
+    /// `exec` with the `multi-user.target.wants` link to `unit`, added to
+    /// what `/etc/systemd/system` already lists.
+    fn with_enable_link(exec: MockExecutor, unit: &str) -> MockExecutor {
+        let wants = "/etc/systemd/system/multi-user.target.wants";
+        exec.with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+            .with_dir_entry(wants, unit)
+            .with_link(
+                &format!("{wants}/{unit}"),
+                &format!("/usr/lib/systemd/system/{unit}"),
             )
     }
 
@@ -1885,7 +2161,7 @@ mod tests {
     fn test_dropin_read_failure_triggers_degraded() {
         // Drop-in directory listed, .conf file listed, but file read fails (size cap)
         let exec = svc_base_mock()
-            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir_entry("/etc/systemd/system", "httpd.service.d")
             .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"]);
         // NOTE: no .with_file for override.conf → read_file will return NotFound
 
@@ -1938,6 +2214,7 @@ mod tests {
             .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
             // NOTE: no .with_file for the preset → read_file returns NotFound
             .with_dir("/etc/systemd/system", vec![]);
+        let exec = with_enabled_vendor_unit(exec, "sshd.service");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -1972,7 +2249,7 @@ mod tests {
     #[test]
     fn test_dropin_dir_unreadable_triggers_degraded() {
         // Per-unit drop-in directory listed but unreadable
-        let exec = svc_base_mock().with_dir("/etc/systemd/system", vec!["httpd.service.d"]);
+        let exec = svc_base_mock().with_dir_entry("/etc/systemd/system", "httpd.service.d");
         // NOTE: no .with_dir for httpd.service.d → read_dir returns Err
 
         let source = SourceSystem::PackageBased {
@@ -2166,7 +2443,7 @@ mod tests {
                 _preset: String::new(),
             };
             let mut warnings = Vec::new();
-            let gated = gate(&entry, &mut warnings);
+            let gated = gate(&entry, &HostLinks::default(), &mut warnings);
             assert_eq!(gated.is_some(), kept, "{unit} {state}");
             assert!(warnings.is_empty(), "{unit} {state}: {warnings:?}");
         }
@@ -2245,8 +2522,8 @@ mod tests {
                  enable dbus-org.freedesktop.timedate1.service\n\
                  disable *\n",
             )
-            .with_dir("/etc/systemd/system", vec![])
-            .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n");
+            .with_dir("/etc/systemd/system", vec![]);
+        let exec = with_enabled_vendor_unit(exec, "httpd.service");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -2373,7 +2650,10 @@ mod tests {
                 "enable firewalld.service\ndisable *\n",
             )
             .with_dir("/etc/systemd/system", vec![])
-            .with_file("/usr/lib/systemd/system/firewalld.service", "[Unit]\n");
+            .with_file(
+                "/usr/lib/systemd/system/firewalld.service",
+                &format!("[Unit]\n\n{WANTED_BY_MULTI_USER}"),
+            );
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -2573,7 +2853,7 @@ mod tests {
     fn test_dropin_captured_for_service() {
         // Drop-in override files represent operator customization
         let exec = svc_base_mock()
-            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir_entry("/etc/systemd/system", "httpd.service.d")
             .with_dir("/etc/systemd/system/httpd.service.d", vec!["restart.conf"])
             .with_file(
                 "/etc/systemd/system/httpd.service.d/restart.conf",
@@ -2610,7 +2890,7 @@ mod tests {
     #[test]
     fn test_services_ok_when_dropins_readable() {
         let exec = svc_base_mock()
-            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir_entry("/etc/systemd/system", "httpd.service.d")
             .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
             .with_file(
                 "/etc/systemd/system/httpd.service.d/override.conf",
@@ -2708,7 +2988,7 @@ mod tests {
     fn test_full_shadow_carries_rationale() {
         // Full shadow should populate shadow_rationale field
         let exec = svc_base_mock()
-            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir_entry("/etc/systemd/system", "httpd.service.d")
             .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
             .with_file(
                 "/etc/systemd/system/httpd.service.d/override.conf",
@@ -2757,7 +3037,7 @@ mod tests {
     fn test_drop_in_no_rationale() {
         // Drop-in (not full shadow) should have shadow_type but no rationale
         let exec = svc_base_mock()
-            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir_entry("/etc/systemd/system", "httpd.service.d")
             .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
             .with_file(
                 "/etc/systemd/system/httpd.service.d/override.conf",
@@ -2843,7 +3123,7 @@ mod tests {
                     "/usr/lib/systemd/system-preset/90-default.preset",
                     "disable *\n",
                 )
-                .with_dir("/etc/systemd/system", vec![UNIT, "quiet.service.d"])
+                .with_dir_entry("/etc/systemd/system", "quiet.service.d")
                 .with_dir("/etc/systemd/system/quiet.service.d", vec!["override.conf"])
                 .with_file(
                     "/etc/systemd/system/quiet.service.d/override.conf",
@@ -2910,13 +3190,17 @@ mod tests {
                 "enable sshd.service\ndisable *\n",
             )
             // /etc/systemd/system has the bare sshd.service file (full shadow)
-            .with_dir("/etc/systemd/system", vec!["sshd.service"])
+            .with_dir_entry("/etc/systemd/system", "sshd.service")
             .with_file(
                 "/etc/systemd/system/sshd.service",
-                "[Unit]\nDescription=Custom sshd\n[Service]\nExecStart=/usr/sbin/sshd -D\n",
+                &format!(
+                    "[Unit]\nDescription=Custom sshd\n[Service]\nExecStart=/usr/sbin/sshd -D\n\n\
+                     {WANTED_BY_MULTI_USER}"
+                ),
             )
             // Vendor counterpart exists
             .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n");
+        let exec = with_enable_link(exec, "sshd.service");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -2971,16 +3255,16 @@ mod tests {
     #[test]
     fn test_unreadable_shadow_file_degrades_inspector() {
         // A full shadow file that cannot be read should degrade the inspector,
-        // not silently produce an empty content entry. The unit is disabled
-        // as its preset says, so it is no candidate and the shadow scan is
-        // the first to read its file (an enabled unit's file is read when it
-        // is resolved, which degrades the scan with its own reason).
+        // not silently produce an empty content entry. The listing does not
+        // name the unit, so the shadow scan is the first to read its file (a
+        // listed unit's file is read when it is resolved, which degrades the
+        // scan with its own reason).
         let exec = MockExecutor::new()
             .with_command(
                 "systemctl list-unit-files --no-pager",
                 ExecResult {
                     stdout: "UNIT FILE                                  STATE           PRESET\n\
-                             sshd.service                               disabled        disabled\n\
+                             other.service                              disabled        disabled\n\
                              \n\
                              1 unit files listed.\n"
                         .into(),
@@ -2993,14 +3277,15 @@ mod tests {
                 "/usr/lib/systemd/system-preset/90-default.preset",
                 "disable sshd.service\ndisable *\n",
             )
-            .with_dir("/etc/systemd/system", vec!["sshd.service"])
+            .with_dir_entry("/etc/systemd/system", "sshd.service")
             // Shadow file exists but is unreadable
             .with_file_error(
                 "/etc/systemd/system/sshd.service",
                 std::io::ErrorKind::PermissionDenied,
             )
             // Vendor counterpart exists
-            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n");
+            .with_file("/usr/lib/systemd/system/sshd.service", "[Unit]\n")
+            .with_file("/usr/lib/systemd/system/other.service", "[Unit]\n");
 
         let source = SourceSystem::PackageBased {
             os_release: svc_test_os_release(),
@@ -3026,14 +3311,34 @@ mod tests {
         }
     }
 
-    /// A storage candidate, enabled against a disable preset.
-    fn storage_candidate(unit: &str) -> Candidate {
-        Candidate {
+    /// A listed storage unit that systemctl calls `enabled`.
+    fn storage_unit(unit: &str) -> Listed {
+        Listed {
             name: UnitName::try_from(unit.to_owned()).unwrap(),
             raw_state: "enabled".into(),
-            state: UnitState::Enabled,
-            default_state: Some(PresetDefault::Disable),
+            listed: Some(UnitState::Enabled),
         }
+    }
+
+    /// The link `enable` makes for a unit wanted by `local-fs.target`.
+    fn local_fs_link(unit: &str) -> HostLinks {
+        let mut links = HostLinks::default();
+        links.admin.insert(
+            UnitName::try_from(unit.to_owned()).unwrap(),
+            vec![links::Link {
+                relation: inspectah_core::types::units::LinkRelation::Wants,
+                parent: UnitName::try_from("local-fs.target".to_owned()).unwrap(),
+            }],
+        );
+        links
+    }
+
+    /// A preset that disables every unit.
+    fn disable_all() -> Vec<PresetRule> {
+        vec![PresetRule::Plain {
+            verb: PresetDefault::Disable,
+            pattern: "*".into(),
+        }]
     }
 
     /// § 7.8: a storage unit's owner is looked up before it is classified.
@@ -3048,14 +3353,20 @@ mod tests {
             ..Default::default()
         };
         let query = "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/tmp.mount";
-        let vendor =
-            || MockExecutor::new().with_file("/usr/lib/systemd/system/tmp.mount", "[Mount]\n");
+        let vendor = || {
+            MockExecutor::new().with_file(
+                "/usr/lib/systemd/system/tmp.mount",
+                "[Mount]\n\n[Install]\nWantedBy=local-fs.target\n",
+            )
+        };
 
         let owned = vendor().with_command(query, rpm("systemd\n", 0));
         let (mut warnings, mut failures) = (Vec::new(), Vec::new());
-        let (changes, findings) = build_state_changes(
+        let (_, changes, findings) = build_state_changes(
             &owned,
-            vec![storage_candidate("tmp.mount")],
+            vec![storage_unit("tmp.mount")],
+            &local_fs_link("tmp.mount"),
+            &disable_all(),
             &mut warnings,
             &mut failures,
             &mut HashSet::new(),
@@ -3076,9 +3387,11 @@ mod tests {
         for answer in [rpm("file is not owned by any package\n", 1), rpm("\n", 0)] {
             let unowned = vendor().with_command(query, answer);
             let mut warnings = Vec::new();
-            let (changes, findings) = build_state_changes(
+            let (_, changes, findings) = build_state_changes(
                 &unowned,
-                vec![storage_candidate("tmp.mount")],
+                vec![storage_unit("tmp.mount")],
+                &local_fs_link("tmp.mount"),
+                &disable_all(),
                 &mut warnings,
                 &mut failures,
                 &mut HashSet::new(),
@@ -3088,5 +3401,276 @@ mod tests {
             assert_eq!(findings.len(), 1, "{findings:?}");
             assert_eq!(findings[0].unit.name().as_unit_name().as_str(), "tmp.mount");
         }
+    }
+
+    fn plain(verb: PresetDefault, pattern: &str) -> PresetRule {
+        PresetRule::Plain {
+            verb,
+            pattern: pattern.into(),
+        }
+    }
+
+    /// Parse each line of `text` as one preset file named `file`.
+    fn rules(file: &str, text: &str) -> Vec<PresetRule> {
+        text.lines()
+            .enumerate()
+            .filter_map(|(i, line)| PresetRule::parse(line, file, i + 1))
+            .collect()
+    }
+
+    /// T39, the parser: the list form, the plain forms, and a first word
+    /// that is neither verb kept with its file and line.
+    #[test]
+    fn preset_lines_parse_into_their_variants() {
+        use PresetDefault::{Disable, Enable};
+        let file = "/etc/systemd/system-preset/10-t.preset";
+        let cases = [
+            (
+                "enable t@.service two three",
+                Some(PresetRule::EnableInstances {
+                    template: "t@.service".into(),
+                    instances: vec!["two".into(), "three".into()],
+                }),
+            ),
+            ("enable t@two.service", Some(plain(Enable, "t@two.service"))),
+            ("enable t@.service", Some(plain(Enable, "t@.service"))),
+            ("disable t@.service x", Some(plain(Disable, "t@.service"))),
+            ("enable t@*", Some(plain(Enable, "t@*"))),
+            ("disable *", Some(plain(Disable, "*"))),
+            (
+                "enable app.service extra words",
+                Some(plain(Enable, "app.service")),
+            ),
+            (
+                "frobnicate t@.service",
+                Some(PresetRule::Unknown {
+                    pattern: "t@.service".into(),
+                    file: file.into(),
+                    line: 7,
+                }),
+            ),
+            ("enable", None),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(PresetRule::parse(line, file, 7), expected, "{line}");
+        }
+    }
+
+    /// T39, the lookup: what each rule set gives an instance with its own
+    /// unit file, an instance backed only by its template, and a unit that
+    /// is not an instance.
+    #[test]
+    fn the_preset_lookup_follows_what_the_package_ships() {
+        use PresetDefault::{Disable, Enable};
+        use PresetLookup::{NoRule, Rule};
+        let file = "/usr/lib/systemd/system-preset/90-t.preset";
+        // (rules, unit, own file, DefaultInstance=, preset)
+        let cases: &[(&str, &str, bool, Option<&str>, PresetLookup)] = &[
+            // An instance with its own unit file.
+            (
+                "enable t@two.service\ndisable *",
+                "t@two.service",
+                true,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@*\ndisable *",
+                "t@two.service",
+                true,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@.service two three\ndisable *",
+                "t@two.service",
+                true,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@.service one\ndisable *",
+                "t@two.service",
+                true,
+                Some("one"),
+                Rule(Disable),
+            ),
+            (
+                "enable t@.service\ndisable *",
+                "t@two.service",
+                true,
+                Some("two"),
+                Rule(Disable),
+            ),
+            // An instance backed only by its template.
+            (
+                "enable t@.service\ndisable *",
+                "t@one.service",
+                false,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@.service\ndisable *",
+                "t@two.service",
+                false,
+                Some("one"),
+                Rule(Disable),
+            ),
+            (
+                "enable t@.service\ndisable *",
+                "t@one.service",
+                false,
+                None,
+                Rule(Disable),
+            ),
+            (
+                "enable t@*\ndisable *",
+                "t@one.service",
+                false,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@.service two three\ndisable *",
+                "t@two.service",
+                false,
+                Some("one"),
+                Rule(Enable),
+            ),
+            (
+                "enable t@.service two three\ndisable *",
+                "t@one.service",
+                false,
+                Some("one"),
+                Rule(Disable),
+            ),
+            (
+                "enable t@two.service\ndisable *",
+                "t@two.service",
+                false,
+                Some("one"),
+                Rule(Disable),
+            ),
+            (
+                "disable t@.service",
+                "t@one.service",
+                false,
+                Some("one"),
+                Rule(Disable),
+            ),
+            (
+                "frobnicate t@.service\nenable t@.service",
+                "t@one.service",
+                false,
+                Some("one"),
+                PresetLookup::Unknown {
+                    file: file.into(),
+                    line: 1,
+                },
+            ),
+            (
+                "enable other@.service\nenable app.service",
+                "t@one.service",
+                false,
+                Some("one"),
+                NoRule,
+            ),
+            // A unit that is not an instance.
+            (
+                "enable app.service\ndisable *",
+                "app.service",
+                true,
+                None,
+                Rule(Enable),
+            ),
+            (
+                "disable app*\nenable app.service",
+                "app.service",
+                true,
+                None,
+                Rule(Disable),
+            ),
+            (
+                "enable other.service\nfrobnicate app.service",
+                "app.service",
+                true,
+                None,
+                PresetLookup::Unknown {
+                    file: file.into(),
+                    line: 2,
+                },
+            ),
+            ("enable other.service", "app.service", true, None, NoRule),
+        ];
+        for (text, unit, own_file, default_instance, expected) in cases {
+            let name = UnitName::try_from(unit.to_string()).unwrap();
+            assert_eq!(
+                preset_for(&name, *own_file, *default_instance, &rules(file, text)),
+                *expected,
+                "{unit} (own file {own_file}, default {default_instance:?}) under {text:?}"
+            );
+        }
+    }
+
+    /// T39 and § 7.4's named case: RHEL 9.8's and RHEL 10.2's getty rules,
+    /// read from their preset files in file-name order. Neither instance
+    /// has a unit file, and `getty@.service` has `DefaultInstance=tty1`:
+    /// `tty1` is `enable` from `90-systemd.preset` on both, and `tty2` is
+    /// `disable` on both. RHEL 9.8's `enable getty@tty1.service`, which sorts
+    /// first, names an instance and is not read for it.
+    #[test]
+    fn getty_presets_on_both_releases() {
+        let dir = "/usr/lib/systemd/system-preset";
+        let mut rhel9 = vec![
+            ("90-default.preset", "enable getty@tty1.service\n"),
+            ("90-systemd.preset", "enable getty@.service\n"),
+            ("99-default-disable.preset", "disable *\n"),
+        ];
+        let rhel10 = rhel9.split_off(1);
+        for (release, files) in [
+            ("RHEL 9.8", rhel9.iter().chain(&rhel10).collect::<Vec<_>>()),
+            ("RHEL 10.2", rhel10.iter().collect()),
+        ] {
+            let mut exec = MockExecutor::new()
+                .with_dir(dir, files.iter().rev().map(|(name, _)| *name).collect());
+            for (name, text) in &files {
+                exec = exec.with_file(&format!("{dir}/{name}"), text);
+            }
+            let (rules, failures) = read_preset_rules(&exec).expect("the presets are read");
+            assert!(failures.is_empty(), "{release}: {failures:?}");
+            for (unit, expected) in [
+                ("getty@tty1.service", PresetDefault::Enable),
+                ("getty@tty2.service", PresetDefault::Disable),
+            ] {
+                let name = UnitName::try_from(unit.to_owned()).unwrap();
+                assert_eq!(
+                    preset_for(&name, false, Some("tty1"), &rules),
+                    PresetLookup::Rule(expected),
+                    "{release}: {unit}"
+                );
+            }
+        }
+    }
+
+    /// T39, the warning: one per line, naming the line, its file and every
+    /// unit it decided, and saying their state was not compared.
+    #[test]
+    fn an_unknown_preset_line_is_one_warning_naming_its_units() {
+        let file = "/etc/systemd/system-preset/10-t.preset";
+        let units = vec![UnitName::try_from("t@one.service".to_owned()).unwrap()];
+        let warning = unknown_preset_warning(file, 3, &units);
+        assert_eq!(warning.inspector, "units");
+        assert_eq!(warning.extra["file"], serde_json::json!(file));
+        assert_eq!(warning.extra["line"], serde_json::json!(3));
+        assert_eq!(warning.extra["units"], serde_json::json!(["t@one.service"]));
+        assert!(
+            warning.message.contains(file)
+                && warning.message.contains("line 3")
+                && warning.message.contains("t@one.service")
+                && warning.message.contains("not compared with a preset"),
+            "{}",
+            warning.message
+        );
     }
 }

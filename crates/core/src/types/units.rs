@@ -756,6 +756,19 @@ pub enum InstallUnknown {
     UpheldBy,
 }
 
+/// How a link on the source host ties a unit to its parent (§ 6.6 of the
+/// units spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkRelation {
+    Wants,
+    Requires,
+    Upholds,
+    Alias,
+    /// Not a link: `unit` is named in `parent`'s `Also=` (§ 7.4).
+    Also,
+}
+
 /// Durable systemd unit states that represent administrator intent.
 /// Only these three states produce migration-worthy `UnitStateChange` entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

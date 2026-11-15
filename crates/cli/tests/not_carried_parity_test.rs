@@ -273,8 +273,6 @@ fn host_mock() -> MockExecutor {
         .with_command("systemctl list-unit-files --no-pager", ok(SYSTEMCTL))
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", PRESET)
-        .with_file("/usr/lib/systemd/system/httpd.service", "[Unit]\n")
-        .with_file("/usr/lib/systemd/system/rhcd.service", "[Unit]\n")
         .with_command(
             "rpm -qf --queryformat %{NAME}\n \
              /usr/lib/systemd/system/httpd.service /usr/lib/systemd/system/rhcd.service",
@@ -288,6 +286,22 @@ fn host_mock() -> MockExecutor {
             ok(&find_var_lib),
         )
         .with_command("rpm --query --all --qf [%{FILENAMES}\\n]", ok(&rpm_owned));
+    // Each listed unit's vendor file, and the link `systemctl enable` made
+    // for it, since the listing calls all three `enabled`.
+    let wants = "/etc/systemd/system/multi-user.target.wants";
+    for unit in ["firewalld.service", "httpd.service", "rhcd.service"] {
+        mock = mock
+            .with_file(
+                &format!("/usr/lib/systemd/system/{unit}"),
+                "[Unit]\n\n[Install]\nWantedBy=multi-user.target\n",
+            )
+            .with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+            .with_dir_entry(wants, unit)
+            .with_link(
+                &format!("{wants}/{unit}"),
+                &format!("/usr/lib/systemd/system/{unit}"),
+            );
+    }
     for (id, requires) in RECURSIVE_REQUIRES {
         mock = mock.with_command(
             &format!(

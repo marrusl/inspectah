@@ -29,8 +29,36 @@ const PRESET_FIXTURE: &str =
 const DROPIN_FIXTURE: &str =
     include_str!("../../../testdata/fixtures/services/dropin-httpd-override.conf");
 
-/// A minimal unit file body.
-const UNIT_FILE: &str = "[Unit]\nDescription=test unit\n";
+/// A minimal unit file body, wanted by `multi-user.target`.
+const UNIT_FILE: &str = "[Unit]\nDescription=test unit\n\n[Install]\nWantedBy=multi-user.target\n";
+
+/// The directory `systemctl enable` links a unit [`UNIT_FILE`] describes
+/// into.
+const MULTI_USER_WANTS: &str = "/etc/systemd/system/multi-user.target.wants";
+
+/// `exec` with the link `systemctl enable` makes for `unit`, whose
+/// `[Install]` is [`UNIT_FILE`]'s, added to what `/etc/systemd/system`
+/// already lists. A host on which `systemctl list-unit-files` says
+/// `enabled` has the link that makes it so.
+fn with_enable_link(exec: MockExecutor, unit: &str) -> MockExecutor {
+    exec.with_dir_entry("/etc/systemd/system", "multi-user.target.wants")
+        .with_dir_entry(MULTI_USER_WANTS, unit)
+        .with_link(
+            &format!("{MULTI_USER_WANTS}/{unit}"),
+            &format!("/usr/lib/systemd/system/{unit}"),
+        )
+}
+
+/// `exec` with the enable link of every unit `listing` lists `enabled`.
+fn with_enable_links(mut exec: MockExecutor, listing: &str) -> MockExecutor {
+    for line in listing.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if let [unit, "enabled", ..] = words.as_slice() {
+            exec = with_enable_link(exec, unit);
+        }
+    }
+    exec
+}
 
 /// Register a unit file under the vendor directory for each name, as a
 /// package installs it.
@@ -65,7 +93,7 @@ fn pkg_source() -> SourceSystem {
 /// vendor unit file for every listed unit, one preset directory with the
 /// default preset, and one drop-in directory.
 fn full_mock() -> MockExecutor {
-    with_vendor_units(MockExecutor::new(), &listed_units(SYSTEMCTL_FIXTURE))
+    let exec = with_vendor_units(MockExecutor::new(), &listed_units(SYSTEMCTL_FIXTURE))
         .with_command(
             "systemctl list-unit-files --no-pager",
             ExecResult {
@@ -81,12 +109,13 @@ fn full_mock() -> MockExecutor {
             PRESET_FIXTURE,
         )
         // Drop-in directory
-        .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+        .with_dir_entry("/etc/systemd/system", "httpd.service.d")
         .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
         .with_file(
             "/etc/systemd/system/httpd.service.d/override.conf",
             DROPIN_FIXTURE,
-        )
+        );
+    with_enable_links(exec, SYSTEMCTL_FIXTURE)
 }
 
 // ── Test 1: Applicability ──────────────────────────────────────────
@@ -240,6 +269,8 @@ fn inventory_has_one_entry_per_unit_with_state_and_preset() {
             "disable bluetooth.service\nenable sshd.service\n",
         )
         .with_dir("/etc/systemd/system", vec![]);
+    let exec = with_vendor_units(exec, &["bluetooth.service", "cups.service", "sshd.service"]);
+    let exec = with_enable_link(with_enable_link(exec, "bluetooth.service"), "sshd.service");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -321,6 +352,7 @@ fn inventory_records_masked_units() {
         .with_dir("/etc/systemd/system", vec![])
         .with_link("/etc/systemd/system/cups.service", "/dev/null");
     let exec = with_vendor_units(exec, &["cups.service", "sshd.service"]);
+    let exec = with_enable_link(exec, "sshd.service");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -384,7 +416,7 @@ fn preset_first_match_wins() {
             "/usr/lib/systemd/system-preset/90-default.preset",
             "enable sshd.service\n",
         );
-    let exec = with_vendor_units(exec, &["sshd.service"]);
+    let exec = with_enable_link(with_vendor_units(exec, &["sshd.service"]), "sshd.service");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -638,7 +670,7 @@ fn dropin_with_secret_produces_redaction_hint() {
             "/usr/lib/systemd/system-preset/90-default.preset",
             "enable myapp.service\n",
         )
-        .with_dir("/etc/systemd/system", vec!["myapp.service.d"])
+        .with_dir_entry("/etc/systemd/system", "myapp.service.d")
         .with_dir("/etc/systemd/system/myapp.service.d", vec!["env.conf"])
         .with_file(
             "/etc/systemd/system/myapp.service.d/env.conf",
@@ -795,6 +827,10 @@ fn no_preset_matched_entries_without_preset_rules() {
             },
         )
         .with_dir("/usr/lib/systemd/system-preset", vec![]); // Empty preset dir
+    let exec = with_enable_links(
+        with_vendor_units(exec, &listed_units(SYSTEMCTL_FIXTURE)),
+        SYSTEMCTL_FIXTURE,
+    );
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -913,6 +949,8 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
     // An enabled unit's file is resolved, since a local one is a state
     // change whatever its preset; on this host both are the package's.
     let exec = with_vendor_units(exec, &["chronyd.service", "sshd.service"]);
+    let exec = with_enable_link(with_enable_link(exec, "chronyd.service"), "sshd.service");
+    let exec = with_vendor_units(exec, &["cups.service"]);
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -971,6 +1009,7 @@ fn test_owning_package_batch_query_populates_state_changes() {
         )
         .with_dir("/etc/systemd/system", vec![]);
     let exec = with_vendor_units(exec, &["httpd.service", "firewalld.service"]);
+    let exec = with_enable_link(exec, "httpd.service");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -1043,6 +1082,7 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
         )
         .with_dir("/etc/systemd/system", vec![]);
     let exec = with_vendor_units(exec, &["httpd.service", "firewalld.service"]);
+    let exec = with_enable_link(exec, "httpd.service");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -1096,11 +1136,11 @@ fn listing_mock(units: &[(&str, &str)]) -> MockExecutor {
         listing.push_str(&format!("{unit} {state} disabled\n"));
     }
     listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
-    MockExecutor::new()
+    let exec = MockExecutor::new()
         .with_command(
             "systemctl list-unit-files --no-pager",
             ExecResult {
-                stdout: listing,
+                stdout: listing.clone(),
                 exit_code: 0,
                 ..Default::default()
             },
@@ -1110,7 +1150,8 @@ fn listing_mock(units: &[(&str, &str)]) -> MockExecutor {
             "/usr/lib/systemd/system-preset/90-default.preset",
             "disable *\n",
         )
-        .with_dir("/etc/systemd/system", vec![])
+        .with_dir("/etc/systemd/system", vec![]);
+    with_enable_links(exec, &listing)
 }
 
 /// The fragment of the state change for `unit`.
@@ -1197,7 +1238,7 @@ fn masks_and_a_comment_only_file_resolve_by_form() {
     .with_file("/etc/systemd/system/empty.service", "")
     .with_link("/etc/systemd/system/hop.service", "/etc/alternatives/hop")
     .with_link("/etc/alternatives/hop", "/dev/null")
-    .with_file("/etc/systemd/system/comment.service", "# replaced\n\n");
+    .with_file("/etc/systemd/system/comment.service", COMMENT_SHADOW);
     let exec = with_vendor_units(
         exec,
         &[
@@ -1594,22 +1635,26 @@ fn a_unit_found_only_elsewhere_on_the_search_path_names_that_path() {
     );
 }
 
-/// An `/etc` storage unit with no state change (listed `disabled`, at its
-/// preset) is a mount finding of its
-/// own (§ 6.5), so the search path refuses it there too: a copy under
+/// An `/etc` storage unit the listing does not name is a mount finding of
+/// its own (§ 6.5), so the search path refuses it there too: a copy under
 /// `/etc/systemd/system.control` outranks it, and the scan warns naming
 /// the unit and the path and records no finding. Control: the same file
-/// without the copy is a finding.
+/// without the copy is a finding. The listing names another unit, since
+/// an empty listing returns before the storage pass; a listed unit is
+/// resolved, and refused, in the first pass.
 #[test]
 fn the_search_path_refuses_an_etc_storage_unit_with_a_warning() {
     let path = "/etc/systemd/system.control/data.mount";
     let host = || {
-        listing_mock(&[("data.mount", "disabled")])
-            .with_dir("/etc/systemd/system", vec!["data.mount"])
-            .with_file(
-                "/etc/systemd/system/data.mount",
-                "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
-            )
+        with_vendor_units(
+            listing_mock(&[("other.service", "disabled")]),
+            &["other.service"],
+        )
+        .with_dir_entry("/etc/systemd/system", "data.mount")
+        .with_file(
+            "/etc/systemd/system/data.mount",
+            "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
+        )
     };
     let has_finding = |exec: &MockExecutor| {
         scan(exec)
@@ -1651,7 +1696,7 @@ fn an_enabled_storage_unit_refused_by_the_search_path_is_warned_once() {
     let path = "/etc/systemd/system.control/data.mount";
     let host = || {
         listing_mock(&[("data.mount", "enabled")])
-            .with_dir("/etc/systemd/system", vec!["data.mount"])
+            .with_dir_entry("/etc/systemd/system", "data.mount")
             .with_file(
                 "/etc/systemd/system/data.mount",
                 "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
@@ -1802,7 +1847,7 @@ fn an_unreadable_enabled_storage_unit_is_listed_once() {
     const PATH: &str = "/etc/systemd/system/data.mount";
     let host = || {
         listing_mock(&[("data.mount", "enabled")])
-            .with_dir("/etc/systemd/system", vec!["data.mount"])
+            .with_dir_entry("/etc/systemd/system", "data.mount")
     };
     let (section, _) = scan(&host().with_file(PATH, "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n"));
     assert_eq!(section.mount_findings.len(), 1);
@@ -1840,15 +1885,16 @@ fn kinds_mock(units: &[(&str, &str)], preset: &str) -> MockExecutor {
     }
     listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
     let answer = ExecResult {
-        stdout: listing,
+        stdout: listing.clone(),
         exit_code: 0,
         ..Default::default()
     };
-    MockExecutor::new()
+    let exec = MockExecutor::new()
         .with_command(LIST_EVERY_KIND, answer.clone())
         .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file("/usr/lib/systemd/system-preset/90-default.preset", preset)
-        .with_dir("/etc/systemd/system", vec![])
+        .with_dir("/etc/systemd/system", vec![]);
+    with_enable_links(exec, &listing)
 }
 
 /// The rpm answer for one vendor unit file's owner.
@@ -2263,9 +2309,13 @@ fn with_mask(exec: MockExecutor, unit: &str, form: MaskForm) -> MockExecutor {
 /// Make `/etc` hold only `/etc/systemd/system` with `entries`, so the units
 /// scan and the config walk read the same tree.
 fn with_etc_units(exec: MockExecutor, entries: Vec<&str>) -> MockExecutor {
-    exec.with_dir("/etc", vec!["systemd"])
-        .with_dir("/etc/systemd", vec!["system"])
-        .with_dir(ETC_UNITS, entries)
+    let exec = exec
+        .with_dir("/etc", vec!["systemd"])
+        .with_dir("/etc/systemd", vec!["system"]);
+    // Added to the listing, so the enable links already there stay.
+    entries
+        .into_iter()
+        .fold(exec, |exec, entry| exec.with_dir_entry(ETC_UNITS, entry))
 }
 
 /// The config entries the real config inspector records over `exec`, on a
@@ -2305,9 +2355,13 @@ fn drop_in_paths(section: &UnitSection) -> Vec<&str> {
 const CONTROL: &str = "comment.service";
 const CONTROL_PATH: &str = "/etc/systemd/system/comment.service";
 
+/// A full shadow that opens with a comment: not empty, so not a mask,
+/// and wanted by `multi-user.target` as [`UNIT_FILE`] is.
+const COMMENT_SHADOW: &str = "# replaced\n\n[Install]\nWantedBy=multi-user.target\n";
+
 fn with_control(exec: MockExecutor) -> MockExecutor {
     let exec = exec
-        .with_file(CONTROL_PATH, "# replaced\n\n")
+        .with_file(CONTROL_PATH, COMMENT_SHADOW)
         .with_file(&format!("/usr/lib/systemd/system/{CONTROL}"), UNIT_FILE);
     owner_answer(exec, CONTROL, Some("comment-pkg"))
 }
@@ -2320,7 +2374,7 @@ fn assert_control_is_a_full_shadow(section: &UnitSection, config: &[String], cas
         .unwrap_or_else(|| panic!("{case}: the comment-only file is a full shadow row"));
     assert_eq!(row.unit, CONTROL, "{case}");
     assert_eq!(row.shadow_type, Some(ShadowType::FullShadow), "{case}");
-    assert_eq!(row.content, "# replaced\n\n", "{case}");
+    assert_eq!(row.content, COMMENT_SHADOW, "{case}");
     assert!(row.disposition.is_included(), "{case}");
     assert_eq!(
         fragment_of(section, CONTROL),
@@ -2896,6 +2950,10 @@ fn mount_rows(section: &UnitSection) -> Vec<MountRow> {
 /// A mount source holding a credential, which no field may copy.
 const MOUNT_SOURCE: &str = "What=https://files.example/volume?token=collector-source-1\n";
 
+/// The `[Install]` section of an enabled unit in these tests, which
+/// [`with_enable_link`] links.
+const WANTED: &str = "\n[Install]\nWantedBy=multi-user.target\n";
+
 fn mount_unit(section: &str, lines: &str) -> String {
     format!("[Unit]\nDescription=admin mount\n\n[{section}]\n{MOUNT_SOURCE}{lines}")
 }
@@ -2948,7 +3006,7 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
         ),
         (
             "srv-shadow.mount",
-            mount_unit("Mount", "Where=/srv/shadow \r\n"),
+            mount_unit("Mount", &format!("Where=/srv/shadow \r\n{WANTED}")),
         ),
         (
             "mnt-auto.automount",
@@ -2977,13 +3035,19 @@ fn mount_findings_come_from_every_source_section_6_5_names() {
             "srv-shadow.mount",
             mount_unit("Mount", "Where=/srv/vendor\n"),
         ),
-        ("opt-on.mount", mount_unit("Mount", "Where=/opt/on\n")),
+        (
+            "opt-on.mount",
+            mount_unit("Mount", &format!("Where=/opt/on\n{WANTED}")),
+        ),
         ("opt-off.mount", mount_unit("Mount", "Where=/opt/off\n")),
         (
             "opt-masked.mount",
             mount_unit("Mount", "Where=/opt/masked\nOptions=nofail\n"),
         ),
-        ("tmp.mount", mount_unit("Mount", "Where=/tmp\n")),
+        (
+            "tmp.mount",
+            mount_unit("Mount", &format!("Where=/tmp\n{WANTED}")),
+        ),
     ] {
         exec = exec.with_file(&format!("/usr/lib/systemd/system/{name}"), &content);
     }
@@ -3174,4 +3238,450 @@ fn unreadable_mount_unit_file_degrades_naming_it() {
         }
         other => panic!("an unreadable mount unit file degrades the scan: {other:?}"),
     }
+}
+
+// ── Install state from the links (§ 7.3, T22, T24's reset states) ──
+
+/// The administrator's unit directory, for the link tests below.
+const ETC: &str = "/etc/systemd/system";
+/// The vendor unit directory.
+const VENDOR: &str = "/usr/lib/systemd/system";
+/// A unit section wanted by `multi-user.target`.
+const WANTS_MULTI_USER: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+
+/// A host whose listing names `units` (name, state) under `preset`, with
+/// no link anywhere until a test adds one, so systemctl's word and the
+/// links can disagree as they do on a real host.
+fn unlinked_host(units: &[(&str, &str)], preset: &str) -> MockExecutor {
+    let mut listing =
+        String::from("UNIT FILE                                  STATE           PRESET\n");
+    for (unit, state) in units {
+        listing.push_str(&format!("{unit} {state} disabled\n"));
+    }
+    listing.push_str(&format!("\n{} unit files listed.\n", units.len()));
+    MockExecutor::new()
+        .with_command(
+            LIST_EVERY_KIND,
+            ExecResult {
+                stdout: listing,
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", preset)
+        .with_dir(ETC, vec![])
+}
+
+/// `exec` with a link to `unit` in the `<parent><suffix>` directory under
+/// `root`, added to what that directory already lists.
+fn with_link_in(exec: MockExecutor, root: &str, parent_dir: &str, unit: &str) -> MockExecutor {
+    let dir = format!("{root}/{parent_dir}");
+    exec.with_dir_entry(root, parent_dir)
+        .with_dir_entry(&dir, unit)
+        .with_link(&format!("{dir}/{unit}"), &format!("{VENDOR}/{unit}"))
+}
+
+/// The inventory entry for `unit`: its state and preset.
+fn entry_of(section: &UnitSection, unit: &str) -> Option<(UnitState, Option<PresetDefault>)> {
+    section
+        .inventory
+        .iter()
+        .find(|e| e.unit.as_str() == unit)
+        .map(|e| (e.state, e.preset))
+}
+
+/// The state change for `unit`, as its state and preset.
+fn change_of(section: &UnitSection, unit: &str) -> Option<(UnitState, Option<PresetDefault>)> {
+    section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == unit)
+        .map(|c| (c.current_state(), c.default_state))
+}
+
+/// T22's state assertions. `backup.service` wants `multi-user.target` and
+/// systemctl reports it `enabled` in every case; the links decide.
+#[test]
+fn t22_the_install_state_is_read_from_the_links() {
+    use PresetDefault::{Disable, Enable};
+    use UnitState::{Disabled, Enabled};
+    let two_targets = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target graphical.target\n";
+    type Links<'a> = &'a [(&'a str, &'a str)];
+    // (case, unit file, links as (root, directory), preset, inventory, state change)
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        Links<'a>,
+        &'a str,
+        Option<(UnitState, Option<PresetDefault>)>,
+        Option<(UnitState, Option<PresetDefault>)>,
+    );
+    let cases: &[Case] = &[
+        (
+            "only a rescue.target.wants link, disable preset",
+            WANTS_MULTI_USER,
+            &[(ETC, "rescue.target.wants")],
+            "disable *\n",
+            Some((Disabled, Some(Disable))),
+            None,
+        ),
+        (
+            "only a rescue.target.wants link, enable preset",
+            WANTS_MULTI_USER,
+            &[(ETC, "rescue.target.wants")],
+            "enable backup.service\n",
+            Some((Disabled, Some(Enable))),
+            Some((Disabled, Some(Enable))),
+        ),
+        (
+            "both links",
+            WANTS_MULTI_USER,
+            &[
+                (ETC, "rescue.target.wants"),
+                (ETC, "multi-user.target.wants"),
+            ],
+            "disable *\n",
+            Some((Enabled, Some(Disable))),
+            Some((Enabled, Some(Disable))),
+        ),
+        (
+            "two WantedBy= values and one link",
+            two_targets,
+            &[(ETC, "multi-user.target.wants")],
+            "disable *\n",
+            None,
+            None,
+        ),
+        (
+            "two WantedBy= values, the second link shipped under /usr/lib",
+            two_targets,
+            &[
+                (ETC, "multi-user.target.wants"),
+                (VENDOR, "graphical.target.wants"),
+            ],
+            "disable *\n",
+            Some((Enabled, Some(Disable))),
+            Some((Enabled, Some(Disable))),
+        ),
+        (
+            "only vendor links",
+            WANTS_MULTI_USER,
+            &[(VENDOR, "multi-user.target.wants")],
+            "disable *\n",
+            Some((Disabled, Some(Disable))),
+            None,
+        ),
+        (
+            "only vendor links, enable preset",
+            WANTS_MULTI_USER,
+            &[(VENDOR, "multi-user.target.wants")],
+            "enable backup.service\n",
+            Some((Disabled, Some(Enable))),
+            Some((Disabled, Some(Enable))),
+        ),
+        (
+            "no [Install] and a hand-made link",
+            "[Service]\nExecStart=/bin/true\n",
+            &[(ETC, "multi-user.target.wants")],
+            "disable *\n",
+            None,
+            None,
+        ),
+        (
+            "control: the expected link alone",
+            WANTS_MULTI_USER,
+            &[(ETC, "multi-user.target.wants")],
+            "disable *\n",
+            Some((Enabled, Some(Disable))),
+            Some((Enabled, Some(Disable))),
+        ),
+    ];
+    for (case, unit_file, links, preset, inventory, change) in cases {
+        let mut exec = unlinked_host(&[("backup.service", "enabled")], preset)
+            .with_file(&format!("{VENDOR}/backup.service"), unit_file);
+        for (root, dir) in *links {
+            exec = with_link_in(exec, root, dir, "backup.service");
+        }
+        let (section, warnings) = scan(&exec);
+        assert!(warnings.is_empty(), "{case}: {warnings:?}");
+        assert_eq!(entry_of(&section, "backup.service"), *inventory, "{case}");
+        assert_eq!(change_of(&section, "backup.service"), *change, "{case}");
+        if inventory.is_none() {
+            assert!(
+                section.inventory.is_empty(),
+                "{case}: {:?}",
+                section.inventory
+            );
+        }
+    }
+}
+
+/// T22: a unit whose `[Install]` holds only `Also=` has no state of its
+/// own, so no state change and no inventory entry, though a link names
+/// it. Control: the same `indirect` unit with a `WantedBy=` its link
+/// matches is read from that link and is `Enabled`.
+#[test]
+fn t22_an_also_only_unit_has_no_install_state() {
+    let host = |unit_file: &str| {
+        with_link_in(
+            unlinked_host(&[("kcm.service", "indirect")], "disable *\n")
+                .with_file(&format!("{VENDOR}/kcm.service"), unit_file),
+            ETC,
+            "multi-user.target.wants",
+            "kcm.service",
+        )
+    };
+    let (control, _) = scan(&host(WANTS_MULTI_USER));
+    assert_eq!(
+        entry_of(&control, "kcm.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+    );
+
+    let (section, warnings) = scan(&host(
+        "[Service]\nExecStart=/bin/true\n\n[Install]\nAlso=kcm.socket\n",
+    ));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(entry_of(&section, "kcm.service"), None);
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+}
+
+/// T22: `remote-cryptsetup.target`, which a package also links under
+/// `/usr/lib`, is `Disabled` against its `enable` preset on a stock host:
+/// an inventory entry and no state change. Control: another unit in the
+/// same state is a `Disabled` state change.
+#[test]
+fn t22_stock_state_read_from_the_links_is_no_state_change() {
+    let target = "[Unit]\nDescription=x\n\n[Install]\nWantedBy=remote-fs.target\n";
+    let host = |unit: &str| {
+        with_link_in(
+            unlinked_host(&[(unit, "disabled")], &format!("enable {unit}\n"))
+                .with_file(&format!("{VENDOR}/{unit}"), target),
+            VENDOR,
+            "remote-fs.target.wants",
+            unit,
+        )
+    };
+    let (section, warnings) = scan(&host("remote-cryptsetup.target"));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        entry_of(&section, "remote-cryptsetup.target"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+
+    let (control, _) = scan(&host("remote-other.target"));
+    assert_eq!(
+        change_of(&control, "remote-other.target"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+}
+
+/// § 7.3's `Undetermined` rows, for a vendor unit with `UpheldBy=` under
+/// an `enable` preset: with no link it is `Disabled`, a state change;
+/// with a link under `/etc` it has no install state; assigning `Also=`
+/// with no link it has none either.
+#[test]
+fn undetermined_install_states_follow_the_links() {
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nUpheldBy=multi-user.target\n";
+    let upheld_also = "[Service]\nExecStart=/bin/true\n\n[Install]\nUpheldBy=multi-user.target\nAlso=helper.service\n";
+    let host = |unit_file: &str| {
+        unlinked_host(&[("watch.service", "enabled")], "enable watch.service\n")
+            .with_file(&format!("{VENDOR}/watch.service"), unit_file)
+    };
+
+    let (no_link, warnings) = scan(&host(upheld));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        change_of(&no_link, "watch.service"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+    assert_eq!(
+        entry_of(&no_link, "watch.service"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+
+    let (linked, _) = scan(&with_link_in(
+        host(upheld),
+        ETC,
+        "multi-user.target.upholds",
+        "watch.service",
+    ));
+    assert_eq!(entry_of(&linked, "watch.service"), None);
+    assert!(
+        linked.state_changes.is_empty(),
+        "{:?}",
+        linked.state_changes
+    );
+
+    let (also, _) = scan(&host(upheld_also));
+    assert_eq!(entry_of(&also, "watch.service"), None);
+    assert!(also.state_changes.is_empty(), "{:?}", also.state_changes);
+}
+
+/// T24, on the expected links: a vendor drop-in holding
+/// `WantedBy=multi-user.target` in the type-wide `service.d` or the
+/// dash-prefix `a-.service.d` makes no expected link, so `a-b.service`,
+/// with no `[Install]` of its own and the `multi-user.target.wants` link,
+/// has no install state. Control: the same drop-in in its own `.d` makes
+/// that link expected, and the unit is `Enabled`.
+#[test]
+fn t24_a_type_wide_or_dash_prefix_drop_in_makes_no_expected_link() {
+    let host = |dir: &str| {
+        let exec = unlinked_host(&[("a-b.service", "enabled")], "disable *\n").with_file(
+            &format!("{VENDOR}/a-b.service"),
+            "[Service]\nExecStart=/bin/true\n",
+        );
+        let exec = with_drop_in(
+            exec,
+            &format!("{VENDOR}/{dir}"),
+            "10-install.conf",
+            INSTALL_DROP_IN,
+        );
+        with_link_in(exec, ETC, "multi-user.target.wants", "a-b.service")
+    };
+    let (control, _) = scan(&host("a-b.service.d"));
+    assert_eq!(
+        entry_of(&control, "a-b.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+    );
+    for dir in ["service.d", "a-.service.d"] {
+        let (section, warnings) = scan(&host(dir));
+        assert!(warnings.is_empty(), "{dir}: {warnings:?}");
+        assert_eq!(entry_of(&section, "a-b.service"), None, "{dir}");
+        assert!(section.state_changes.is_empty(), "{dir}");
+    }
+}
+
+/// T24's reset install states, each with `WantedBy=multi-user.target` in
+/// the local unit `app.service`:
+/// - an `/etc` drop-in holding only `WantedBy=` leaves nothing expected,
+///   so with no link the unit has no install state and no inventory
+///   entry, asserted after the drop-in is shown collected. Control:
+///   without the drop-in, the link makes it `Enabled`.
+/// - `WantedBy=` then `WantedBy=graphical.target` in one drop-in expects
+///   `graphical.target.wants` only: a link there is `Enabled`, and the
+///   `multi-user.target.wants` link alone is `Disabled`.
+/// - with `Alias=x-alias.service` in the unit, an empty `Alias=` drops the
+///   alias from the expected links, so the wants link alone is `Enabled`;
+///   without the reset the missing alias leaves no install state.
+#[test]
+fn t24_reset_install_states() {
+    let drop_in_dir = format!("{ETC}/app.service.d");
+    let local = |unit_file: &str| {
+        unlinked_host(&[("app.service", "enabled")], "disable *\n")
+            .with_dir_entry(ETC, "app.service")
+            .with_file(&format!("{ETC}/app.service"), unit_file)
+    };
+    let with_reset = |exec: MockExecutor, text: &str| {
+        with_drop_in(
+            exec.with_dir_entry(ETC, "app.service.d"),
+            &drop_in_dir,
+            "10-reset.conf",
+            text,
+        )
+    };
+    let enabled = Some((UnitState::Enabled, Some(PresetDefault::Disable)));
+    let disabled = Some((UnitState::Disabled, Some(PresetDefault::Disable)));
+
+    let (control, _) = scan(&with_link_in(
+        local(WANTS_MULTI_USER),
+        ETC,
+        "multi-user.target.wants",
+        "app.service",
+    ));
+    assert_eq!(entry_of(&control, "app.service"), enabled);
+
+    let (reset, warnings) = scan(&with_reset(
+        local(WANTS_MULTI_USER),
+        "[Install]\nWantedBy=\n",
+    ));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        drop_in_paths(&reset).contains(&format!("{drop_in_dir}/10-reset.conf").as_str()),
+        "the reset drop-in is collected: {:?}",
+        drop_in_paths(&reset)
+    );
+    assert_eq!(entry_of(&reset, "app.service"), None);
+    assert!(reset.state_changes.is_empty(), "{:?}", reset.state_changes);
+
+    let reset_then_add = "[Install]\nWantedBy=\nWantedBy=graphical.target\n";
+    for (dir, expected) in [
+        ("graphical.target.wants", enabled),
+        ("multi-user.target.wants", disabled),
+    ] {
+        let exec = with_reset(local(WANTS_MULTI_USER), reset_then_add);
+        let (section, _) = scan(&with_link_in(exec, ETC, dir, "app.service"));
+        assert_eq!(entry_of(&section, "app.service"), expected, "{dir}");
+    }
+
+    let aliased = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nAlias=x-alias.service\n";
+    let wants_link =
+        |exec: MockExecutor| with_link_in(exec, ETC, "multi-user.target.wants", "app.service");
+    let (no_reset, _) = scan(&wants_link(local(aliased)));
+    assert_eq!(entry_of(&no_reset, "app.service"), None);
+    let (alias_reset, _) = scan(&wants_link(with_reset(
+        local(aliased),
+        "[Install]\nAlias=\n",
+    )));
+    assert_eq!(entry_of(&alias_reset, "app.service"), enabled);
+}
+
+/// T39's warning half through the scan: a preset line whose verb is
+/// neither `enable` nor `disable`, the first match for `app.service`,
+/// leaves it in the inventory with no preset and no state change, and
+/// one warning names the line, its file and the unit. Control: without
+/// that line the `disable` rule after it gives an `Enabled` state change.
+#[test]
+fn t39_an_unknown_preset_line_stops_the_lookup_with_a_warning() {
+    let host = |preset: &str| {
+        with_link_in(
+            unlinked_host(&[("app.service", "enabled")], preset)
+                .with_file(&format!("{VENDOR}/app.service"), WANTS_MULTI_USER),
+            ETC,
+            "multi-user.target.wants",
+            "app.service",
+        )
+    };
+    let (control, _) = scan(&host("disable app.service\n"));
+    assert_eq!(
+        change_of(&control, "app.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Disable)))
+    );
+
+    let exec = host("# a comment\nfrobnicate app.service\ndisable app.service\n");
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        entry_of(&section, "app.service"),
+        Some((UnitState::Enabled, None))
+    );
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+    let warnings = scan_warnings(&exec);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let warning = &warnings[0];
+    let file = "/usr/lib/systemd/system-preset/90-default.preset";
+    assert_eq!(warning.extra["file"], serde_json::json!(file));
+    assert_eq!(warning.extra["line"], serde_json::json!(2));
+    assert_eq!(warning.extra["units"], serde_json::json!(["app.service"]));
+    assert!(
+        warning.message.contains(file)
+            && warning.message.contains("line 2")
+            && warning.message.contains("app.service")
+            && warning.message.contains("not compared with a preset"),
+        "{}",
+        warning.message
+    );
 }

@@ -86,6 +86,13 @@ const TARBALL_PREFIX: &str = "unit-host";
 /// link's own path, what a real read there returns: the final target's
 /// content, or `""` for `/dev/null`.
 ///
+/// A unit listed `enabled` has the links `systemctl enable` makes for it,
+/// read from the `WantedBy=`, `RequiredBy=` and `Alias=` lines of its unit
+/// file and of the drop-ins in its own `.d` under both unit directories,
+/// unless the host already has a link to it under `/etc/systemd/system`
+/// that a test placed itself. A unit whose files name no link gets none,
+/// so the scan reads it as having no install state.
+///
 /// Ownership has one source: [`vendor_unit`](UnitHost::vendor_unit) with an
 /// owner records the file in the RPM database the RPM inspector reads, and
 /// the units inspector's `rpm -qf` for that file answers with the same
@@ -204,7 +211,8 @@ impl UnitHost {
     }
 
     /// The executor the inspectors run over.
-    pub fn build(self) -> MockExecutor {
+    pub fn build(mut self) -> MockExecutor {
+        self.add_enable_links();
         let mut ownership = String::from("@@bash\n/usr/bin/bash\n");
         for (package, paths) in &self.rpm_owned {
             ownership.push_str(&format!("@@{package}\n"));
@@ -294,6 +302,108 @@ impl UnitHost {
             mock = mock.with_file(&path, &content);
         }
         mock
+    }
+
+    /// The links `systemctl enable` makes for every unit listed `enabled`
+    /// that has no link under `/etc/systemd/system` yet.
+    fn add_enable_links(&mut self) {
+        let enabled: Vec<String> = self
+            .units
+            .iter()
+            .filter(|(_, state)| state == "enabled")
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in enabled {
+            if self.has_admin_link(&name) {
+                continue;
+            }
+            for (dir, parent) in self.install_links(&name) {
+                let link = match dir {
+                    Some(suffix) => format!("{ETC_UNIT_DIR}/{parent}{suffix}/{name}"),
+                    None => format!("{ETC_UNIT_DIR}/{parent}"),
+                };
+                let target = self.unit_file_path(&name);
+                self.list(&link);
+                self.links.insert(link, target);
+            }
+        }
+    }
+
+    /// Whether a link under `/etc/systemd/system` names `name`: one in a
+    /// dependency directory, or an alias to it.
+    fn has_admin_link(&self, name: &str) -> bool {
+        self.links.iter().any(|(path, target)| {
+            let Some(rest) = path.strip_prefix(&format!("{ETC_UNIT_DIR}/")) else {
+                return false;
+            };
+            match rest.split_once('/') {
+                Some((_, link)) => link == name,
+                None => target.rsplit('/').next() == Some(name) && rest != name,
+            }
+        })
+    }
+
+    /// The unit file `systemctl enable` links `name` to.
+    fn unit_file_path(&self, name: &str) -> String {
+        let etc = format!("{ETC_UNIT_DIR}/{name}");
+        if self.files.contains_key(&etc) {
+            etc
+        } else {
+            format!("{VENDOR_UNIT_DIR}/{name}")
+        }
+    }
+
+    /// The links `enable` makes for `name`, as (dependency directory
+    /// suffix or `None` for an alias, parent or alias name), read from its
+    /// unit file and then its own `.d` drop-ins in file-name order, with
+    /// an empty `WantedBy=` or `Alias=` clearing the values before it.
+    fn install_links(&self, name: &str) -> Vec<(Option<&'static str>, String)> {
+        let mut texts = vec![
+            self.files
+                .get(&self.unit_file_path(name))
+                .cloned()
+                .unwrap_or_default(),
+        ];
+        let mut drop_ins: BTreeMap<String, String> = BTreeMap::new();
+        for root in [VENDOR_UNIT_DIR, ETC_UNIT_DIR] {
+            let prefix = format!("{root}/{name}.d/");
+            for (path, text) in &self.files {
+                if let Some(file) = path.strip_prefix(&prefix) {
+                    drop_ins.insert(file.to_owned(), text.clone());
+                }
+            }
+        }
+        texts.extend(drop_ins.into_values());
+        let (mut wanted, mut required, mut aliases) = (Vec::new(), Vec::new(), Vec::new());
+        for text in &texts {
+            let mut in_install = false;
+            // systemd ends a line at a lone CR as well as at LF.
+            for line in text.split(['\n', '\r']).map(str::trim) {
+                if line.starts_with('[') {
+                    in_install = line == "[Install]";
+                    continue;
+                }
+                let Some((key, value)) = line.split_once('=').filter(|_| in_install) else {
+                    continue;
+                };
+                let list = match key.trim() {
+                    "WantedBy" => &mut wanted,
+                    "RequiredBy" => &mut required,
+                    "Alias" => &mut aliases,
+                    _ => continue,
+                };
+                if value.trim().is_empty() {
+                    list.clear();
+                }
+                list.extend(value.split_whitespace().map(str::to_owned));
+            }
+        }
+        let wants = wanted.into_iter().map(|p| (Some(".wants"), p));
+        let requires = required.into_iter().map(|p| (Some(".requires"), p));
+        wants
+            .chain(requires)
+            .chain(aliases.into_iter().map(|a| (None, a)))
+            .collect()
     }
 
     /// The preset column systemd prints for `name`: the first matching
