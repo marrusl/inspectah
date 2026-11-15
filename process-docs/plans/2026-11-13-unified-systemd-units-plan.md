@@ -8,7 +8,7 @@
 
 **Tech stack:** Rust, serde, insta, proptest, axum, React and TypeScript with Vitest. One new dev-dependency: `proptest` in `inspectah-core`, for T2's property test (Task 2.1), which the spec requires.
 
-**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `3cafbc9c`. The spec is the contract. Section numbers (§) and test ids (T1 to T34) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
+**Spec:** `process-docs/specs/proposed/2026-11-13-unified-systemd-units.md` at `4fb53d9b`. The spec is the contract. Section numbers (§) and test ids (T1 to T38) are the spec's; run ids R1 to R5 are § 13's. Source line numbers below were read at `205181a6`, where no source file differs from `70aa8996`, the commit the spec cites. The symbol name is the identifier; the line is a convenience.
 
 **Branch:** `feat/unified-systemd-units`, cut from `main` by Task 1.1. Phases 1 to 5 land on it and it merges to `main` once, after phase 5 (§ 15).
 
@@ -422,7 +422,7 @@ Before Task 2.1: merge `main` into the branch and run the gate.
 
 ## Phase 3: one control per fact (size M; 7 tasks)
 
-Spec: § 8, § 10.2 "What the plan takes" item 3 and the tuned decision, § 11.1 `scheduled_tasks` row, § 9.1 "Aggregate timer control". Tests T19 to T21.
+Spec: § 8, § 10.2 "What the plan takes" item 3 and the tuned decision, § 11.1 `scheduled_tasks` row, § 9.1 "Aggregate timer control". Tests T19 to T21. T35 to T38 are built by the four phase 3 fixes listed after review gate 3.
 
 Before Task 3.1: merge `main` into the branch and run the gate.
 
@@ -437,6 +437,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 **Acceptance:** T19 passes; `SystemdTimer` has no `disposition`, `locked`, `timer_content` or `service_content`.
 
+**Note, added after this task was done:** removing the second writer lets an operator exclude a local timer's service and keep the timer. The spec now records each timer's trigger (`SystemdTimer.trigger`, § 8) and omits the timer's `enable` when that trigger is local and not staged (§ 10.2 rule 5). Phase 3 fix 3 adds both.
+
 ### Task 3.2: Remove the timer operation; link scheduled rows to their unit (Rust lane, S)
 
 **Spec:** § 8 last bullet (refine half), § 11.1 `scheduled_tasks` timers (`unit`, `unit_row`), § 11.1 Operations "`ItemId::SystemdTimer` is removed"; T20 refine half.
@@ -445,6 +447,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 - [ ] **Step 1: Failing tests first:** a request naming `SystemdTimer` is rejected at deserialization; a scheduled timer row has `unit` and `unit_row` and no include flag; the timer's `unit_states` row keeps its flag.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `refactor(refine): remove the timer toggle that applied nothing`.
+
+**Note, added after this task was done:** the same validation arm still accepts `SetInclude` for `GeneratedTimer`, `CronJob` and `AtJob` and applies nothing. The spec now requires each to apply or be refused by name (§ 8). Phase 3 fix 1 does it.
 
 ### Task 3.3: Timer control gone from the UI and aggregate view (frontend lane, S)
 
@@ -465,6 +469,8 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 - [ ] **Step 1: Failing tests first:** the flatpak enable is quoted and follows its own `COPY`; a generated cron timer and service named for a collected, enabled vendor timer, through the scan export and the refine export: the request is declined with a FIXME, neither generated file is in the staged tree, and the vendor timer's enable is carried against the package's unit; the declined request shows on the scheduled row.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `feat(pipeline): plan generated and flatpak units like collected ones`.
+
+**Note, added after this task was done:** this task's collision set holds the units that have a row. The spec now counts inventory entries as well (§ 10.2 "What the plan takes" item 3). Phase 3 fix 2 widens the set and adds the rename advice.
 
 ### Task 3.5: The tuned enable goes; every line is planned (Rust lane, S)
 
@@ -499,6 +505,17 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 **Review gate 3:** implementation review before Task 4.0. Focus: no second writer remains for any unit file; generated-name collisions through both export routes.
 
+### Phase 3 fixes, after review gate 3 (Rust lane)
+
+Four rules the spec gained once the phase's tasks were built. Each is one test-first fix on the branch before phase 3 closes, with the usual gate, and is not a numbered task.
+
+- **Fix 1: the scheduled controls apply (§ 8, § 11.1; T35).** `crates/refine/src/session.rs` (the validation arm and the apply arms), the scheduled stager and Containerfile lines that read the generated-timer row's disposition. Failing test first, T35: `SetInclude(false)` on a generated-timer row removes its timer, its service and its `enable` through the refine export, and `true` restores them; the same operation on a cron-job and an at-job row changes the export or returns an error naming the row; none returns success with the export unchanged.
+- **Fix 2: an inventory name blocks a generated pair (§ 10.2 item 3; T36).** The collision set in `staged_writes` and the FIXME text in `crates/pipeline/src/render/unit_plan.rs`. Failing test first, T36: a package timer at its preset, in the inventory only, and a generated pair of its name; then only the generated service's name in the inventory; then the control with no collision.
+- **Fix 3: a timer needs its trigger (§ 8, § 10.2 rule 5, § 6.7 row; T37).** `crates/core/src/types/scheduled.rs` (`SystemdTimer.trigger`), `crates/collect/src/inspectors/scheduled.rs` (record `Unit=`, else the same-named service), `crates/pipeline/src/render/unit_plan.rs` (`OmissionReason::TimerTriggerNotStaged`, checked after the timer's own file and package). Failing test first, T37 in full, the carried cases included. The systemd behavior this rests on is read from source; Task 4.0 measures it.
+- **Fix 4: an unmanaged file under `/etc/systemd/system` is refused (§ 10.2 "No other writer"; T38).** `crates/pipeline/src/render/unmanaged.rs` and the unmanaged extraction step, tested by `Destination`; `WithheldWhy::UnmanagedUnitPath` and its text in `crates/pipeline/src/render/configtree.rs`; the refine projection's `withheld`. Failing test first, T38, with the `/opt` control and the zero-length file at a masked unit's path.
+
+The frontend lane needs no change for these: the reasons reach rows through the existing `declined` and `withheld` projections. The changelog lines are Task 3.7's, or a follow-up to it if it is already done.
+
 ---
 
 ## Phase 4: the `/etc/systemd/system` scan (size L, above § 15's estimate; 17 tasks)
@@ -512,6 +529,8 @@ Spec: § 6.3 (`also`, `install_drop_ins`, `vendor_drop_ins`), § 6.6, § 7.1 sou
 **Needs:** reverted `rhel9` and `rhel10` VMs, no inspectah build, no driftify profile: every case is a unit planted by hand. The `systemd-cryptsetup@` and `systemd-fsck@` case needs a host with an encrypted volume or a separate filesystem; if the VMs have neither, record that and do not fabricate one.
 
 - [ ] Run each R5 question as § 13 states it, on both releases. Record under a dated Measured subsection. Revert both VMs. Commit `docs(skills): record the small systemd facts phase 4 relies on`.
+
+- [ ] Include the two cases § 13 R5 gained with phase 3's fixes: a timer enabled in an image that lacks its service file (does the timer start, and what does the journal say), and `systemctl is-enabled tuned.service` in each bootc base after `dnf install tuned`. If the timer does start, or the base does not enable `tuned.service` by preset, tell the project owner before phase 4 goes on: the first undercuts `TimerTriggerNotStaged` (§ 10.2 rule 5) and the second the removal of the kernel section's enable (§ 10.2).
 
 - [ ] Include the sequence § 7.4's additive row rests on, on both bases: in an image where the package install has already linked a preset-enabled unit, `COPY` an `/etc` drop-in that adds `WantedBy=extra.target`, then `systemctl enable`; and the same with a full shadow that adds a target. Record the links before and after.
 
@@ -781,7 +800,7 @@ Before Task 5.1: merge `main` into the branch and run the gate.
 |---|---|---|---|
 | 1 the rename | 7 (6 / 1 / 0) | M | M |
 | 2 every kind | 17 (13 / 1 / 2 runs; 1 close) | L, upper end | XL: about one and a half L |
-| 3 one control per fact | 7 (5 / 2 / 0) | M | M |
+| 3 one control per fact | 7 (5 / 2 / 0), plus four fixes after its review gate | M | M, plus the fixes |
 | 4 the `/etc/systemd/system` scan | 17 (15 / 1 / 1 run) | L, upper end | L+: about a half over L, plus two small follow-on tasks |
 | 5 carried instances | 7 (4 / 1 / 1 run; 1 merge) | S to M | M |
 
@@ -833,6 +852,10 @@ Each spec section that states a requirement, and the task that implements it.
 | § 7.7 `*.upholds/*` exclusion | 4.5 |
 | § 7.8 owning package | 2.2 |
 | § 8 scheduled tasks | 3.1, 3.2, 3.3; generated units 3.4, 3.6 |
+| § 8 the scheduled controls apply; § 11.1 operations on scheduled rows | Phase 3 fix 1 |
+| § 8 a carried timer needs its trigger; § 10.2 rule 5 timer trigger; § 6.7 `SystemdTimer.trigger` | Phase 3 fix 3 |
+| § 10.2 item 3, a collected unit includes inventory names | Phase 3 fix 2 |
+| § 10.2 no other writer under `/etc/systemd/system` | Phase 3 fix 4 |
 | § 9 schema, one bump, refusal test | 1.2; re-run 5.5 |
 | § 9.1 string consumers | 1.2, 1.5, 1.6, 1.7; aggregate timer control 3.3 |
 | § 10.1 lines, quoting, order within section | 2.7, 2.9 |
@@ -870,7 +893,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 13 R2 (six observations), R4 | 5.6 |
 | § 13 R3 settled results | 2.17 |
 | § 13 R3 open routes (image-builder disk image, installer ISO, `ostreecontainer` kickstart) | 5.6 |
-| § 13 R5, the additive sequence included | 4.0 |
+| § 13 R5, the additive sequence, the timer without its service and the `tuned.service` preset included | 4.0 |
 | § 13 unrecorded measurements | 2.15 |
 | § 14 backlog items | Backlog items section; closures named in 2.15, 3.7, 4.12, 5.6 |
 | § 14 overlap contract text | 4.12 |
@@ -885,6 +908,7 @@ Each spec section that states a requirement, and the task that implements it.
 | § 17 cost: a changed `[Install]` is carried only when it adds | 4.5b (the two advisory texts) |
 | § 17 limit: rendered unit state depends on the image's machine-id | 4.0a (the README sentence); what a later layer does is outside the product |
 | § 17 cost: a mask is dropped with its package | 4.0b (the `# Omitted:` line is its text) |
+| § 17 cost: four rules that come with the single writer | Phase 3 fixes 1 to 4 (each rule's FIXME, error or `# Omitted:` line is its text) |
 
 ### Tests
 
@@ -926,3 +950,7 @@ Each test, and each lettered case, in the task that carries it. Every task liste
 | T32 | render and the excluded-file case 4.5b; rows 4.11 |
 | T33 | 4.0a |
 | T34 | 4.0b |
+| T35 | Phase 3 fix 1 |
+| T36 | Phase 3 fix 2 |
+| T37 | Phase 3 fix 3 |
+| T38 | Phase 3 fix 4 |
