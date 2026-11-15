@@ -39,6 +39,10 @@ pub(super) const UNREAD_SEARCH_PATH: [(&str, DropInRoot); 9] = [
 /// The suffix of a drop-in file systemd reads.
 const DROP_IN_FILE_SUFFIX: &str = ".conf";
 
+/// The first character of a hidden file name, which systemd's drop-in
+/// listing skips.
+const HIDDEN_FILE_PREFIX: char = '.';
+
 /// A link to this path masks the unit.
 const DEV_NULL: &str = "/dev/null";
 
@@ -243,11 +247,14 @@ fn search_path_change(
 }
 
 /// The `.conf` file names in the directory `path`; none when it does not
-/// exist.
+/// exist. A name starting with `.` is skipped: systemd's drop-in listing
+/// (`conf_files_list`, through `dirent_is_file_with_suffix`) ignores hidden
+/// files, so an editor's `.#override.conf` lock file is never read.
 pub(super) fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
     match exec.read_dir(Path::new(path)) {
         Ok(entries) => Ok(entries
             .into_iter()
+            .filter(|entry| !entry.starts_with(HIDDEN_FILE_PREFIX))
             .filter(|entry| entry.ends_with(DROP_IN_FILE_SUFFIX))
             .collect()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),

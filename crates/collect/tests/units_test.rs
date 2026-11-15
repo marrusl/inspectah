@@ -1757,6 +1757,74 @@ fn a_file_the_search_path_does_not_load_in_place_changes_nothing() {
     }
 }
 
+/// systemd skips hidden files when it lists drop-ins, so a vendor
+/// `.hidden.conf` is not a vendor drop-in name and an `/etc`
+/// `.#override.conf` holding `[Install]` (an editor's lock file) is not an
+/// install file. Control: the same files without the leading `.` are
+/// recorded.
+#[test]
+fn hidden_drop_in_names_are_not_recorded() {
+    let host = |vendor: &str, etc: &str| {
+        let vendor_dir = "/usr/lib/systemd/system/app.service.d";
+        let etc_dir = "/etc/systemd/system/app.service.d";
+        vendor_app()
+            .with_dir(vendor_dir, vec![vendor])
+            .with_file(&format!("{vendor_dir}/{vendor}"), "[Service]\nNice=5\n")
+            .with_dir(etc_dir, vec![etc])
+            .with_file(&format!("{etc_dir}/{etc}"), INSTALL_DROP_IN)
+    };
+    let recorded = |exec: &MockExecutor| {
+        let (section, _) = scan(exec);
+        let change = section
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == "app.service")
+            .expect("app.service is a state change")
+            .clone();
+        (change.vendor_drop_ins, change.install_drop_ins)
+    };
+
+    let (vendor, install) = recorded(&host("vendor.conf", "override.conf"));
+    assert_eq!(vendor, ["vendor.conf"]);
+    assert_eq!(install, ["/etc/systemd/system/app.service.d/override.conf"]);
+
+    let (vendor, install) = recorded(&host(".hidden.conf", ".#override.conf"));
+    assert!(vendor.is_empty(), "{vendor:?}");
+    assert!(install.is_empty(), "{install:?}");
+}
+
+/// An enabled `/etc` storage unit whose file cannot be read is a
+/// candidate and a file the storage pass lists; the read failure is
+/// listed once in the degraded reason. Control: the readable file is a
+/// finding and the scan is not degraded.
+#[test]
+fn an_unreadable_enabled_storage_unit_is_listed_once() {
+    const PATH: &str = "/etc/systemd/system/data.mount";
+    let host = || {
+        listing_mock(&[("data.mount", "enabled")])
+            .with_dir("/etc/systemd/system", vec!["data.mount"])
+    };
+    let (section, _) = scan(&host().with_file(PATH, "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n"));
+    assert_eq!(section.mount_findings.len(), 1);
+
+    let unreadable = host().with_file_error(PATH, std::io::ErrorKind::PermissionDenied);
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &unreadable,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    match UnitsInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, .. }) => {
+            // Each failure reads `<path>: <error>`; the mock's error text
+            // repeats the path, so count the `<path>: ` entries.
+            assert_eq!(reason.matches(&format!("{PATH}: ")).count(), 1, "{reason}");
+        }
+        other => panic!("expected Degraded for an unreadable unit file, got {other:?}"),
+    }
+}
+
 // ── Every unit kind (§ 5, § 7.4 of the units spec) ─────────────────
 
 /// The listing command once every kind is listed: no `--type`.
