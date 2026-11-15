@@ -83,6 +83,18 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
     dirs
 }
 
+/// Whether `text` holds an `[Install]` section header, read by logical
+/// line with the whitespace systemd strips, so `  [Install]  ` and
+/// `[Install]\r` count.
+pub(crate) fn holds_install_section(text: &str) -> bool {
+    logical_lines(text).iter().any(|line| {
+        line.trim_matches(UNIT_FILE_WHITESPACE)
+            .strip_prefix('[')
+            .and_then(|l| l.strip_suffix(']'))
+            == Some(INSTALL_SECTION)
+    })
+}
+
 /// The effective `[Install]` section of `name`, whose unit file reads
 /// `fragment`, with `%i`, `%I`, `%p` and `%N` expanded.
 ///

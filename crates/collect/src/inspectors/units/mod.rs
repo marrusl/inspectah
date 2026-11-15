@@ -310,6 +310,15 @@ fn build_state_changes(
             Ok(Resolved::NotFound) => warnings.push(warn(
                 "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
             )),
+            Ok(Resolved::Unsupported { path }) => {
+                let mut warning = warn(&format!(
+                    "{path} is on the systemd search path, outside the two unit \
+                     directories this scan reads, and changes what loads or what \
+                     enable does; the unit's state is not carried"
+                ));
+                warning.extra.insert("path".into(), serde_json::json!(path));
+                warnings.push(warning);
+            }
             // Today's warning for a `linked` unit.
             Err(ResolveError::Linked { .. }) => warnings.push(service_warning(
                 candidate.name.as_str(),

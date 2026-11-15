@@ -5,6 +5,7 @@
 //! The answer is a [`Resolved`] with every owning package unknown: the
 //! owner lookup fills it in afterwards, before the unit is classified.
 
+use super::install::{DropInRoot, drop_in_dirs, holds_install_section};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{UnitFragment, UnitName};
 use std::io;
@@ -15,6 +16,28 @@ pub(super) const ETC_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// The directory packages install unit files into.
 pub(super) const VENDOR_UNIT_DIR: &str = "/usr/lib/systemd/system";
+
+/// The directories on systemd's unit search path besides the two this
+/// collector reads, in the order `systemd.unit(5)` gives them, each with
+/// the highest of the two it outranks: [`DropInRoot::Etc`] for the four
+/// above `/etc/systemd/system`, which outrank both, and
+/// [`DropInRoot::Vendor`] for the five between it and
+/// `/usr/lib/systemd/system`. `/run/systemd/generator.late` comes after
+/// the vendor directory, outranks nothing read here, and is not listed.
+pub(super) const UNREAD_SEARCH_PATH: [(&str, DropInRoot); 9] = [
+    ("/etc/systemd/system.control", DropInRoot::Etc),
+    ("/run/systemd/system.control", DropInRoot::Etc),
+    ("/run/systemd/transient", DropInRoot::Etc),
+    ("/run/systemd/generator.early", DropInRoot::Etc),
+    ("/etc/systemd/system.attached", DropInRoot::Vendor),
+    ("/run/systemd/system", DropInRoot::Vendor),
+    ("/run/systemd/system.attached", DropInRoot::Vendor),
+    ("/run/systemd/generator", DropInRoot::Vendor),
+    ("/usr/local/lib/systemd/system", DropInRoot::Vendor),
+];
+
+/// The suffix of a drop-in file systemd reads.
+const DROP_IN_FILE_SUFFIX: &str = ".conf";
 
 /// A link to this path masks the unit.
 const DEV_NULL: &str = "/dev/null";
@@ -33,6 +56,9 @@ pub(super) enum Resolved {
     AliasOf(UnitName),
     /// No file in the two directories this collector reads.
     NotFound,
+    /// A file on the search path that this collector does not read
+    /// changes what loads for the name or what `enable` does (§ 7.1).
+    Unsupported { path: String },
 }
 
 /// A name the collector cannot resolve to a unit it models.
@@ -58,17 +84,44 @@ pub(super) enum Entry {
 /// Resolve `name`: its own file under `/etc`, then under the vendor
 /// directory, then, for an instance, its template's in the same order. A
 /// link is tested before anything else, and a regular file is a mask only
-/// when it is exactly zero bytes long.
+/// when it is exactly zero bytes long. A file on the rest of the search
+/// path that changes the answer makes the name [`Resolved::Unsupported`]
+/// ([`search_path_change`]).
 pub(super) fn resolve(exec: &dyn Executor, name: &UnitName) -> Result<Resolved, ResolveError> {
+    let (resolved, chosen) = effective_file(exec, name)?;
+    match search_path_change(exec, name, chosen.as_ref())? {
+        Some(path) => Ok(Resolved::Unsupported { path }),
+        None => Ok(resolved),
+    }
+}
+
+/// The file the collector chose for a name: the unit's own or its
+/// template's, and the directory it sits in.
+struct Chosen {
+    file: UnitName,
+    root: DropInRoot,
+}
+
+/// [`resolve`] over the two directories this collector reads, with the
+/// file it chose; `None` when there is none.
+fn effective_file(
+    exec: &dyn Executor,
+    name: &UnitName,
+) -> Result<(Resolved, Option<Chosen>), ResolveError> {
     for file in candidates(name) {
         let etc = format!("{ETC_UNIT_DIR}/{}", file.as_str());
+        let chosen = Chosen {
+            file: file.clone(),
+            root: DropInRoot::Etc,
+        };
         match entry(exec, &etc)? {
             Entry::Missing => {}
-            Entry::Link(target) => return link_form(exec, &etc, target, &file, true),
+            Entry::Link(target) => {
+                return Ok((link_form(exec, &etc, target, &file, true)?, Some(chosen)));
+            }
             Entry::File { empty: true } => {
-                return Ok(Resolved::Masked {
-                    hidden: hidden_fragment(exec, &file)?,
-                });
+                let hidden = hidden_fragment(exec, &file)?;
+                return Ok((Resolved::Masked { hidden }, Some(chosen)));
             }
             Entry::File { empty: false } => {
                 let vendor = format!("{VENDOR_UNIT_DIR}/{}", file.as_str());
@@ -79,32 +132,140 @@ pub(super) fn resolve(exec: &dyn Executor, name: &UnitName) -> Result<Resolved, 
                         owning_package: None,
                     },
                 };
-                return Ok(Resolved::File { fragment });
+                return Ok((Resolved::File { fragment }, Some(chosen)));
             }
         }
 
         let vendor = format!("{VENDOR_UNIT_DIR}/{}", file.as_str());
+        let chosen = Chosen {
+            file: file.clone(),
+            root: DropInRoot::Vendor,
+        };
         match entry(exec, &vendor)? {
             Entry::Missing => {}
-            Entry::Link(target) => return link_form(exec, &vendor, target, &file, false),
+            Entry::Link(target) => {
+                return Ok((
+                    link_form(exec, &vendor, target, &file, false)?,
+                    Some(chosen),
+                ));
+            }
             // A zero-length vendor file is a mask the package ships, with
             // no file under it.
             Entry::File { empty: true } => {
-                return Ok(Resolved::Masked {
-                    hidden: UnitFragment::Absent,
-                });
+                let hidden = UnitFragment::Absent;
+                return Ok((Resolved::Masked { hidden }, Some(chosen)));
             }
             Entry::File { empty: false } => {
-                return Ok(Resolved::File {
-                    fragment: UnitFragment::Vendor {
-                        file,
-                        owning_package: None,
-                    },
-                });
+                let fragment = UnitFragment::Vendor {
+                    file,
+                    owning_package: None,
+                };
+                return Ok((Resolved::File { fragment }, Some(chosen)));
             }
         }
     }
-    Ok(Resolved::NotFound)
+    Ok((Resolved::NotFound, None))
+}
+
+/// The first path on [`UNREAD_SEARCH_PATH`] that changes what the
+/// collector read for `name`, which chose `chosen` (§ 7.1 of the units
+/// spec, "The search path"):
+///
+/// - a unit file systemd loads in place of the chosen one: the chosen
+///   file's name in a directory that outranks it, and, when the template
+///   was chosen for an instance, the instance's own file in any directory
+///   on the list, since a concrete instance file loads over its template
+///   wherever each sits. With nothing chosen, any file for the name or its
+///   template;
+/// - a `.conf` drop-in in one of [`drop_in_dirs`] in any directory on the
+///   list that holds an `[Install]` section or has the file name of a
+///   vendor drop-in in those directories. Type-wide and dash-prefix
+///   directories are not read for `[Install]`, so their drop-ins change
+///   nothing here.
+///
+/// A drop-in whose text cannot be decoded is counted as changing the
+/// answer, since its `[Install]` cannot be ruled out.
+fn search_path_change(
+    exec: &dyn Executor,
+    name: &UnitName,
+    chosen: Option<&Chosen>,
+) -> Result<Option<String>, ResolveError> {
+    for (dir, rank) in UNREAD_SEARCH_PATH {
+        let files = match chosen {
+            None => candidates(name),
+            Some(chosen) => {
+                let mut files = Vec::new();
+                if rank <= chosen.root {
+                    files.push(chosen.file.clone());
+                }
+                if chosen.file != *name {
+                    files.push(name.clone());
+                }
+                files
+            }
+        };
+        for file in files {
+            let path = format!("{dir}/{}", file.as_str());
+            if !matches!(entry(exec, &path)?, Entry::Missing) {
+                return Ok(Some(path));
+            }
+        }
+    }
+
+    let dirs = drop_in_dirs(name);
+    let mut vendor_names: Option<Vec<String>> = None;
+    for (dir, _) in UNREAD_SEARCH_PATH {
+        for drop_in_dir in &dirs {
+            for file in conf_files(exec, &format!("{dir}/{drop_in_dir}"))? {
+                let path = format!("{dir}/{drop_in_dir}/{file}");
+                let vendor_names = match &vendor_names {
+                    Some(names) => names,
+                    None => vendor_names.insert(vendor_drop_in_names(exec, &dirs)?),
+                };
+                if vendor_names.contains(&file) {
+                    return Ok(Some(path));
+                }
+                match exec.read_file(Path::new(&path)) {
+                    Ok(text) if !holds_install_section(&text) => {}
+                    Ok(_) => return Ok(Some(path)),
+                    Err(e) if e.kind() == io::ErrorKind::InvalidData => return Ok(Some(path)),
+                    Err(e) => {
+                        return Err(ResolveError::Read {
+                            path,
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The `.conf` file names in the directory `path`; none when it does not
+/// exist.
+fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
+    match exec.read_dir(Path::new(path)) {
+        Ok(entries) => Ok(entries
+            .into_iter()
+            .filter(|entry| entry.ends_with(DROP_IN_FILE_SUFFIX))
+            .collect()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(ResolveError::Read {
+            path: path.to_owned(),
+            error: e.to_string(),
+        }),
+    }
+}
+
+/// The `.conf` file names a package ships in `dirs` under the vendor
+/// directory.
+fn vendor_drop_in_names(exec: &dyn Executor, dirs: &[String]) -> Result<Vec<String>, ResolveError> {
+    let mut names = Vec::new();
+    for dir in dirs {
+        names.extend(conf_files(exec, &format!("{VENDOR_UNIT_DIR}/{dir}"))?);
+    }
+    Ok(names)
 }
 
 /// The names whose file can load for `name`: its own, then its template's
@@ -342,6 +503,137 @@ mod tests {
         for (unit, expected) in cases {
             assert_eq!(resolve(&exec, &name(unit)), Ok(expected), "{unit}");
         }
+    }
+
+    /// T24, the concrete instance and the search path for instances (the
+    /// scan records no instance yet, so these are asserted here): a file of
+    /// the instance's own name is the fragment over its template wherever
+    /// each sits on the two directories read; an instance file anywhere on
+    /// the search path refuses the instance when the template was chosen,
+    /// and so does a template file that outranks the chosen template; a
+    /// template file beside a chosen instance file changes nothing.
+    #[test]
+    fn the_effective_file_of_an_instance_and_the_search_path() {
+        let vendor_template =
+            || MockExecutor::new().with_file("/usr/lib/systemd/system/worker@.service", UNIT);
+        let local_template =
+            || MockExecutor::new().with_file("/etc/systemd/system/worker@.service", UNIT);
+        let unsupported = |path: &str| Resolved::Unsupported { path: path.into() };
+        let cases: Vec<(&str, MockExecutor, Resolved)> = vec![
+            (
+                "an /etc instance over a vendor template",
+                vendor_template().with_file("/etc/systemd/system/worker@site.service", UNIT),
+                Resolved::File {
+                    fragment: UnitFragment::Local {
+                        file: name("worker@site.service"),
+                    },
+                },
+            ),
+            (
+                "a vendor instance over an /etc template",
+                local_template().with_file("/usr/lib/systemd/system/worker@site.service", UNIT),
+                Resolved::File {
+                    fragment: vendor("worker@site.service"),
+                },
+            ),
+            (
+                "no instance file: the template",
+                vendor_template(),
+                Resolved::File {
+                    fragment: vendor("worker@.service"),
+                },
+            ),
+            (
+                "an instance file under /run, the template chosen",
+                vendor_template().with_file("/run/systemd/system/worker@site.service", UNIT),
+                unsupported("/run/systemd/system/worker@site.service"),
+            ),
+            (
+                "an instance file under /usr/local/lib, the /etc template chosen",
+                local_template()
+                    .with_file("/usr/local/lib/systemd/system/worker@site.service", UNIT),
+                unsupported("/usr/local/lib/systemd/system/worker@site.service"),
+            ),
+            (
+                "a template under /run outranks the chosen vendor template",
+                vendor_template().with_file("/run/systemd/system/worker@.service", UNIT),
+                unsupported("/run/systemd/system/worker@.service"),
+            ),
+            (
+                "a template under /run does not outrank the chosen /etc template",
+                local_template().with_file("/run/systemd/system/worker@.service", UNIT),
+                Resolved::File {
+                    fragment: UnitFragment::Local {
+                        file: name("worker@.service"),
+                    },
+                },
+            ),
+            (
+                "a template under /run beside a chosen vendor instance",
+                MockExecutor::new()
+                    .with_file("/usr/lib/systemd/system/worker@site.service", UNIT)
+                    .with_file("/run/systemd/system/worker@.service", UNIT),
+                Resolved::File {
+                    fragment: vendor("worker@site.service"),
+                },
+            ),
+            (
+                "a drop-in with [Install] in the template's .d under /run",
+                vendor_template()
+                    .with_dir("/run/systemd/system/worker@.service.d", vec!["50-x.conf"])
+                    .with_file(
+                        "/run/systemd/system/worker@.service.d/50-x.conf",
+                        "[Install]\nWantedBy=multi-user.target\n",
+                    ),
+                unsupported("/run/systemd/system/worker@.service.d/50-x.conf"),
+            ),
+            (
+                "a drop-in with no [Install] in the template's .d under /run",
+                vendor_template()
+                    .with_dir("/run/systemd/system/worker@.service.d", vec!["50-x.conf"])
+                    .with_file(
+                        "/run/systemd/system/worker@.service.d/50-x.conf",
+                        "[Service]\nNice=5\n",
+                    ),
+                Resolved::File {
+                    fragment: vendor("worker@.service"),
+                },
+            ),
+        ];
+        for (label, exec, expected) in cases {
+            assert_eq!(
+                resolve(&exec, &name("worker@site.service")),
+                Ok(expected),
+                "{label}"
+            );
+        }
+    }
+
+    /// The constant holds the directories `systemd.unit(5)` lists besides
+    /// the two this collector reads, in its order, and not
+    /// `generator.late`.
+    #[test]
+    fn the_search_path_constant_is_systemds_order() {
+        let dirs: Vec<&str> = UNREAD_SEARCH_PATH.iter().map(|(dir, _)| *dir).collect();
+        assert_eq!(
+            dirs,
+            [
+                "/etc/systemd/system.control",
+                "/run/systemd/system.control",
+                "/run/systemd/transient",
+                "/run/systemd/generator.early",
+                "/etc/systemd/system.attached",
+                "/run/systemd/system",
+                "/run/systemd/system.attached",
+                "/run/systemd/generator",
+                "/usr/local/lib/systemd/system",
+            ]
+        );
+        let above_etc = UNREAD_SEARCH_PATH
+            .iter()
+            .take_while(|(_, rank)| *rank == DropInRoot::Etc)
+            .count();
+        assert_eq!(above_etc, 4, "the first four outrank /etc/systemd/system");
     }
 
     /// A link whose final target is a zero-length file is a mask, as one to

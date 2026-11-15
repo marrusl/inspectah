@@ -1399,6 +1399,216 @@ fn unreadable_unit_file_degrades_the_inspector() {
     }
 }
 
+// ── The effective unit and the search path (§ 7.1, § 7.2, T24) ─────
+//
+// The scan records no instance until install state is read from links,
+// so the instance cases of T24 (the concrete instance as fragment, and an
+// instance file elsewhere on the search path) are tested on `resolve` in
+// `crates/collect/src/inspectors/units/resolve.rs`.
+
+/// An enabled vendor `app.service`, a state change against its preset.
+fn vendor_app() -> MockExecutor {
+    with_vendor_units(
+        listing_mock(&[("app.service", "enabled")]),
+        &["app.service"],
+    )
+}
+
+/// An enabled `app.service` under `/etc` only.
+fn local_app() -> MockExecutor {
+    listing_mock(&[("app.service", "enabled")])
+        .with_file("/etc/systemd/system/app.service", UNIT_FILE)
+}
+
+/// `vendor_app` with a vendor drop-in `10-vendor.conf` in its own `.d`
+/// that holds `[Install]`.
+fn vendor_app_with_vendor_drop_in() -> MockExecutor {
+    vendor_app()
+        .with_dir(
+            "/usr/lib/systemd/system/app.service.d",
+            vec!["10-vendor.conf"],
+        )
+        .with_file(
+            "/usr/lib/systemd/system/app.service.d/10-vendor.conf",
+            INSTALL_DROP_IN,
+        )
+}
+
+/// A drop-in holding an `[Install]` section.
+const INSTALL_DROP_IN: &str = "[Install]\nWantedBy=multi-user.target\n";
+
+/// `exec` with the drop-in `file` in `dir`, holding `text`.
+fn with_drop_in(exec: MockExecutor, dir: &str, file: &str, text: &str) -> MockExecutor {
+    exec.with_dir(dir, vec![file])
+        .with_file(&format!("{dir}/{file}"), text)
+}
+
+/// Whether the scan of `exec` has a state change for `unit`, and its
+/// warnings.
+fn row_and_warnings(exec: &MockExecutor, unit: &str) -> (bool, Vec<String>) {
+    let (section, warnings) = scan(exec);
+    let row = section
+        .state_changes
+        .iter()
+        .any(|s| s.unit().name().as_str() == unit);
+    (row, warnings)
+}
+
+/// T24, the search path: a file on systemd's search path that this
+/// collector does not read, and that changes what loads or what `enable`
+/// does, makes the unit unsupported: a warning naming the unit and the
+/// path, and no state change. Each case's control is the same host
+/// without the extra file, which has the row and no such warning.
+#[test]
+fn a_file_the_search_path_loads_in_place_refuses_the_unit() {
+    /// A label, the control host, the path the case adds, and the host
+    /// with it.
+    type Case = (
+        &'static str,
+        fn() -> MockExecutor,
+        &'static str,
+        MockExecutor,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a copy under /usr/local/lib",
+            vendor_app,
+            "/usr/local/lib/systemd/system/app.service",
+            vendor_app().with_file("/usr/local/lib/systemd/system/app.service", UNIT_FILE),
+        ),
+        (
+            "a copy over an /etc unit from a directory above /etc",
+            local_app,
+            "/etc/systemd/system.control/app.service",
+            local_app().with_file("/etc/systemd/system.control/app.service", UNIT_FILE),
+        ),
+        (
+            "a drop-in with [Install] in the unit's own .d under /run",
+            vendor_app,
+            "/run/systemd/system/app.service.d/50-install.conf",
+            with_drop_in(
+                vendor_app(),
+                "/run/systemd/system/app.service.d",
+                "50-install.conf",
+                INSTALL_DROP_IN,
+            ),
+        ),
+        (
+            "a drop-in with [Install] reaches a local unit too",
+            local_app,
+            "/run/systemd/system/app.service.d/50-install.conf",
+            with_drop_in(
+                local_app(),
+                "/run/systemd/system/app.service.d",
+                "50-install.conf",
+                INSTALL_DROP_IN,
+            ),
+        ),
+        (
+            "a drop-in with no [Install] under a vendor drop-in's file name",
+            vendor_app_with_vendor_drop_in,
+            "/run/systemd/system/app.service.d/10-vendor.conf",
+            with_drop_in(
+                vendor_app_with_vendor_drop_in(),
+                "/run/systemd/system/app.service.d",
+                "10-vendor.conf",
+                "[Service]\nNice=5\n",
+            ),
+        ),
+    ];
+    for (label, control, path, refused) in cases {
+        let (row, warnings) = row_and_warnings(&control(), "app.service");
+        assert!(row, "{label}: the control has its row: {warnings:?}");
+        assert!(
+            !warnings.iter().any(|w| w.contains(path)),
+            "{label}: the control does not warn: {warnings:?}"
+        );
+
+        let (row, warnings) = row_and_warnings(&refused, "app.service");
+        assert!(!row, "{label}: no state change");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unit app.service ") && w.contains(path)),
+            "{label}: a warning naming the unit and {path}: {warnings:?}"
+        );
+    }
+}
+
+/// T24, what the search path does not change: a drop-in with `[Install]`
+/// in the type-wide directory or a dash-prefix directory, a drop-in in
+/// the unit's own `.d` with neither `[Install]` nor a vendor drop-in's
+/// name, a copy of an `/etc` unit in a directory that ranks below `/etc`,
+/// and a file under `generator.late`, which ranks below the vendor
+/// directory. Each keeps the row and its fragment, with no warning.
+#[test]
+fn a_file_the_search_path_does_not_load_in_place_changes_nothing() {
+    let vendor = UnitFragment::Vendor {
+        file: file("app.service"),
+        owning_package: None,
+    };
+    let cases: Vec<(&str, &str, MockExecutor, UnitFragment)> = vec![
+        (
+            "the type-wide directory",
+            "app.service",
+            with_drop_in(
+                vendor_app(),
+                "/run/systemd/system/service.d",
+                "50-install.conf",
+                INSTALL_DROP_IN,
+            ),
+            vendor.clone(),
+        ),
+        (
+            "a dash-prefix directory",
+            "app-x.service",
+            with_drop_in(
+                with_vendor_units(
+                    listing_mock(&[("app-x.service", "enabled")]),
+                    &["app-x.service"],
+                ),
+                "/run/systemd/system/app-.service.d",
+                "50-install.conf",
+                INSTALL_DROP_IN,
+            ),
+            UnitFragment::Vendor {
+                file: file("app-x.service"),
+                owning_package: None,
+            },
+        ),
+        (
+            "a drop-in of the unit's own with no [Install]",
+            "app.service",
+            with_drop_in(
+                vendor_app_with_vendor_drop_in(),
+                "/run/systemd/system/app.service.d",
+                "50-limits.conf",
+                "[Service]\nLimitNOFILE=4096\n",
+            ),
+            vendor.clone(),
+        ),
+        (
+            "a copy of an /etc unit under /run/systemd/system",
+            "app.service",
+            local_app().with_file("/run/systemd/system/app.service", UNIT_FILE),
+            UnitFragment::Local {
+                file: file("app.service"),
+            },
+        ),
+        (
+            "generator.late",
+            "app.service",
+            vendor_app().with_file("/run/systemd/generator.late/app.service", UNIT_FILE),
+            vendor,
+        ),
+    ];
+    for (label, unit, exec, fragment) in cases {
+        let (section, warnings) = scan(&exec);
+        assert!(warnings.is_empty(), "{label}: {warnings:?}");
+        assert_eq!(fragment_of(&section, unit), &fragment, "{label}");
+    }
+}
+
 // ── Every unit kind (§ 5, § 7.4 of the units spec) ─────────────────
 
 /// The listing command once every kind is listed: no `--type`.
