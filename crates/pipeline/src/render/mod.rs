@@ -308,7 +308,9 @@ mod tests {
         use inspectah_core::types::rpm::RepoFile;
         use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, SystemdTimer};
         use inspectah_core::types::sysctl::{SysctlFile, SysctlFileBody, SysctlSection};
-        use inspectah_core::types::units::{MountUnitFinding, SystemdDropIn, UnitInventoryEntry};
+        use inspectah_core::types::units::{
+            ManualLink, MountUnitFinding, SystemdDropIn, UndeterminedInstall, UnitInventoryEntry,
+        };
 
         // `config.files[]` and `non_rpm_software.env_files[]`.
         let ConfigFileEntry {
@@ -388,6 +390,33 @@ mod tests {
                 nofail: _,    // exempt: an optional boolean from `Options=`
                 aggregate: _, // fleet counts
             } = finding;
+        }
+
+        // `units.manual_links[]`. Names and a cause only: no content is
+        // read into it, and its advisory is built from these fields and
+        // fixed text (§ 6.7).
+        fn _classify_manual_link(link: ManualLink) {
+            let ManualLink {
+                relation: _, // exempt: wants, requires, upholds, alias or also
+                parent: _,   // exempt: a proved unit name
+                unit: _,     // exempt: a proved unit name
+                cause: _,    // exempt: a cause and, for one, a reason
+                // identifiers: paths under /etc/systemd/system from a
+                // directory listing, no content
+                install_files: _,
+                aggregate: _, // fleet counts
+            } = link;
+        }
+
+        // `units.undetermined_installs[]`, the same: names, a reason and
+        // paths.
+        fn _classify_undetermined_install(record: UndeterminedInstall) {
+            let UndeterminedInstall {
+                unit: _,          // exempt: a proved unit name
+                reason: _,        // exempt: why the section cannot be relied on
+                install_files: _, // identifiers: paths from a directory listing
+                aggregate: _,     // fleet counts
+            } = record;
         }
 
         // `scheduled_tasks.generated_timer_units[]`.

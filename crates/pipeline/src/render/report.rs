@@ -2398,6 +2398,8 @@ mod tests {
             }],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2441,6 +2443,8 @@ mod tests {
             }],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2473,6 +2477,8 @@ mod tests {
             inventory: vec![],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -2513,6 +2519,8 @@ mod tests {
             }],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(
@@ -3733,6 +3741,8 @@ mod tests {
                 ..Default::default()
             }],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let html = render_report(&snap, &RenderContext { target: None });
 

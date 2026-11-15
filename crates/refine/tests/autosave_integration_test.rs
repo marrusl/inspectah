@@ -415,6 +415,8 @@ fn units_snapshot() -> InspectionSnapshot {
             ..Default::default()
         }],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap
 }

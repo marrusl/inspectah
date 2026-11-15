@@ -234,6 +234,8 @@ fn a_non_leaf_disabled_repo_package_renders_the_same_on_both_paths() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     let about_the_packages = |containerfile: &str| -> Vec<String> {
         containerfile

@@ -11,10 +11,10 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    AdminStorageFragment, AdvisoryUnit, Classified, MountUnitFinding, PresetDefault, StorageKind,
-    SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UnitFragment, UnitInventoryEntry,
-    UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
-    holds_install_section, logical_lines,
+    AdminStorageFragment, AdvisoryUnit, Classified, ManualLink, MountUnitFinding, PresetDefault,
+    StorageKind, SystemdDropIn, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UndeterminedInstall,
+    UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange,
+    UnitSubject, holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -387,14 +387,29 @@ fn is_enabled_storage(candidate: &Candidate) -> bool {
     matches!(candidate.name.kind(), UnitKind::Storage(_)) && candidate.state == UnitState::Enabled
 }
 
+/// What [`build_state_changes`] finds for the listed units.
+#[derive(Debug, Default)]
+struct UnitFindings {
+    inventory: Vec<UnitInventoryEntry>,
+    state_changes: Vec<UnitStateChange>,
+    mount_findings: Vec<MountUnitFinding>,
+    /// The links reported and not carried (§ 6.6 of the units spec).
+    manual_links: Vec<ManualLink>,
+    /// The units whose `[Install]` cannot be relied on and whose `/etc`
+    /// files change it, or that assign `Also=` (§ 6.6).
+    undetermined_installs: Vec<UndeterminedInstall>,
+}
+
 /// Resolve each listed unit's file, read its install state from the links
 /// (§ 7.3 of the units spec) and its preset, and record it in the
 /// inventory; keep the state changes and the enabled storage units, look
 /// up the owners, then classify: a carried unit is a state change, an
-/// administrator's storage unit a mount finding. A unit with no install
-/// state has no inventory entry. A unit that cannot be resolved or
-/// classified is reported through `warnings`; a unit file that could not
-/// be read goes to `read_failures`. The names refused by the search path
+/// administrator's storage unit a mount finding. The links reported and
+/// not carried, and the undetermined install records, come from the same
+/// read of the links, for every unit whose section was read, with an
+/// install state or not. A unit with no install state has no inventory
+/// entry. A unit that cannot be resolved or classified is reported through
+/// `warnings`; a unit file that could not be read goes to `read_failures`. The names refused by the search path
 /// or unreadable go to `reported`, so the storage pass does not report
 /// them again.
 fn build_state_changes(
@@ -405,12 +420,10 @@ fn build_state_changes(
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
     reported: &mut HashSet<UnitName>,
-) -> (
-    Vec<UnitInventoryEntry>,
-    Vec<UnitStateChange>,
-    Vec<MountUnitFinding>,
-) {
+) -> UnitFindings {
     let mut inventory = Vec::new();
+    let mut manual_links = Vec::new();
+    let mut undetermined_installs = Vec::new();
     let mut unknown_lines: BTreeMap<(String, usize), Vec<UnitName>> = BTreeMap::new();
     let mut found = Vec::new();
     let mut fragments = Vec::new();
@@ -436,12 +449,17 @@ fn build_state_changes(
                     }
                 };
                 let state = match &evidence.read {
-                    Some(read) => links::install_state(
-                        read,
-                        host_links.admin(&subject.name),
-                        host_links.any_admin_link(&subject.name),
-                        host_links.vendor(&subject.name),
-                    ),
+                    Some(read) => {
+                        let found = links::link_findings(
+                            &subject.name,
+                            read,
+                            host_links,
+                            &etc_install_files(&fragment, &evidence),
+                        );
+                        manual_links.extend(found.manual_links);
+                        undetermined_installs.extend(found.undetermined);
+                        found.state
+                    }
                     // The section could not be read as text: the listing's
                     // word is all there is.
                     None => subject.listed,
@@ -593,7 +611,43 @@ fn build_state_changes(
             Err(e) => warnings.push(warn(&e.to_string())),
         }
     }
-    (inventory, state_changes, mount_findings)
+    UnitFindings {
+        inventory,
+        state_changes,
+        mount_findings,
+        manual_links,
+        undetermined_installs,
+    }
+}
+
+/// The install files of a unit under `/etc/systemd/system` (§ 10.2 of the
+/// units spec): its unit file or shadow there, then its install drop-ins.
+fn etc_install_files(fragment: &UnitFragment, evidence: &InstallEvidence) -> Vec<String> {
+    let unit_file = match fragment {
+        UnitFragment::Local { file } | UnitFragment::Shadowed { file, .. } => {
+            Some(format!("{ETC_UNIT_DIR}/{}", file.as_str()))
+        }
+        UnitFragment::Vendor { .. } | UnitFragment::Absent => None,
+    };
+    unit_file
+        .into_iter()
+        .chain(evidence.install_drop_ins.iter().cloned())
+        .collect()
+}
+
+/// The warning for an entry of a dependency directory under
+/// `/etc/systemd/system` whose parent or own name does not parse as a unit
+/// name (§ 7.3 of the units spec): it is reported and nothing else.
+fn unparsed_link_warning(path: &str) -> Warning {
+    Warning {
+        inspector: "units".into(),
+        message: format!(
+            "link {path} - its parent or its own name is not a unit name this scan reads, \
+             so the link is not reported or carried"
+        ),
+        severity: Some(WarningSeverity::Warning),
+        extra: std::collections::HashMap::from([("path".into(), serde_json::json!(path))]),
+    }
 }
 
 /// The unit file a fragment names, if any.
@@ -1002,6 +1056,8 @@ impl Inspector for UnitsInspector {
                             inventory,
                             drop_ins: Vec::new(),
                             mount_findings: Vec::new(),
+                            manual_links: Vec::new(),
+                            undetermined_installs: Vec::new(),
                         }),
                         warnings,
                         redaction_hints: Vec::new(),
@@ -1014,7 +1070,11 @@ impl Inspector for UnitsInspector {
         // 4. The links under both unit directories (§ 7.1 sources 3 and 4),
         //    then every unit past the name gate once, in listing order.
         let (host_links, mut unit_file_read_failures) = links::read_host_links(exec);
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<Warning> = host_links
+            .admin_unparsed
+            .iter()
+            .map(|path| unparsed_link_warning(path))
+            .collect();
         let mut listed = Vec::new();
         let mut seen = HashSet::new();
         for unit in &units {
@@ -1034,7 +1094,13 @@ impl Inspector for UnitsInspector {
         // 4b. Each unit's file, install state and preset: the inventory,
         //     the state changes and the enabled storage units.
         let mut reported = HashSet::new();
-        let (inventory, state_changes, mut mount_findings) = build_state_changes(
+        let UnitFindings {
+            inventory,
+            state_changes,
+            mut mount_findings,
+            manual_links,
+            undetermined_installs,
+        } = build_state_changes(
             exec,
             listed,
             &host_links,
@@ -1079,6 +1145,8 @@ impl Inspector for UnitsInspector {
             inventory,
             drop_ins,
             mount_findings,
+            manual_links,
+            undetermined_installs,
         };
 
         // Preset file read failures are correctness-bearing — a missing
@@ -3376,7 +3444,11 @@ mod tests {
 
         let owned = vendor().with_command(query, rpm("systemd\n", 0));
         let (mut warnings, mut failures) = (Vec::new(), Vec::new());
-        let (_, changes, findings) = build_state_changes(
+        let UnitFindings {
+            state_changes: changes,
+            mount_findings: findings,
+            ..
+        } = build_state_changes(
             &owned,
             vec![storage_unit("tmp.mount")],
             &local_fs_link("tmp.mount"),
@@ -3401,7 +3473,11 @@ mod tests {
         for answer in [rpm("file is not owned by any package\n", 1), rpm("\n", 0)] {
             let unowned = vendor().with_command(query, answer);
             let mut warnings = Vec::new();
-            let (_, changes, findings) = build_state_changes(
+            let UnitFindings {
+                state_changes: changes,
+                mount_findings: findings,
+                ..
+            } = build_state_changes(
                 &unowned,
                 vec![storage_unit("tmp.mount")],
                 &local_fs_link("tmp.mount"),

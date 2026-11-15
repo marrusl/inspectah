@@ -110,5 +110,7 @@ expression: section
       "aggregate": null
     }
   ],
-  "mount_findings": []
+  "mount_findings": [],
+  "manual_links": [],
+  "undetermined_installs": []
 }

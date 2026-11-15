@@ -699,6 +699,8 @@ mod tests {
             ],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         let rpm = snap.rpm.as_mut().expect("rpm section");
         rpm.file_ownership = vec![

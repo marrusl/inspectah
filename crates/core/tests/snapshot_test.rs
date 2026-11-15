@@ -106,8 +106,9 @@ const SCHEMA_27_SNAPSHOT: &str =
 
 /// The schema-27 payload moved to the current version with its `services`
 /// section renamed to `units` and its three unit name lists replaced by
-/// the one inventory that holds the same unit, an empty
-/// `mount_findings` list added, and the state change's name and owner
+/// the one inventory that holds the same unit, empty `mount_findings`,
+/// `manual_links` and `undetermined_installs` lists added, and the state
+/// change's name and owner
 /// moved into a carried unit with a vendor fragment. Nothing else changes.
 fn schema_27_payload_as_current() -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_str(SCHEMA_27_SNAPSHOT).unwrap();
@@ -122,6 +123,8 @@ fn schema_27_payload_as_current() -> serde_json::Value {
         serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
     );
     lists.insert("mount_findings".into(), serde_json::json!([]));
+    lists.insert("manual_links".into(), serde_json::json!([]));
+    lists.insert("undetermined_installs".into(), serde_json::json!([]));
     let change = &mut lists.get_mut("state_changes").unwrap()[0];
     let owner = change
         .as_object_mut()
@@ -572,7 +575,14 @@ const RPM_SECTION_KEYS: &[&str] = &[
 ];
 
 /// The serialized keys of a `UnitSection`.
-const UNIT_SECTION_KEYS: &[&str] = &["drop_ins", "inventory", "mount_findings", "state_changes"];
+const UNIT_SECTION_KEYS: &[&str] = &[
+    "drop_ins",
+    "inventory",
+    "manual_links",
+    "mount_findings",
+    "state_changes",
+    "undetermined_installs",
+];
 
 fn serialized_keys<T: serde::Serialize>(value: &T) -> BTreeSet<String> {
     serde_json::to_value(value)

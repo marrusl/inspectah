@@ -5411,6 +5411,8 @@ mod tests {
                     },
                 ],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             }),
             ..Default::default()
         }
@@ -6047,6 +6049,8 @@ mod tests {
                 }],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             }),
             ..Default::default()
         };
@@ -6129,6 +6133,8 @@ mod tests {
                 }],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             }),
             ..Default::default()
         };
@@ -6547,6 +6553,8 @@ mod tests {
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             }),
             config: Some(ConfigSection { files: vec![] }),
             ..Default::default()

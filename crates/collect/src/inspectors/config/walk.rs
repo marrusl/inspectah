@@ -154,6 +154,10 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
     "/etc/logrotate.d/kvm_stat",
     "/etc/systemd/system/*.wants/*",
     "/etc/systemd/system/*.requires/*",
+    // An `.upholds` link is a unit-state finding, never configuration: the
+    // walk would follow it and stage the linked unit's content at the
+    // link's path (§ 7.7 of the units spec).
+    "/etc/systemd/system/*.upholds/*",
     "/etc/systemd/user/*.wants/*",
     "/etc/systemd/user/*.requires/*",
     // NOTE: Drop-in overrides (*.service.d/*.conf, *.timer.d/*.conf,

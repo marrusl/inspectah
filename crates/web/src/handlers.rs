@@ -1793,6 +1793,8 @@ mod tests {
             }],
             inventory: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
 
         let session = RefineSession::new(snap);

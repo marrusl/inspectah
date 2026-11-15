@@ -1576,6 +1576,10 @@ pub fn merge_service_sections(
         inventory,
         drop_ins,
         mount_findings,
+        // § 12's merge of the link findings is not built yet: an aggregate
+        // carries none.
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     })
 }
 

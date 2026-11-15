@@ -622,6 +622,8 @@ mod tests {
             serde_json::json!([{"unit": "httpd.service", "state": "enabled", "preset": "disable"}]),
         );
         lists.insert("mount_findings".into(), serde_json::json!([]));
+        lists.insert("manual_links".into(), serde_json::json!([]));
+        lists.insert("undetermined_installs".into(), serde_json::json!([]));
         let change = &mut lists.get_mut("state_changes").unwrap()[0];
         let owner = change
             .as_object_mut()

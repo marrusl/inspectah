@@ -27,8 +27,9 @@ use inspectah_pipeline::render::unit_plan::{
 
 use super::types::{
     ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders, DeclinedView,
-    DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, MountFindingView,
-    NotCarriedRow, RepoGroup, UnitStateView, UnmanagedWithheldView, WithheldView,
+    DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, ManualLinkView,
+    MountFindingView, NotCarriedRow, RepoGroup, UndeterminedInstallView, UnitStateView,
+    UnmanagedWithheldView, WithheldView,
 };
 use crate::types::{RefinedDropIn, RefinedServiceState};
 
@@ -50,6 +51,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let unit_states = unit_state_views(states, &plan);
     let unit_dropins = drop_in_views(dropins, &withheld);
     let mount_findings = mount_finding_views(&snap, &plan);
+    let (manual_links, undetermined_installs) = link_finding_views(&snap, &plan);
     let config_withheld = config_withheld_views(&snap, &withheld);
     let declined_generated = declined_generated_views(&plan);
     let generated_timers = generated_timer_views(&snap);
@@ -95,6 +97,8 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         unit_states,
         unit_dropins,
         mount_findings,
+        manual_links,
+        undetermined_installs,
         config_withheld,
         quadlets,
         flatpaks,
@@ -380,6 +384,51 @@ fn mount_finding_views(snap: &InspectionSnapshot, plan: &UnitPlan) -> Vec<MountF
         .collect()
 }
 
+/// One view per hand-made link and one per undetermined install record,
+/// each with § 10.9's lines from the plan, which holds one block per record
+/// in the section's order.
+fn link_finding_views(
+    snap: &InspectionSnapshot,
+    plan: &UnitPlan,
+) -> (Vec<ManualLinkView>, Vec<UndeterminedInstallView>) {
+    let Some(units) = &snap.units else {
+        return (Vec::new(), Vec::new());
+    };
+    debug_assert_eq!(
+        (units.manual_links.len(), units.undetermined_installs.len()),
+        (
+            plan.link_advisories.len(),
+            plan.undetermined_advisories.len()
+        ),
+        "plan_units builds one advisory block per link and per record, in order, so they zip \
+         positionally"
+    );
+    let links = units
+        .manual_links
+        .iter()
+        .zip(&plan.link_advisories)
+        .map(|(link, advisories)| ManualLinkView {
+            relation: link.relation,
+            parent: link.parent.clone(),
+            unit: link.unit.clone(),
+            cause: link.cause,
+            advisories: advisories.clone(),
+        })
+        .collect();
+    let records = units
+        .undetermined_installs
+        .iter()
+        .zip(&plan.undetermined_advisories)
+        .map(|(record, advisories)| UndeterminedInstallView {
+            unit: record.unit.clone(),
+            reason: record.reason,
+            install_files: record.install_files.clone(),
+            advisories: advisories.clone(),
+        })
+        .collect();
+    (links, records)
+}
+
 /// One not-carried package as refine shows it.
 fn not_carried_row(pkg: &NotCarriedPackage) -> NotCarriedRow {
     NotCarriedRow {
@@ -506,6 +555,8 @@ mod tests {
                 }],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             }),
             ..Default::default()
         }

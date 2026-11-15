@@ -67,6 +67,8 @@ fn snapshot_with_services() -> InspectionSnapshot {
             ..Default::default()
         }],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap
 }

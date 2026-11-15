@@ -15,7 +15,8 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, MountUnitFinding, UnitFragment, UnitState,
+    AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
+    MountUnitFinding, UnitFragment, UnitName, UnitState,
 };
 use inspectah_pipeline::render;
 use inspectah_refine::session::RefineSession;
@@ -6934,4 +6935,516 @@ fn t24_a_lone_cr_install_drop_in_is_an_install_file() {
         omitted(&excluded, "app.service").is_some_and(|l| l.ends_with(&evidence_changed(DROP_IN))),
         "{excluded}"
     );
+}
+
+// ---------------------------------------------------------------------
+// Hand-made links and undetermined installs (§ 6.6, § 7.3, § 10.9, § 11.1;
+// T22 to T24, T40).
+// ---------------------------------------------------------------------
+
+/// A service with no `[Install]` section.
+const NO_INSTALL: &str = "[Service]\nExecStart=/bin/true\n";
+/// A service wanted by `multi-user.target`.
+const WANTS_MULTI_USER: &str =
+    "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+/// The second line of § 10.9's unit-level block for `unit`.
+fn undetermined_second_line(unit: &str) -> String {
+    format!(
+        "#   The image's links for {unit} can differ from the source host's, including links \
+         its package install made before these files are copied. Check them with systemctl \
+         is-enabled in the image."
+    )
+}
+
+/// The block in `containerfile` that starts with the line `first`: that
+/// line and the `#   ` lines after it.
+fn block_from(containerfile: &str, first: &str) -> Vec<String> {
+    let mut lines = containerfile.lines().skip_while(|l| *l != first);
+    let Some(head) = lines.next() else {
+        return Vec::new();
+    };
+    std::iter::once(head)
+        .chain(lines.take_while(|l| l.starts_with("#   ")))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The link findings of a scanned snapshot.
+fn links_of(snap: &InspectionSnapshot) -> &[ManualLink] {
+    &snap.units.as_ref().expect("a units section").manual_links
+}
+
+/// Whether a refine row, serialized, has an `include` field.
+fn has_include(row: serde_json::Value) -> bool {
+    row.get("include").is_some()
+}
+
+fn name(unit: &str) -> UnitName {
+    UnitName::try_from(unit.to_owned()).expect("a unit name")
+}
+
+/// T23: a `multi-user.target.wants/backup.service` link to a unit with no
+/// `[Install]`. The `StaticUnit` link and its refine row exist first; then
+/// the advisory holds § 10.9's text and the `add-wants` line on the scan
+/// and refine routes, no instruction names the unit, and the row has no
+/// include field.
+#[test]
+fn t23_a_link_to_a_unit_with_no_install_section_is_advised_with_its_command() {
+    const UNIT: &str = "backup.service";
+    let snap = scan(
+        UnitHost::new()
+            .unit(UNIT, "static")
+            .vendor_unit(UNIT, NO_INSTALL, None)
+            .link(
+                "/etc/systemd/system/multi-user.target.wants/backup.service",
+                "/usr/lib/systemd/system/backup.service",
+            ),
+    );
+    assert_eq!(
+        links_of(&snap)
+            .iter()
+            .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+            .collect::<Vec<_>>(),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target",
+            UNIT,
+            ManualLinkCause::StaticUnit
+        )]
+    );
+    let refine = session(&snap);
+    let rows = &refine.decisions().manual_links;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let expected = [
+        "# Advisory: multi-user.target.wants/backup.service is a link on the source host that \
+         backup.service's [Install] section there does not make (it names no link: none, only \
+         Also=, or a list a drop-in reset to empty). Not carried."
+            .to_owned(),
+        "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+         'multi-user.target' 'backup.service'"
+            .to_owned(),
+    ];
+    assert_eq!(rows[0].advisories, expected, "the refine row");
+    assert!(
+        !has_include(serde_json::to_value(&rows[0]).expect("the row serializes")),
+        "the row has no toggle"
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, &expected[0]),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T23's table on § 10.9's renderer: a `.requires` link gets the
+/// `add-requires` line; a link of a section with a specifier the
+/// `Undetermined` text naming it in words and the `add-wants` line; a
+/// `systemd-fsck@` instance the device text and no command line; a
+/// hand-made alias the alias wording and no command line.
+#[test]
+fn t23_link_advisory_table() {
+    let link = |relation, parent: &str, unit: &str, cause| ManualLink {
+        relation,
+        parent: name(parent),
+        unit: name(unit),
+        cause,
+        install_files: Vec::new(),
+        aggregate: None,
+    };
+    let fsck = r"systemd-fsck@dev-disk-by\x2duuid-0a1b.service";
+    let cases = [
+        (
+            link(
+                LinkRelation::Requires,
+                "a.target",
+                "backup.service",
+                ManualLinkCause::StaticUnit,
+            ),
+            vec![
+                "# Advisory: a.target.requires/backup.service is a link on the source host that \
+                 backup.service's [Install] section there does not make (it names no link: \
+                 none, only Also=, or a list a drop-in reset to empty). Not carried."
+                    .to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-requires \
+                 -- 'a.target' 'backup.service'"
+                    .to_owned(),
+            ],
+        ),
+        (
+            link(
+                LinkRelation::Wants,
+                "multi-user.target",
+                "host.service",
+                ManualLinkCause::Undetermined {
+                    reason: InstallUnknown::Specifier,
+                },
+            ),
+            vec![
+                "# Advisory: multi-user.target.wants/host.service is not carried: the unit's \
+                 [Install] section cannot be relied on (a specifier inspectah does not expand)."
+                    .to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'multi-user.target' 'host.service'"
+                    .to_owned(),
+            ],
+        ),
+        (
+            link(
+                LinkRelation::Wants,
+                "local-fs.target",
+                fsck,
+                ManualLinkCause::HostDevice,
+            ),
+            vec![format!(
+                "# Advisory: {fsck} is tied to a device of the source host. Not carried."
+            )],
+        ),
+        (
+            link(
+                LinkRelation::Alias,
+                "backup-alias.service",
+                "backup.service",
+                ManualLinkCause::NotInInstall,
+            ),
+            vec![
+                "# Advisory: backup-alias.service is a link to backup.service made by hand on \
+                 the source host (the unit's [Install] section does not name \
+                 backup-alias.service). Not carried."
+                    .to_owned(),
+                "#   No systemctl verb but enable makes an alias link. To carry it, add \
+                 Alias=backup-alias.service in a drop-in for backup.service, or make the link \
+                 in the Containerfile."
+                    .to_owned(),
+            ],
+        ),
+    ];
+    for (link, expected) in cases {
+        assert_eq!(
+            render::unit_plan::manual_link_lines(&link),
+            expected,
+            "{link:?}"
+        );
+    }
+}
+
+/// T23: a local unit with `UpheldBy=multi-user.target` and its `.upholds`
+/// link, through the units and config inspectors. The link is on the host
+/// and the unit's own file is a config entry (the walk's positive
+/// control); then no state change, no instruction names the unit, the
+/// advisory holds the restart-loop text, and the link's path is in neither
+/// `config.files` nor the staged tree.
+#[test]
+fn t23_an_upholds_link_is_advised_and_never_carried() {
+    const UNIT: &str = "watch.service";
+    const LINK: &str = "/etc/systemd/system/multi-user.target.upholds/watch.service";
+    let snap = scan(
+        UnitHost::new()
+            .unit(UNIT, "enabled")
+            .preset("disable *")
+            .etc_unit(
+                UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nUpheldBy=multi-user.target\n",
+            )
+            .link(LINK, "/etc/systemd/system/watch.service"),
+    );
+    let config_paths: Vec<&str> = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .map(|f| f.path.as_str())
+        .collect();
+    assert!(
+        config_paths.contains(&"/etc/systemd/system/watch.service"),
+        "{config_paths:?}"
+    );
+    assert!(!config_paths.contains(&LINK), "{config_paths:?}");
+    let units = snap.units.as_ref().expect("a units section");
+    assert!(units.state_changes.is_empty(), "{:?}", units.state_changes);
+    let first = "# Advisory: multi-user.target.upholds/watch.service is not carried: the unit's \
+                 [Install] section cannot be relied on (enabling the unit would also make an \
+                 .upholds link).";
+    let expected = [
+        first.to_owned(),
+        "#   An .upholds link starts watch.service as soon as it exists and restarts it \
+         whenever it stops, so adding it for a unit that exits produces a restart loop. A \
+         RHEL 9 target does not honor it. To add it, put Upholds=watch.service in a drop-in \
+         for multi-user.target."
+            .to_owned(),
+    ];
+    for (route, tree) in both_exports(&snap) {
+        let containerfile = containerfile_in(&tree);
+        assert_eq!(
+            block_from(&containerfile, first),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            staged_at(&tree, "/etc/systemd/system/watch.service"),
+            "{route}"
+        );
+        assert!(!staged_at(&tree, LINK), "{route}");
+    }
+}
+
+/// T24's reset links through the scan:
+/// - a local unit with `WantedBy=multi-user.target`, an `/etc` drop-in
+///   holding only `WantedBy=` and its `multi-user.target.wants` link: the
+///   `StaticUnit` advisory and its `add-wants` line;
+/// - `RequiredBy=a.target` in a vendor unit, an empty `RequiredBy=` in an
+///   `/etc` drop-in and the `a.target.requires` link: the `Undetermined`
+///   advisory naming `RequiredByReset` in words, and the unit-level block
+///   naming the drop-in. No instruction names either unit.
+#[test]
+fn t24_reset_links_are_advised() {
+    let snap = scan(
+        UnitHost::new()
+            .unit("app.service", "enabled")
+            .preset("disable *")
+            .etc_unit("app.service", WANTS_MULTI_USER)
+            .file(
+                "/etc/systemd/system/app.service.d/10-reset.conf",
+                "[Install]\nWantedBy=\n",
+            )
+            .link(
+                "/etc/systemd/system/multi-user.target.wants/app.service",
+                "/etc/systemd/system/app.service",
+            )
+            .unit("need.service", "enabled")
+            .base_package("needpkg")
+            .vendor_unit(
+                "need.service",
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
+                Some("needpkg"),
+            )
+            .file(
+                "/etc/systemd/system/need.service.d/10-reset.conf",
+                "[Install]\nRequiredBy=\n",
+            )
+            .link(
+                "/etc/systemd/system/a.target.requires/need.service",
+                "/usr/lib/systemd/system/need.service",
+            ),
+    );
+    let static_first = "# Advisory: multi-user.target.wants/app.service is a link on the source \
+                        host that app.service's [Install] section there does not make (it names \
+                        no link: none, only Also=, or a list a drop-in reset to empty). Not \
+                        carried.";
+    let reset_first = "# Advisory: a.target.requires/need.service is not carried: the unit's \
+                       [Install] section cannot be relied on (an empty RequiredBy= whose effect \
+                       was not measured).";
+    let record_first = "# Advisory: need.service is not carried: its [Install] section on the \
+                        source host cannot be relied on (an empty RequiredBy= whose effect was \
+                        not measured), and these files under /etc/systemd/system change it: \
+                        /etc/systemd/system/need.service.d/10-reset.conf.";
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, static_first),
+            [
+                static_first.to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'multi-user.target' 'app.service'"
+                    .to_owned()
+            ],
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            block_from(&containerfile, reset_first),
+            [
+                reset_first.to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-requires \
+                 -- 'a.target' 'need.service'"
+                    .to_owned()
+            ],
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            block_from(&containerfile, record_first),
+            [
+                record_first.to_owned(),
+                undetermined_second_line("need.service")
+            ],
+            "{route}:\n{containerfile}"
+        );
+        for unit in ["app.service", "need.service"] {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, unit),
+                "{route} {unit}:\n{containerfile}"
+            );
+        }
+    }
+}
+
+/// The T40 host: `need.service`, a vendor unit of an installed package
+/// under an `enable` preset, with `unit_file` and, when given, an `/etc`
+/// drop-in `10-reset.conf` holding `drop_in`. No link to it anywhere.
+fn t40_host(unit_file: &str, drop_in: Option<&str>) -> UnitHost {
+    let host = UnitHost::new()
+        .unit("need.service", "disabled")
+        .preset("enable need.service")
+        .base_package("needpkg")
+        .vendor_unit("need.service", unit_file, Some("needpkg"));
+    match drop_in {
+        Some(text) => host.file(T40_DROP_IN, text),
+        None => host,
+    }
+}
+
+const T40_DROP_IN: &str = "/etc/systemd/system/need.service.d/10-reset.conf";
+
+/// T40 through the scan, the render and refine: the `RequiredBy=`-only
+/// vendor unit with a drop-in holding `RequiredBy=` and no link has its
+/// record, the block naming the unit, the reason and the drop-in on both
+/// routes, the refine row with the same block and no include field, and no
+/// `systemctl` line for the unit. The `UpheldBy=` drop-in gives the same
+/// with its reason. Control: the vendor unit with no `/etc` file and
+/// `UpheldBy=` in its own file has no record, and its `disable` is carried.
+#[test]
+fn t40_an_undetermined_section_with_an_etc_file_and_no_link() {
+    let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
+    for (drop_in, reason, words) in [
+        (
+            "[Install]\nRequiredBy=\n",
+            InstallUnknown::RequiredByReset,
+            "an empty RequiredBy= whose effect was not measured",
+        ),
+        (
+            "[Install]\nUpheldBy=a.target\n",
+            InstallUnknown::UpheldBy,
+            "enabling the unit would also make an .upholds link",
+        ),
+    ] {
+        let snap = scan(t40_host(required, Some(drop_in)));
+        let units = snap.units.as_ref().expect("a units section");
+        assert!(
+            units.drop_ins.iter().any(|d| d.path == T40_DROP_IN),
+            "{reason:?}: the drop-in is collected"
+        );
+        assert!(units.state_changes.is_empty(), "{reason:?}");
+        assert!(units.manual_links.is_empty(), "{reason:?}");
+        let expected = [
+            format!(
+                "# Advisory: need.service is not carried: its [Install] section on the source \
+                 host cannot be relied on ({words}), and these files under \
+                 /etc/systemd/system change it: {T40_DROP_IN}."
+            ),
+            undetermined_second_line("need.service"),
+        ];
+        let refine = session(&snap);
+        let rows = &refine.decisions().undetermined_installs;
+        assert_eq!(rows.len(), 1, "{reason:?}: {rows:?}");
+        assert_eq!(
+            (
+                rows[0].unit.as_str(),
+                rows[0].reason,
+                &rows[0].install_files
+            ),
+            ("need.service", reason, &vec![T40_DROP_IN.to_owned()]),
+            "{reason:?}"
+        );
+        assert_eq!(rows[0].advisories, expected, "{reason:?}");
+        assert!(
+            !has_include(serde_json::to_value(&rows[0]).expect("the row serializes")),
+            "{reason:?}"
+        );
+        for (route, containerfile) in both_routes(&snap) {
+            assert_eq!(
+                block_from(&containerfile, &expected[0]),
+                expected,
+                "{route} {reason:?}:\n{containerfile}"
+            );
+            assert!(
+                in_no_systemctl_instruction(&containerfile, "need.service"),
+                "{route} {reason:?}:\n{containerfile}"
+            );
+        }
+    }
+
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
+    let control = scan(t40_host(upheld, None));
+    assert!(
+        control
+            .units
+            .as_ref()
+            .expect("a units section")
+            .undetermined_installs
+            .is_empty()
+    );
+    for (route, containerfile) in both_routes(&control) {
+        assert!(
+            acts(&containerfile, "disable", "need.service"),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            !containerfile.contains("# Advisory: need.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
+/// T40's `UpheldBy=` vendor unit with no `/etc` file: with one link, the
+/// per-link advisory and no `systemctl` line for the unit; with
+/// `Also=helper.service` and no link, no state change and one record with
+/// no files, its block without the file clause and with the `Also=`
+/// sentence.
+#[test]
+fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
+    let linked = scan(t40_host(upheld, None).link(
+        "/etc/systemd/system/multi-user.target.wants/need.service",
+        "/usr/lib/systemd/system/need.service",
+    ));
+    let first = "# Advisory: multi-user.target.wants/need.service is not carried: the unit's \
+                 [Install] section cannot be relied on (enabling the unit would also make an \
+                 .upholds link).";
+    for (route, containerfile) in both_routes(&linked) {
+        assert_eq!(
+            block_from(&containerfile, first),
+            [
+                first.to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'multi-user.target' 'need.service'"
+                    .to_owned()
+            ],
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "need.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let also = scan(t40_host(&format!("{upheld}Also=helper.service\n"), None));
+    let units = also.units.as_ref().expect("a units section");
+    assert!(units.state_changes.is_empty(), "{:?}", units.state_changes);
+    assert_eq!(units.undetermined_installs.len(), 1);
+    assert!(units.undetermined_installs[0].install_files.is_empty());
+    let expected = [
+        "# Advisory: need.service is not carried: its [Install] section on the source host \
+         cannot be relied on (enabling the unit would also make an .upholds link). It assigns \
+         Also=, so the units it names are enabled or disabled with it in the image, and \
+         inspectah could not list them to check."
+            .to_owned(),
+        undetermined_second_line("need.service"),
+    ];
+    for (route, containerfile) in both_routes(&also) {
+        assert_eq!(
+            block_from(&containerfile, &expected[0]),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "need.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
 }

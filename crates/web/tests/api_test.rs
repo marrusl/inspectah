@@ -574,6 +574,8 @@ fn units_view_state() -> Arc<AppState> {
         ],
         inventory: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
@@ -669,6 +671,8 @@ fn scheduled_timer_state() -> Arc<AppState> {
         drop_ins: vec![],
         inventory: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap.scheduled_tasks = Some(ScheduledTaskSection {
         cron_jobs: vec![CronJob {
@@ -969,6 +973,8 @@ fn generated_collision_state(collected: bool) -> Arc<AppState> {
             drop_ins: vec![],
             inventory: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
     }
     // With `collected`, the host's own timer of the generated name is a
@@ -1906,6 +1912,8 @@ fn rich_snapshot() -> InspectionSnapshot {
             },
         ],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     snap.containers = Some(ContainerSection {
@@ -3003,6 +3011,8 @@ fn service_subsection_state() -> Arc<AppState> {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap.warnings.push(Warning {
         inspector: "units".into(),
@@ -3199,6 +3209,8 @@ fn locked_package_state() -> Arc<AppState> {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap.config = Some(ConfigSection { files: vec![] });
     Arc::new(AppState {

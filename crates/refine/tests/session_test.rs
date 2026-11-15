@@ -2100,6 +2100,8 @@ fn full_shadow_snapshot() -> InspectionSnapshot {
             ..Default::default()
         }],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap
 }
@@ -2423,6 +2425,8 @@ fn cascade_snapshot() -> InspectionSnapshot {
             drop_in(DROP_IN_ONLY_UNIT, DROP_IN_ONLY_PATH),
         ],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap
 }

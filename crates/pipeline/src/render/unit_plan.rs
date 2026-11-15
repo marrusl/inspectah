@@ -11,8 +11,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
-    CarriedUnit, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, UnitAction,
-    UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section,
+    CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause, MountUnitFinding,
+    OrdinaryKind, StorageKind, SystemdDropIn, UndeterminedInstall, UnitAction, UnitFragment,
+    UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -455,6 +456,13 @@ pub struct UnitPlan {
     /// ([`mount_advisory_lines`]), unescaped. Not commands: the section
     /// writes them after its `systemctl` lines (§ 10.1).
     pub mount_advisories: Vec<Vec<String>>,
+    /// § 10.9's comment lines, one block per hand-made link
+    /// ([`manual_link_lines`]), in the section's order, unescaped.
+    pub link_advisories: Vec<Vec<String>>,
+    /// § 10.9's unit-level block, one per undetermined install record
+    /// ([`undetermined_install_lines`]), in the section's order,
+    /// unescaped.
+    pub undetermined_advisories: Vec<Vec<String>>,
 }
 
 /// What asked for a generated unit's enable: the row it shows on (§ 11.1).
@@ -702,8 +710,10 @@ pub fn excluded_updater_line(name: &UnitName) -> DeclinedLine {
 /// The unit state section's lines for `plan`, in § 10.1's order: a line per
 /// declined command ([`declined_line`]), a line per excluded runtime
 /// updater ([`excluded_updater_line`]), then [`systemctl_lines`], then the
-/// comment-only mount advisory blocks ([`UnitPlan::mount_advisories`]),
-/// one after another. Each block starts with its `# Advisory:` line, so
+/// comment-only blocks one after another: the mount advisories
+/// ([`UnitPlan::mount_advisories`]), the hand-made link advisories
+/// ([`UnitPlan::link_advisories`]) and the undetermined install blocks
+/// ([`UnitPlan::undetermined_advisories`]). Each block starts with its `# Advisory:` line, so
 /// no line separates them.
 pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
     // The reason may name a package from the snapshot, so the finished
@@ -722,14 +732,209 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
             .map(|name| escape_comment_text(&excluded_updater_line(name).comment())),
     );
     lines.extend(systemctl_lines(&plan.planned));
-    // A mount point comes from a host file: escaped here, as above.
+    // A mount point comes from a host file, and an install file's path
+    // from a directory listing: escaped here, as above.
     lines.extend(
         plan.mount_advisories
             .iter()
+            .chain(&plan.link_advisories)
+            .chain(&plan.undetermined_advisories)
             .flatten()
             .map(|line| escape_comment_text(line)),
     );
     lines
+}
+
+// ---------------------------------------------------------------------------
+// § 10.9 hand-made link advisories
+// ---------------------------------------------------------------------------
+
+/// § 10.9's `StaticUnit` text after the link: it does not say who made
+/// the link, which may be a hand or an `enable` before the section changed.
+const LINK_STATIC_UNIT: &str = "[Install] section there does not make (it names no link: \
+     none, only Also=, or a list a drop-in reset to empty). Not carried.";
+
+/// § 10.9's `PartialInstall` text after the unit's name, before the link.
+const LINK_PARTIAL_INSTALL: &str = "has some of the links its [Install] section names and \
+     not others, so neither enable nor disable reproduces the source host. Not carried. Present:";
+
+/// § 10.9's start of the command line, before the verb.
+const LINK_COMMAND_PREFIX: &str =
+    "#   To carry it, add after the configuration COPY: RUN systemctl";
+
+/// § 10.9's unit-level block, the second line's text after the unit name
+/// (`The image's links for <unit>`).
+const UNDETERMINED_CHECK: &str = "can differ from the source host's, including links its \
+     package install made before these files are copied. Check them with systemctl is-enabled \
+     in the image.";
+
+/// § 10.9's sentence for an undetermined record with no install file.
+const UNDETERMINED_ASSIGNS_ALSO: &str = "It assigns Also=, so the units it names are enabled \
+     or disabled with it in the image, and inspectah could not list them to check.";
+
+/// Why a section cannot be relied on, in the words § 10.9 gives each
+/// [`InstallUnknown`] reason.
+pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
+    match reason {
+        InstallUnknown::Specifier => "a specifier inspectah does not expand",
+        InstallUnknown::RequiredByReset => "an empty RequiredBy= whose effect was not measured",
+        InstallUnknown::ForeignName => "a name this model does not admit",
+        InstallUnknown::UpheldBy => "enabling the unit would also make an .upholds link",
+    }
+}
+
+/// How § 10.9 names a link: `<parent>.<relation>/<unit>` for a link in a
+/// dependency directory, and for an alias the words `<parent> is a link to
+/// <unit>`, which take the place of the path and of the `is a link` after
+/// it. With relation `Also` there is no link: `<parent>` names `<unit>` in
+/// `Also=`.
+enum LinkName<'a> {
+    Path(String),
+    Alias { alias: &'a str, unit: &'a str },
+    Also { owner: &'a str, unit: &'a str },
+}
+
+impl<'a> LinkName<'a> {
+    fn of(link: &'a ManualLink) -> Self {
+        let (parent, unit) = (link.parent.as_str(), link.unit.as_str());
+        let dir = |suffix: &str| Self::Path(format!("{parent}.{suffix}/{unit}"));
+        match link.relation {
+            LinkRelation::Wants => dir("wants"),
+            LinkRelation::Requires => dir("requires"),
+            LinkRelation::Upholds => dir("upholds"),
+            LinkRelation::Alias => Self::Alias {
+                alias: parent,
+                unit,
+            },
+            LinkRelation::Also => Self::Also {
+                owner: parent,
+                unit,
+            },
+        }
+    }
+
+    /// The words that open a sentence saying the link is on the host:
+    /// `<path> is a link`, `<alias> is a link to <unit>`.
+    fn is_a_link(&self) -> String {
+        match self {
+            Self::Path(path) => format!("{path} is a link"),
+            Self::Alias { alias, unit } => format!("{alias} is a link to {unit}"),
+            Self::Also { owner, unit } => format!("{owner} names {unit} in Also="),
+        }
+    }
+
+    /// The link as the subject of a sentence that does not say it is a
+    /// link.
+    fn subject(&self) -> String {
+        match self {
+            Self::Path(path) => path.clone(),
+            Self::Alias { alias, unit } => format!("{alias}, a link to {unit},"),
+            Self::Also { owner, unit } => format!("{owner}'s Also= entry {unit}"),
+        }
+    }
+}
+
+/// The comment lines of § 10.9 for one hand-made link, the one source for
+/// the Containerfile and the view response. The lines are the spec's text
+/// with the names filled in, `#` included, and are not escaped: each
+/// surface escapes the finished line for itself.
+///
+/// - The first line by cause. For an alias, the link is named
+///   `<alias> is a link to <unit>` in place of its path ([`LinkName`]).
+/// - For the first four causes, one more line by relation: the
+///   `add-wants` or `add-requires` command, quoted after `--`, for a
+///   `.wants` or `.requires` link; for an `.upholds` link, what the link
+///   does and how to add it, since no verb makes one; for an alias, how to
+///   add it, since no verb but `enable` makes one. A `HostDevice` link gets
+///   no command.
+pub fn manual_link_lines(link: &ManualLink) -> Vec<String> {
+    let unit = link.unit.as_str();
+    let parent = link.parent.as_str();
+    let name = LinkName::of(link);
+    let first = match link.cause {
+        ManualLinkCause::StaticUnit => format!(
+            "# Advisory: {} on the source host that {unit}'s {LINK_STATIC_UNIT}",
+            name.is_a_link()
+        ),
+        ManualLinkCause::NotInInstall => format!(
+            "# Advisory: {} made by hand on the source host (the unit's [Install] section \
+             does not name {parent}). Not carried.",
+            name.is_a_link()
+        ),
+        ManualLinkCause::PartialInstall => {
+            let present = match &name {
+                LinkName::Path(path) => path.clone(),
+                LinkName::Alias { .. } | LinkName::Also { .. } => {
+                    name.subject().trim_end_matches(',').to_owned()
+                }
+            };
+            format!("# Advisory: {unit} {LINK_PARTIAL_INSTALL} {present}.")
+        }
+        ManualLinkCause::Undetermined { reason } => format!(
+            "# Advisory: {} is not carried: the unit's [Install] section cannot be relied on \
+             ({}).",
+            name.subject(),
+            install_unknown_words(reason)
+        ),
+        ManualLinkCause::HostDevice => {
+            return vec![format!(
+                "# Advisory: {unit} is tied to a device of the source host. Not carried."
+            )];
+        }
+    };
+    let second = match link.relation {
+        LinkRelation::Wants | LinkRelation::Requires => {
+            let verb = if link.relation == LinkRelation::Wants {
+                "add-wants"
+            } else {
+                "add-requires"
+            };
+            Some(format!(
+                "{LINK_COMMAND_PREFIX} {verb} -- {} {}",
+                single_quote(parent),
+                single_quote(unit)
+            ))
+        }
+        LinkRelation::Upholds => Some(format!(
+            "#   An .upholds link starts {unit} as soon as it exists and restarts it whenever \
+             it stops, so adding it for a unit that exits produces a restart loop. A RHEL 9 \
+             target does not honor it. To add it, put Upholds={unit} in a drop-in for {parent}."
+        )),
+        LinkRelation::Alias => Some(format!(
+            "#   No systemctl verb but enable makes an alias link. To carry it, add \
+             Alias={parent} in a drop-in for {unit}, or make the link in the Containerfile."
+        )),
+        // Not a link: there is nothing to make.
+        LinkRelation::Also => None,
+    };
+    std::iter::once(first).chain(second).collect()
+}
+
+/// § 10.9's unit-level block for one undetermined install record, the one
+/// source for the Containerfile and the view response, unescaped: its
+/// install files come from a directory listing, so each surface escapes the
+/// finished line for itself. A record with install files names them at
+/// the end of the first line; one with none assigns `Also=`, which the
+/// first line says instead.
+pub fn undetermined_install_lines(record: &UndeterminedInstall) -> Vec<String> {
+    let unit = record.unit.as_str();
+    let opening = format!(
+        "# Advisory: {unit} is not carried: its [Install] section on the source host cannot be \
+         relied on ({})",
+        install_unknown_words(record.reason)
+    );
+    let first = if record.install_files.is_empty() {
+        format!("{opening}. {UNDETERMINED_ASSIGNS_ALSO}")
+    } else {
+        format!(
+            "{opening}, and these files under /etc/systemd/system change it: {}.",
+            record.install_files.join(", ")
+        )
+    };
+    vec![
+        first,
+        format!("#   The image's links for {unit} {UNDETERMINED_CHECK}"),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -1652,6 +1857,12 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
         .mount_findings
         .iter()
         .map(|finding| mount_advisory_lines(finding, staged, &units.drop_ins))
+        .collect();
+    plan.link_advisories = units.manual_links.iter().map(manual_link_lines).collect();
+    plan.undetermined_advisories = units
+        .undetermined_installs
+        .iter()
+        .map(undetermined_install_lines)
         .collect();
     plan
 }

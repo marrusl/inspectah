@@ -10,7 +10,9 @@
 use super::install::{InstallRead, InstallSection};
 use super::resolve::{ETC_UNIT_DIR, VENDOR_UNIT_DIR};
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::types::units::{LinkRelation, UnitName, UnitState};
+use inspectah_core::types::units::{
+    LinkRelation, ManualLink, ManualLinkCause, UndeterminedInstall, UnitName, UnitState,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
@@ -29,6 +31,12 @@ const DEFAULT_TARGET: &str = "default.target";
 
 /// A link to this path masks a unit; it is not an alias.
 const DEV_NULL: &str = "/dev/null";
+
+/// The templates whose instances name a volume or an escaped device path of
+/// the source host. A link to one of their instances is never carried,
+/// whatever its `[Install]` says (§ 7.5 of the units spec). (Mark Russell,
+/// 2026-11-13)
+const HOST_DEVICE_TEMPLATES: [&str; 2] = ["systemd-cryptsetup@.service", "systemd-fsck@.service"];
 
 /// One link to a unit: the relation and the unit whose dependency
 /// directory holds it, or, for an alias, the alias name.
@@ -52,6 +60,11 @@ pub(crate) struct HostLinks {
     /// [`UnitName`]. Such a link makes no row of its own (§ 7.3), but it is
     /// still a link to the unit under `/etc`.
     pub(crate) admin_unparsed_parent: BTreeSet<UnitName>,
+    /// The paths of the entries of dependency directories under
+    /// `/etc/systemd/system` whose parent or own name does not parse as a
+    /// [`UnitName`]. Each gets a structured warning and nothing else
+    /// (§ 7.3).
+    pub(crate) admin_unparsed: Vec<String>,
     /// Whether some read under `/etc/systemd/system` failed, so links there
     /// may be missing from [`admin`](HostLinks::admin).
     pub(crate) admin_unreadable: bool,
@@ -92,6 +105,7 @@ pub(crate) fn read_host_links(exec: &dyn Executor) -> (HostLinks, Vec<String>) {
     let links = HostLinks {
         admin: admin.links,
         admin_unparsed_parent: admin.unparsed_parent,
+        admin_unparsed: admin.unparsed,
         admin_unreadable: admin.unreadable,
         vendor: vendor.links,
     };
@@ -105,6 +119,9 @@ struct RootLinks {
     /// The units linked from a dependency directory whose parent does not
     /// parse.
     unparsed_parent: BTreeSet<UnitName>,
+    /// The paths of the dependency-directory entries whose parent or own
+    /// name does not parse.
+    unparsed: Vec<String>,
     /// Whether a read under the directory failed.
     unreadable: bool,
 }
@@ -148,7 +165,9 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
             };
             let parent = UnitName::try_from(parent).ok();
             for name in names {
+                let link_path = format!("{path}/{name}");
                 let Ok(unit) = UnitName::try_from(name) else {
+                    read.unparsed.push(link_path);
                     continue;
                 };
                 match &parent {
@@ -157,6 +176,7 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
                         parent: parent.clone(),
                     }),
                     None => {
+                        read.unparsed.push(link_path);
                         read.unparsed_parent.insert(unit);
                     }
                 }
@@ -260,6 +280,112 @@ pub(crate) fn install_state(
         }
         InstallRead::Undetermined { assigns_also, .. } => {
             (!any_admin_link && !assigns_also).then_some(UnitState::Disabled)
+        }
+    }
+}
+
+/// What the links say about one unit (§ 7.3 of the units spec): its
+/// install state, the links reported and not carried, and the record of a
+/// section that cannot be relied on.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LinkFindings {
+    /// The install state; `None` is no install state.
+    pub(crate) state: Option<UnitState>,
+    pub(crate) manual_links: Vec<ManualLink>,
+    pub(crate) undetermined: Option<UndeterminedInstall>,
+}
+
+/// Read § 7.3's table for `unit`, whose effective section is `read`, with
+/// `etc_install_files` its install files under `/etc/systemd/system` (its
+/// unit file or shadow there, and its install drop-ins, § 10.2).
+///
+/// - An instance of a [`HOST_DEVICE_TEMPLATES`] template has no install
+///   state, and each of its links under `/etc` is a `HostDevice` link.
+/// - With no section, or a `Known` one that names no link, each link under
+///   `/etc` is a `StaticUnit` link.
+/// - With a `Known` section that names links, a link outside them is a
+///   `NotInInstall` link when the unit is `Enabled` or `Disabled`; when
+///   neither verb reproduces the links, each link under `/etc` is a
+///   `PartialInstall` link.
+/// - With an `Undetermined` section, each link under `/etc` is an
+///   `Undetermined` link with its reason. The unit has one
+///   [`UndeterminedInstall`] when it assigns `Also=` or has an install file
+///   under `/etc`, and then no install state either; otherwise it is
+///   `Disabled` with no link under `/etc` (§ 7.3's table, with T40 for the
+///   unit with an `/etc` file and no link).
+///
+/// A link under a parent that does not parse makes no finding; it still
+/// counts as a link to the unit under `/etc`.
+pub(crate) fn link_findings(
+    unit: &UnitName,
+    read: &InstallRead,
+    links: &HostLinks,
+    etc_install_files: &[String],
+) -> LinkFindings {
+    let admin = links.admin(unit);
+    let report = |cause: ManualLinkCause, linked: &mut dyn Iterator<Item = &Link>| {
+        linked
+            .map(|link| ManualLink {
+                relation: link.relation,
+                parent: link.parent.clone(),
+                unit: unit.clone(),
+                cause,
+                install_files: Vec::new(),
+                aggregate: None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let host_device = unit
+        .instance()
+        .is_some_and(|instance| HOST_DEVICE_TEMPLATES.contains(&instance.template().as_str()));
+    if host_device {
+        return LinkFindings {
+            state: None,
+            manual_links: report(ManualLinkCause::HostDevice, &mut admin.iter()),
+            undetermined: None,
+        };
+    }
+    let state = install_state(read, admin, links.any_admin_link(unit), links.vendor(unit));
+    match read {
+        InstallRead::Absent => LinkFindings {
+            state,
+            manual_links: report(ManualLinkCause::StaticUnit, &mut admin.iter()),
+            undetermined: None,
+        },
+        InstallRead::Known(section) => {
+            let expected = expected_links(section);
+            let manual_links = match state {
+                _ if expected.is_empty() => report(ManualLinkCause::StaticUnit, &mut admin.iter()),
+                Some(_) => report(
+                    ManualLinkCause::NotInInstall,
+                    &mut admin.iter().filter(|link| !expected.contains(link)),
+                ),
+                None => report(ManualLinkCause::PartialInstall, &mut admin.iter()),
+            };
+            LinkFindings {
+                state,
+                manual_links,
+                undetermined: None,
+            }
+        }
+        InstallRead::Undetermined {
+            reason,
+            assigns_also,
+        } => {
+            let recorded = *assigns_also || !etc_install_files.is_empty();
+            LinkFindings {
+                state: state.filter(|_| !recorded),
+                manual_links: report(
+                    ManualLinkCause::Undetermined { reason: *reason },
+                    &mut admin.iter(),
+                ),
+                undetermined: recorded.then(|| UndeterminedInstall {
+                    unit: unit.clone(),
+                    reason: *reason,
+                    install_files: etc_install_files.to_vec(),
+                    aggregate: None,
+                }),
+            }
         }
     }
 }
@@ -660,5 +786,233 @@ mod tests {
             };
             assert_eq!(links, expected, "{dir}");
         }
+    }
+
+    /// `HostLinks` with `admin` links to `name` under `/etc`.
+    fn host_with(name: &str, admin: Vec<Link>) -> HostLinks {
+        HostLinks {
+            admin: LinksByUnit::from([(unit(name), admin)]),
+            ..HostLinks::default()
+        }
+    }
+
+    /// The (relation, parent, cause) of each link finding.
+    fn found(findings: &LinkFindings) -> Vec<(LinkRelation, &str, ManualLinkCause)> {
+        findings
+            .manual_links
+            .iter()
+            .map(|l| (l.relation, l.parent.as_str(), l.cause))
+            .collect()
+    }
+
+    /// § 7.3's last column and § 7.5's device templates: which links under
+    /// `/etc` are reported, with which cause, and when an undetermined
+    /// section gets its record.
+    #[test]
+    fn link_findings_follow_the_table() {
+        use ManualLinkCause::{HostDevice, NotInInstall, PartialInstall, StaticUnit};
+        let multi = &["multi-user.target"][..];
+        let rescue = wants("rescue.target");
+
+        // A systemd-fsck@ instance: whatever its section says, its link is
+        // a device link and it has no state. Control: an instance of
+        // another template with the same section and link is `Enabled`.
+        let fsck = r"systemd-fsck@dev-disk-by\x2duuid-0a1b.service";
+        let fsck_found = link_findings(
+            &unit(fsck),
+            &section(multi, &[], &[]),
+            &host_with(fsck, vec![wants("multi-user.target")]),
+            &[],
+        );
+        assert_eq!(fsck_found.state, None);
+        assert_eq!(
+            found(&fsck_found),
+            [(LinkRelation::Wants, "multi-user.target", HostDevice)]
+        );
+        let other = "worker@site.service";
+        let other_found = link_findings(
+            &unit(other),
+            &section(multi, &[], &[]),
+            &host_with(other, vec![wants("multi-user.target")]),
+            &[],
+        );
+        assert_eq!(other_found.state, Some(UnitState::Enabled));
+        assert!(other_found.manual_links.is_empty());
+
+        // `Absent`, and `Known` with nothing expected: static links.
+        for read in [InstallRead::Absent, section(&[], &[], &[])] {
+            let f = link_findings(
+                &unit("a.service"),
+                &read,
+                &host_with("a.service", vec![rescue.clone()]),
+                &[],
+            );
+            assert_eq!(f.state, None);
+            assert_eq!(
+                found(&f),
+                [(LinkRelation::Wants, "rescue.target", StaticUnit)]
+            );
+        }
+
+        // `Known`: enable-made links report nothing, others are not in the
+        // section; two values and one link is a partial install.
+        let both = link_findings(
+            &unit("a.service"),
+            &section(multi, &[], &[]),
+            &host_with(
+                "a.service",
+                vec![wants("multi-user.target"), rescue.clone()],
+            ),
+            &[],
+        );
+        assert_eq!(both.state, Some(UnitState::Enabled));
+        assert_eq!(
+            found(&both),
+            [(LinkRelation::Wants, "rescue.target", NotInInstall)]
+        );
+        let partial = link_findings(
+            &unit("a.service"),
+            &section(&["multi-user.target", "graphical.target"], &[], &[]),
+            &host_with("a.service", vec![wants("multi-user.target")]),
+            &[],
+        );
+        assert_eq!(partial.state, None);
+        assert_eq!(
+            found(&partial),
+            [(LinkRelation::Wants, "multi-user.target", PartialInstall)]
+        );
+
+        // `Undetermined`: each link carries the reason; the record comes
+        // with an `/etc` install file or `Also=`, and then no state.
+        let reason = InstallUnknown::RequiredByReset;
+        let undetermined = |assigns_also| InstallRead::Undetermined {
+            reason,
+            assigns_also,
+        };
+        let file = "/etc/systemd/system/a.service.d/10-reset.conf".to_owned();
+        let record = |files: Vec<String>| UndeterminedInstall {
+            unit: unit("a.service"),
+            reason,
+            install_files: files,
+            aggregate: None,
+        };
+        // (case, assigns Also=, /etc files, links, state, links found, record)
+        type Case = (
+            &'static str,
+            bool,
+            Vec<String>,
+            Vec<Link>,
+            Option<UnitState>,
+            usize,
+            Option<UndeterminedInstall>,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "no file, no link",
+                false,
+                vec![],
+                vec![],
+                Some(UnitState::Disabled),
+                0,
+                None,
+            ),
+            (
+                "a file, no link",
+                false,
+                vec![file.clone()],
+                vec![],
+                None,
+                0,
+                Some(record(vec![file.clone()])),
+            ),
+            (
+                "no file, a link",
+                false,
+                vec![],
+                vec![requires("a.target")],
+                None,
+                1,
+                None,
+            ),
+            (
+                "a file and a link",
+                false,
+                vec![file.clone()],
+                vec![requires("a.target")],
+                None,
+                1,
+                Some(record(vec![file.clone()])),
+            ),
+            (
+                "Also=, no link",
+                true,
+                vec![],
+                vec![],
+                None,
+                0,
+                Some(record(vec![])),
+            ),
+            (
+                "Also= and a link",
+                true,
+                vec![],
+                vec![requires("a.target")],
+                None,
+                1,
+                Some(record(vec![])),
+            ),
+        ];
+        for (case, assigns_also, files, admin, state, links, expected) in cases {
+            let f = link_findings(
+                &unit("a.service"),
+                &undetermined(assigns_also),
+                &host_with("a.service", admin),
+                &files,
+            );
+            assert_eq!(f.state, state, "{case}");
+            assert_eq!(f.manual_links.len(), links, "{case}");
+            assert!(
+                f.manual_links
+                    .iter()
+                    .all(|l| l.cause == ManualLinkCause::Undetermined { reason }),
+                "{case}"
+            );
+            assert_eq!(f.undetermined, expected, "{case}");
+        }
+    }
+
+    /// The entries of `/etc` dependency directories whose parent or own
+    /// name does not parse are listed by path for the warning; a vendor
+    /// one is not.
+    #[test]
+    fn unparsed_links_under_etc_are_listed_by_path() {
+        let exec = MockExecutor::new()
+            .with_dir(
+                ETC_UNIT_DIR,
+                vec!["dev-foo.device.wants", "multi-user.target.wants"],
+            )
+            .with_dir(
+                &format!("{ETC_UNIT_DIR}/dev-foo.device.wants"),
+                vec!["guest.service"],
+            )
+            .with_dir(
+                &format!("{ETC_UNIT_DIR}/multi-user.target.wants"),
+                vec!["not a unit", "app.service"],
+            )
+            .with_dir(VENDOR_UNIT_DIR, vec!["multi-user.target.wants"])
+            .with_dir(
+                &format!("{VENDOR_UNIT_DIR}/multi-user.target.wants"),
+                vec!["also not a unit"],
+            );
+        let (links, failures) = read_host_links(&exec);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            links.admin_unparsed,
+            [
+                format!("{ETC_UNIT_DIR}/dev-foo.device.wants/guest.service"),
+                format!("{ETC_UNIT_DIR}/multi-user.target.wants/not a unit"),
+            ]
+        );
+        assert_eq!(links.admin(&unit("app.service")).len(), 1);
     }
 }

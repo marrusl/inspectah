@@ -174,6 +174,8 @@ fn test_service_render_plan_omits_proven_absent_service() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -226,6 +228,8 @@ fn test_service_render_plan_emits_package_unreachable_service() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -264,6 +268,8 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -319,6 +325,8 @@ fn test_service_render_plan_proven_present_emits_clean() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -362,6 +370,8 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -419,6 +429,8 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -471,6 +483,8 @@ fn test_aggregate_snapshot_skips_service_omission_and_advisories() {
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 
     let plan = render(&snap);
@@ -531,6 +545,8 @@ fn a_commandline_package_owning_a_unit_is_unreachable_unless_a_repo_serves_it() 
             inventory: vec![],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         });
         snap
     };
@@ -808,6 +824,8 @@ fn test_service_presence_tiers_table() {
                 inventory: vec![],
                 drop_ins: vec![],
                 mount_findings: Vec::new(),
+                manual_links: Vec::new(),
+                undetermined_installs: Vec::new(),
             });
 
             let plan = render(&snap);
@@ -952,6 +970,8 @@ fn leaf_snapshot(
         inventory: vec![],
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
     snap
 }
@@ -1460,6 +1480,8 @@ fn omitted_comment_keeps_a_hostile_owner_inside_the_comment() {
             inventory: vec![],
             drop_ins: vec![],
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         };
 
         let mut excluded = InspectionSnapshot::new();

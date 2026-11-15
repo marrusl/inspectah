@@ -1187,6 +1187,69 @@ pub struct UnitSection {
     pub drop_ins: Vec<SystemdDropIn>,
     /// The administrator's mount, automount and swap units.
     pub mount_findings: Vec<MountUnitFinding>,
+    /// Links inspectah reports and does not carry (§ 6.6 of the units
+    /// spec).
+    pub manual_links: Vec<ManualLink>,
+    /// Units whose `[Install]` cannot be relied on, where the image's
+    /// links can differ from the host's with nothing else to say so
+    /// (§ 6.6, § 7.3).
+    pub undetermined_installs: Vec<UndeterminedInstall>,
+}
+
+/// Why a link on the source host is reported and not carried (§ 6.6 of
+/// the units spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualLinkCause {
+    /// The linked unit has no link of its own to make: no `[Install]`
+    /// section, or one that names no link (only `Also=`, or lists a
+    /// drop-in reset to empty).
+    StaticUnit,
+    /// The unit's `[Install]` section does not name this parent for this
+    /// relation.
+    NotInInstall,
+    /// The section names this link and others that are absent, so neither
+    /// `enable` nor `disable` reproduces the host.
+    PartialInstall,
+    /// The `[Install]` section cannot be relied on, one that holds
+    /// `UpheldBy=` included. The reason is kept so the advisory can name
+    /// it.
+    Undetermined { reason: InstallUnknown },
+    /// An instance of a template tied to one host's devices (§ 7.5).
+    HostDevice,
+}
+
+/// A link on the source host that inspectah reports and does not carry
+/// (§ 6.6 of the units spec). It holds no carried unit and no decision:
+/// nothing turns it into a command, and it has no toggle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualLink {
+    pub relation: LinkRelation,
+    /// The unit whose `.wants`, `.requires` or `.upholds` directory holds
+    /// the link. For an alias, the alias name.
+    pub parent: UnitName,
+    pub unit: UnitName,
+    pub cause: ManualLinkCause,
+    /// For the two install-difference causes: the `/etc` install files
+    /// that produce the difference. Empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub install_files: Vec<String>,
+    pub aggregate: Option<AggregatePrevalence>,
+}
+
+/// A unit whose `[Install]` on the source host is `Undetermined` and whose
+/// `/etc` install files change it, or that assigns `Also=`, so its members
+/// cannot be listed or checked (§ 6.6, § 7.3 of the units spec). One per
+/// unit, whether or not the unit has a link, since the image's links can
+/// differ from the host's with no link on either side to report.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UndeterminedInstall {
+    pub unit: UnitName,
+    pub reason: InstallUnknown,
+    /// The unit's `/etc` install files: its unit file or shadow, and its
+    /// install drop-ins. Empty when it has none.
+    pub install_files: Vec<String>,
+    pub aggregate: Option<AggregatePrevalence>,
 }
 
 #[cfg(test)]
@@ -1510,6 +1573,8 @@ mod tests {
             }],
             drop_ins: vec![],
             mount_findings: vec![],
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         };
 
         let json = serde_json::to_string(&section).unwrap();
@@ -1605,6 +1670,8 @@ mod tests {
             ],
             drop_ins: Vec::new(),
             mount_findings: Vec::new(),
+            manual_links: Vec::new(),
+            undetermined_installs: Vec::new(),
         };
         let json = serde_json::to_string(&section).unwrap();
         let parsed: UnitSection = serde_json::from_str(&json).unwrap();
@@ -1623,10 +1690,10 @@ mod tests {
     fn test_missing_field_fails_deserialization() {
         // A missing inventory must fail, not silently backfill. The same
         // payload with the field loads.
-        let with_field = r#"{"state_changes":[],"inventory":[],"drop_ins":[],"mount_findings":[]}"#;
+        let with_field = r#"{"state_changes":[],"inventory":[],"drop_ins":[],"mount_findings":[],"manual_links":[],"undetermined_installs":[]}"#;
         serde_json::from_str::<UnitSection>(with_field).expect("complete section loads");
 
-        let json = r#"{"state_changes":[],"drop_ins":[],"mount_findings":[]}"#;
+        let json = r#"{"state_changes":[],"drop_ins":[],"mount_findings":[],"manual_links":[],"undetermined_installs":[]}"#;
         let err = serde_json::from_str::<UnitSection>(json).unwrap_err();
         assert!(
             err.to_string().contains("inventory"),

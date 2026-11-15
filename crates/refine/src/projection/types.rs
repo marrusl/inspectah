@@ -10,7 +10,10 @@ use inspectah_core::types::config::{ConfigCategory, ConfigShadow};
 use inspectah_core::types::containers::ComposeService;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_core::types::storage::VarDirBacking;
-use inspectah_core::types::units::{PresetDefault, SystemdDropIn, UnitName, UnitState};
+use inspectah_core::types::units::{
+    InstallUnknown, LinkRelation, ManualLinkCause, PresetDefault, SystemdDropIn, UnitName,
+    UnitState,
+};
 use inspectah_core::types::users::UserGroupDecision;
 use inspectah_pipeline::export_warning::ExportWarning;
 use inspectah_pipeline::render::unit_plan::{AdvisoryReason, OmissionReason};
@@ -28,6 +31,12 @@ pub struct DecisionProjection {
     /// One row per administrator's mount, automount or swap unit. These
     /// rows have no toggle.
     pub mount_findings: Vec<MountFindingView>,
+    /// One row per link inspectah reports and does not carry (§ 11.1).
+    /// These rows have no toggle.
+    pub manual_links: Vec<ManualLinkView>,
+    /// One row per unit whose `[Install]` cannot be relied on (§ 11.1).
+    /// These rows have no toggle.
+    pub undetermined_installs: Vec<UndeterminedInstallView>,
     /// The included config rows whose file the export does not write, by
     /// the row's own `path`: only an included row offers a file, so the
     /// row is the included config entry at that path.
@@ -220,6 +229,35 @@ pub struct MountFindingView {
     pub unit_file_path: Option<String>,
     /// § 10.6's lines for the finding, as the Containerfile writes them
     /// before escaping.
+    pub advisories: Vec<String>,
+}
+
+/// A link inspectah reports and does not carry, as refine shows it
+/// (§ 11.1). No `include`: the row has no toggle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualLinkView {
+    pub relation: LinkRelation,
+    /// The unit whose dependency directory holds the link, or the alias
+    /// name.
+    pub parent: UnitName,
+    pub unit: UnitName,
+    /// Why the link is not carried; `undetermined` carries its reason.
+    pub cause: ManualLinkCause,
+    /// § 10.9's lines for the link, as the Containerfile writes them before
+    /// escaping.
+    pub advisories: Vec<String>,
+}
+
+/// A unit whose `[Install]` cannot be relied on, as refine shows it
+/// (§ 11.1). No `include`: the row has no toggle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UndeterminedInstallView {
+    pub unit: UnitName,
+    pub reason: InstallUnknown,
+    /// The unit's install files under `/etc/systemd/system`.
+    pub install_files: Vec<String>,
+    /// § 10.9's block for the unit, as the Containerfile writes it before
+    /// escaping.
     pub advisories: Vec<String>,
 }
 

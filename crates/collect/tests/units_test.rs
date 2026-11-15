@@ -12,8 +12,8 @@ use inspectah_core::types::finding::{AdvisoryType, FindingKind, ShadowType};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, OrdinaryKind, PresetDefault, UnitAction, UnitFragment,
-    UnitKind, UnitName, UnitSection, UnitState,
+    AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLinkCause, OrdinaryKind,
+    PresetDefault, UnitAction, UnitFragment, UnitKind, UnitName, UnitSection, UnitState,
 };
 use inspectah_core::types::warnings::Warning;
 
@@ -3868,4 +3868,420 @@ fn a_semicolon_preset_line_is_a_comment() {
         Some((UnitState::Enabled, Some(PresetDefault::Disable)))
     );
     assert!(scan_warnings(&exec).is_empty());
+}
+
+// ── Hand-made links and undetermined installs (§ 6.6, § 7.3, T22 to T24, T40) ──
+
+/// Each hand-made link the scan reports: relation, parent, unit and cause.
+fn manual_links(section: &UnitSection) -> Vec<(LinkRelation, &str, &str, ManualLinkCause)> {
+    section
+        .manual_links
+        .iter()
+        .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+        .collect()
+}
+
+/// Each undetermined install record: unit, reason and install files.
+fn undetermined(section: &UnitSection) -> Vec<(&str, InstallUnknown, Vec<&str>)> {
+    section
+        .undetermined_installs
+        .iter()
+        .map(|r| {
+            (
+                r.unit.as_str(),
+                r.reason,
+                r.install_files.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect()
+}
+
+/// T22's link half, on the T22 hosts: one `NotInInstall` link for the
+/// `rescue.target.wants/` link, the extra link alone when both links
+/// exist, `PartialInstall` for two `WantedBy=` values and one link, and
+/// nothing for a link shipped under `/usr/lib`. Control: the expected link
+/// alone reports nothing.
+#[test]
+fn t22_link_findings() {
+    use LinkRelation::Wants;
+    use ManualLinkCause::{NotInInstall, PartialInstall};
+    let two_targets = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target graphical.target\n";
+    type Found<'a> = Vec<(LinkRelation, &'a str, &'a str, ManualLinkCause)>;
+    // (case, unit file, links as (root, directory), links found)
+    type Case<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], Found<'a>);
+    let cases: [Case; 5] = [
+        (
+            "only a rescue.target.wants link",
+            WANTS_MULTI_USER,
+            &[(ETC, "rescue.target.wants")],
+            vec![(Wants, "rescue.target", "backup.service", NotInInstall)],
+        ),
+        (
+            "both links",
+            WANTS_MULTI_USER,
+            &[
+                (ETC, "rescue.target.wants"),
+                (ETC, "multi-user.target.wants"),
+            ],
+            vec![(Wants, "rescue.target", "backup.service", NotInInstall)],
+        ),
+        (
+            "two WantedBy= values and one link",
+            two_targets,
+            &[(ETC, "multi-user.target.wants")],
+            vec![(Wants, "multi-user.target", "backup.service", PartialInstall)],
+        ),
+        (
+            "the second link shipped under /usr/lib",
+            two_targets,
+            &[
+                (ETC, "multi-user.target.wants"),
+                (VENDOR, "graphical.target.wants"),
+            ],
+            vec![],
+        ),
+        (
+            "control: the expected link alone",
+            WANTS_MULTI_USER,
+            &[(ETC, "multi-user.target.wants")],
+            vec![],
+        ),
+    ];
+    for (case, unit_file, links, expected) in cases {
+        let mut exec = unlinked_host(&[("backup.service", "enabled")], "disable *\n")
+            .with_file(&format!("{VENDOR}/backup.service"), unit_file);
+        for (root, dir) in links {
+            exec = with_link_in(exec, root, dir, "backup.service");
+        }
+        let (section, _) = scan(&exec);
+        assert_eq!(manual_links(&section), expected, "{case}");
+        assert!(section.undetermined_installs.is_empty(), "{case}");
+    }
+}
+
+/// T23's table through the scan:
+/// - a `multi-user.target.wants` link to a unit with no `[Install]` is a
+///   `StaticUnit` link, and so is a `.requires` link;
+/// - a link to a unit whose `WantedBy=` holds a specifier inspectah does
+///   not expand is `Undetermined(Specifier)`;
+/// - an alias under `/etc/systemd/system` that the unit's `Alias=` does not
+///   name is a `NotInInstall` link with relation `Alias` and the alias name
+///   as its parent, while the enable-made link reports nothing;
+/// - `UpheldBy=multi-user.target` with its `.upholds` link is
+///   `Undetermined(UpheldBy)`, with no state change and no inventory entry.
+///
+/// Each subject is first shown on the host (the link is in the listing),
+/// and a unit at the expected link alone reports nothing (T22's control).
+#[test]
+fn t23_hand_made_link_causes() {
+    let no_install = "[Service]\nExecStart=/bin/true\n";
+    let static_host = |dir: &str| {
+        with_link_in(
+            unlinked_host(&[("backup.service", "static")], "disable *\n")
+                .with_file(&format!("{VENDOR}/backup.service"), no_install),
+            ETC,
+            dir,
+            "backup.service",
+        )
+    };
+    for (dir, relation, parent) in [
+        (
+            "multi-user.target.wants",
+            LinkRelation::Wants,
+            "multi-user.target",
+        ),
+        ("a.target.requires", LinkRelation::Requires, "a.target"),
+    ] {
+        let (section, _) = scan(&static_host(dir));
+        assert_eq!(
+            manual_links(&section),
+            [(
+                relation,
+                parent,
+                "backup.service",
+                ManualLinkCause::StaticUnit
+            )],
+            "{dir}"
+        );
+        assert!(section.state_changes.is_empty(), "{dir}");
+    }
+
+    let (specifier, _) = scan(&with_link_in(
+        unlinked_host(&[("host.service", "enabled")], "disable *\n").with_file(
+            &format!("{VENDOR}/host.service"),
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=%H.target\n",
+        ),
+        ETC,
+        "multi-user.target.wants",
+        "host.service",
+    ));
+    assert_eq!(
+        manual_links(&specifier),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target",
+            "host.service",
+            ManualLinkCause::Undetermined {
+                reason: InstallUnknown::Specifier
+            }
+        )]
+    );
+
+    let aliased = with_link_in(
+        unlinked_host(&[("backup.service", "enabled")], "disable *\n")
+            .with_file(&format!("{VENDOR}/backup.service"), WANTS_MULTI_USER),
+        ETC,
+        "multi-user.target.wants",
+        "backup.service",
+    )
+    .with_dir_entry(ETC, "backup-alias.service")
+    .with_link(
+        &format!("{ETC}/backup-alias.service"),
+        &format!("{VENDOR}/backup.service"),
+    );
+    let (alias, _) = scan(&aliased);
+    assert_eq!(
+        entry_of(&alias, "backup.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Disable))),
+        "the alias stands beside an enabled unit"
+    );
+    assert_eq!(
+        manual_links(&alias),
+        [(
+            LinkRelation::Alias,
+            "backup-alias.service",
+            "backup.service",
+            ManualLinkCause::NotInInstall
+        )]
+    );
+
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nUpheldBy=multi-user.target\n";
+    let (upholds, _) = scan(&with_link_in(
+        unlinked_host(&[("watch.service", "enabled")], "enable watch.service\n")
+            .with_file(&format!("{VENDOR}/watch.service"), upheld),
+        ETC,
+        "multi-user.target.upholds",
+        "watch.service",
+    ));
+    assert_eq!(
+        manual_links(&upholds),
+        [(
+            LinkRelation::Upholds,
+            "multi-user.target",
+            "watch.service",
+            ManualLinkCause::Undetermined {
+                reason: InstallUnknown::UpheldBy
+            }
+        )]
+    );
+    assert!(upholds.state_changes.is_empty());
+    assert_eq!(entry_of(&upholds, "watch.service"), None);
+    assert!(upholds.undetermined_installs.is_empty(), "no /etc file");
+}
+
+/// T24's reset links:
+/// - a local unit with `WantedBy=multi-user.target`, an `/etc` drop-in
+///   holding only `WantedBy=`, and its `multi-user.target.wants` link:
+///   a `StaticUnit` link, the drop-in shown collected first. Control:
+///   without the drop-in the link is enable-made and reports nothing.
+/// - `RequiredBy=a.target` in a vendor unit, an `/etc` drop-in holding an
+///   empty `RequiredBy=`, and the `a.target.requires` link: an
+///   `Undetermined(RequiredByReset)` link, no state change, and one record
+///   naming the drop-in.
+#[test]
+fn t24_reset_links() {
+    let drop_in_dir = format!("{ETC}/app.service.d");
+    let local = || {
+        with_link_in(
+            unlinked_host(&[("app.service", "enabled")], "disable *\n")
+                .with_dir_entry(ETC, "app.service")
+                .with_file(&format!("{ETC}/app.service"), WANTS_MULTI_USER),
+            ETC,
+            "multi-user.target.wants",
+            "app.service",
+        )
+    };
+    let (control, _) = scan(&local());
+    assert!(
+        control.manual_links.is_empty(),
+        "{:?}",
+        control.manual_links
+    );
+
+    let (reset, _) = scan(&with_drop_in(
+        local().with_dir_entry(ETC, "app.service.d"),
+        &drop_in_dir,
+        "10-reset.conf",
+        "[Install]\nWantedBy=\n",
+    ));
+    assert!(
+        drop_in_paths(&reset).contains(&format!("{drop_in_dir}/10-reset.conf").as_str()),
+        "{:?}",
+        drop_in_paths(&reset)
+    );
+    assert_eq!(
+        manual_links(&reset),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target",
+            "app.service",
+            ManualLinkCause::StaticUnit
+        )]
+    );
+
+    let need_dir = format!("{ETC}/need.service.d");
+    let required = with_drop_in(
+        with_link_in(
+            unlinked_host(&[("need.service", "enabled")], "enable need.service\n")
+                .with_file(
+                    &format!("{VENDOR}/need.service"),
+                    "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
+                )
+                .with_dir_entry(ETC, "need.service.d"),
+            ETC,
+            "a.target.requires",
+            "need.service",
+        ),
+        &need_dir,
+        "10-reset.conf",
+        "[Install]\nRequiredBy=\n",
+    );
+    let (section, _) = scan(&required);
+    let reason = InstallUnknown::RequiredByReset;
+    assert_eq!(
+        manual_links(&section),
+        [(
+            LinkRelation::Requires,
+            "a.target",
+            "need.service",
+            ManualLinkCause::Undetermined { reason }
+        )]
+    );
+    assert!(section.state_changes.is_empty());
+    assert_eq!(
+        undetermined(&section),
+        [(
+            "need.service",
+            reason,
+            vec![format!("{need_dir}/10-reset.conf").as_str()]
+        )]
+    );
+}
+
+/// T40 through the scan, each a vendor unit under an `enable` preset:
+/// - `RequiredBy=a.target` with an `/etc` drop-in holding `RequiredBy=`
+///   and no link: the drop-in is collected, then no state change, no link
+///   and one record naming the unit, `RequiredByReset` and the drop-in;
+/// - the same with an `UpheldBy=` drop-in: the record with `UpheldBy`;
+/// - control: `UpheldBy=` in the unit's own file, no `/etc` file and no
+///   link: a `Disabled` state change and no record; with one link: no
+///   state change, the link, and no record;
+/// - with `Also=helper.service` added and no link: no state change and one
+///   record with no files; with one link, the link and the same record.
+#[test]
+fn t40_undetermined_installs() {
+    let dir = format!("{ETC}/need.service.d");
+    let host = |unit_file: &str| {
+        unlinked_host(&[("need.service", "disabled")], "enable need.service\n")
+            .with_file(&format!("{VENDOR}/need.service"), unit_file)
+    };
+    let with_reset = |exec: MockExecutor, text: &str| {
+        with_drop_in(
+            exec.with_dir_entry(ETC, "need.service.d"),
+            &dir,
+            "10-reset.conf",
+            text,
+        )
+    };
+    let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
+    let drop_in = format!("{dir}/10-reset.conf");
+    for (text, reason) in [
+        ("[Install]\nRequiredBy=\n", InstallUnknown::RequiredByReset),
+        ("[Install]\nUpheldBy=a.target\n", InstallUnknown::UpheldBy),
+    ] {
+        let (section, _) = scan(&with_reset(host(required), text));
+        assert!(
+            drop_in_paths(&section).contains(&drop_in.as_str()),
+            "{reason:?}: {:?}",
+            drop_in_paths(&section)
+        );
+        assert!(section.state_changes.is_empty(), "{reason:?}");
+        assert!(section.manual_links.is_empty(), "{reason:?}");
+        assert_eq!(
+            undetermined(&section),
+            [("need.service", reason, vec![drop_in.as_str()])],
+            "{reason:?}"
+        );
+    }
+
+    let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
+    let (no_link, _) = scan(&host(upheld));
+    assert_eq!(
+        change_of(&no_link, "need.service"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+    assert!(no_link.undetermined_installs.is_empty());
+    let one_link = |exec| with_link_in(exec, ETC, "multi-user.target.wants", "need.service");
+    let reason = InstallUnknown::UpheldBy;
+    let (linked, _) = scan(&one_link(host(upheld)));
+    assert!(linked.state_changes.is_empty());
+    assert_eq!(
+        manual_links(&linked),
+        [(
+            LinkRelation::Wants,
+            "multi-user.target",
+            "need.service",
+            ManualLinkCause::Undetermined { reason }
+        )]
+    );
+    assert!(linked.undetermined_installs.is_empty());
+
+    let upheld_also = format!("{upheld}Also=helper.service\n");
+    let (also, _) = scan(&host(&upheld_also));
+    assert!(also.state_changes.is_empty());
+    assert!(also.manual_links.is_empty());
+    assert_eq!(undetermined(&also), [("need.service", reason, vec![])]);
+    let (also_linked, _) = scan(&one_link(host(&upheld_also)));
+    assert_eq!(manual_links(&also_linked).len(), 1);
+    assert_eq!(
+        undetermined(&also_linked),
+        [("need.service", reason, vec![])]
+    );
+}
+
+/// § 7.3: a link under `/etc/systemd/system` whose parent or own name does
+/// not parse as a unit name produces a structured warning naming the
+/// link, and no link finding. Control: a link that parses gives no such
+/// warning.
+#[test]
+fn a_link_that_does_not_parse_is_warned_and_reported_no_further() {
+    let host = || {
+        unlinked_host(&[("guest.service", "static")], "disable *\n").with_file(
+            &format!("{VENDOR}/guest.service"),
+            "[Service]\nExecStart=/bin/true\n",
+        )
+    };
+    let (_, control) = scan(&with_link_in(
+        host(),
+        ETC,
+        "multi-user.target.wants",
+        "guest.service",
+    ));
+    assert!(control.is_empty(), "{control:?}");
+
+    for (dir, name) in [
+        ("dev-foo.device.wants", "guest.service"),
+        ("multi-user.target.wants", "not a unit"),
+    ] {
+        let exec = with_link_in(host(), ETC, dir, name);
+        let (section, _) = scan(&exec);
+        assert!(section.manual_links.is_empty(), "{dir}/{name}");
+        let path = format!("{ETC}/{dir}/{name}");
+        let warnings = scan_warnings(&exec);
+        assert!(
+            warnings.iter().any(|w| w.message.contains(&path)
+                && w.extra.get("path") == Some(&serde_json::json!(path))),
+            "{path}: {warnings:?}"
+        );
+    }
 }

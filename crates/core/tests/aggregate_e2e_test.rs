@@ -103,6 +103,8 @@ fn with_services(snap: &mut InspectionSnapshot, units: &[&str]) {
             .collect(),
         drop_ins: vec![],
         mount_findings: Vec::new(),
+        manual_links: Vec::new(),
+        undetermined_installs: Vec::new(),
     });
 }
 
