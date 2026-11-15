@@ -329,7 +329,8 @@ pub(super) enum LinkEnd {
     /// whose name is this unit name.
     UnitFile(UnitName),
     /// Anything else: a file elsewhere or with a name that is not a unit
-    /// name, or a chain that does not resolve (dangling, or a loop).
+    /// name, or a chain that does not resolve (dangling, through a path
+    /// that is not a directory, or a loop).
     Elsewhere,
 }
 
@@ -340,9 +341,21 @@ pub(super) enum LinkEnd {
 /// mask and so is a link to an empty unit file. Only a link that ends at a
 /// file with content can name a unit. The resolver and the link reader
 /// both read a link through this, so they agree on which unit it names.
+///
+/// A chain that does not resolve ends [`LinkEnd::Elsewhere`]. One the
+/// collector could not follow, because a permission or I/O failure stopped
+/// it on the way, is a [`ResolveError::Read`] naming the link at `path`:
+/// where it ends is not known, so nothing may be read from it.
 pub(super) fn link_end(exec: &dyn Executor, path: &str) -> Result<LinkEnd, ResolveError> {
-    let Ok(resolved) = exec.resolve_final_target(Path::new(path)) else {
-        return Ok(LinkEnd::Elsewhere);
+    let resolved = match exec.resolve_final_target(Path::new(path)) {
+        Ok(resolved) => resolved,
+        Err(e) if chain_does_not_resolve(&e) => return Ok(LinkEnd::Elsewhere),
+        Err(e) => {
+            return Err(ResolveError::Read {
+                path: path.to_owned(),
+                error: e.to_string(),
+            });
+        }
     };
     // A target that cannot be read is a read failure, as systemd fails on a
     // target it cannot stat: either form could hide a mask.
@@ -365,6 +378,19 @@ pub(super) fn link_end(exec: &dyn Executor, path: &str) -> Result<LinkEnd, Resol
         Some(unit) if in_unit_dir => LinkEnd::UnitFile(unit),
         _ => LinkEnd::Elsewhere,
     })
+}
+
+/// Whether `error`, from following a chain of links, says the chain ends
+/// at nothing: a missing path (dangling), a path that is not a directory
+/// where the chain needs one, or a loop (`ELOOP`).
+fn chain_does_not_resolve(error: &io::Error) -> bool {
+    // `io::ErrorKind::FilesystemLoop` is unstable
+    // (https://github.com/rust-lang/rust/issues/86442), so a loop is read
+    // from the OS error number.
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    ) || error.raw_os_error() == Some(libc::ELOOP)
 }
 
 /// Read what sits at `path` without following a link.
@@ -752,6 +778,66 @@ mod tests {
                 target: "/opt/gone.service".into(),
             })
         );
+    }
+
+    /// A chain that does not resolve, dangling, through a path that is
+    /// not a directory, or looping, ends nowhere: [`LinkEnd::Elsewhere`].
+    /// A chain the collector could not follow, because a link on the way
+    /// could not be read, is a read failure naming the link, never
+    /// `Elsewhere`: what it ends at is not known. Control: the readable
+    /// chain ends at the vendor unit.
+    #[test]
+    fn a_chain_that_cannot_be_followed_is_a_read_failure() {
+        let public = format!("{ETC_UNIT_DIR}/public.service");
+        let relay = "/opt/units/relay.service";
+        let real = format!("{VENDOR_UNIT_DIR}/real.service");
+        let chain = || {
+            MockExecutor::new()
+                .with_file(&real, UNIT)
+                .with_link(&public, relay)
+                .with_link(relay, &real)
+        };
+        let readable = chain();
+        assert_eq!(
+            link_end(&readable, &public),
+            Ok(LinkEnd::UnitFile(name("real.service")))
+        );
+
+        let looping = MockExecutor::new()
+            .with_link(&public, relay)
+            .with_link(relay, &public);
+        let ends_nowhere = [
+            (
+                "dangling",
+                chain().with_dangling_link(relay, "/opt/units/gone.service"),
+            ),
+            (
+                "through a file",
+                chain().with_link_error(relay, io::ErrorKind::NotADirectory),
+            ),
+            ("a loop", looping),
+        ];
+        for (case, exec) in ends_nowhere {
+            assert_eq!(link_end(&exec, &public), Ok(LinkEnd::Elsewhere), "{case}");
+        }
+
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            let exec = chain().with_link_error(relay, kind);
+            match link_end(&exec, &public) {
+                Err(ResolveError::Read { path, error }) => {
+                    assert_eq!(path, public, "{kind:?}");
+                    assert!(error.contains(relay), "{kind:?}: {error}");
+                }
+                other => panic!("{kind:?}: expected a read failure, got {other:?}"),
+            }
+            assert!(
+                matches!(
+                    resolve(&exec, &name("public.service")),
+                    Err(ResolveError::Read { path, .. }) if path == public
+                ),
+                "{kind:?}: the resolver reads the same failure"
+            );
+        }
     }
 
     #[test]

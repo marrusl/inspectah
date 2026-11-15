@@ -102,6 +102,7 @@ pub struct UnitHost {
     files: BTreeMap<String, String>,
     file_errors: BTreeMap<String, std::io::ErrorKind>,
     links: BTreeMap<String, String>,
+    link_errors: BTreeMap<String, std::io::ErrorKind>,
     dirs: BTreeMap<String, BTreeSet<String>>,
     /// `(name, state)` rows of `systemctl list-unit-files`.
     units: Vec<(String, String)>,
@@ -214,6 +215,15 @@ impl UnitHost {
         self
     }
 
+    /// A path, listed in its directory, whose link read fails with `kind`,
+    /// and so does any resolution of a chain through it, as on a host where
+    /// the link cannot be read.
+    pub fn link_error(mut self, path: &str, kind: std::io::ErrorKind) -> Self {
+        self.list(path);
+        self.link_errors.insert(path.into(), kind);
+        self
+    }
+
     /// A directory, listed in its parent, empty unless files are added.
     pub fn dir(mut self, path: &str) -> Self {
         self.list(path);
@@ -294,6 +304,9 @@ impl UnitHost {
         }
         for (path, target) in &this.links {
             mock = mock.with_link(path, target);
+        }
+        for (path, kind) in &this.link_errors {
+            mock = mock.with_link_error(path, *kind);
         }
         // What a real read of each link returns, now that every link is
         // registered and chains resolve.

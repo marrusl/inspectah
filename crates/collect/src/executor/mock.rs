@@ -158,7 +158,9 @@ impl MockExecutor {
 
     /// Register a path whose `read_link` fails with `error_kind`, as an
     /// I/O or permission failure does on a real host. Takes priority over
-    /// a registered link and over the not-a-link answer.
+    /// a registered link and over the not-a-link answer. A resolution that
+    /// passes through the path fails with the same kind, as `canonicalize`
+    /// does when it cannot read a link on the way.
     pub fn with_link_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
         self.link_errors.insert(path.to_string(), error_kind);
         self
@@ -301,19 +303,19 @@ impl MockExecutor {
     /// Resolve `path` through registered links, an ancestor directory's
     /// as well as the path's own, as `canonicalize` does; the last
     /// component is followed only when `follow_last` is set. A link
-    /// registered with [`with_dangling_link`] fails with `NotFound`; more
-    /// than [`MAX_SYMLINK_HOPS`] links, or a path seen twice, is a loop.
+    /// registered with [`with_dangling_link`] fails with `NotFound`, one
+    /// registered with [`with_link_error`] with its kind; more than
+    /// [`MAX_SYMLINK_HOPS`] links, or a path seen twice, is a loop, which
+    /// fails with `ELOOP` as `canonicalize` does.
     ///
     /// [`with_dangling_link`]: MockExecutor::with_dangling_link
+    /// [`with_link_error`]: MockExecutor::with_link_error
     fn resolve(&self, path: &Path, follow_last: bool) -> io::Result<PathBuf> {
         let mut current = normalize_mock_path(path);
         let mut visited = HashSet::new();
         'resolve: loop {
             if !visited.insert(current.clone()) || visited.len() > MAX_SYMLINK_HOPS {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("symlink loop detected at {}", current.display()),
-                ));
+                return Err(io::Error::from_raw_os_error(libc::ELOOP));
             }
             let components: Vec<Component> = current.components().collect();
             let mut prefix = PathBuf::new();
@@ -328,6 +330,9 @@ impl MockExecutor {
                         io::ErrorKind::NotFound,
                         format!("dangling symlink at {}", prefix.display()),
                     ));
+                }
+                if let Some(&error_kind) = self.link_errors.get(key) {
+                    return Err(io::Error::new(error_kind, prefix.display().to_string()));
                 }
                 if let Some(target) = self.links.get(key) {
                     // An absolute target replaces the parent in `join`.
@@ -511,7 +516,7 @@ mod tests {
         let result = mock.resolve_final_target(Path::new("/etc/pki/entitlement/a.pem"));
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("loop"));
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
     }
 
     #[test]

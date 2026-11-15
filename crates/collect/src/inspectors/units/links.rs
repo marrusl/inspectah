@@ -921,6 +921,44 @@ mod tests {
         assert!(links.admin(&unit("real.service")).is_empty());
     }
 
+    /// A chain that cannot be followed to its end, because a link on the
+    /// way cannot be read, is a failed read under `/etc` naming the alias:
+    /// its links there are incomplete, and no alias is counted. Control:
+    /// the readable chain is an alias of the unit it ends at.
+    #[test]
+    fn an_alias_whose_chain_cannot_be_followed_marks_etc_unreadable() {
+        use std::io::ErrorKind::PermissionDenied;
+        let public = format!("{ETC_UNIT_DIR}/public.service");
+        let relay = "/opt/units/relay.service";
+        let end = format!("{VENDOR_UNIT_DIR}/real.service");
+        let chain = || {
+            MockExecutor::new()
+                .with_dir(ETC_UNIT_DIR, vec!["public.service"])
+                .with_link(&public, relay)
+                .with_link(relay, &end)
+                .with_file(&end, "[Install]\nAlias=public.service\n")
+        };
+
+        let (links, failures) = read_host_links(&chain());
+        assert!(failures.is_empty(), "control: {failures:?}");
+        assert!(!links.admin_unreadable, "control");
+        assert_eq!(
+            links.admin(&unit("real.service")),
+            [alias("public.service")],
+            "control"
+        );
+
+        let (links, failures) = read_host_links(&chain().with_link_error(relay, PermissionDenied));
+        assert!(
+            failures.len() == 1
+                && failures[0].starts_with(&format!("{public}: "))
+                && failures[0].contains(relay),
+            "{failures:?}"
+        );
+        assert!(links.admin_unreadable);
+        assert!(links.admin(&unit("real.service")).is_empty());
+    }
+
     /// A link in a dependency directory whose parent does not parse makes
     /// no link of its own, and is still a link to the unit under `/etc`:
     /// an `Undetermined` section with only that link has no state.

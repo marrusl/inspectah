@@ -66,7 +66,11 @@ on a registered path that is not a link and `NotFound` on an
 unregistered one. A collector that must not read an entry before it
 knows where the entry resolves (the sysctl reader) treats only
 `InvalidInput` as "not a link"; use `with_link_error()` to inject any
-other failure. Callers that only ask `is_ok()` are unaffected.
+other failure. A resolution through a `with_link_error()` path fails
+with the same kind, as `canonicalize` does, so it also injects a
+failure partway along a chain. A loop fails with `ELOOP`
+(`raw_os_error()`), as `canonicalize` does. Callers that only ask
+`is_ok()` are unaffected.
 
 **7. `read_dir` returns a partial listing.** Both executors' `read_dir`
 drop an entry the directory iterator fails on and return the rest,

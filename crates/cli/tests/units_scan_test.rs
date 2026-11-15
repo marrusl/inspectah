@@ -7438,6 +7438,90 @@ fn an_alias_chain_installs_its_unit_through_both_exports() {
     }
 }
 
+/// An alias chain the collector cannot follow to its end: the link
+/// `/etc/systemd/system/public.service` goes through a link under `/opt`
+/// that cannot be read on the way to the packaged `real.service`, whose
+/// `[Install]` names the alias and whose preset is `enable`. The links
+/// under `/etc` are incomplete, so the scan degrades naming the alias, and
+/// `real.service` gets no state: no state change, no state row in refine,
+/// and no `disable` on either route. Control: the same chain readable
+/// installs `real.service`, with no `disable` either. The relay is named
+/// after the unit, so the host builder takes the chain as its enable link
+/// and adds none of its own.
+#[test]
+fn an_alias_chain_that_cannot_be_followed_disables_nothing_through_both_exports() {
+    const ALIASED: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\nAlias=public.service\n";
+    const ALIAS: &str = "/etc/systemd/system/public.service";
+    const RELAY: &str = "/opt/units/real.service";
+    let host = |readable: bool| {
+        let host = UnitHost::new()
+            .unit("real.service", "enabled")
+            .unit("public.service", "alias")
+            .preset("enable real.service")
+            .base_package("realpkg")
+            .vendor_unit("real.service", ALIASED, Some("realpkg"))
+            .link(ALIAS, RELAY)
+            .link(RELAY, "/usr/lib/systemd/system/real.service");
+        if readable {
+            host
+        } else {
+            host.link_error(RELAY, std::io::ErrorKind::PermissionDenied)
+        }
+    };
+    let degraded = |snap: &InspectionSnapshot| -> Vec<String> {
+        snap.warnings
+            .iter()
+            .filter(|w| w.inspector == "Units" && w.message.starts_with("degraded: "))
+            .map(|w| w.message.clone())
+            .collect()
+    };
+
+    let control = scan(host(true));
+    assert_eq!(
+        inventory_entry(&control, "real.service").map(|e| e.state),
+        Some(UnitState::Enabled),
+        "control: the readable chain installs real.service"
+    );
+    assert!(degraded(&control).is_empty(), "{:?}", control.warnings);
+    for (route, containerfile) in both_routes(&control) {
+        assert!(
+            !acts(&containerfile, "disable", "real.service"),
+            "{route}, control:\n{containerfile}"
+        );
+    }
+
+    let snap = scan(host(false));
+    let failures = degraded(&snap);
+    assert!(
+        failures.len() == 1
+            && failures[0].starts_with("degraded: unit file read failures: ")
+            && failures[0].contains(&format!("{ALIAS}: "))
+            && failures[0].contains(RELAY),
+        "the scan degrades naming the alias: {failures:?}"
+    );
+    assert!(
+        inventory_entry(&snap, "real.service").is_none(),
+        "no state for real.service"
+    );
+    assert_eq!(changes_named(&snap, "real.service"), 0);
+    let refine = session(&snap);
+    assert!(
+        refine
+            .decisions()
+            .unit_states
+            .iter()
+            .all(|row| row.unit.as_str() != "real.service"),
+        "no state row for real.service: {:?}",
+        refine.decisions().unit_states
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            !acts(&containerfile, "disable", "real.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// A vendor unit file that cannot be read as text, with the link its
 /// `[Install]` names and no file under `/etc`, through the scan, the render
 /// and refine. Its section is undetermined and `Also=` is not known: no
