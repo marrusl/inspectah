@@ -21,15 +21,15 @@ use inspectah_pipeline::render::configtree::{
     Destination, PathError, StagedFileKind, StagedWrites, WithheldWhy, staged_writes,
 };
 use inspectah_pipeline::render::unit_plan::{
-    DeclinedMarker, GeneratedSource, OmissionReason, UnitPlan, declined_line, etc_unit_path,
-    plan_units,
+    DeclinedLine, DeclinedMarker, GeneratedSource, OmissionReason, UnitPlan, declined_line,
+    default_target_line, etc_unit_path, plan_units,
 };
 
 use super::types::{
     AlsoView, ConfigWithheldView, DecisionProjection, DeclinedGeneratedView, DeclinedRenders,
-    DeclinedView, DropInView, FragmentView, GeneratedRowView, GeneratedTimerView, ManualLinkView,
-    MountFindingView, NotCarriedRow, RepoGroup, UndeterminedInstallView, UnitStateView,
-    UnmanagedWithheldView, WithheldView,
+    DeclinedView, DefaultTargetView, DropInView, FragmentView, GeneratedRowView,
+    GeneratedTimerView, ManualLinkView, MountFindingView, NotCarriedRow, RepoGroup,
+    UndeterminedInstallView, UnitStateView, UnmanagedWithheldView, WithheldView,
 };
 use crate::types::{RefinedDropIn, RefinedServiceState};
 
@@ -52,6 +52,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let unit_dropins = drop_in_views(dropins, &withheld);
     let mount_findings = mount_finding_views(&snap, &plan);
     let (manual_links, undetermined_installs) = link_finding_views(&snap, &plan);
+    let default_target = default_target_view(&snap, &plan);
     let config_withheld = config_withheld_views(&snap, &withheld);
     let declined_generated = declined_generated_views(&plan);
     let generated_timers = generated_timer_views(&snap);
@@ -99,6 +100,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
         mount_findings,
         manual_links,
         undetermined_installs,
+        default_target,
         config_withheld,
         quadlets,
         flatpaks,
@@ -182,10 +184,31 @@ fn declined_generated_views(plan: &UnitPlan) -> Vec<DeclinedGeneratedView> {
         .collect()
 }
 
+/// The default target's row (§ 11.1), from the snapshot's record, with
+/// the plan's decline written by [`default_target_line`], as the
+/// Containerfile writes it.
+fn default_target_view(snap: &InspectionSnapshot, plan: &UnitPlan) -> Option<DefaultTargetView> {
+    let target = snap.units.as_ref()?.default_target.as_ref()?;
+    Some(DefaultTargetView {
+        target: target.target.name().as_unit_name().clone(),
+        include: target.disposition.is_included(),
+        locked: target.locked,
+        declined: plan
+            .default_target_declined
+            .as_ref()
+            .map(|(name, reason)| line_view(default_target_line(name, reason), reason)),
+    })
+}
+
 /// The row's view of a declined command: [`declined_line`] decides the
 /// marker and the text, as it does for the Containerfile.
 fn declined_view(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedView {
-    let line = declined_line(name, action, reason);
+    line_view(declined_line(name, action, reason), reason)
+}
+
+/// A declined line as a row shows it: its marker, the reason's variant
+/// name, and its text.
+fn line_view(line: DeclinedLine, reason: &OmissionReason) -> DeclinedView {
     DeclinedView {
         renders: match line.marker {
             DeclinedMarker::Omitted => DeclinedRenders::Omitted,

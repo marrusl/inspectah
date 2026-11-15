@@ -37,6 +37,9 @@ pub struct DecisionProjection {
     /// One row per unit whose `[Install]` cannot be relied on (§ 11.1).
     /// These rows have no toggle.
     pub undetermined_installs: Vec<UndeterminedInstallView>,
+    /// The default target the host sets, with its toggle (§ 11.1), or
+    /// `None` when the snapshot records none.
+    pub default_target: Option<DefaultTargetView>,
     /// The included config rows whose file the export does not write, by
     /// the row's own `path`: only an included row offers a file, so the
     /// row is the included config entry at that path.
@@ -65,6 +68,17 @@ pub struct DecisionProjection {
     /// write, by the row's own `path` (§ 10.2, § 11.1): a file under
     /// `/etc/systemd/system`, withheld as `UnmanagedUnitPath`.
     pub unmanaged_withheld: Vec<UnmanagedWithheldView>,
+}
+
+/// The default target's row (§ 11.1): the recorded target, its toggle
+/// (`ItemId::DefaultTarget`), and the plan's `declined` when the export
+/// does not write its `set-default`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DefaultTargetView {
+    pub target: UnitName,
+    pub include: bool,
+    pub locked: bool,
+    pub declined: Option<DeclinedView>,
 }
 
 /// An unmanaged-file row's `withheld` (§ 11.1).

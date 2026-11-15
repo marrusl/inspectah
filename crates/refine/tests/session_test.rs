@@ -3171,4 +3171,80 @@ mod unit_rows {
             assert!(preview.contains(line.as_str()), "{line}\n{preview}");
         }
     }
+
+    /// § 11.1 `default_target`: the recorded target, its toggle and lock,
+    /// and the plan's `declined` through `default_target_line`. Included
+    /// with no `declined`; after `SetInclude(DefaultTarget, false)`,
+    /// `include: false`; a local target whose config row is excluded,
+    /// `declined` with `UnitFileNotStaged`; no record, absent.
+    #[test]
+    fn the_default_target_is_projected_with_its_toggle_and_decline() {
+        use inspectah_core::types::units::{DefaultTarget, TargetUnit};
+        use inspectah_refine::projection::DefaultTargetView;
+        const LOCAL: &str = "/etc/systemd/system/custom.target";
+        let with_target = |unit: &str, fragment: UnitFragment, files| {
+            let mut snap = snapshot(vec![], files, vec![]);
+            let target =
+                TargetUnit::try_from(UnitSubject::new(name(unit), fragment).expect("a subject"))
+                    .expect("a target");
+            snap.units.as_mut().expect("units").default_target = Some(DefaultTarget {
+                target,
+                disposition: FindingKind::included(),
+                locked: false,
+                aggregate: None,
+            });
+            snap
+        };
+        let toggle = |include: bool| RefinementOp::SetInclude {
+            item_id: ItemId::DefaultTarget,
+            include,
+        };
+
+        let mut session = RefineSession::new(with_target(
+            "graphical.target",
+            vendor("graphical.target", None),
+            vec![],
+        ));
+        let view = |session: &RefineSession| session.decisions().default_target.clone();
+        assert_eq!(
+            view(&session),
+            Some(DefaultTargetView {
+                target: name("graphical.target"),
+                include: true,
+                locked: false,
+                declined: None,
+            })
+        );
+        session.apply(toggle(false)).expect("the toggle applies");
+        assert_eq!(
+            view(&session).map(|v| (v.include, v.declined)),
+            Some((false, None))
+        );
+
+        let mut local = RefineSession::new(with_target(
+            "custom.target",
+            UnitFragment::Local {
+                file: name("custom.target"),
+            },
+            vec![config(LOCAL, "[Unit]\nDescription=Custom\n")],
+        ));
+        assert_eq!(view(&local).and_then(|v| v.declined), None, "file staged");
+        local
+            .apply(RefinementOp::SetInclude {
+                item_id: ItemId::Config { path: LOCAL.into() },
+                include: false,
+            })
+            .expect("the config row is excluded");
+        assert_eq!(
+            view(&local).and_then(|v| v.declined),
+            Some(DeclinedView {
+                renders: DeclinedRenders::Omitted,
+                reason: "UnitFileNotStaged".into(),
+                text: "custom.target (its unit file is not in the export)".into(),
+            })
+        );
+
+        let none = RefineSession::new(snapshot(vec![], vec![], vec![]));
+        assert_eq!(view(&none), None);
+    }
 }
