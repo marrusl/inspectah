@@ -924,6 +924,7 @@ fn a_declined_command_renders_from_one_line_function() {
                 why: AlsoWhy::RowNotCarried,
                 verb: UnitAction::Enable,
                 named: vec![name("helper.service")],
+                further: None,
                 add: Vec::new(),
             },
             DeclinedMarker::Advisory,
@@ -4132,7 +4133,8 @@ fn rule_7_line_rules() {
             head(
                 "enable",
                 "c.service",
-                "whose links there neither command reproduces"
+                "whose links there neither command reproduces, and b.service, which is not \
+                 enabled there"
             ),
             ALSO_HEADER.to_owned(),
             add("enable", "bundle.service"),
@@ -4237,7 +4239,8 @@ fn rule_7_conditions_in_order_and_in_the_plural() {
         block_at(&render(&snap).lines, "# Advisory: bundle.service"),
         [head(
             "h1.service and h2.service",
-            "whose own rows are not carried with this command"
+            "whose own rows are not carried with this command, and t@one.service, an instance \
+             with no row here to check its configuration"
         )]
     );
 
@@ -4261,6 +4264,38 @@ fn rule_7_conditions_in_order_and_in_the_plural() {
         [head(
             "t@one.service and t@two.service",
             "instances with no row here to check their configuration"
+        )]
+    );
+
+    // Condition 2 failed two ways: one clause group per cause, in `also`
+    // order within a group, the group of the first failing member first.
+    let mut h3 = change_with("h3.service", vendor("h3.service"), UnitState::Enabled);
+    h3.disposition = FindingKind::excluded();
+    let snap = units_snapshot(
+        vec![
+            owner(
+                "bundle.service",
+                UnitState::Enabled,
+                vec![
+                    also_member("t@one.service", Installed),
+                    also_member("h3.service", Installed),
+                    also_member("t@two.service", Installed),
+                ],
+            ),
+            h3,
+        ],
+        vec![],
+    );
+    assert_eq!(
+        also_why(&snap, "bundle.service"),
+        Some(("t@one.service".into(), AlsoWhy::NeedsOwnRow))
+    );
+    assert_eq!(
+        block_at(&render(&snap).lines, "# Advisory: bundle.service"),
+        [head(
+            "t@one.service and t@two.service",
+            "instances with no row here to check their configuration, and h3.service, whose \
+             own row is not carried with this command"
         )]
     );
 

@@ -276,14 +276,19 @@ pub enum OmissionReason {
     /// `also` order that fails the first failing condition, or for
     /// [`AlsoWhy::InstallFile`] on the unit's own file, its first member.
     /// The other fields are what the advisory's text needs: the command's
-    /// `verb`; `named`, every unit the first line names (the members that
-    /// fail as `member` does, or the unit whose install file it is); and
-    /// `add`, the members given a line of the opposite verb.
+    /// `verb`; `named`, the units the first line names first (the members
+    /// that fail as `member` does, or the unit whose install file it is);
+    /// `further`, the members failing the same condition the other way it
+    /// can fail (each condition fails at most two ways: under `enable`,
+    /// `Unlinked` or `Other`; under `disable`, `Installed` or `Other`;
+    /// `RowNotCarried` or `NeedsOwnRow`), with that reason; and `add`, the
+    /// members given a line of the opposite verb.
     AlsoMember {
         member: UnitName,
         why: AlsoWhy,
         verb: UnitAction,
         named: Vec<UnitName>,
+        further: Option<Box<(AlsoWhy, Vec<UnitName>)>>,
         add: Vec<UnitName>,
     },
 }
@@ -362,8 +367,12 @@ impl OmissionReason {
                 name = name.as_str()
             ),
             Self::AlsoMember {
-                why, verb, named, ..
-            } => also_reason_text(why, *verb, named),
+                why,
+                verb,
+                named,
+                further,
+                ..
+            } => also_reason_text(why, *verb, named, further.as_deref()),
         }
     }
 
@@ -930,16 +939,44 @@ fn number(clause: [&'static str; 2], named: &[UnitName]) -> &'static str {
 }
 
 /// [`OmissionReason::AlsoMember`]'s text: rule 7's first line after
-/// `Not carried: ` (§ 10.2).
-fn also_reason_text(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> String {
-    let clause = match why {
-        AlsoWhy::InstallFile { path } => {
-            return format!(
-                "{path} {ALSO_INSTALL_FILE_SETS} {}, {ALSO_INSTALL_FILE_UNITS} {verb} \
-                 {ALSO_INSTALL_FILE_REST}",
-                name_list(named)
-            );
-        }
+/// `Not carried: ` (§ 10.2). `further` adds its members and their clause
+/// after the first group's.
+fn also_reason_text(
+    why: &AlsoWhy,
+    verb: UnitAction,
+    named: &[UnitName],
+    further: Option<&(AlsoWhy, Vec<UnitName>)>,
+) -> String {
+    if let AlsoWhy::InstallFile { path } = why {
+        return format!(
+            "{path} {ALSO_INSTALL_FILE_SETS} {}, {ALSO_INSTALL_FILE_UNITS} {verb} \
+             {ALSO_INSTALL_FILE_REST}",
+            name_list(named)
+        );
+    }
+    let mut text = format!(
+        "systemctl {verb} on it also {verb}s {} {ALSO_NAMED_BY}, {}",
+        name_list(named),
+        also_clause(why, verb, named)
+    );
+    if let Some((why, names)) = further {
+        text.push_str(&format!(
+            ", and {}, {}",
+            name_list(names),
+            also_clause(why, verb, names)
+        ));
+    }
+    text.push('.');
+    text
+}
+
+/// The clause after the members a rule 7 first line names for `why`.
+/// Conditions 1 and 2 give clause groups; an `InstallFile` reason is
+/// written whole by [`also_reason_text`] and names no members, so its arm
+/// gives the end of that sentence.
+fn also_clause(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> &'static str {
+    match why {
+        AlsoWhy::InstallFile { .. } => ALSO_INSTALL_FILE_REST,
         AlsoWhy::LinksDiffer(MemberLinks::Unlinked) => number(ALSO_NOT_ENABLED, named),
         AlsoWhy::LinksDiffer(MemberLinks::Installed) => number(ALSO_ENABLED, named),
         AlsoWhy::LinksDiffer(MemberLinks::Other | MemberLinks::Inert) => ALSO_NEITHER,
@@ -948,11 +985,7 @@ fn also_reason_text(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> Stri
             UnitAction::Enable => number(ALSO_INSTANCE_NEEDS_ROW, named),
             UnitAction::Disable | UnitAction::Mask => ALSO_IMAGE_NEEDS,
         },
-    };
-    format!(
-        "systemctl {verb} on it also {verb}s {} {ALSO_NAMED_BY}, {clause}.",
-        name_list(named)
-    )
+    }
 }
 
 /// One line to add: `RUN systemctl <verb> -- '<unit>'`, as a comment.
@@ -2308,7 +2341,9 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
 ///    ([`install_file_in_snapshot`]), staged or excluded.
 ///
 /// The reason names the first member, in `also` order, that fails the
-/// condition, and lists every member failing it the same way.
+/// condition, and lists every member failing it: one group per link value
+/// or cause, in `also` order within a group, the first member's group
+/// first.
 fn rule_7_also(
     snap: &InspectionSnapshot,
     staged: &StagedWrites<'_>,
@@ -2320,14 +2355,47 @@ fn rule_7_also(
     if action == UnitAction::Mask || sc.also.is_empty() {
         return Ok(());
     }
-    let declined = |member: &UnitName, why: AlsoWhy, named: Vec<UnitName>, add: Vec<UnitName>| {
+    let declined = |member: &UnitName,
+                    why: AlsoWhy,
+                    named: Vec<UnitName>,
+                    further: Option<Box<(AlsoWhy, Vec<UnitName>)>>,
+                    add: Vec<UnitName>| {
         OmissionReason::AlsoMember {
             member: member.clone(),
             why,
             verb: action,
             named,
+            further,
             add,
         }
+    };
+    // The members failing a condition, grouped by `fails`' reason, the
+    // group of the first failing member first; that member is the reason's
+    // `member`. A condition fails at most two ways, so there are at most
+    // two groups.
+    let failing = |fails: &dyn Fn(&AlsoMember) -> Option<AlsoWhy>, add: Vec<UnitName>| {
+        let mut groups: Vec<(AlsoWhy, Vec<UnitName>)> = Vec::new();
+        for m in &sc.also {
+            if let Some(why) = fails(m) {
+                match groups.iter_mut().find(|(seen, _)| *seen == why) {
+                    Some((_, names)) => names.push(m.unit.clone()),
+                    None => groups.push((why, vec![m.unit.clone()])),
+                }
+            }
+        }
+        let mut groups = groups.into_iter();
+        if let Some((why, named)) = groups.next()
+            && let Some(member) = named.first().cloned()
+        {
+            return Err(declined(
+                &member,
+                why,
+                named,
+                groups.next().map(Box::new),
+                add,
+            ));
+        }
+        Ok(())
     };
     let (matching, opposite) = match action {
         UnitAction::Enable => (MemberLinks::Installed, MemberLinks::Unlinked),
@@ -2342,20 +2410,13 @@ fn rule_7_also(
     };
 
     // Condition 1.
-    if let Some(first) = sc
-        .also
-        .iter()
-        .find(|m| m.links != matching && m.links != MemberLinks::Inert)
-    {
-        let named = members_where(&|m| m.links == first.links);
-        let add = members_where(&|m| m.links == opposite);
-        return Err(declined(
-            &first.unit,
-            AlsoWhy::LinksDiffer(first.links),
-            named,
-            add,
-        ));
-    }
+    failing(
+        &|m| {
+            (m.links != matching && m.links != MemberLinks::Inert)
+                .then_some(AlsoWhy::LinksDiffer(m.links))
+        },
+        members_where(&|m| m.links == opposite),
+    )?;
 
     // Condition 2.
     let own_rule = |m: &AlsoMember| -> Option<AlsoWhy> {
@@ -2368,10 +2429,7 @@ fn rule_7_also(
         };
         needs_row.then_some(AlsoWhy::NeedsOwnRow)
     };
-    if let Some((first, why)) = sc.also.iter().find_map(|m| own_rule(m).map(|why| (m, why))) {
-        let named = members_where(&|m| own_rule(m).as_ref() == Some(&why));
-        return Err(declined(&first.unit, why, named, Vec::new()));
-    }
+    failing(&own_rule, Vec::new())?;
 
     // Condition 3.
     let own = install_file_in_snapshot(snap, staged, sc.unit().name(), &sc.vendor_drop_ins)
@@ -2391,6 +2449,7 @@ fn rule_7_also(
             member,
             AlsoWhy::InstallFile { path },
             vec![of.clone()],
+            None,
             Vec::new(),
         ));
     }
