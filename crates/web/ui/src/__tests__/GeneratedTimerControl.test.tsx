@@ -61,6 +61,7 @@ const GROUPS = [
     slug: "services-scheduling",
     label: "Services & Scheduling",
     sections: [
+      { id: "units", label: "Services", is_triage: true },
       { id: "scheduled_tasks", label: "Scheduled Tasks", is_triage: false },
     ],
     has_actionable_sections: true,
@@ -71,6 +72,11 @@ const GROUPS = [
 let row: GeneratedTimerDto;
 /** Every `/api/op` body the app sent. */
 let ops: unknown[];
+/**
+ * When set, the next `/api/op` waits on this promise and fails with its
+ * value as the server's error, instead of applying.
+ */
+let failNextOp: Promise<string> | null;
 
 function view() {
   return emptyView({
@@ -82,12 +88,19 @@ function view() {
 beforeEach(() => {
   row = { name: NAME, include: true, locked: false };
   ops = [];
+  failNextOp = null;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/op" && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
         ops.push(body);
+        if (failNextOp) {
+          const failing = failNextOp;
+          failNextOp = null;
+          const error = await failing;
+          return { ok: false, status: 409, json: async () => ({ error }) };
+        }
         row = { ...row, include: body.target.include };
         return { ok: true, status: 200, json: async () => view() };
       }
@@ -111,12 +124,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+async function openSection(name: RegExp) {
+  const nav = await screen.findByRole("navigation", { name: "Sections" });
+  await userEvent.click(await within(nav).findByRole("link", { name }));
+}
+
 async function generatedRow() {
   render(<App />);
-  const nav = await screen.findByRole("navigation", { name: "Sections" });
-  await userEvent.click(
-    await within(nav).findByRole("link", { name: /^Scheduled Tasks/ }),
-  );
+  await openSection(/^Scheduled Tasks/);
   return screen.findByTestId(`context-item-${ROW_ID}`);
 }
 
@@ -169,6 +184,42 @@ describe("generated timer row control", () => {
       ),
     ).toBeInTheDocument();
     expect(ops).toEqual([]);
+  });
+
+  it("keeps a failure across a section switch, announces it, and retries", async () => {
+    let fail!: (error: string) => void;
+    failNextOp = new Promise<string>((resolve) => {
+      fail = resolve;
+    });
+    const rowEl = await generatedRow();
+    const toggle = within(rowEl).getByRole("checkbox", {
+      name: `Toggle ${NAME}`,
+    });
+    await userEvent.click(toggle);
+    // Pending: the toggle is disabled while the request is in flight.
+    await waitFor(() => expect(toggle).toBeDisabled());
+
+    // The operator leaves the section before the request settles.
+    await openSection(/^Services/);
+    fail("the session changed underneath this request");
+    await openSection(/^Scheduled Tasks/);
+
+    const back = await screen.findByTestId(`context-item-${ROW_ID}`);
+    const message = await within(back).findByText(
+      `Could not exclude ${NAME}: the session changed underneath this request`,
+    );
+    expect(message.closest("[aria-live]")).not.toBeNull();
+    const retry = within(back).getByRole("checkbox", {
+      name: `Toggle ${NAME}`,
+    });
+    expect(retry).toBeChecked();
+    expect(retry).toBeEnabled();
+
+    // Retry: the request goes out again, succeeds, and the failure clears.
+    await userEvent.click(retry);
+    await waitFor(() => expect(retry).not.toBeChecked());
+    expect(within(back).queryByText(/Could not exclude/)).toBeNull();
+    expect(ops).toEqual([setIncludeOp(false), setIncludeOp(false)]);
   });
 
   it("offers exclude while another source of the name is still included", async () => {

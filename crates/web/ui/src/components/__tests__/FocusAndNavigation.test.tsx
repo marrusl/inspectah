@@ -71,6 +71,8 @@ const MOCK_VIEW = {
   mount_findings: [],
   quadlets: [],
   flatpaks: [],
+  declined_generated: [],
+  generated_timers: [],
   sysctl: { state: "unavailable", reason: "not collected" },
   tuned: [],
   users_groups_decisions: [],

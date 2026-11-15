@@ -197,6 +197,45 @@ function renderSection(
   );
 }
 
+/**
+ * Scheduled Tasks with one generated timer row, whose toggle MainContent
+ * guards by the generated name.
+ */
+function renderScheduled(onMutationError: (err: Error) => void) {
+  render(
+    <MainContent
+      activeSection="scheduled_tasks"
+      loading={false}
+      viewData={{
+        ...VIEW,
+        generated_timers: [
+          { name: "cron-backup", include: true, locked: false },
+        ],
+      }}
+      sections={[
+        {
+          id: "scheduled_tasks",
+          display_name: "Scheduled Tasks",
+          items: [
+            {
+              id: "generated:0:cron-backup",
+              title: "cron-backup",
+              subtitle: "0 2 * * *",
+              detail: null,
+              searchable_text: "cron-backup generated-timer",
+              generated_timer: "cron-backup",
+            },
+          ],
+        },
+      ]}
+      onViewUpdate={vi.fn()}
+      onMutationError={onMutationError}
+      sectionSearchOpen={false}
+      onSectionSearchClose={vi.fn()}
+    />,
+  );
+}
+
 function renderUsers(onMutationError: (err: Error) => void) {
   renderSection(
     "users_groups",
@@ -305,6 +344,12 @@ const CASES: GuardCase[] = [
     control: () =>
       screen.getByRole("checkbox", { name: `Toggle ${DROPIN.path}` }),
     trigger: pressSpace(`dropin-item-${DROPIN.path}`),
+  },
+  {
+    name: "generated timer toggle",
+    request: "applyOp",
+    renderWith: renderScheduled,
+    control: () => screen.getByRole("checkbox", { name: "Toggle cron-backup" }),
   },
   {
     name: "user include checkbox",

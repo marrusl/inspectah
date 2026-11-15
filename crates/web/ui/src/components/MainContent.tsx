@@ -356,6 +356,35 @@ export function MainContent({
       new Set((viewData.users_groups_decisions ?? []).map((u) => u.name)),
     );
   }, [viewData, retainUserFailures]);
+  // Failed generated-timer toggles, by generated name, kept here with
+  // `scheduledGuard` so a failure that settles after a section switch is
+  // still on the row when the operator returns. A reset ends every one, a
+  // name that leaves the view ends its own, and an Undo or Redo ends all
+  // of them, since either can replace the row's state.
+  const generatedFailures = useItemFailures<string>();
+  const {
+    begin: beginGeneratedAttempt,
+    clearAll: clearGeneratedFailures,
+    retain: retainGeneratedFailures,
+    end: endGeneratedFailures,
+  } = generatedFailures;
+  useEffect(() => {
+    clearGeneratedFailures();
+  }, [resetCounter, clearGeneratedFailures]);
+  useEffect(() => {
+    if (historyChange) {
+      endGeneratedFailures(
+        (viewData?.generated_timers ?? []).map((g) => g.name),
+      );
+    }
+    // Keyed on the history step alone: a new view must not end them.
+  }, [historyChange, endGeneratedFailures]);
+  useEffect(() => {
+    if (!viewData) return;
+    retainGeneratedFailures(
+      new Set(viewData.generated_timers.map((g) => g.name)),
+    );
+  }, [viewData, retainGeneratedFailures]);
   const runPackage = packageGuard.runGuarded;
   const runRepo = repoGuard.runGuarded;
   const runGroup = groupGuard.runGuarded;
@@ -968,23 +997,29 @@ export function MainContent({
                       !row.include && row.cron_job_excluded
                         ? `Excluded with its cron job ${row.cron_job_excluded}; include the cron job to carry this unit.`
                         : undefined,
+                    failure: generatedFailures.failures.get(name),
                     onToggle: () => {
+                      const include = !row.include;
                       const op: RefinementOp = {
                         op: "SetInclude",
                         target: {
                           item_id: { kind: "GeneratedTimer", key: { name } },
-                          include: !row.include,
+                          include,
                         },
                       };
-                      scheduledGuard.runGuarded(key, () =>
-                        applyOp(op)
+                      scheduledGuard.runGuarded(key, () => {
+                        const recordFailure = beginGeneratedAttempt(name);
+                        return applyOp(op)
                           .then((updated) => onViewUpdate(updated))
-                          .catch((err) =>
-                            onMutationError(
-                              err instanceof Error ? err : new Error(String(err)),
-                            ),
-                          ),
-                      );
+                          .catch((err) => {
+                            const error =
+                              err instanceof Error ? err : new Error(String(err));
+                            recordFailure(
+                              `Could not ${include ? "include" : "exclude"} ${name}: ${error.message}`,
+                            );
+                            onMutationError(error);
+                          });
+                      });
                     },
                   };
                 }

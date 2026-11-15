@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
+import { HelperText, HelperTextItem } from "@patternfly/react-core";
 import type {
   ContextItem as ContextItemType,
   DeclinedView,
@@ -16,6 +17,8 @@ export interface ContextRowControl {
    * since the server would refuse it; the reason is shown instead.
    */
   blockedReason?: string;
+  /** The last request on this row that failed, kept by the owner. */
+  failure?: string;
 }
 
 export interface ContextItemProps {
@@ -114,6 +117,18 @@ export function ContextItem({
           </button>
         )}
       </div>
+      {/* One live region per controlled row, in the page for as long as
+          the row is, so a failure that lands later is announced once. */}
+      {control && (
+        <HelperText
+          isLiveRegion
+          data-testid={`context-item-failure-${item.id}`}
+        >
+          {control.failure && (
+            <HelperTextItem variant="error">{control.failure}</HelperTextItem>
+          )}
+        </HelperText>
+      )}
       {control?.blockedReason && (
         <div
           data-testid={`context-item-blocked-${item.id}`}
