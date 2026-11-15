@@ -7292,6 +7292,80 @@ fn t24_reset_links_are_advised() {
     }
 }
 
+/// An alias reached through a chain, through the scan, the render and
+/// refine. `real.service`'s `[Install]` is `Alias=public.service`, its
+/// preset `enable`, and the host's links, planted by hand, are
+/// `public.service -> relay.service -> real.service`. The chain installs
+/// the unit: the inventory reads `Enabled` and the relay is reported as a
+/// second alias. So the unit is at its preset, with no state row in refine
+/// and no `disable` on either route.
+#[test]
+fn an_alias_chain_installs_its_unit_through_both_exports() {
+    const ALIASED: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\nAlias=public.service\n";
+    let snap = scan(
+        UnitHost::new()
+            .unit("real.service", "enabled")
+            .unit("public.service", "alias")
+            .unit("relay.service", "alias")
+            .preset("enable real.service")
+            .base_package("realpkg")
+            .vendor_unit("real.service", ALIASED, Some("realpkg"))
+            .link("/etc/systemd/system/public.service", "relay.service")
+            .link(
+                "/etc/systemd/system/relay.service",
+                "/usr/lib/systemd/system/real.service",
+            ),
+    );
+    assert_eq!(
+        inventory_entry(&snap, "real.service").map(|e| e.state),
+        Some(UnitState::Enabled),
+        "the chain installs real.service"
+    );
+    assert_eq!(changes_named(&snap, "real.service"), 0);
+    let relay: Vec<_> = links_of(&snap)
+        .iter()
+        .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+        .collect();
+    assert_eq!(
+        relay,
+        [(
+            LinkRelation::Alias,
+            "relay.service",
+            "real.service",
+            ManualLinkCause::NotInInstall
+        )]
+    );
+
+    let refine = session(&snap);
+    assert!(
+        refine
+            .decisions()
+            .manual_links
+            .iter()
+            .any(|row| row.parent.as_str() == "relay.service"),
+        "refine shows the relay link"
+    );
+    assert!(
+        refine
+            .decisions()
+            .unit_states
+            .iter()
+            .all(|row| row.unit.as_str() != "real.service"),
+        "no state row for real.service: {:?}",
+        refine.decisions().unit_states
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            containerfile.contains("relay.service"),
+            "{route}: the relay link is advised:\n{containerfile}"
+        );
+        assert!(
+            !acts(&containerfile, "disable", "real.service"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// The T40 host: `need.service`, a vendor unit of an installed package
 /// under an `enable` preset, with `unit_file` and, when given, an `/etc`
 /// drop-in `10-reset.conf` holding `drop_in`. No link to it anywhere.

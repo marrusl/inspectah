@@ -1839,6 +1839,119 @@ fn hidden_drop_in_names_are_not_recorded() {
     assert!(install.is_empty(), "{install:?}");
 }
 
+/// The vendor `real.service` whose only `[Install]` key is
+/// `Alias=public.service`.
+const ALIASED_UNIT: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\nAlias=public.service\n";
+
+/// A host whose `/etc/systemd/system` holds exactly the links `links`
+/// places, with the vendor [`ALIASED_UNIT`], `preset` as its one preset
+/// rule, and `real.service` listed `enabled`. No enable link is made for
+/// it: each case plants its own.
+fn alias_host(links: &[(&str, &str)], preset: &str) -> MockExecutor {
+    let listing = "UNIT FILE                                  STATE           PRESET\n\
+                   real.service enabled enabled\n\n1 unit files listed.\n";
+    let mut exec = MockExecutor::new()
+        .with_command(
+            LIST_EVERY_KIND,
+            ExecResult {
+                stdout: listing.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", preset)
+        .with_dir("/usr/lib/systemd/system", vec!["real.service"])
+        .with_file("/usr/lib/systemd/system/real.service", ALIASED_UNIT)
+        .with_file(
+            "/opt/app/real.service",
+            "[Service]\nExecStart=/opt/app/run\n",
+        )
+        .with_dir(
+            "/etc/systemd/system",
+            links.iter().map(|(name, _)| *name).collect(),
+        );
+    for (name, target) in links {
+        exec = exec.with_link(&format!("/etc/systemd/system/{name}"), target);
+    }
+    owner_answer(exec, "real.service", Some("realpkg"))
+}
+
+/// An alias is attributed to the unit at the end of its whole chain, as
+/// the resolver reads it, never to its first target's name. Each case
+/// plants its links by hand:
+///
+/// - The chain `public.service -> relay.service -> real.service`, under an
+///   `enable` preset: `public.service` is the alias `[Install]` names, so
+///   `real.service` is installed and at its preset, with no `disable`
+///   row; `relay.service` is a second alias of it, reported as a link its
+///   `[Install]` does not name.
+/// - A link to `/opt/app/real.service`, outside both unit directories and
+///   named like the packaged unit, under a `disable` preset: it is no
+///   alias of the packaged unit, which is disabled, with no row.
+/// - Control: a direct link to the vendor file, under a `disable` preset,
+///   is the alias, so the unit is enabled against its preset and is a row.
+#[test]
+fn an_alias_is_attributed_to_the_end_of_its_chain() {
+    let real = "/usr/lib/systemd/system/real.service";
+    let (chain, _) = scan(&alias_host(
+        &[("public.service", "relay.service"), ("relay.service", real)],
+        "enable real.service\n",
+    ));
+    assert_eq!(
+        inventory_state(&chain, "real.service"),
+        Some(UnitState::Enabled),
+        "the chain installs real.service"
+    );
+    assert!(
+        chain.state_changes.is_empty(),
+        "an installed unit at its enable preset has no row: {:?}",
+        state_change_names(&chain)
+    );
+    assert_eq!(
+        manual_links(&chain),
+        [(
+            LinkRelation::Alias,
+            "relay.service",
+            "real.service",
+            ManualLinkCause::NotInInstall
+        )]
+    );
+
+    let (outside, _) = scan(&alias_host(
+        &[("public.service", "/opt/app/real.service")],
+        "disable real.service\n",
+    ));
+    assert_eq!(
+        inventory_state(&outside, "real.service"),
+        Some(UnitState::Disabled),
+        "a link outside the unit directories is no alias of real.service"
+    );
+    assert!(
+        outside.state_changes.is_empty(),
+        "{:?}",
+        state_change_names(&outside)
+    );
+    assert!(
+        outside.manual_links.is_empty(),
+        "{:?}",
+        outside.manual_links
+    );
+
+    let (direct, _) = scan(&alias_host(
+        &[("public.service", real)],
+        "disable real.service\n",
+    ));
+    assert_eq!(
+        inventory_state(&direct, "real.service"),
+        Some(UnitState::Enabled),
+        "control: the direct alias installs real.service"
+    );
+    assert_eq!(state_change_names(&direct), ["real.service"]);
+    assert_eq!(direct.state_changes[0].current_state(), UnitState::Enabled);
+    assert!(direct.manual_links.is_empty(), "{:?}", direct.manual_links);
+}
+
 /// An enabled `/etc` storage unit whose file cannot be read is a
 /// candidate and a file the storage pass lists; the read failure is
 /// listed once in the degraded reason. Control: the readable file is a

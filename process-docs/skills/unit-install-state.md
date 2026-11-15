@@ -44,7 +44,13 @@ under `/etc/systemd/system`, and the links packages ship under
 - A section that names no link (none, only `Also=`, or a list a drop-in
   reset) gives no state: enabling it acts only through its members.
 - `HostLinks` keys links by the unit they link: a dependency-directory
-  link by its own name, an alias by its target. A link under a parent that
+  link by its own name, an alias by the unit at the end of its whole
+  chain, read by `resolve::link_end`, the resolver's own reading. A mask,
+  a link to a file outside both unit directories (whatever its name) and
+  a chain that does not resolve are no alias; a chain whose end cannot be
+  read is a failed read under `/etc`. Never attribute an alias by its
+  first target's name: `public -> relay -> real` would then count against
+  `relay` and leave `real` reading `Disabled`. A link under a parent that
   does not parse is not a finding but still counts as a link to the unit
   (`admin_unparsed_parent`); one whose own name does not parse is a
   warning (`admin_unparsed`).

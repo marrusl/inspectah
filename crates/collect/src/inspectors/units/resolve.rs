@@ -302,13 +302,8 @@ fn hidden_fragment(exec: &dyn Executor, file: &UnitName) -> Result<UnitFragment,
     Ok(UnitFragment::Absent)
 }
 
-/// What a link at `path` makes the unit. The whole chain is followed, and
-/// the final target's form is decided before anything else, as systemd's
-/// `unit_file_load_or_readlink` does: a link that ends at `/dev/null` or at
-/// a zero-length regular file is a mask, wherever that file is, so a link
-/// to a link to `/dev/null` is a mask and so is a link to an empty unit
-/// file. Only a link that ends at a file with content is an alias or
-/// linked.
+/// What a link at `path` makes the unit, from [`link_end`]: a mask, an
+/// alias of another unit, or linked.
 fn link_form(
     exec: &dyn Executor,
     path: &str,
@@ -316,12 +311,46 @@ fn link_form(
     file: &UnitName,
     under_etc: bool,
 ) -> Result<Resolved, ResolveError> {
-    let linked = || ResolveError::Linked {
-        path: path.to_owned(),
-        target: target.clone(),
-    };
+    match link_end(exec, path)? {
+        LinkEnd::Mask => {
+            let hidden = if under_etc {
+                hidden_fragment(exec, file)?
+            } else {
+                UnitFragment::Absent
+            };
+            Ok(Resolved::Masked { hidden })
+        }
+        LinkEnd::UnitFile(other) if other != *file => Ok(Resolved::AliasOf(other)),
+        LinkEnd::UnitFile(_) | LinkEnd::Elsewhere => Err(ResolveError::Linked {
+            path: path.to_owned(),
+            target,
+        }),
+    }
+}
+
+/// Where the whole chain of the link at `path` ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LinkEnd {
+    /// `/dev/null` or a zero-length regular file, wherever it is: a mask.
+    Mask,
+    /// A file with content directly in one of the two unit directories,
+    /// whose name is this unit name.
+    UnitFile(UnitName),
+    /// Anything else: a file elsewhere or with a name that is not a unit
+    /// name, or a chain that does not resolve (dangling, or a loop).
+    Elsewhere,
+}
+
+/// Follow the link at `path` to the end of its chain and decide its form
+/// before anything else, as systemd's `unit_file_load_or_readlink` does: a
+/// link that ends at `/dev/null` or at a zero-length regular file is a
+/// mask, wherever that file is, so a link to a link to `/dev/null` is a
+/// mask and so is a link to an empty unit file. Only a link that ends at a
+/// file with content can name a unit. The resolver and the link reader
+/// both read a link through this, so they agree on which unit it names.
+pub(super) fn link_end(exec: &dyn Executor, path: &str) -> Result<LinkEnd, ResolveError> {
     let Ok(resolved) = exec.resolve_final_target(Path::new(path)) else {
-        return Err(linked());
+        return Ok(LinkEnd::Elsewhere);
     };
     // A target that cannot be read is a read failure, as systemd fails on a
     // target it cannot stat: either form could hide a mask.
@@ -331,25 +360,19 @@ fn link_form(
             Entry::File { empty: true }
         );
     if masked {
-        let hidden = if under_etc {
-            hidden_fragment(exec, file)?
-        } else {
-            UnitFragment::Absent
-        };
-        return Ok(Resolved::Masked { hidden });
+        return Ok(LinkEnd::Mask);
     }
     let in_unit_dir = resolved
         .parent()
         .is_some_and(|dir| dir == Path::new(ETC_UNIT_DIR) || dir == Path::new(VENDOR_UNIT_DIR));
-    let other_unit = resolved
+    let unit = resolved
         .file_name()
         .and_then(|n| n.to_str())
-        .and_then(|n| UnitName::try_from(n.to_owned()).ok())
-        .filter(|other| other != file);
-    match other_unit {
-        Some(other) if in_unit_dir => Ok(Resolved::AliasOf(other)),
-        _ => Err(linked()),
-    }
+        .and_then(|n| UnitName::try_from(n.to_owned()).ok());
+    Ok(match unit {
+        Some(unit) if in_unit_dir => LinkEnd::UnitFile(unit),
+        _ => LinkEnd::Elsewhere,
+    })
 }
 
 /// Read what sits at `path` without following a link.

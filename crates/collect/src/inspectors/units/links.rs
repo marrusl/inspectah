@@ -8,7 +8,7 @@
 //! package ships under `/usr/lib/systemd/system`.
 
 use super::install::{DROP_IN_DIR_SUFFIX, InstallRead, InstallSection};
-use super::resolve::{ETC_UNIT_DIR, VENDOR_UNIT_DIR};
+use super::resolve::{self, ETC_UNIT_DIR, LinkEnd, ResolveError, VENDOR_UNIT_DIR};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{
     InstallUnknown, LinkRelation, ManualLink, ManualLinkCause, UndeterminedInstall, UnitName,
@@ -29,9 +29,6 @@ const DEPENDENCY_DIRS: [(&str, LinkRelation); 3] = [
 /// The link that sets the default target. It is not an alias (§ 7.6 of the
 /// units spec owns it).
 const DEFAULT_TARGET: &str = "default.target";
-
-/// A link to this path masks a unit; it is not an alias.
-const DEV_NULL: &str = "/dev/null";
 
 /// The templates whose instances name a volume or an escaped device path of
 /// the source host. A link to one of their instances is never carried,
@@ -206,8 +203,8 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
         let Ok(alias) = UnitName::try_from(entry.clone()) else {
             continue;
         };
-        let target = match exec.read_link(Path::new(&path)) {
-            Ok(target) => target,
+        match exec.read_link(Path::new(&path)) {
+            Ok(_) => {}
             // Not a link (`EINVAL`), or gone since the listing.
             Err(e)
                 if matches!(
@@ -221,20 +218,20 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
                 fail(&mut read, format!("{path}: {e}"));
                 continue;
             }
-        };
-        if target == DEV_NULL {
-            continue;
         }
-        let unit = Path::new(&target)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(|name| UnitName::try_from(name.to_owned()).ok());
-        match unit {
-            Some(unit) if unit != alias => read.links.entry(unit).or_default().push(Link {
-                relation: LinkRelation::Alias,
-                parent: alias,
-            }),
-            _ => {}
+        // The unit at the end of the whole chain, as the resolver reads it:
+        // a mask, a link to a file outside both unit directories, and a
+        // chain that does not resolve are no alias.
+        match resolve::link_end(exec, &path) {
+            Ok(LinkEnd::UnitFile(unit)) if unit != alias => {
+                read.links.entry(unit).or_default().push(Link {
+                    relation: LinkRelation::Alias,
+                    parent: alias,
+                });
+            }
+            Ok(_) => {}
+            Err(ResolveError::Read { path, error }) => fail(&mut read, format!("{path}: {error}")),
+            Err(ResolveError::Linked { .. }) => {}
         }
     }
     read
@@ -578,6 +575,9 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
 
+    /// A link to this path masks a unit; it is not an alias.
+    const DEV_NULL: &str = "/dev/null";
+
     fn unit(name: &str) -> UnitName {
         UnitName::try_from(name.to_owned()).expect("a valid unit name")
     }
@@ -839,6 +839,86 @@ mod tests {
             [alias("dbus-org.x.service")]
         );
         assert!(links.admin(&unit("graphical.target")).is_empty());
+    }
+
+    /// An alias is the unit at the end of its whole chain, as the resolver
+    /// reads it, never its first target's name. `public.service` links to
+    /// `relay.service`, which links to `real.service`: both are aliases of
+    /// `real.service`, and `relay.service` has none. A link that ends at a
+    /// file outside both unit directories is no alias, even when that file
+    /// is named `real.service`; one that ends at an empty file is a mask.
+    /// Control: a direct link to the vendor file is an alias of it.
+    #[test]
+    fn an_alias_is_the_unit_its_whole_chain_ends_at() {
+        let real = format!("{VENDOR_UNIT_DIR}/real.service");
+        let exec = MockExecutor::new()
+            .with_dir(
+                ETC_UNIT_DIR,
+                vec![
+                    "public.service",
+                    "relay.service",
+                    "direct.service",
+                    "outside.service",
+                    "emptied.service",
+                ],
+            )
+            .with_link(&format!("{ETC_UNIT_DIR}/public.service"), "relay.service")
+            .with_link(&format!("{ETC_UNIT_DIR}/relay.service"), &real)
+            .with_link(&format!("{ETC_UNIT_DIR}/direct.service"), &real)
+            .with_link(
+                &format!("{ETC_UNIT_DIR}/outside.service"),
+                "/opt/app/real.service",
+            )
+            .with_file("/opt/app/real.service", "[Unit]\nDescription=elsewhere\n")
+            .with_link(
+                &format!("{ETC_UNIT_DIR}/emptied.service"),
+                "/opt/app/empty.service",
+            )
+            .with_file("/opt/app/empty.service", "")
+            .with_dir(VENDOR_UNIT_DIR, vec!["real.service"])
+            .with_file(&real, "[Install]\nAlias=public.service\n");
+
+        let (links, failures) = read_host_links(&exec);
+
+        assert!(failures.is_empty(), "{failures:?}");
+        let real = links.admin(&unit("real.service"));
+        assert!(
+            real.contains(&alias("direct.service")),
+            "control: a direct link is an alias: {real:?}"
+        );
+        assert!(
+            real.contains(&alias("public.service")),
+            "the chain's first link is an alias of its end: {real:?}"
+        );
+        assert!(
+            real.contains(&alias("relay.service")),
+            "the chain's second link is an alias of its end: {real:?}"
+        );
+        assert_eq!(real.len(), 3, "{real:?}");
+        assert!(links.admin(&unit("relay.service")).is_empty());
+        assert_eq!(
+            links.admin.keys().map(UnitName::as_str).collect::<Vec<_>>(),
+            ["real.service"]
+        );
+    }
+
+    /// A link whose chain cannot be read to its end is a failed read under
+    /// `/etc`: its links there are incomplete, and the alias is not counted.
+    #[test]
+    fn an_alias_whose_end_cannot_be_read_marks_etc_unreadable() {
+        use std::io::ErrorKind::PermissionDenied;
+        let end = format!("{VENDOR_UNIT_DIR}/real.service");
+        let exec = MockExecutor::new()
+            .with_dir(ETC_UNIT_DIR, vec!["public.service"])
+            .with_link(&format!("{ETC_UNIT_DIR}/public.service"), &end)
+            .with_file_error(&end, PermissionDenied);
+        let (links, failures) = read_host_links(&exec);
+        assert!(
+            failures.len() == 1 && failures[0].starts_with(&format!("{end}: ")),
+            "{failures:?}"
+        );
+        assert!(links.admin_unreadable);
+        assert!(links.admin(&unit("real.service")).is_empty());
     }
 
     /// A link in a dependency directory whose parent does not parse makes
