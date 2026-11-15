@@ -10,12 +10,17 @@ use super::selinux;
 
 /// § 10.1 and § 10.2 "Never the machine-id": a carried unit state holds
 /// through first boot while the image keeps the base image's empty
-/// `/etc/machine-id` (measured, run R3), and what undoes it.
+/// `/etc/machine-id` (measured, run R3), and what can undo it: a first-boot
+/// preset pass, which on RHEL 9 kept a rendered `enable` and undid a
+/// `disable`, and on RHEL 10 undid both, and never touched a mask
+/// (measured, 2026-11-14).
 const UNIT_STATE_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
      section survive first boot with the base image's empty `/etc/machine-id`. A later layer or \
      installer script that removes that file or writes `uninitialized` to it makes first boot \
-     apply the presets, which undoes the rendered `enable` and `disable` lines. A later \
-     `systemctl preset-all` puts every unit back to preset.";
+     apply the presets, which can undo the rendered `enable` and `disable` lines (measured: \
+     RHEL 9 kept an `enable` and undid a `disable`, RHEL 10 undid both). A rendered `mask` is \
+     kept. A later `systemctl preset-all` returns enabled and disabled units to their presets \
+     and leaves masks in place.";
 
 /// § 10.1: what a carried `disable` does and does not do (measured).
 const UNIT_STATE_DISABLE: &str = "A `disable` removes the administrator's links and nothing \

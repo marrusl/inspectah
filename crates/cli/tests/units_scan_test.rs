@@ -2447,8 +2447,10 @@ fn a_full_shadow_is_enabled_after_the_copy_of_its_shadow() {
 const README_FIRST_BOOT: &str = "The unit states in the Containerfile's Systemd Unit State \
      section survive first boot with the base image's empty `/etc/machine-id`. A later layer or \
      installer script that removes that file or writes `uninitialized` to it makes first boot \
-     apply the presets, which undoes the rendered `enable` and `disable` lines. A later \
-     `systemctl preset-all` puts every unit back to preset.";
+     apply the presets, which can undo the rendered `enable` and `disable` lines (measured: \
+     RHEL 9 kept an `enable` and undid a `disable`, RHEL 10 undid both). A rendered `mask` is \
+     kept. A later `systemctl preset-all` returns enabled and disabled units to their presets \
+     and leaves masks in place.";
 const README_DISABLE: &str = "A `disable` removes the administrator's links and nothing more: \
      a unit that a package's `.wants` link or another unit's `Wants=` pulls in reads \
      `disabled` afterwards and is still wanted.";
