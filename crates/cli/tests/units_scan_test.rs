@@ -9650,3 +9650,185 @@ fn a_not_additive_owner_whose_member_is_off_gets_both_advisories() {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// § 10.2 rule 7 and § 12 on a fleet aggregate (T25 (j)).
+// ---------------------------------------------------------------------
+
+/// The `FleetAggregate` block for `unit`'s `verb`, naming `members`.
+fn fleet_block(unit: &str, verb: &str, members: &str) -> Vec<String> {
+    vec![
+        format!(
+            "# Advisory: {unit} is {verb}d on the source hosts. Not carried: systemctl {verb} on \
+             it also {verb}s {members} (named by Also=), and fleet evidence may omit install \
+             metadata."
+        ),
+        format!(
+            "#   Before adding this after the configuration COPY, check the effective [Install] \
+             and Also= of {unit} in the image, and the intended state of each member:"
+        ),
+        format!("#     RUN systemctl {verb} -- '{unit}'"),
+    ]
+}
+
+/// `snap` with `unit`'s row included, as the operator includes a row the
+/// merge narrowed out because not every host has it.
+fn with_row_included(snap: &InspectionSnapshot, unit: &str) -> InspectionSnapshot {
+    let mut snap = snap.clone();
+    let row = snap
+        .units
+        .as_mut()
+        .expect("a units section")
+        .state_changes
+        .iter_mut()
+        .find(|c| c.unit().name().as_str() == unit)
+        .unwrap_or_else(|| panic!("no state change for {unit}"));
+    row.disposition = inspectah_core::types::FindingKind::included();
+    snap
+}
+
+/// Asserts, with `unit`'s row included, that `unit` gets exactly `block`
+/// and that no `systemctl` instruction names `unit` or any of `quiet`, on
+/// both routes: the scan's export of the aggregate, and a refine session
+/// that includes the row and [`INSTALL_PACKAGE`] (an aggregate starts
+/// refine with its added packages excluded). Then that the plan declines
+/// it with `FleetAggregate`, and that the row the fleet view shows carries
+/// no reason from the plan (§ 12): its one text field, `attention_reason`,
+/// is `collected`, what the scan recorded on the host.
+fn assert_fleet_advisory(
+    fleet: &InspectionSnapshot,
+    unit: &str,
+    block: &[String],
+    quiet: &[&str],
+    collected: Option<&str>,
+) {
+    let snap = &with_row_included(fleet, unit);
+    let ops = [
+        (package_item(INSTALL_PACKAGE), true),
+        (unit_item(unit), true),
+    ];
+    let routes = [
+        ("scan", containerfile_in(&render_export(snap))),
+        ("refine", containerfile_in(&exported_after(fleet, &ops))),
+    ];
+    for (route, containerfile) in routes {
+        assert_eq!(
+            advisory_for(&containerfile, unit),
+            block,
+            "{route}:\n{containerfile}"
+        );
+        for name in std::iter::once(&unit).chain(quiet) {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, name),
+                "{route}: {name}:\n{containerfile}"
+            );
+        }
+    }
+    let staged = inspectah_pipeline::render::configtree::staged_writes(snap);
+    let plan = inspectah_pipeline::render::unit_plan::plan_units(snap, &staged);
+    let why =
+        plan.declined
+            .iter()
+            .find_map(|(name, _, reason)| match reason {
+                inspectah_pipeline::render::unit_plan::OmissionReason::AlsoMember {
+                    why, ..
+                } if name.as_str() == unit => Some(why.clone()),
+                _ => None,
+            });
+    assert_eq!(
+        why,
+        Some(inspectah_pipeline::render::unit_plan::AlsoWhy::FleetAggregate)
+    );
+    let row = change(snap, unit);
+    assert!(row.aggregate.is_some(), "a fleet row");
+    assert_eq!(
+        row.attention_reason.as_deref(),
+        collected,
+        "the fleet row carries no reason from the plan"
+    );
+}
+
+/// T25 (j), through the real collector and merge. Host A: a vendor
+/// `bundle.service` enabled against a `disable` preset with
+/// `Also=helper.timer`, the helper `Inert`. Host B: the package ships
+/// `helper.timer` and an `/etc` drop-in for it with an `[Install]`
+/// section, no `bundle` unit, and no row for the helper. Host A alone: the
+/// enable is carried. Merged, with the bundle row included: the
+/// `FleetAggregate` advisory. The same with a host B that has no drop-in,
+/// where nothing else would stop the enable.
+#[test]
+fn t25_j_a_fleet_aggregate_advises_every_command_with_members() {
+    const HELPER: &str = "helper.timer";
+    const HELPER_TIMER: &str = "[Timer]\nOnCalendar=daily\n";
+    let host_a = || {
+        rule7_host(
+            &[],
+            &[(BUNDLE, "enabled")],
+            &[
+                (BUNDLE, &wanted_with("Also=helper.timer\n")),
+                (HELPER, HELPER_TIMER),
+            ],
+        )
+    };
+    let host_b = |drop_in: bool| {
+        let host = rule7_host(&[], &[], &[(HELPER, HELPER_TIMER)]);
+        if drop_in {
+            host.file(
+                &etc_drop_in(HELPER, "10-install.conf"),
+                "[Install]\nWantedBy=timers.target\n",
+            )
+        } else {
+            host
+        }
+    };
+
+    let alone = scan(host_a());
+    assert_eq!(
+        change(&alone, BUNDLE).also[0].links,
+        inspectah_core::types::units::MemberLinks::Inert
+    );
+    assert_also_carried(&alone, BUNDLE, "enable", "(j) host A alone");
+
+    let block = fleet_block(BUNDLE, "enable", HELPER);
+    for drop_in in [false, true] {
+        let fleet = merged(named(host_a(), "host-a"), named(host_b(drop_in), "host-b"));
+        assert_eq!(changes_named(&fleet, HELPER), 0, "no row for the helper");
+        assert_fleet_advisory(&fleet, BUNDLE, &block, &[HELPER], None);
+    }
+}
+
+/// § 12: an owner row made by § 7.4's owner check on one host merges as
+/// any state change, and in the aggregate it is the `FleetAggregate`
+/// advisory. Host A: `m.service` at its `enable` preset with `m.socket`
+/// unlinked, so an owner row. Host B: `m.socket` linked, so no owner row.
+#[test]
+fn an_owner_row_from_one_host_is_a_fleet_advisory() {
+    let socket = "[Socket]\nListenStream=/run/m.sock\n\n[Install]\nWantedBy=sockets.target\n";
+    let host = |socket_state: &str| {
+        rule7_host(
+            &["enable m.service"],
+            &[("m.service", "enabled"), ("m.socket", socket_state)],
+            &[
+                ("m.service", &wanted_with("Also=m.socket\n")),
+                ("m.socket", socket),
+            ],
+        )
+    };
+    let collected = change(&scan(host("disabled")), "m.service")
+        .attention_reason
+        .clone();
+    let fleet = merged(
+        named(host("disabled"), "host-a"),
+        named(host("enabled"), "host-b"),
+    );
+    assert_eq!(
+        change(&fleet, "m.service")
+            .aggregate
+            .as_ref()
+            .map(|a| a.count),
+        Some(1),
+        "the owner row is host A's"
+    );
+    let block = fleet_block("m.service", "enable", "m.socket");
+    assert_fleet_advisory(&fleet, "m.service", &block, &[], collected.as_deref());
+}

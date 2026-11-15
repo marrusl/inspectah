@@ -274,10 +274,12 @@ pub enum OmissionReason {
     /// The command would also act on `member` (§ 10.2 rule 7). An
     /// advisory ([`also_advisory_lines`]). `member` is the first member in
     /// `also` order that fails the first failing condition, or for
-    /// [`AlsoWhy::InstallFile`] on the unit's own file, its first member.
-    /// The other fields are what the advisory's text needs: the command's
-    /// `verb`; `named`, the units the first line names first (the members
-    /// that fail as `member` does, or the unit whose install file it is);
+    /// [`AlsoWhy::InstallFile`] on the unit's own file and for
+    /// [`AlsoWhy::FleetAggregate`], its first member. The other fields are
+    /// what the advisory's text needs: the command's `verb`; `named`, the
+    /// units the first line names first (the members that fail as `member`
+    /// does, the unit whose install file it is, or every member in a fleet
+    /// aggregate);
     /// `further`, the members failing the same condition the other way it
     /// can fail (each condition fails at most two ways: under `enable`,
     /// `Unlinked` or `Other`; under `disable`, `Installed` or `Other`;
@@ -304,6 +306,8 @@ pub enum AlsoWhy {
     NeedsOwnRow,
     /// The unit or the member has an install file in the snapshot.
     InstallFile { path: String },
+    /// The export is a fleet aggregate.
+    FleetAggregate,
 }
 
 impl OmissionReason {
@@ -750,12 +754,16 @@ impl DeclinedLine {
 /// that form.
 pub fn declined_line(name: &UnitName, action: UnitAction, reason: &OmissionReason) -> DeclinedLine {
     match reason {
-        OmissionReason::AlsoMember { .. } => DeclinedLine {
+        OmissionReason::AlsoMember { why, .. } => DeclinedLine {
             marker: DeclinedMarker::Advisory,
             text: format!(
-                "{} is {} {ALSO_NOT_CARRIED} {}",
+                "{} is {} {} {}",
                 name.as_str(),
                 state_word(action),
+                match why {
+                    AlsoWhy::FleetAggregate => ALSO_NOT_CARRIED_FLEET,
+                    _ => ALSO_NOT_CARRIED,
+                },
                 reason.describe()
             ),
         },
@@ -854,6 +862,10 @@ pub fn unit_state_lines(plan: &UnitPlan) -> Vec<String> {
 /// Rule 7's first line, between the unit's state and the reason.
 const ALSO_NOT_CARRIED: &str = "on the source host. Not carried:";
 
+/// [`ALSO_NOT_CARRIED`] for a fleet aggregate, whose rows come from
+/// several hosts.
+const ALSO_NOT_CARRIED_FLEET: &str = "on the source hosts. Not carried:";
+
 /// After the members a rule 7 first line names.
 const ALSO_NAMED_BY: &str = "(named by Also=)";
 
@@ -903,6 +915,18 @@ const ALSO_EACH_FOLLOWS: &str =
 
 /// The header of an `InstallFile` advisory's one line to add.
 const ALSO_AFTER_READING: &str = "#   After reading that file, add after the configuration COPY:";
+
+/// The clause of a `FleetAggregate` advisory, after the members.
+const ALSO_FLEET_EVIDENCE: &str = "and fleet evidence may omit install metadata";
+
+/// The header of a `FleetAggregate` advisory's one line to add, before
+/// the unit.
+const ALSO_FLEET_CHECK: &str = "#   Before adding this after the configuration COPY, check the \
+     effective [Install] and Also= of";
+
+/// The header of a `FleetAggregate` advisory's one line to add, after the
+/// unit.
+const ALSO_FLEET_CHECK_REST: &str = "in the image, and the intended state of each member:";
 
 /// The state a command reproduces: `enabled` for `enable`.
 fn state_word(action: UnitAction) -> &'static str {
@@ -985,6 +1009,7 @@ fn also_clause(why: &AlsoWhy, verb: UnitAction, named: &[UnitName]) -> &'static 
             UnitAction::Enable => number(ALSO_INSTANCE_NEEDS_ROW, named),
             UnitAction::Disable | UnitAction::Mask => ALSO_IMAGE_NEEDS,
         },
+        AlsoWhy::FleetAggregate => ALSO_FLEET_EVIDENCE,
     }
 }
 
@@ -1000,8 +1025,9 @@ fn line_to_add(verb: UnitAction, unit: &UnitName) -> String {
 /// any other reason. The first line is [`declined_line`]'s. A links
 /// mismatch adds the unit's own command and the opposite verb for each
 /// member in `add`, between a header and a footer, when there is any such
-/// member; an `InstallFile` advisory adds the unit's own command; the
-/// other reasons add no line.
+/// member; an `InstallFile` advisory adds the unit's own command, and a
+/// `FleetAggregate` advisory adds it after what to check first; the other
+/// reasons add no line.
 pub fn also_advisory_lines(
     name: &UnitName,
     action: UnitAction,
@@ -1024,6 +1050,13 @@ pub fn also_advisory_lines(
         }
         AlsoWhy::InstallFile { .. } => {
             lines.push(ALSO_AFTER_READING.to_owned());
+            lines.push(line_to_add(action, name));
+        }
+        AlsoWhy::FleetAggregate => {
+            lines.push(format!(
+                "{ALSO_FLEET_CHECK} {} {ALSO_FLEET_CHECK_REST}",
+                name.as_str()
+            ));
             lines.push(line_to_add(action, name));
         }
         AlsoWhy::LinksDiffer(_) | AlsoWhy::RowNotCarried | AlsoWhy::NeedsOwnRow => {}
@@ -2326,10 +2359,11 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
 // Rule 7, `Also=` members
 // ---------------------------------------------------------------------------
 
-/// Rule 7 (§ 10.2) on a single host, for a row that passed rules 1 to 6:
-/// an `enable` or `disable` whose `also` list is not empty is carried only
-/// when three conditions hold, and the first that fails gives the
-/// [`AlsoWhy`]. `rows` is every state change by name, and `carried` every
+/// Rule 7 (§ 10.2), for a row that passed rules 1 to 6: an `enable` or
+/// `disable` whose `also` list is not empty is never carried in a fleet
+/// aggregate ([`AlsoWhy::FleetAggregate`], naming every member), and on a
+/// single host is carried only when three conditions hold, the first that
+/// fails giving the [`AlsoWhy`]. `rows` is every state change by name, and `carried` every
 /// row that passed rules 1 to 6, with its verb.
 ///
 /// 1. Every member's links match the verb: `Installed` or `Inert` for
@@ -2397,6 +2431,20 @@ fn rule_7_also(
         }
         Ok(())
     };
+    // A fleet aggregate is always an advisory (§ 12): its evidence may lack
+    // another host's install files, so no condition can be established.
+    if snap.aggregate_meta.is_some()
+        && let Some(first) = sc.also.first()
+    {
+        let every = sc.also.iter().map(|m| m.unit.clone()).collect();
+        return Err(declined(
+            &first.unit,
+            AlsoWhy::FleetAggregate,
+            every,
+            None,
+            Vec::new(),
+        ));
+    }
     let (matching, opposite) = match action {
         UnitAction::Enable => (MemberLinks::Installed, MemberLinks::Unlinked),
         UnitAction::Disable | UnitAction::Mask => (MemberLinks::Unlinked, MemberLinks::Installed),

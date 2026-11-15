@@ -3459,3 +3459,352 @@ fn mount_findings_merge_to_one_row_per_unit_name() {
             .all(|f| f.aggregate.as_ref().is_some_and(|a| a.total == 3))
     );
 }
+
+// ---------------------------------------------------------------------------
+// § 12: the phase 4 fields of a state change, and the link findings
+// ---------------------------------------------------------------------------
+
+/// A unit name for a test.
+fn unit_name(unit: &str) -> inspectah_core::types::units::UnitName {
+    unit.to_owned().try_into().expect("a test unit name")
+}
+
+/// An `Also=` member recorded with `links` and the vendor drop-ins named.
+fn member(
+    unit: &str,
+    links: inspectah_core::types::units::MemberLinks,
+    vendor_drop_ins: &[&str],
+) -> inspectah_core::types::units::AlsoMember {
+    inspectah_core::types::units::AlsoMember {
+        unit: unit_name(unit),
+        links,
+        vendor_drop_ins: vendor_drop_ins.iter().map(|n| (*n).to_owned()).collect(),
+    }
+}
+
+/// `bundle.service` enabled, recorded with `also`, `install_drop_ins` and
+/// `vendor_drop_ins`.
+fn bundle_change(
+    also: Vec<inspectah_core::types::units::AlsoMember>,
+    install_drop_ins: &[&str],
+    vendor_drop_ins: &[&str],
+) -> UnitStateChange {
+    let mut change = UnitStateChange::new(
+        test_carried_unit(unit_name("bundle.service"), Some("bundle".into())),
+        UnitState::Enabled,
+        Some(PresetDefault::Disable),
+    )
+    .expect("a vendor unit can be enabled");
+    change.also = also;
+    change.install_drop_ins = install_drop_ins.iter().map(|p| (*p).to_owned()).collect();
+    change.vendor_drop_ins = vendor_drop_ins.iter().map(|n| (*n).to_owned()).collect();
+    change
+}
+
+/// A section holding `state_changes` alone.
+fn changes_section(state_changes: Vec<UnitStateChange>) -> Option<UnitSection> {
+    Some(UnitSection {
+        state_changes,
+        ..Default::default()
+    })
+}
+
+/// Host names `h1`, `h2`, ... for `n` hosts, in hostname order.
+fn host_names(n: usize) -> Vec<String> {
+    (1..=n).map(|i| format!("h{i}")).collect()
+}
+
+/// § 12: the list fields of a state change are the union across every
+/// host that has the unit. Within `also`, a member two hosts record with
+/// different `links` becomes `Other`, a member both record alike keeps its
+/// value, a member one host records is kept as recorded, and a member's
+/// `vendor_drop_ins` is the union of the names. Members keep the order the
+/// first host recorded, then each later host's new ones. The lists are the
+/// same whichever host's row the merge keeps.
+#[test]
+fn a_state_change_merges_the_union_of_its_phase_4_lists() {
+    use inspectah_core::types::units::MemberLinks::{Inert, Installed, Other, Unlinked};
+    let h1 = bundle_change(
+        vec![
+            member("a.service", Installed, &["10-a.conf"]),
+            member("b.service", Inert, &[]),
+        ],
+        &["/etc/systemd/system/bundle.service.d/10-x.conf"],
+        &["10-x.conf"],
+    );
+    let h2 = bundle_change(
+        vec![
+            member("c.service", Installed, &[]),
+            member("a.service", Unlinked, &["20-a.conf"]),
+            member("b.service", Inert, &[]),
+        ],
+        &["/etc/systemd/system/bundle.service.d/20-y.conf"],
+        &["20-y.conf", "10-x.conf"],
+    );
+    let result = merge_service_sections(
+        vec![changes_section(vec![h1]), changes_section(vec![h2])],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+    let merged = &result.state_changes[0];
+    assert_eq!(
+        merged.also,
+        vec![
+            member("a.service", Other, &["10-a.conf", "20-a.conf"]),
+            member("b.service", Inert, &[]),
+            member("c.service", Installed, &[]),
+        ]
+    );
+    assert_eq!(
+        merged.install_drop_ins,
+        [
+            "/etc/systemd/system/bundle.service.d/10-x.conf",
+            "/etc/systemd/system/bundle.service.d/20-y.conf",
+        ]
+    );
+    assert_eq!(merged.vendor_drop_ins, ["10-x.conf", "20-y.conf"]);
+    assert_eq!(merged.aggregate.as_ref().map(|a| a.count), Some(2));
+
+    // Control: one host alone keeps its lists as recorded.
+    let alone = merge_service_sections(
+        vec![changes_section(vec![bundle_change(
+            vec![member("a.service", Unlinked, &["20-a.conf"])],
+            &[],
+            &[],
+        )])],
+        1,
+        &host_names(1),
+    )
+    .expect("a merged section");
+    assert_eq!(
+        alone.state_changes[0].also,
+        vec![member("a.service", Unlinked, &["20-a.conf"])]
+    );
+}
+
+/// A link finding for a test.
+fn manual_link(
+    relation: inspectah_core::types::units::LinkRelation,
+    parent: &str,
+    unit: &str,
+    cause: inspectah_core::types::units::ManualLinkCause,
+    install_files: &[&str],
+) -> inspectah_core::types::units::ManualLink {
+    inspectah_core::types::units::ManualLink {
+        relation,
+        parent: unit_name(parent),
+        unit: unit_name(unit),
+        cause,
+        install_files: install_files.iter().map(|p| (*p).to_owned()).collect(),
+        aggregate: None,
+    }
+}
+
+/// A section holding `manual_links` alone.
+fn links_section(
+    manual_links: Vec<inspectah_core::types::units::ManualLink>,
+) -> Option<UnitSection> {
+    Some(UnitSection {
+        manual_links,
+        ..Default::default()
+    })
+}
+
+/// The count and hosts of a merged finding's prevalence.
+fn prevalence(
+    aggregate: &Option<inspectah_core::types::aggregate::AggregatePrevalence>,
+) -> (i32, i32, Vec<String>) {
+    let aggregate = aggregate.as_ref().expect("an aggregate row");
+    (aggregate.count, aggregate.total, aggregate.hosts.clone())
+}
+
+/// § 12: `manual_links` merge by relation, parent and unit. Two hosts with
+/// the same `VendorInstallOnly` link and different `install_files` give one
+/// row with the union of the files and the prevalence of both. Two hosts
+/// with opposing install-difference causes for one triple give the first
+/// host's cause in hostname order, with the prevalence of both. A link
+/// that differs in relation, parent or unit is a row of its own.
+#[test]
+fn manual_links_merge_by_relation_parent_and_unit() {
+    use inspectah_core::types::units::LinkRelation::{Also, Requires, Wants};
+    use inspectah_core::types::units::ManualLinkCause::{
+        HostInstallOnly, StaticUnit, VendorInstallOnly,
+    };
+    const X_DROP_IN: &str = "/etc/systemd/system/x.service.d/10-a.conf";
+    const X_OTHER_DROP_IN: &str = "/etc/systemd/system/x.service.d/20-b.conf";
+    let result = merge_service_sections(
+        vec![
+            links_section(vec![
+                manual_link(
+                    Wants,
+                    "multi-user.target",
+                    "x.service",
+                    VendorInstallOnly,
+                    &[X_DROP_IN],
+                ),
+                manual_link(
+                    Also,
+                    "y.service",
+                    "z.service",
+                    HostInstallOnly,
+                    &["/etc/systemd/system/y.service"],
+                ),
+                manual_link(Requires, "multi-user.target", "x.service", StaticUnit, &[]),
+            ]),
+            links_section(vec![
+                manual_link(
+                    Wants,
+                    "multi-user.target",
+                    "x.service",
+                    VendorInstallOnly,
+                    &[X_OTHER_DROP_IN, X_DROP_IN],
+                ),
+                manual_link(
+                    Also,
+                    "y.service",
+                    "z.service",
+                    VendorInstallOnly,
+                    &["/etc/systemd/system/y.service.d/10-c.conf"],
+                ),
+            ]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    let both = (2, 2, host_names(2));
+    let rows: Vec<_> = result
+        .manual_links
+        .iter()
+        .map(|link| {
+            (
+                link.relation,
+                link.parent.as_str(),
+                link.unit.as_str(),
+                link.cause,
+                link.install_files.clone(),
+                prevalence(&link.aggregate),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                Wants,
+                "multi-user.target",
+                "x.service",
+                VendorInstallOnly,
+                vec![X_DROP_IN.to_owned(), X_OTHER_DROP_IN.to_owned()],
+                both.clone(),
+            ),
+            (
+                Also,
+                "y.service",
+                "z.service",
+                HostInstallOnly,
+                vec![
+                    "/etc/systemd/system/y.service".to_owned(),
+                    "/etc/systemd/system/y.service.d/10-c.conf".to_owned(),
+                ],
+                both,
+            ),
+            (
+                Requires,
+                "multi-user.target",
+                "x.service",
+                StaticUnit,
+                vec![],
+                (1, 2, vec!["h1".to_owned()]),
+            ),
+        ]
+    );
+
+    // The first host in hostname order decides the cause, so the other
+    // order gives the other cause.
+    let swapped = merge_service_sections(
+        vec![
+            links_section(vec![manual_link(
+                Also,
+                "y.service",
+                "z.service",
+                VendorInstallOnly,
+                &[],
+            )]),
+            links_section(vec![manual_link(
+                Also,
+                "y.service",
+                "z.service",
+                HostInstallOnly,
+                &[],
+            )]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(swapped.manual_links.len(), 1);
+    assert_eq!(swapped.manual_links[0].cause, VendorInstallOnly);
+}
+
+/// § 12: `undetermined_installs` merge by unit, with `install_files` the
+/// union and the reason of the first host in hostname order; the
+/// prevalence counts every host that recorded one. A record for another
+/// unit is a row of its own.
+#[test]
+fn undetermined_installs_merge_by_unit() {
+    use inspectah_core::types::units::InstallUnknown::{RequiredByReset, Specifier, UpheldBy};
+    use inspectah_core::types::units::UndeterminedInstall;
+    let record = |unit: &str, reason, files: &[&str]| UndeterminedInstall {
+        unit: unit_name(unit),
+        reason,
+        install_files: files.iter().map(|p| (*p).to_owned()).collect(),
+        aggregate: None,
+    };
+    let section = |records| {
+        Some(UnitSection {
+            undetermined_installs: records,
+            ..Default::default()
+        })
+    };
+    const A: &str = "/etc/systemd/system/u.service.d/10-a.conf";
+    const B: &str = "/etc/systemd/system/u.service.d/20-b.conf";
+    let result = merge_service_sections(
+        vec![
+            section(vec![record("u.service", Specifier, &[A])]),
+            section(vec![
+                record("u.service", RequiredByReset, &[B, A]),
+                record("v.service", UpheldBy, &[]),
+            ]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    let rows: Vec<_> = result
+        .undetermined_installs
+        .iter()
+        .map(|r| {
+            (
+                r.unit.as_str(),
+                r.reason,
+                r.install_files.clone(),
+                prevalence(&r.aggregate),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "u.service",
+                Specifier,
+                vec![A.to_owned(), B.to_owned()],
+                (2, 2, host_names(2)),
+            ),
+            ("v.service", UpheldBy, vec![], (1, 2, vec!["h2".to_owned()])),
+        ]
+    );
+}

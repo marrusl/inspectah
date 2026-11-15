@@ -1104,7 +1104,9 @@ use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::{FcontextRule, FcontextSource, SelinuxSection};
 use crate::types::storage::StorageSection;
-use crate::types::units::{UnitInventoryEntry, UnitName, UnitSection, UnitState};
+use crate::types::units::{
+    AlsoMember, MemberLinks, UnitInventoryEntry, UnitName, UnitSection, UnitState,
+};
 use crate::types::users::UserGroupSection;
 
 /// Pick an optional scalar value from a specific host index.
@@ -1549,11 +1551,11 @@ pub fn merge_service_sections(
         return None;
     }
 
-    let mut state_changes = merge_items(
-        collect_items(&sections, |s| &s.state_changes),
-        total_hosts,
-        hostnames,
-    );
+    let observed = collect_items(&sections, |s| &s.state_changes);
+    let mut state_changes = merge_items(observed.clone(), total_hosts, hostnames);
+    for change in &mut state_changes {
+        union_lists(change, &observed);
+    }
     // `merge_items` includes every row on every host, so a runtime updater
     // each host excluded would come out included (§ 12 "The exception").
     for change in &mut state_changes {
@@ -1571,16 +1573,117 @@ pub fn merge_service_sections(
         hostnames,
     );
 
+    let manual_links = merge_by_first_host(
+        collect_items(&sections, |s| &s.manual_links),
+        |a, b| a.relation == b.relation && a.parent == b.parent && a.unit == b.unit,
+        |link| (&mut link.install_files, &mut link.aggregate),
+        total_hosts,
+        hostnames,
+    );
+    let undetermined_installs = merge_by_first_host(
+        collect_items(&sections, |s| &s.undetermined_installs),
+        |a, b| a.unit == b.unit,
+        |record| (&mut record.install_files, &mut record.aggregate),
+        total_hosts,
+        hostnames,
+    );
+
     Some(UnitSection {
         state_changes,
         inventory,
         drop_ins,
         mount_findings,
-        // § 12's merge of the link findings is not built yet: an aggregate
-        // carries none.
-        manual_links: Vec::new(),
-        undetermined_installs: Vec::new(),
+        manual_links,
+        undetermined_installs,
     })
+}
+
+/// Gives the merged `change` the union of the list fields of every row
+/// `observed` holds for its unit (§ 12): `install_drop_ins` and
+/// `vendor_drop_ins` sorted, as the collector records them, and `also` in
+/// the order the hosts recorded its members, host by host. A member that
+/// two hosts record with different `links` becomes
+/// [`MemberLinks::Other`], and its `vendor_drop_ins` are the union of the
+/// names.
+fn union_lists(change: &mut UnitStateChange, observed: &[(usize, UnitStateChange)]) {
+    let rows: Vec<&UnitStateChange> = observed
+        .iter()
+        .map(|(_, row)| row)
+        .filter(|row| row.unit().name() == change.unit().name())
+        .collect();
+    change.install_drop_ins = dedup_strings(
+        rows.iter()
+            .map(|row| row.install_drop_ins.clone())
+            .collect(),
+    );
+    change.vendor_drop_ins =
+        dedup_strings(rows.iter().map(|row| row.vendor_drop_ins.clone()).collect());
+    let mut also: Vec<AlsoMember> = Vec::new();
+    for member in rows.iter().flat_map(|row| &row.also) {
+        match also.iter_mut().find(|seen| seen.unit == member.unit) {
+            Some(seen) => {
+                if seen.links != member.links {
+                    seen.links = MemberLinks::Other;
+                }
+                seen.vendor_drop_ins = dedup_strings(vec![
+                    std::mem::take(&mut seen.vendor_drop_ins),
+                    member.vendor_drop_ins.clone(),
+                ]);
+            }
+            None => also.push(member.clone()),
+        }
+    }
+    change.also = also;
+}
+
+/// Merges findings that have no include flag and keep the first host's
+/// value (§ 12): one row per group of findings `same` puts together, in the
+/// order the first of each was recorded. The row is the first host's
+/// finding in hostname order, with the `install_files` of every host's
+/// finding in the group, in first-recorded order, and a prevalence that
+/// counts every host that recorded one. `parts` gives a finding's
+/// `install_files` and `aggregate`.
+fn merge_by_first_host<T: Clone>(
+    items: Vec<(usize, T)>,
+    same: impl Fn(&T, &T) -> bool,
+    parts: impl Fn(&mut T) -> (&mut Vec<String>, &mut Option<AggregatePrevalence>),
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Vec<T> {
+    let mut groups: Vec<(T, Vec<String>)> = Vec::new();
+    for (host_idx, mut item) in items {
+        let host = hostnames[host_idx].clone();
+        match groups.iter_mut().find(|(first, _)| same(first, &item)) {
+            Some((first, hosts)) => {
+                let (files, _) = parts(&mut item);
+                let files = std::mem::take(files);
+                let (merged, _) = parts(first);
+                for file in files {
+                    if !merged.contains(&file) {
+                        merged.push(file);
+                    }
+                }
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+            None => groups.push((item, vec![host])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(mut row, mut hosts)| {
+            hosts.sort();
+            let (_, aggregate) = parts(&mut row);
+            *aggregate = Some(AggregatePrevalence {
+                count: hosts.len() as i32,
+                total: total_hosts as i32,
+                hosts,
+                ..Default::default()
+            });
+            row
+        })
+        .collect()
 }
 
 /// Merge the unit inventories of every host into one entry per unit name,
