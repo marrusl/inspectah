@@ -29,6 +29,7 @@
   "containerfile_preview": "# WARNING: This Containerfile was generated from an incomplete inspection.\n# The following inspector sections may be missing or degraded: kernelboot\n# Review the audit report for details before building.\n\n# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n\n# === Manual Follow-up Required ===\n# TODO: 'bash.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Configuration Files ===\n# 1 config file(s) captured\n\nCOPY config/etc/ /etc/\n\n# FIXME: kernel_boot data may be incomplete (inspector returned degraded)\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "declined_generated": [],
   "flatpaks": [],
+  "generated_timers": [],
   "generation": 0,
   "has_unmanaged_scan": false,
   "mount_findings": [],

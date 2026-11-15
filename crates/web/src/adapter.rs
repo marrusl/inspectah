@@ -23,8 +23,9 @@ use inspectah_pipeline::render::unit_plan::AdvisoryReason;
 use inspectah_pipeline::render::var_dirs::EffectiveBacking;
 use inspectah_refine::group_state;
 use inspectah_refine::projection::{
-    GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices, RefStorage,
-    RefVarDirectory, RefVersionChanges, ReferenceProjection, ScheduledSource, config_ref_summary,
+    GeneratedTimerView, GenericRefItem, RefContainers, RefKernelBoot, RefNetwork, RefServices,
+    RefStorage, RefVarDirectory, RefVersionChanges, ReferenceProjection, ScheduledSource,
+    config_ref_summary,
 };
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{ItemId, RefinedView};
@@ -32,10 +33,10 @@ use inspectah_refine::types::{ItemId, RefinedView};
 use crate::sysctl_view::project_sysctl;
 use crate::web_types::{
     ConfigFileDto, ContextAdvisory, ContextDecision, ContextItem, ContextSubsection,
-    DropInDecisionDto, FlatpakDecisionDto, GroupInfo, GroupMemberInfo, LanguagePackageDto,
-    LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto, QuadletDecisionDto,
-    ReferenceSection, RepoGroupInfo, ServiceDecisionDto, TunedDecisionDto, UnmanagedFileGroupDto,
-    UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
+    DropInDecisionDto, FlatpakDecisionDto, GeneratedTimerDto, GroupInfo, GroupMemberInfo,
+    LanguagePackageDto, LanguagePackageEnvDto, PackageProvenance, ProvenanceSignalsDto,
+    QuadletDecisionDto, ReferenceSection, RepoGroupInfo, ServiceDecisionDto, TunedDecisionDto,
+    UnmanagedFileGroupDto, UnmanagedFileItemDto, VersionChangeEntry, ViewResponse,
 };
 
 /// Build a complete [`ViewResponse`] from session state.
@@ -514,6 +515,7 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         })
         .collect();
 
+    let projected = session.snapshot_projected();
     ViewResponse {
         packages,
         config_files,
@@ -529,7 +531,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         quadlets,
         flatpaks,
         declined_generated: decisions.declined_generated.clone(),
-        sysctl: project_sysctl(&session.snapshot_projected()),
+        generated_timers: generated_timer_dtos(&decisions.generated_timers, &projected),
+        sysctl: project_sysctl(&projected),
         tuned,
         users_groups_decisions: decisions.users_groups.clone(),
         package_groups,
@@ -541,6 +544,38 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
         unmanaged_files,
         has_unmanaged_scan,
     }
+}
+
+/// Each generated-timer row's decision, with the excluded cron job that
+/// excludes it, when there is one: the same test the session applies
+/// before it refuses to include the row.
+fn generated_timer_dtos(
+    views: &[GeneratedTimerView],
+    projected: &inspectah_core::snapshot::InspectionSnapshot,
+) -> Vec<GeneratedTimerDto> {
+    let sched = projected.scheduled_tasks.as_ref();
+    views
+        .iter()
+        .map(|view| {
+            let cron_job_excluded = sched.and_then(|st| {
+                st.generated_timer_units
+                    .iter()
+                    .filter(|unit| unit.name == view.name)
+                    .find_map(|unit| {
+                        st.cron_jobs
+                            .iter()
+                            .find(|c| !c.disposition.is_included() && unit.generated_from(&c.path))
+                    })
+                    .map(|cron| cron.path.clone())
+            });
+            GeneratedTimerDto {
+                name: view.name.clone(),
+                include: view.include,
+                locked: view.locked,
+                cron_job_excluded,
+            }
+        })
+        .collect()
 }
 
 // =========================================================================

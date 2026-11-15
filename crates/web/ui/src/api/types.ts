@@ -493,6 +493,19 @@ export type GeneratedRowView =
   | { row: "scheduled"; name: string }
   | { row: "flatpak" };
 
+/** A generated-timer row's decision (Rust: `GeneratedTimerDto`). */
+export interface GeneratedTimerDto {
+  /** The `generated_timer_units` name, the `ItemId::GeneratedTimer` key. */
+  name: string;
+  include: boolean;
+  locked: boolean;
+  /**
+   * The excluded cron job this unit is generated from. While set, the
+   * server refuses including the row.
+   */
+  cron_job_excluded?: string;
+}
+
 /** A generated unit's request the export declined, and its row. */
 export interface DeclinedGeneratedView {
   row: GeneratedRowView;
@@ -798,6 +811,8 @@ export interface ViewResponse extends RefinedView {
    * write, with the row it is shown on. Always present.
    */
   declined_generated: DeclinedGeneratedView[];
+  /** Each generated-timer row's decision, by its name. Always present. */
+  generated_timers: GeneratedTimerDto[];
   /** The read-only sysctl panel. Always present. */
   sysctl: SysctlViewDto;
   tuned: TunedDecisionDto[];

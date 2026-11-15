@@ -577,6 +577,21 @@ pub struct PackageProvenance {
     pub group_name: String,
 }
 
+/// A generated-timer row's decision as the view shows it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct GeneratedTimerDto {
+    /// The `generated_timer_units` name, the row's
+    /// `ItemId::GeneratedTimer` key.
+    pub name: String,
+    pub include: bool,
+    pub locked: bool,
+    /// The excluded cron job this unit is generated from, which excludes
+    /// it whatever its own row says. While set, including the row is
+    /// refused: the cron job has to be included first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_job_excluded: Option<String>,
+}
+
 /// The `/api/view` body. The first five fields are `RefinedView`'s wire
 /// fields, listed here so each config row can carry its `withheld`; the
 /// adapter destructures `RefinedView` whole, so a field added there does
@@ -602,6 +617,9 @@ pub struct ViewResponse {
     /// not write, with the scheduled or flatpak row it is shown on
     /// (§ 11.1). Always present; empty when nothing is declined.
     pub declined_generated: Vec<DeclinedGeneratedView>,
+    /// Each generated-timer row's decision, by its name (§ 8, § 11.1).
+    /// Always present; empty when the host has no generated timer.
+    pub generated_timers: Vec<GeneratedTimerDto>,
     /// The read-only sysctl panel. Always present.
     pub sysctl: SysctlViewDto,
     pub tuned: Vec<TunedDecisionDto>,

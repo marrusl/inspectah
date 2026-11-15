@@ -59,6 +59,7 @@ function view(config_files: RefinedConfig[]): ViewResponse {
     quadlets: [],
     flatpaks: [],
     declined_generated: [],
+    generated_timers: [],
     sysctl: { state: "unavailable", reason: "not collected" },
     tuned: [],
     users_groups_decisions: [],

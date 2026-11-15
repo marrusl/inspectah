@@ -6,6 +6,7 @@ import type {
   ReferenceSection,
 } from "../api/types";
 import { ContextItem } from "./ContextItem";
+import type { ContextRowControl } from "./ContextItem";
 
 export interface ContextListProps {
   section: ReferenceSection;
@@ -13,12 +14,15 @@ export interface ContextListProps {
   onNavigateToUnit?: (unit: string) => void;
   /** The declined generated unit a row shows, if any. */
   declinedFor?: (item: ContextItemType) => DeclinedView | undefined;
+  /** The include control a row offers, if any. */
+  controlFor?: (item: ContextItemType) => ContextRowControl | undefined;
 }
 
 export function ContextList({
   section,
   onNavigateToUnit,
   declinedFor,
+  controlFor,
 }: ContextListProps) {
   const subsections = (section.subsections ?? []).filter(
     (sub) => sub.items.length > 0,
@@ -49,6 +53,7 @@ export function ContextList({
               item={item}
               onNavigateToUnit={onNavigateToUnit}
               declined={declinedFor?.(item)}
+              control={controlFor?.(item)}
             />
           ))}
         </div>
@@ -73,6 +78,7 @@ export function ContextList({
                 item={item}
                 onNavigateToUnit={onNavigateToUnit}
                 declined={declinedFor?.(item)}
+                control={controlFor?.(item)}
               />
             ))}
           </div>

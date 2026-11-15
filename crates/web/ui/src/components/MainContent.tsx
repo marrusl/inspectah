@@ -330,6 +330,7 @@ export function MainContent({
   const tunedGuard = usePendingGuard();
   const usersGuard = usePendingGuard();
   const serviceGuard = usePendingGuard();
+  const scheduledGuard = usePendingGuard();
   // Failed Users requests, by username. Held here for the same reason as
   // the guards: the card that shows the failure unmounts on a section
   // switch, and a request that fails while the operator is away must
@@ -945,6 +946,44 @@ export function MainContent({
             lookupId === "scheduled_tasks"
               ? (item) =>
                   scheduledDeclined(viewData?.declined_generated ?? [], item)
+              : undefined
+          }
+          controlFor={
+            lookupId === "scheduled_tasks"
+              ? (item) => {
+                  const name = item.generated_timer;
+                  const row = viewData?.generated_timers.find(
+                    (g) => g.name === name,
+                  );
+                  if (name === undefined || !row) return undefined;
+                  const key = JSON.stringify(["generated-timer", name]);
+                  return {
+                    include: row.include,
+                    disabled:
+                      row.locked || scheduledGuard.pendingKeys.has(key),
+                    blockedReason: row.cron_job_excluded
+                      ? `Excluded with its cron job ${row.cron_job_excluded}; include the cron job to carry this unit.`
+                      : undefined,
+                    onToggle: () => {
+                      const op: RefinementOp = {
+                        op: "SetInclude",
+                        target: {
+                          item_id: { kind: "GeneratedTimer", key: { name } },
+                          include: !row.include,
+                        },
+                      };
+                      scheduledGuard.runGuarded(key, () =>
+                        applyOp(op)
+                          .then((updated) => onViewUpdate(updated))
+                          .catch((err) =>
+                            onMutationError(
+                              err instanceof Error ? err : new Error(String(err)),
+                            ),
+                          ),
+                      );
+                    },
+                  };
+                }
               : undefined
           }
         />

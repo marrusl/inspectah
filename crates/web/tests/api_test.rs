@@ -1197,6 +1197,72 @@ async fn a_scheduled_timer_without_a_path_is_identified_by_name() {
     );
 }
 
+/// A `SetInclude` on `item_id` through `/api/op`.
+async fn set_include(
+    app: &axum::Router,
+    item_id: serde_json::Value,
+    include: bool,
+) -> (StatusCode, serde_json::Value) {
+    post_json(
+        app,
+        "/api/op",
+        serde_json::json!({
+            "kind": "Op",
+            "op": "SetInclude",
+            "target": {"item_id": item_id, "include": include}
+        }),
+    )
+    .await
+}
+
+/// D1 through the production handlers: a generated timer row is decided
+/// on its own row. The view carries its state, excluding it takes its
+/// enable out of the export preview, and including it again brings the
+/// enable back. Excluding its cron job excludes it with the job, and the
+/// view names that job; including the generated row is then refused.
+#[tokio::test]
+async fn a_generated_timer_row_is_decided_on_its_row() {
+    let app = app(scheduled_timer_state());
+    let generated = serde_json::json!({"kind": "GeneratedTimer", "key": {"name": "cron-backup"}});
+    let enable = "'cron-backup.timer'";
+
+    let (status, view) = get_json(&app, "/api/view").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        view["generated_timers"],
+        serde_json::json!([{"name": "cron-backup", "include": true, "locked": false}])
+    );
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(preview.contains(enable), "{preview}");
+
+    let (status, view) = set_include(&app, generated.clone(), false).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["generated_timers"][0]["include"], false, "{view}");
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(!preview.contains(enable), "{preview}");
+
+    let (status, view) = set_include(&app, generated.clone(), true).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["generated_timers"][0]["include"], true, "{view}");
+    let preview = view["containerfile_preview"].as_str().expect("a preview");
+    assert!(preview.contains(enable), "{preview}");
+
+    let cron = serde_json::json!({"kind": "CronJob", "key": {"path": TIMER_CRON_PATH}});
+    let (status, view) = set_include(&app, cron, false).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(
+        view["generated_timers"],
+        serde_json::json!([{
+            "name": "cron-backup",
+            "include": false,
+            "locked": false,
+            "cron_job_excluded": TIMER_CRON_PATH
+        }])
+    );
+    let (status, json) = set_include(&app, generated, true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+}
+
 /// Path of the advisory config entry in [`advisory_state`].
 const ADVISORY_CONFIG_PATH: &str = "/etc/init.d/legacy-app";
 
