@@ -11,7 +11,7 @@ use super::install::{InstallRead, InstallSection};
 use super::resolve::{ETC_UNIT_DIR, VENDOR_UNIT_DIR};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{LinkRelation, UnitName, UnitState};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 
@@ -47,15 +47,29 @@ pub(crate) type LinksByUnit = BTreeMap<UnitName, Vec<Link>>;
 pub(crate) struct HostLinks {
     /// Under `/etc/systemd/system` (source 3).
     pub(crate) admin: LinksByUnit,
+    /// The units named by an entry of a dependency directory under
+    /// `/etc/systemd/system` whose parent does not parse as a
+    /// [`UnitName`]. Such a link makes no row of its own (§ 7.3), but it is
+    /// still a link to the unit under `/etc`.
+    pub(crate) admin_unparsed_parent: BTreeSet<UnitName>,
+    /// Whether some read under `/etc/systemd/system` failed, so links there
+    /// may be missing from [`admin`](HostLinks::admin).
+    pub(crate) admin_unreadable: bool,
     /// Under `/usr/lib/systemd/system`, the links packages ship (source 4).
     /// They complete an install and never start one.
     pub(crate) vendor: LinksByUnit,
 }
 
 impl HostLinks {
-    /// The links under `/etc/systemd/system` to `unit`.
+    /// The links under `/etc/systemd/system` to `unit` whose parent parses.
     pub(crate) fn admin(&self, unit: &UnitName) -> &[Link] {
         self.admin.get(unit).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether any link to `unit` sits under `/etc/systemd/system`, one
+    /// under a parent that does not parse included.
+    pub(crate) fn any_admin_link(&self, unit: &UnitName) -> bool {
+        !self.admin(unit).is_empty() || self.admin_unparsed_parent.contains(unit)
     }
 
     /// The links a package ships to `unit`.
@@ -67,30 +81,53 @@ impl HostLinks {
 /// Read the links under both unit directories. A listing of
 /// `/etc/systemd/system` that fails is left to the drop-in pass, which
 /// lists the same directory and reports it; any other read that fails is
-/// returned as `<path>: <error>` in the second value. A link whose own name
-/// or parent does not parse as a [`UnitName`] is skipped.
+/// returned as `<path>: <error>` in the second value. Any failed read under
+/// `/etc` sets [`HostLinks::admin_unreadable`]. A link whose own name does
+/// not parse as a [`UnitName`] is skipped; one whose parent does not parse
+/// is recorded only in [`HostLinks::admin_unparsed_parent`].
 pub(crate) fn read_host_links(exec: &dyn Executor) -> (HostLinks, Vec<String>) {
     let mut failures = Vec::new();
+    let admin = read_links(exec, ETC_UNIT_DIR, &mut failures);
+    let vendor = read_links(exec, VENDOR_UNIT_DIR, &mut failures);
     let links = HostLinks {
-        admin: read_links(exec, ETC_UNIT_DIR, &mut failures),
-        vendor: read_links(exec, VENDOR_UNIT_DIR, &mut failures),
+        admin: admin.links,
+        admin_unparsed_parent: admin.unparsed_parent,
+        admin_unreadable: admin.unreadable,
+        vendor: vendor.links,
     };
     (links, failures)
+}
+
+/// What one unit directory's links are.
+#[derive(Default)]
+struct RootLinks {
+    links: LinksByUnit,
+    /// The units linked from a dependency directory whose parent does not
+    /// parse.
+    unparsed_parent: BTreeSet<UnitName>,
+    /// Whether a read under the directory failed.
+    unreadable: bool,
 }
 
 /// The links in one unit directory: every entry of its `.wants`,
 /// `.requires` and `.upholds` directories, and every link directly under it
 /// to another unit's name, other than `default.target` and a mask.
-fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> LinksByUnit {
-    let mut links = LinksByUnit::new();
+fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> RootLinks {
+    let mut read = RootLinks::default();
+    let mut fail = |read: &mut RootLinks, failure: String| {
+        read.unreadable = true;
+        failures.push(failure);
+    };
     let entries = match exec.read_dir(Path::new(root)) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == io::ErrorKind::NotFound || root == ETC_UNIT_DIR => {
-            return links;
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return read,
+        Err(_) if root == ETC_UNIT_DIR => {
+            read.unreadable = true;
+            return read;
         }
         Err(e) => {
-            failures.push(format!("{root}: {e}"));
-            return links;
+            fail(&mut read, format!("{root}: {e}"));
+            return read;
         }
     };
     for entry in entries {
@@ -101,23 +138,27 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Li
                 .map(|parent| (parent.to_owned(), *relation))
         });
         if let Some((parent, relation)) = dependency {
-            let Ok(parent) = UnitName::try_from(parent) else {
-                continue;
-            };
             let names = match exec.read_dir(Path::new(&path)) {
                 Ok(names) => names,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => {
-                    failures.push(format!("{path}: {e}"));
+                    fail(&mut read, format!("{path}: {e}"));
                     continue;
                 }
             };
+            let parent = UnitName::try_from(parent).ok();
             for name in names {
-                if let Ok(unit) = UnitName::try_from(name) {
-                    links.entry(unit).or_default().push(Link {
+                let Ok(unit) = UnitName::try_from(name) else {
+                    continue;
+                };
+                match &parent {
+                    Some(parent) => read.links.entry(unit).or_default().push(Link {
                         relation,
                         parent: parent.clone(),
-                    });
+                    }),
+                    None => {
+                        read.unparsed_parent.insert(unit);
+                    }
                 }
             }
             continue;
@@ -140,7 +181,7 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Li
                 continue;
             }
             Err(e) => {
-                failures.push(format!("{path}: {e}"));
+                fail(&mut read, format!("{path}: {e}"));
                 continue;
             }
         };
@@ -152,14 +193,14 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Li
             .and_then(|name| name.to_str())
             .and_then(|name| UnitName::try_from(name.to_owned()).ok());
         match unit {
-            Some(unit) if unit != alias => links.entry(unit).or_default().push(Link {
+            Some(unit) if unit != alias => read.links.entry(unit).or_default().push(Link {
                 relation: LinkRelation::Alias,
                 parent: alias,
             }),
             _ => {}
         }
     }
-    links
+    read
 }
 
 /// The links `systemctl enable` makes from `section`: one per `WantedBy=`
@@ -181,8 +222,10 @@ pub(crate) fn expected_links(section: &InstallSection) -> Vec<Link> {
 }
 
 /// The install state of a unit whose effective section is `read`, with
-/// `admin` the links to it under `/etc/systemd/system` and `vendor` the
-/// links a package ships to it (§ 7.3 of the units spec, the table).
+/// `admin` the links to it under `/etc/systemd/system`, `any_admin_link`
+/// whether any link to it sits there (one under a parent that does not
+/// parse included), and `vendor` the links a package ships to it (§ 7.3 of
+/// the units spec, the table).
 /// `None` is no install state: the unit has no enablement of its own, or
 /// neither `enable` nor `disable` reproduces its links.
 ///
@@ -197,6 +240,7 @@ pub(crate) fn expected_links(section: &InstallSection) -> Vec<Link> {
 pub(crate) fn install_state(
     read: &InstallRead,
     admin: &[Link],
+    any_admin_link: bool,
     vendor: &[Link],
 ) -> Option<UnitState> {
     match read {
@@ -215,7 +259,7 @@ pub(crate) fn install_state(
                 .then_some(UnitState::Enabled)
         }
         InstallRead::Undetermined { assigns_also, .. } => {
-            (admin.is_empty() && !assigns_also).then_some(UnitState::Disabled)
+            (!any_admin_link && !assigns_also).then_some(UnitState::Disabled)
         }
     }
 }
@@ -392,7 +436,12 @@ mod tests {
             ),
         ];
         for (case, read, admin, vendor, expected) in cases {
-            assert_eq!(install_state(&read, &admin, &vendor), expected, "{case}");
+            let any = !admin.is_empty();
+            assert_eq!(
+                install_state(&read, &admin, any, &vendor),
+                expected,
+                "{case}"
+            );
         }
     }
 
@@ -482,6 +531,103 @@ mod tests {
             [alias("dbus-org.x.service")]
         );
         assert!(links.admin(&unit("graphical.target")).is_empty());
+    }
+
+    /// A link in a dependency directory whose parent does not parse makes
+    /// no link of its own, and is still a link to the unit under `/etc`:
+    /// an `Undetermined` section with only that link has no state.
+    #[test]
+    fn a_link_under_an_unparsed_parent_counts_as_a_link_under_etc() {
+        let exec = MockExecutor::new()
+            .with_dir(ETC_UNIT_DIR, vec!["dev-foo.device.wants"])
+            .with_dir(
+                &format!("{ETC_UNIT_DIR}/dev-foo.device.wants"),
+                vec!["guest.service"],
+            );
+        let (links, failures) = read_host_links(&exec);
+        assert!(failures.is_empty(), "{failures:?}");
+        let guest = unit("guest.service");
+        assert!(links.admin(&guest).is_empty());
+        assert!(links.any_admin_link(&guest));
+        assert!(!links.admin_unreadable);
+        let undetermined = InstallRead::Undetermined {
+            reason: InstallUnknown::ForeignName,
+            assigns_also: false,
+        };
+        assert_eq!(
+            install_state(
+                &undetermined,
+                links.admin(&guest),
+                links.any_admin_link(&guest),
+                &[]
+            ),
+            None
+        );
+        assert_eq!(
+            install_state(&undetermined, &[], false, &[]),
+            Some(UnitState::Disabled)
+        );
+    }
+
+    /// Every failure branch of the link read: which reads report a failure,
+    /// and which leave `/etc`'s links incomplete. A listing of
+    /// `/etc/systemd/system` itself is reported by the drop-in pass, so it
+    /// adds no failure here, and the vendor side never marks `/etc`.
+    #[test]
+    fn failed_link_reads_are_reported_and_mark_etc_unreadable() {
+        use std::io::ErrorKind::PermissionDenied;
+        let etc_wants = format!("{ETC_UNIT_DIR}/multi-user.target.wants");
+        let vendor_wants = format!("{VENDOR_UNIT_DIR}/multi-user.target.wants");
+        let alias = format!("{ETC_UNIT_DIR}/x-alias.service");
+        let cases: Vec<(&str, MockExecutor, Option<String>, bool)> = vec![
+            (
+                "the /etc listing",
+                MockExecutor::new().with_dir_error(ETC_UNIT_DIR, PermissionDenied),
+                None,
+                true,
+            ),
+            (
+                "a dependency directory under /etc",
+                MockExecutor::new()
+                    .with_dir(ETC_UNIT_DIR, vec!["multi-user.target.wants"])
+                    .with_dir_error(&etc_wants, PermissionDenied),
+                Some(etc_wants.clone()),
+                true,
+            ),
+            (
+                "an alias under /etc",
+                MockExecutor::new()
+                    .with_dir(ETC_UNIT_DIR, vec!["x-alias.service"])
+                    .with_link_error(&alias, PermissionDenied),
+                Some(alias.clone()),
+                true,
+            ),
+            (
+                "the vendor listing",
+                MockExecutor::new().with_dir_error(VENDOR_UNIT_DIR, PermissionDenied),
+                Some(VENDOR_UNIT_DIR.to_owned()),
+                false,
+            ),
+            (
+                "a dependency directory under the vendor directory",
+                MockExecutor::new()
+                    .with_dir(VENDOR_UNIT_DIR, vec!["multi-user.target.wants"])
+                    .with_dir_error(&vendor_wants, PermissionDenied),
+                Some(vendor_wants.clone()),
+                false,
+            ),
+        ];
+        for (case, exec, failed_path, unreadable) in cases {
+            let (links, failures) = read_host_links(&exec);
+            match &failed_path {
+                Some(path) => assert!(
+                    failures.len() == 1 && failures[0].starts_with(&format!("{path}: ")),
+                    "{case}: {failures:?}"
+                ),
+                None => assert!(failures.is_empty(), "{case}: {failures:?}"),
+            }
+            assert_eq!(links.admin_unreadable, unreadable, "{case}");
+        }
     }
 
     /// T24: a vendor drop-in holding `WantedBy=multi-user.target` in the

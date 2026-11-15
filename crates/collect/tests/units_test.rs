@@ -3685,3 +3685,107 @@ fn t39_an_unknown_preset_line_stops_the_lookup_with_a_warning() {
         warning.message
     );
 }
+
+/// § 7.3's `Undetermined` row with "some link under `/etc`": a vendor
+/// unit with `WantedBy=dev-foo.device`, a value the model does not admit,
+/// is `Undetermined`, and its link sits in a directory whose parent does
+/// not parse as a unit name. That link still counts, so under an `enable`
+/// preset the unit has no install state: no entry and no state change.
+/// Control: the same unit with no link is a `Disabled` state change.
+#[test]
+fn a_link_under_a_parent_that_does_not_parse_is_still_a_link() {
+    let host = || {
+        unlinked_host(&[("guest.service", "enabled")], "enable guest.service\n").with_file(
+            &format!("{VENDOR}/guest.service"),
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=dev-foo.device\n",
+        )
+    };
+    let (control, _) = scan(&host());
+    assert_eq!(
+        change_of(&control, "guest.service"),
+        Some((UnitState::Disabled, Some(PresetDefault::Enable)))
+    );
+
+    let (section, _) = scan(&with_link_in(
+        host(),
+        ETC,
+        "dev-foo.device.wants",
+        "guest.service",
+    ));
+    assert_eq!(entry_of(&section, "guest.service"), None);
+    assert!(
+        section.state_changes.is_empty(),
+        "{:?}",
+        section.state_changes
+    );
+}
+
+/// The section and degradation reason of a scan of `exec` that degrades.
+fn degraded(exec: &MockExecutor) -> (UnitSection, String) {
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    match UnitsInspector::new().inspect(&ctx, &NullProgress) {
+        Err(InspectorError::Degraded { reason, partial }) => {
+            let SectionData::Units(section) = partial.section else {
+                panic!("expected the units section");
+            };
+            (section, reason)
+        }
+        other => panic!("the scan degrades: {other:?}"),
+    }
+}
+
+/// A link directory under `/etc` that cannot be read hides links, so the
+/// degraded scan derives no install state for any unit that is not
+/// masked: the unit linked there has no entry and no `disable`, though
+/// the links read say it has none. A mask is still recorded. Control: the
+/// readable directory makes the unit `Enabled` at its preset.
+#[test]
+fn an_unreadable_link_directory_under_etc_withholds_install_states() {
+    let host = || {
+        let exec = unlinked_host(
+            &[("app.service", "enabled"), ("old.service", "masked")],
+            "enable app.service\ndisable *\n",
+        )
+        .with_file(&format!("{VENDOR}/app.service"), WANTS_MULTI_USER)
+        .with_file(&format!("{VENDOR}/old.service"), WANTS_MULTI_USER);
+        with_mask(exec, "old.service", MaskForm::DevNullLink).with_dir_entry(ETC, "old.service")
+    };
+    let (control, warnings) = scan(&with_link_in(
+        host(),
+        ETC,
+        "multi-user.target.wants",
+        "app.service",
+    ));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        entry_of(&control, "app.service"),
+        Some((UnitState::Enabled, Some(PresetDefault::Enable)))
+    );
+
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Other,
+    ] {
+        let exec = host()
+            .with_dir_entry(ETC, "multi-user.target.wants")
+            .with_dir_error(&format!("{ETC}/multi-user.target.wants"), kind);
+        let (section, reason) = degraded(&exec);
+        assert!(
+            reason.contains("/etc/systemd/system/multi-user.target.wants"),
+            "{kind:?}: {reason}"
+        );
+        assert_eq!(entry_of(&section, "app.service"), None, "{kind:?}");
+        assert_eq!(change_of(&section, "app.service"), None, "{kind:?}");
+        assert_eq!(
+            change_of(&section, "old.service"),
+            Some((UnitState::Masked, Some(PresetDefault::Disable))),
+            "{kind:?}"
+        );
+    }
+}

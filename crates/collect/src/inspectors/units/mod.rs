@@ -421,6 +421,11 @@ fn build_state_changes(
             Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => {
                 (fragment, UnitState::Masked, InstallEvidence::default())
             }
+            // A read under `/etc/systemd/system` failed, so links there may
+            // be missing, and a state read from the rest could carry a
+            // command the host never had. The scan degrades, and no unit
+            // that is not masked gets an install state.
+            Ok(Resolved::File { .. }) if host_links.admin_unreadable => continue,
             Ok(Resolved::File { fragment }) => {
                 let evidence = match install_evidence(exec, &subject.name, &fragment) {
                     Ok(evidence) => evidence,
@@ -434,6 +439,7 @@ fn build_state_changes(
                     Some(read) => links::install_state(
                         read,
                         host_links.admin(&subject.name),
+                        host_links.any_admin_link(&subject.name),
                         host_links.vendor(&subject.name),
                     ),
                     // The section could not be read as text: the listing's
