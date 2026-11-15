@@ -1634,6 +1634,53 @@ fn the_search_path_refuses_an_etc_storage_unit_with_a_warning() {
         has_search_path_warning(&warnings, "data.mount", path),
         "{warnings:?}"
     );
+    assert!(
+        warnings.iter().any(|w| w.message.contains(path)
+            && w.message.ends_with("its mount finding is not recorded")),
+        "the storage pass says what it does not record: {warnings:?}"
+    );
+}
+
+/// An enabled `/etc` storage unit is a candidate as well as a file the
+/// storage pass lists, so the search path refuses it in the first pass;
+/// the storage pass does not warn again. Exactly one warning names the
+/// path. Control: without the copy, the unit is a finding and no warning
+/// names the path.
+#[test]
+fn an_enabled_storage_unit_refused_by_the_search_path_is_warned_once() {
+    let path = "/etc/systemd/system.control/data.mount";
+    let host = || {
+        listing_mock(&[("data.mount", "enabled")])
+            .with_dir("/etc/systemd/system", vec!["data.mount"])
+            .with_file(
+                "/etc/systemd/system/data.mount",
+                "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
+            )
+    };
+    let naming_path = |exec: &MockExecutor| {
+        scan_warnings(exec)
+            .into_iter()
+            .filter(|w| w.message.contains(path))
+            .count()
+    };
+
+    let control = host();
+    assert!(
+        scan(&control)
+            .0
+            .mount_findings
+            .iter()
+            .any(|f| f.unit.name().as_unit_name().as_str() == "data.mount"),
+        "the control is a finding"
+    );
+    assert_eq!(naming_path(&control), 0);
+
+    let refused = host().with_file(path, "[Mount]\nWhat=/dev/sdc1\nWhere=/data\n");
+    assert!(
+        scan(&refused).0.mount_findings.is_empty(),
+        "no finding for the refused unit"
+    );
+    assert_eq!(naming_path(&refused), 1, "{:?}", scan_warnings(&refused));
 }
 
 /// T24, what the search path does not change: a drop-in with `[Install]`

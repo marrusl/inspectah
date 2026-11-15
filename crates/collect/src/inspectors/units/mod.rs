@@ -284,11 +284,14 @@ fn is_enabled_storage(candidate: &Candidate) -> bool {
 /// is a state change, an administrator's storage unit a mount finding. A
 /// candidate that cannot be resolved or classified is reported through
 /// `warnings`; a unit file that could not be read goes to `read_failures`.
+/// The names refused by the search path or unreadable go to `reported`,
+/// so the storage pass does not report them again.
 fn build_state_changes(
     exec: &dyn Executor,
     candidates: Vec<Candidate>,
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
+    reported: &mut HashSet<UnitName>,
 ) -> (Vec<UnitStateChange>, Vec<MountUnitFinding>) {
     let mut found = Vec::new();
     let mut fragments = Vec::new();
@@ -311,7 +314,8 @@ fn build_state_changes(
                 "no unit file under /etc/systemd/system or /usr/lib/systemd/system",
             )),
             Ok(Resolved::Unsupported { path }) => {
-                warnings.push(search_path_warning(warn, path));
+                warnings.push(search_path_warning(warn, path, STATE_NOT_CARRIED));
+                reported.insert(candidate.name.clone());
             }
             // Today's warning for a `linked` unit.
             Err(ResolveError::Linked { .. }) => warnings.push(service_warning(
@@ -321,6 +325,7 @@ fn build_state_changes(
             )),
             Err(ResolveError::Read { path, error }) => {
                 read_failures.push(format!("{path}: {error}"));
+                reported.insert(candidate.name.clone());
             }
         }
     }
@@ -387,7 +392,7 @@ fn build_state_changes(
 /// local or a full copy over a vendor file. Such a unit is not enabled (an
 /// enabled one was a candidate) and not masked (its file is no mask), so
 /// its finding records no state. `recorded` holds the names that already
-/// have a finding.
+/// have a finding, or were already reported as refused or unreadable.
 ///
 /// A listing error is left to [`collect_drop_ins`], which reads the same
 /// directory and reports it. A unit file that could not be read goes to
@@ -416,6 +421,7 @@ fn etc_storage_findings(
             Ok(Resolved::Unsupported { path }) => warnings.push(search_path_warning(
                 |detail| etc_unit_file_warning(&name, detail),
                 path,
+                FINDING_NOT_RECORDED,
             )),
             // A mask, an alias or a link elsewhere: not a unit file here.
             Ok(_) | Err(ResolveError::Linked { .. }) => {}
@@ -461,13 +467,25 @@ fn etc_unit_file_warning(name: &UnitName, detail: &str) -> Warning {
     }
 }
 
+/// The closing clause of the search-path warning from the state-change
+/// pass.
+const STATE_NOT_CARRIED: &str = "the unit's state is not carried";
+
+/// The closing clause of the search-path warning from the storage pass.
+const FINDING_NOT_RECORDED: &str = "its mount finding is not recorded";
+
 /// The warning for a unit the search path refuses (§ 7.1 of the units
-/// spec), built by `warn` from the detail, with `path` among its fields.
-fn search_path_warning(warn: impl FnOnce(&str) -> Warning, path: String) -> Warning {
+/// spec), built by `warn` from the detail ending in `consequence`, with
+/// `path` among its fields.
+fn search_path_warning(
+    warn: impl FnOnce(&str) -> Warning,
+    path: String,
+    consequence: &str,
+) -> Warning {
     let mut warning = warn(&format!(
         "{path} is on the systemd search path, outside the two unit \
          directories this scan reads, and changes what loads or what \
-         enable does; the unit's state is not carried"
+         enable does; {consequence}"
     ));
     warning.extra.insert("path".into(), serde_json::json!(path));
     warning
@@ -626,19 +644,23 @@ impl Inspector for UnitsInspector {
         // 4b. Resolve each candidate's unit file and owning package, then
         //     build the state changes.
         let mut unit_file_read_failures = Vec::new();
+        let mut reported = HashSet::new();
         let (state_changes, mut mount_findings) = build_state_changes(
             exec,
             candidates,
             &mut warnings,
             &mut unit_file_read_failures,
+            &mut reported,
         );
 
         // 4c. The administrator's other storage files, then what each
         //     finding mounts, read from its unit file (§ 6.5).
-        let recorded: HashSet<UnitName> = mount_findings
-            .iter()
-            .map(|f| f.unit.name().as_unit_name().clone())
-            .collect();
+        let mut recorded = reported;
+        recorded.extend(
+            mount_findings
+                .iter()
+                .map(|f| f.unit.name().as_unit_name().clone()),
+        );
         mount_findings.extend(etc_storage_findings(
             exec,
             &recorded,
@@ -2966,6 +2988,7 @@ mod tests {
             vec![storage_candidate("tmp.mount")],
             &mut warnings,
             &mut failures,
+            &mut HashSet::new(),
         );
         assert!(
             warnings.is_empty() && failures.is_empty(),
@@ -2988,6 +3011,7 @@ mod tests {
                 vec![storage_candidate("tmp.mount")],
                 &mut warnings,
                 &mut failures,
+                &mut HashSet::new(),
             );
             assert!(changes.is_empty(), "{changes:?}");
             assert!(warnings.is_empty(), "{warnings:?}");
