@@ -1653,8 +1653,11 @@ So a link to a template name is never inert under a `.wants` directory.
 The branch scan at `f9ddc7de` named the plain-parent link with cause
 `template` and the text "systemd starts no unit from a link to a template
 name without an instance, so the link has no effect", which this
-measurement contradicts. The warning now names the instance systemd starts
-(`starts tl-bar@multi-user.service`, and a `starts` field on the link).
+measurement contradicts. Build behavior, re-measured at `49027f6e` on both
+releases: the warning names the instance systemd starts
+(`starts tl-bar@multi-user.service`, and a `starts` field on the link), and
+that instance ran after a reboot. See
+[§ the instance fixes](#measured-2026-11-16-the-instance-fixes-at-49027f6e).
 The two other links get cause `instance_filled`, whose text claims
 nothing about the effect, and that holds. The scan made `enable` rows for
 `tl-fooi@a.target` and `tl-foot@b.target` with the attention reason for an
@@ -1878,10 +1881,12 @@ state 'enabled' - its ExecStart= setting in
 for the instance that inspectah cannot read as systemd does, so what
 the instance reads is unknown and its enable is not carried`. The
 Containerfile names the unit nowhere. systemd expands `%t` to `/run`.
-The reader now expands `%t` and the system manager's other fixed
-directory specifiers, so the instance's `required_config` is the fixed
-table's `/etc/openvpn/server/<i>.conf` and its enable is carried when
-that file is staged.
+Build behavior, re-measured at `49027f6e` on both releases: the reader
+expands `%t` and the system manager's other fixed directory specifiers,
+so the instance's `required_config` is the fixed table's
+`/etc/openvpn/server/<i>.conf`, its enable is carried when that file is
+staged, and it is omitted when the file is excluded. See
+[§ the instance fixes](#measured-2026-11-16-the-instance-fixes-at-49027f6e).
 
 **`dirsrv@` names its directory.** The derivation finds both the
 directory and `dse.ldif` from the unit's own lines, and the fixed table
@@ -1924,6 +1929,315 @@ instance's `searchable_text` starts with its own name, so a search for
 `tt@two` finds one scheduled row; `tt@` finds all three. The description
 and command are not expanded per instance (`instance timer %i`,
 `/usr/bin/echo tt %i`).
+
+### Measured, 2026-11-16: the instance fixes at `49027f6e`
+
+Part B of the branch-tip runs. Branch build `49027f6e` (`inspectah
+version` printed `commit 49027f6e` on each guest), RHEL 9.8 (systemd
+252-67.el9_8.6) and RHEL 10.2 (systemd 257-23.el10_2.2), both aarch64,
+each reverted to its clean snapshot. No drift run. The plants, as root:
+EPEL from `epel-release-latest-<major>`, `dnf install openvpn`
+(`openvpn-2.5.11-2.el9`, `openvpn-2.7.9-1.el10_3`), an unowned
+`/etc/openvpn/server/s1.conf`, `systemctl enable openvpn-server@s1.service`;
+the template links below; `systemctl enable podman.socket`, `disable
+irqbalance.service` and `mask kdump.service` for the R3 image; and the
+timers of the next section. Scanned as root in 62 s and 18 s.
+
+**`openvpn-server@s1` is carried, and omitted when its file is
+excluded.** The shipped `/usr/lib/systemd/system/openvpn-server@.service`
+is byte-identical to the test fixtures `OPENVPN_SERVER_EL9` (908 bytes)
+and `OPENVPN_SERVER_EL10` (847 bytes) in `crates/cli/tests/units_scan_test.rs`,
+which were built from upstream sources. On both hosts:
+
+- the row has `required_config: ["/etc/openvpn/server/s1.conf"]` and no
+  `data_paths`, and no warning names the unit;
+- the scan Containerfile lists `'openvpn-server@s1.service'` in its
+  `enable` line, the build printed `Created symlink
+  .../multi-user.target.wants/openvpn-server@s1.service →
+  /usr/lib/systemd/system/openvpn-server@.service.`, and the image reads
+  `enabled`;
+- in refine, `SetInclude` with `{"kind":"Config","key":{"path":"/etc/openvpn/server/s1.conf"}}`
+  set to false, then an export (HTTP 200): the Containerfile has `#
+  Omitted: openvpn-server@s1.service (its configuration
+  /etc/openvpn/server/s1.conf is excluded from the export)`, no
+  `systemctl` line names the unit, and `config/etc/openvpn/server` is not
+  in the export. `x-export-warnings` held only the not-carried notice.
+
+**A template link under a plain parent names the instance systemd
+starts.** The scan's warning, cause `template`, with `starts` on the link:
+
+```
+link /etc/systemd/system/multi-user.target.wants/tl-bar@.service (tl-bar@.service, starts tl-bar@multi-user.service) is not reported or carried: its unit is a template, and systemd fills in the parent's name without its type as the instance and starts that instance with the parent
+```
+
+After a reboot, `tl-bar@multi-user.service` was `active (exited)` and the
+journal had `tl-bar-started multi-user`, on both releases.
+
+**Template links under an alias, a masked and a missing parent.** The same
+`tl-bar@.service`, linked from three more `.wants` directories.
+`tlw.target` (enabled) has `Wants=tlm.target tln.target`, so the boot asks
+for all three parents. Same on both releases:
+
+| Parent | `systemctl show -p Wants` after `daemon-reload` | After a reboot | Scan |
+|---|---|---|---|
+| `tla.target`, the `Alias=` link of an enabled `tlr.target` | `tlr.target` (and `tla.target`, the same unit) wants `tl-bar@tlr.service` | `tl-bar@tlr.service` ran | `instance_filled` |
+| `tlm.target -> /dev/null` | `tlm.target` (`masked`) wants `tl-bar@tlm.service` | `tl-bar@tlm.service` loaded, never started | `instance_filled`; `mask -- 'tlm.target'` rendered |
+| `tln.target`, no unit file | `not-found`, no wants | nothing started | `instance_filled` |
+
+So an alias parent fills in the unit's own name, not the alias's. A
+masked parent names an instance and never starts it. A parent with no
+unit file reads no `.wants` link at all. The journal's `has different
+name` line appears for the plain, alias and masked parents, not for the
+missing one. The `instance_filled` text claims nothing about the effect,
+so it holds for all three.
+
+### Measured, 2026-11-16: R5's open items
+
+Same guests and day as the section above. Each case ran in one of two
+places:
+
+- `podman run --rm` of `rhel-bootc:9.8` and `:10.2`, with no manager, as
+  in a `RUN` step: the drop-in order, the four directories above `/etc`,
+  `%I` in `[Install]`, the preset cases, the resets, the additive
+  sequence, the preset file search and the scriptlets;
+- the package-mode guest, with systemd as PID 1: the four directories
+  above `/etc` again, with `systemctl set-property`, the timer, and
+  `systemd-cryptsetup@`.
+
+Every result is the same on both releases unless a line names one.
+
+**The instance's `.d` wins over its template's, in both placements.**
+`enable g2@x.service`, the template under `/usr/lib` with no `[Install]`,
+one file of the same name, `50-g2.conf`, in each directory:
+
+| `g2@x.service.d/` | `g2@.service.d/` | Link |
+|---|---|---|
+| `/etc`, no `[Install]` | vendor, `WantedBy=multi-user.target` | none, "no installation config" |
+| vendor, no `[Install]` | `/etc`, `WantedBy=multi-user.target` | none |
+| `/etc`, `WantedBy=graphical.target` | vendor, `WantedBy=multi-user.target` | `graphical.target.wants` only |
+| vendor, `WantedBy=graphical.target` | `/etc`, `WantedBy=multi-user.target` | `graphical.target.wants` only |
+| none | vendor or `/etc`, `WantedBy=multi-user.target` | `multi-user.target.wants` |
+
+**A drop-in above `/etc` hides a same-named one below it.** The hiding
+file is `50-CPUWeight.conf` holding `[Service]` `CPUWeight=200`, the name
+`systemctl set-property ... CPUWeight=` gives its file. The hidden file,
+of the same name, holds `WantedBy=multi-user.target`.
+
+| Hidden file | Hiding file | In the image | On the host |
+|---|---|---|---|
+| the unit's `.d` under `/etc` | the unit's `.d` | no link, each of the four directories | no link, each of the four |
+| the unit's `.d` under `/usr/lib` | the unit's `.d` | no link, each of the four | no link, each of the four |
+| the template's `.d` under `/etc` | the instance's `.d` | no link, each of the four | no link, each of the four |
+| the template's `.d` under `/usr/lib` | the instance's `.d` | no link, each of the four | not run |
+| the instance's `.d` under `/etc` | the template's `.d` | **linked**, each of the four | not run |
+| any of these | removed (the image without the hiding file) | linked | linked |
+
+On the host, `set-property` wrote the hiding file to
+`/etc/systemd/system.control/<unit>.d/` and, with `--runtime`, to
+`/run/systemd/system.control/<unit>.d/`, for an instance under its own
+name (`mc1@x.service.d`). The other two directories were planted by hand.
+The manager hides the same way: `DropInPaths` listed only the control
+file. The last table row is the order § 7.2 reads from source: every
+directory of the instance's name before any of its template's, then the
+root. `systemctl revert` removed the control files for the controls.
+
+**`/run/systemd/generator.early` does not keep a hand-placed file.** An
+online `systemctl enable` reloads the manager (one `Reloading.` journal
+line per call), and a reload re-runs the generators, which replaces that
+directory: it was gone after the re-test. In the first host run, the
+vendor case and the template case in `generator.early` linked. Re-run with
+each file written just before its own `enable`, online and with
+`SYSTEMD_OFFLINE=1`, nothing linked on either release. Inferred, not
+measured: the first run's links came from the reload of the previous
+case's `enable` removing the next case's file.
+
+**`%I` in `[Install]` fails `enable`, after the values before it.** On
+`pi@a\x2db.service`:
+
+| `[Install]` | `enable` | Links |
+|---|---|---|
+| `WantedBy=pi-%I.target` | `Failed to enable unit, invalid specifier in "pi-%I.target".` (RHEL 10: `Failed to enable unit: Invalid specifier in unit pi-%I.target`), exit 1 | none |
+| `WantedBy=multi-user.target pk-%I.target` | the same error, exit 1 | `multi-user.target.wants` |
+| `Alias=pl-%I@.service`, `WantedBy=multi-user.target` | the same error for the alias, exit 1 | `multi-user.target.wants` |
+| `WantedBy=pj-%i.target` (control) | exit 0 | `pj-a\x2db.target.wants/pj@a\x2db.service` |
+
+So `enable` does not skip `%I`: it fails the `RUN` step, with any link it
+made before the value. § 7.2 declines the value, so no `enable` is
+rendered for such a unit.
+
+**A preset line starting with `;` is a comment, and a drop-in whose name
+starts with `.` is not read.** A preset file holding `;enable psemi.service`,
+`xenable pxv.service`, `#enable phash.service` and `enable ppos.service`:
+`systemctl preset` printed `Couldn't parse line 'xenable pxv.service'.
+Ignoring.` and nothing for the other lines, linked `ppos` only, and
+`list-unit-files` read `psemi.service disabled disabled`. A
+`<unit>.d/.hidden.conf` holding `WantedBy=multi-user.target`, under `/etc`
+or under `/usr/lib`: "no installation config", no link. The same file
+named `hidden.conf` linked the unit.
+
+**For an instance with its own unit file, a template rule does not count
+and later rules decide.** Units `t@three.service` (and `t@.service`, but
+for the last row) under `/usr/lib`, each with
+`WantedBy=multi-user.target`, a preset file ending in `disable *`, then
+`systemctl preset t@three.service`:
+
+| Rules before `disable *` | Link |
+|---|---|
+| `enable t@.service two`, `enable t@three.service` | linked |
+| `enable t@.service`, `enable t@three.service` | linked |
+| `disable t@.service`, `enable t@three.service` | linked |
+| `enable t@three.service` (control) | linked |
+| `enable t@.service two`, `enable t@three.service`, no `t@.service` file | linked |
+
+**An empty `RequiredBy=` resets, as `WantedBy=` does. An empty `UpheldBy=`
+resets on RHEL 10.** Unit under `/usr/lib`, drop-in under `/etc`:
+
+| Unit `[Install]` | `/etc` drop-in | `enable` | `is-enabled` |
+|---|---|---|---|
+| `RequiredBy=multi-user.target` | `RequiredBy=` | "no installation config", exit 0, no link | `static` |
+| the same | `RequiredBy=` then `RequiredBy=graphical.target` | `graphical.target.requires` only | `enabled` |
+| `RequiredBy=multi-user.target` then `RequiredBy=`, both in the unit | none | no link | `static` |
+| `RequiredBy=multi-user.target` | none (control) | `multi-user.target.requires` | `enabled` |
+| `UpheldBy=multi-user.target`, RHEL 10 | `UpheldBy=` | no link | `static` |
+| the same, RHEL 10 | `UpheldBy=` then `UpheldBy=graphical.target` | `graphical.target.upholds` only | `enabled` |
+
+RHEL 9 prints `Unknown key name 'UpheldBy' in section 'Install',
+ignoring.` for every such line, links nothing and reads `static`. § 7.2
+declines the `RequiredBy=` reset as `Undetermined(RequiredByReset)`; § 17
+names this measurement as one that moves the reader to follow it.
+
+**The additive sequence leaves an existing alias link alone.** In a fresh
+container of each base, for `bluetooth.service` (`WantedBy=bluetooth.target`,
+`Alias=dbus-org.bluez.service`), `NetworkManager-dispatcher.service`
+(`Alias=` only) and `NetworkManager.service` (whose alias link belongs to
+its `Also=` member): an `/etc` drop-in holding `WantedBy=extra.target`, or
+a full shadow with that line added, then `systemctl enable <unit>`. Every
+case exited 0 and made exactly one new link,
+`extra.target.wants/<unit>`, to the `/usr/lib` file for the drop-in and to
+the `/etc` file for the shadow. Every existing link, the alias links
+included (`dbus-org.bluez.service -> /usr/lib/systemd/system/bluetooth.service`),
+kept its target and its `1970-01-01` mtime from the base, under the
+shadow too.
+
+**No stock preset file has a list-form line.** Searched in both bases and
+on both guests with `^\s*(enable|disable)\s+\S+@\S*\s+\S`: no match. The
+only lines naming an `@` unit are `90-systemd.preset:18: enable
+getty@.service` (all four) and `90-default.preset:9: enable
+getty@tty1.service` (RHEL 9 base and guest only).
+
+**What package scriptlets pass to `systemctl preset`.** Every package
+owning a file named `*@*` under `/usr/lib/systemd/system` or
+`/usr/lib/systemd/user` in each base (30 paths on RHEL 9, 42 on RHEL 10;
+every one a template or a drop-in directory, no concrete instance file),
+read with `rpm -q --scripts`. `systemd-update-helper install-system-units`
+runs `systemctl --no-reload preset "$@"`.
+
+| Package | Names passed to `install-system-units` |
+|---|---|
+| `mdadm` | `mdmonitor.service`, `raid-check.timer` |
+| `nvme-cli` | RHEL 9: none (the scriptlet runs `systemctl enable nvmefc-boot-connections`). RHEL 10: `nvmefc-boot-connections.service`, `nvmf-autoconnect.service`, **`nvmf-connect@.service`**, `nvmf-connect-nbft.service` |
+| `openssh-server` | `sshd.service`, `sshd.socket` |
+| `ostree` | `ostree-remount.service` |
+| `podman` | none (RHEL 9 has `systemctl disable` of `podman.service` and `podman.socket`) |
+| `systemd` | none; on first install its `%post` runs `systemctl preset-all` and `systemctl --global preset-all` |
+| `systemd-udev` | the udev units, `systemd-boot-update.service`, `systemd-pstore.service`, and on RHEL 10 `remote-cryptsetup.target` |
+| `zram-generator` | none |
+| `yggdrasil` (RHEL 10) | `yggdrasil.service`, system and user |
+
+So one scriptlet presets a template by its template name, none presets an
+instance by name, and `systemd`'s own first install presets everything.
+
+**`systemd-cryptsetup@` lives in the generator directory only.** Neither
+guest has an installer-encrypted volume, so one was planted: a 64 MiB
+LUKS2 file under `/var/tmp`, a key file, and a line in `/etc/crypttab`,
+then `daemon-reload`. The generator wrote
+`/run/systemd/generator/systemd-cryptsetup@r5c.service` and two links,
+`cryptsetup.target.requires/` and `dev-mapper-r5c.device.requires/`, both
+in `/run/systemd/generator`. Nothing under `/etc/systemd` or
+`/usr/lib/systemd/system` names it. `UnitFileState=generated`,
+`is-enabled` and `list-unit-files` read `generated`, and a start opened
+`/dev/mapper/r5c`. Like `systemd-fsck@`, the instance has no link a scan
+reads. The plant was removed afterwards.
+
+**A timer's `Unit=` holding `%I` is dropped by systemd, and the scan
+expands it.** On the host, `/etc/systemd/system/ti@.timer` with
+`Unit=tiu@%I.service`, `tj@.timer` with `Unit=tju@%i.service`, both
+`tiu@.service` and `tju@.service` present, each instance enabled and
+started:
+
+| Instance | systemd | Scan `trigger.unit` |
+|---|---|---|
+| `ti@a\x2db.timer` | `Failed to resolve unit specifiers in tiu@%I.service, ignoring: Invalid slot`; `Triggers=ti@a\x2db.service`; `Refusing to start, unit ti@a\x2db.service to trigger not loaded.` | `tiu@a-b.service` |
+| `ti@plain.timer` | the same error; `Triggers=ti@plain.service`; refused | `tiu@plain.service` |
+| `tj@a\x2db.timer` | `Triggers=tju@a\x2db.service`, `active` | `tju@a\x2db.service` |
+
+So systemd ignores the assignment, with or without an escape in the
+instance, and the timer falls back to its same-named service. Started by
+hand, `tiu@a-b.service` ran, so the unit exists and no timer reaches it.
+The scan renders `enable` for both `ti@` instances, which matches the
+host, where they are enabled and never fire.
+
+### Measured, 2026-11-16: an image-builder disk, read before boot
+
+Part of run R3. The scan tarball of the section above, built unmodified on
+each guest (`podman build --layers=true --network=host`, COPY-source
+check clean, 264 s on RHEL 9 and 163 s on RHEL 10), renders `enable` for
+`podman.socket`, `disable -- 'irqbalance.service'` and `mask --
+'kdump.service'`. The image's `/etc/machine-id` is 0 bytes. The lint
+warnings were `nonempty-run-tmp`, `var-tmpfiles`, `sysusers` (new here,
+not investigated) and on RHEL 10 `nonempty-boot`.
+
+**The image-builder deploys a zero-length machine-id.** On each guest:
+
+```
+sudo podman run --rm --privileged --pull=never --security-opt label=type:unconfined_t \
+  -v /var/lib/containers/storage:/var/lib/containers/storage -v ./bib-out:/output \
+  registry.redhat.io/rhel<major>/bootc-image-builder:latest --type raw --rootfs xfs localhost/r3probe:latest
+```
+
+The builder images carried `version` labels `9.9` and `10.3`. Each run
+took about a minute and wrote a 10 GiB sparse `disk.raw` (2.1 and 2.9 GiB
+used) with three partitions: `EFI-SYSTEM` (vfat), `boot` and `root` (xfs).
+Loop-mounted read-only (`losetup -P -r`, `mount -o ro,norecovery`):
+
+- `ostree/deploy/default/deploy/<checksum>.0/etc/machine-id`: **0 bytes**,
+  on both releases;
+- the deployment's `/etc`: `sockets.target.wants/podman.socket`, no
+  `multi-user.target.wants/irqbalance.service`, `kdump.service ->
+  /dev/null` with the base's own `multi-user.target.wants/kdump.service`
+  still there, and `default.target -> multi-user.target`;
+- the boot entry's options: `root=UUID=... rw boot=UUID=... console=tty0
+  console=ttyS0 ostree=...`, no `systemd.firstboot` or other first-boot
+  argument.
+
+**Not booted.** Booting the disk needs a VM that has it as a disk: a new
+VM, or a second disk on `rhel9` or `rhel10`, which are VM configuration
+changes beyond the start, stop and revert these guests allow, or nested
+virtualization, which is off on both (`prlctl list -i`: `Nested
+virtualization: off`; no `/dev/kvm` in either guest). So this route's
+first-boot journal line and booted unit states are unmeasured.
+
+**The installer routes were not run.**
+
+- The installer ISO route needs the guest to boot that ISO with a
+  separate disk to install to. Each guest has one disk, and attaching an
+  ISO is a VM configuration change. The image-builder ISO was not built.
+- A plain `ostreecontainer` kickstart needs boot media (`rhel9`'s
+  `cdrom0` holds `rhel-9.8-aarch64-boot.iso`, connected; `rhel10`'s holds
+  the 10.2 boot ISO, disconnected), a way to hand the installer the
+  kickstart (a kernel argument typed at the console, or an `OEMDRV`
+  volume), and a registry the installer can pull the probe image from.
+  No registry runs on the test network.
+
+**A layer that reinstalls `systemd` writes a machine-id.** From each
+base, `RUN dnf -y reinstall systemd` (`252-67.el9_8.6`,
+`257-23.el10_2.2`) in `podman build`: `/etc/machine-id` was 0 bytes
+before the step and 33 bytes after it, holding a fresh ID, on both
+releases. RHEL 10's `systemd` `%post` runs `systemd-machine-id-setup`
+before its first-install check (read from `rpm -q --scripts`). Inferred,
+not measured: an upgrade of `systemd` in a layer does the same, and the
+image then ships one ID to every host deployed from it, with no first
+boot.
 
 ## A redaction test that checks for the secret proves nothing about the file
 
