@@ -9679,6 +9679,78 @@ fn a_reset_environment_file_is_not_required_through_the_scan() {
     );
 }
 
+/// R4 through the scan: an instance's `EnvironmentFile=` set by a
+/// type-wide drop-in (`/etc/systemd/system/service.d`) or a dash-prefix one
+/// (`/etc/systemd/system/t-.service.d` for `t-job@site.service`) is
+/// required. For each, the file missing omits the enable on both routes
+/// and in refine, the file excluded through refine omits it, and the file
+/// present and clean carries it.
+#[test]
+fn a_type_wide_or_dash_prefix_drop_in_sets_what_an_instance_needs() {
+    const ENV: &str = "/etc/t/site.env";
+    const DROP_IN: &str = "[Service]\nEnvironmentFile=/etc/t/%i.env\n";
+    let template = "[Service]\nExecStart=/usr/bin/t %i\n\n[Install]\nWantedBy=multi-user.target\n";
+    for (template_name, unit, drop_in) in [
+        (
+            "t@.service",
+            "t@site.service",
+            "/etc/systemd/system/service.d/50-env.conf",
+        ),
+        (
+            "t-job@.service",
+            "t-job@site.service",
+            "/etc/systemd/system/t-.service.d/50-env.conf",
+        ),
+    ] {
+        let host = |with_env: bool| {
+            let host = instance_link(
+                UnitHost::new()
+                    .unit(template_name, "indirect")
+                    .preset("disable *")
+                    .vendor_unit(template_name, template, None),
+                "/etc/systemd/system",
+                "multi-user.target",
+                unit,
+                &format!("/usr/lib/systemd/system/{template_name}"),
+            )
+            .file(drop_in, DROP_IN);
+            if with_env {
+                host.file(ENV, "PORT=1\n")
+            } else {
+                host
+            }
+        };
+        let missing = scan(host(false));
+        assert_eq!(change(&missing, unit).required_config, [ENV], "{drop_in}");
+        assert_instance_omitted(
+            &missing,
+            unit,
+            &config_omitted(unit, ENV, "is not in the export"),
+            "InstanceConfigNotStaged",
+        );
+
+        let present = scan(host(true));
+        assert_instance_carried(&present, unit, drop_in);
+
+        let excluded = [(config_item(ENV), false)];
+        let containerfile = containerfile_in(&exported_after(&present, &excluded));
+        assert_eq!(
+            omitted(&containerfile, unit),
+            Some(config_omitted(unit, ENV, "is excluded from the export").as_str()),
+            "{drop_in}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, unit),
+            "{drop_in}:\n{containerfile}"
+        );
+        assert_eq!(
+            declined_in(&session_after(&present, &excluded), unit).map(|d| d.reason),
+            Some("InstanceConfigNotStaged".into()),
+            "{drop_in}"
+        );
+    }
+}
+
 /// T25 (c) with the member's configuration named by a quoted argument:
 /// carried with the owner while the configuration is in the export, and
 /// with it excluded, the member omitted naming the whole path and the

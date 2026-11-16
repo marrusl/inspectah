@@ -54,7 +54,11 @@ The units inspector decides by the form of what is at
   `a-.service` is the row's `unit` and the config entry at the path is
   shadowed by it. Its toggle and writer are the drop-in row's.
 - Neither is ever an install file of the units sharing that prefix or
-  type, because `enable` does not read `[Install]` there (measured).
+  type, because `enable` does not read `[Install]` there (measured). Both
+  are runtime sources all the same: an enabled instance's
+  `required_config` and `data_paths` read their `[Service]` settings
+  (`instance::runtime_drop_ins`, see
+  [unit-install-state](unit-install-state.md)).
 - Which drop-ins are install files, and what excluding one does to a
   unit's command, is in
   [service-omission-model](service-omission-model.md) (rule 5's drop-in

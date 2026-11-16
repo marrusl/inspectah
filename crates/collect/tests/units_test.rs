@@ -5914,6 +5914,167 @@ fn a_state_directory_reset_clears_the_data_path() {
     );
 }
 
+/// The units section and warnings of a scan of `exec` that may degrade,
+/// with the degradation reason when it did.
+fn scan_maybe_degraded(exec: &MockExecutor) -> (UnitSection, Vec<String>, Option<String>) {
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+    let (output, reason) = match UnitsInspector::new().inspect(&ctx, &NullProgress) {
+        Ok(output) => (output, None),
+        Err(InspectorError::Degraded { partial, reason }) => (*partial, Some(reason)),
+        Err(e) => panic!("the units inspector failed: {e:?}"),
+    };
+    let SectionData::Units(section) = output.section else {
+        panic!("expected the units section");
+    };
+    let warnings = output.warnings.into_iter().map(|w| w.message).collect();
+    (section, warnings, reason)
+}
+
+/// § 7.5, R4: an instance's settings come from every drop-in directory
+/// systemd reads for it, not only the own and template `.d` the
+/// `[Install]` reader uses: the type-wide `service.d`, the dash-prefix
+/// `worker-.service.d` (and its instance form `worker-@site.service.d`),
+/// under `/etc`, the vendor directory or `/run`. Each one's
+/// `EnvironmentFile=` is required.
+#[test]
+fn an_instance_reads_its_type_wide_and_dash_prefix_drop_ins() {
+    const UNIT: &str = "worker-job@site.service";
+    let text = template_with("ExecStart=/usr/bin/worker\n");
+    for (root, dir) in [
+        (ETC, "service.d"),
+        (VENDOR, "service.d"),
+        (ETC, "worker-.service.d"),
+        (VENDOR, "worker-.service.d"),
+        (ETC, "worker-@site.service.d"),
+        (ETC, "worker-@.service.d"),
+        ("/run/systemd/system", "worker-.service.d"),
+        ("/usr/local/lib/systemd/system", "service.d"),
+    ] {
+        let exec = with_drop_in(
+            instance_host("worker-job@.service", &text, UNIT).with_dir_entry(root, dir),
+            &format!("{root}/{dir}"),
+            "50-env.conf",
+            "[Service]\nEnvironmentFile=/etc/worker/%i.env\n",
+        );
+        let (section, warnings) = scan(&exec);
+        assert_eq!(
+            needs_of(&section, UNIT),
+            (vec!["/etc/worker/site.env".to_owned()], vec![]),
+            "{root}/{dir}: {warnings:?}"
+        );
+    }
+}
+
+/// § 7.5, R4: of drop-ins sharing a file name, the one systemd reads wins
+/// (systemd's `unit_file_find_dropin_paths`: every directory of the unit's
+/// names on the whole search path before any type-wide directory, the
+/// first directory listed keeping the name): a vendor `worker@.service.d`
+/// file hides an `/etc` `service.d` file of its name. The `[Install]`
+/// section of a type-wide drop-in is never read.
+#[test]
+fn a_named_drop_in_hides_a_type_wide_one_of_its_name() {
+    const UNIT: &str = "worker@site.service";
+    let exec = with_drop_in(
+        with_drop_in(
+            instance_host(
+                "worker@.service",
+                &template_with("ExecStart=/usr/bin/worker\n"),
+                UNIT,
+            )
+            .with_dir_entry(ETC, "service.d")
+            .with_dir_entry(VENDOR, "worker@.service.d"),
+            &format!("{ETC}/service.d"),
+            "50-env.conf",
+            "[Service]\nEnvironmentFile=/etc/hidden/%i.env\n",
+        ),
+        &format!("{VENDOR}/worker@.service.d"),
+        "50-env.conf",
+        "[Service]\nEnvironmentFile=/etc/read/%i.env\n",
+    );
+    let (section, _) = scan(&exec);
+    assert_eq!(
+        needs_of(&section, UNIT).0,
+        ["/etc/read/site.env".to_owned()]
+    );
+}
+
+/// § 7.5, R4: a runtime drop-in directory that cannot be listed in full,
+/// and a drop-in there that is not text, leave what the instance reads
+/// unknown: the instance has no state change, a warning names the unit and
+/// the path, and the scan degrades naming the path. Healthy first.
+#[test]
+fn an_unreadable_runtime_drop_in_declines_the_instance() {
+    const UNIT: &str = "worker@site.service";
+    let dir = format!("{ETC}/service.d");
+    let host = || {
+        with_drop_in(
+            instance_host(
+                "worker@.service",
+                &template_with("ExecStart=/usr/bin/worker\n"),
+                UNIT,
+            )
+            .with_dir_entry(ETC, "service.d"),
+            &dir,
+            "50-env.conf",
+            "[Service]\nNice=5\n",
+        )
+    };
+    let (section, _, reason) = scan_maybe_degraded(&host());
+    assert!(
+        section
+            .state_changes
+            .iter()
+            .any(|c| c.unit().name().as_str() == UNIT)
+    );
+    assert_eq!(reason, None);
+
+    for (label, exec, path) in [
+        (
+            "iteration",
+            host().with_dir_iteration_error(&dir, std::io::ErrorKind::Other),
+            dir.clone(),
+        ),
+        (
+            "listing",
+            host().with_dir_error(&dir, std::io::ErrorKind::PermissionDenied),
+            dir.clone(),
+        ),
+        (
+            "not text",
+            host().with_file_error(
+                &format!("{dir}/50-env.conf"),
+                std::io::ErrorKind::InvalidData,
+            ),
+            format!("{dir}/50-env.conf"),
+        ),
+    ] {
+        let (section, warnings, reason) = scan_maybe_degraded(&exec);
+        assert!(
+            section
+                .state_changes
+                .iter()
+                .all(|c| c.unit().name().as_str() != UNIT),
+            "{label}: no state change"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains(UNIT)
+                && w.contains(&path)
+                && w.contains("its enable is not carried")),
+            "{label}: {warnings:?}"
+        );
+        assert!(
+            reason.as_deref().is_some_and(|r| r.contains(&path)),
+            "{label}: {reason:?}"
+        );
+    }
+}
+
 /// Control: a unit that is not an instance records neither list, though
 /// its file names `%i`.
 #[test]

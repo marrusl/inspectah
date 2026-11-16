@@ -138,7 +138,8 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
   type-wide (`service.d`) and dash-prefix (`a-.service.d`) directories
   apply to the unit's other sections but `enable` does not read
   `[Install]` there (measured), so `drop_in_dirs` never lists them and the
-  reader skips a source from any other directory.
+  reader skips a source from any other directory. An instance's needs are
+  read from them all the same, through their own selection (below).
 - **`Undetermined`** for any `UpheldBy=`, that `RequiredBy=` reset, a
   specifier other than `%i`, `%p`, `%N` and `%%`, or a value that is not a
   `UnitName`. `%I` is undetermined here: `systemctl enable` does not expand
@@ -299,9 +300,27 @@ its unit file alone.
 row records `required_config` (paths under `/etc`, kept whether or not
 they exist) and `data_paths` (paths under `/var` that exist, never under
 `/var/run` or `/var/lock`, `RUNTIME_VAR_DIRS`). They come from the unit
-file and the drop-ins of its own and its template's `.d` that systemd
-reads (`InstallEvidence::unit_texts`, the same selection as
-`read_install`), plus the fixed tables. Non-obvious points:
+file (`InstallEvidence::fragment_text`) and the runtime drop-in set, plus
+the fixed tables. Non-obvious points:
+
+- **The runtime drop-in set is not the `[Install]` reader's**
+  (`runtime_drop_ins`, from `unit_file_find_dropin_paths` in
+  `src/shared/dropin.c`, 252 and 257): on every directory of the search
+  path (`resolve::unit_search_path`, all twelve, `/run` and
+  `/usr/local/lib` included), the `.d` of each of the unit's names
+  (`named_drop_in_dirs`: own, template, then the dash-prefix cuts,
+  `worker-job@site` giving `worker-.service.d` and
+  `worker-@site.service.d`), then the type-wide `service.d` on every
+  directory. One file per name, the first directory in that list keeping
+  it, applied in file-name order. G2 and the `[Install]` reader stay as
+  they are: `enable` does not read `[Install]` from a type-wide or
+  dash-prefix directory (measured), while the manager applies their
+  `[Service]` settings.
+- **A runtime source that cannot be read declines the enable by name.**
+  A listing that fails other than `NotFound` (an iteration error too,
+  through `read_dir_strict`) or a drop-in that is not text is
+  `NeedsUnknown::Unreadable`: no state change, a warning naming the unit
+  and the path, and the path in `read_failures`, so the scan degrades.
 
 - **Each setting is read with its own syntax** (`Syntax`), as systemd's
   parser for it reads it (252 and 257, `load-fragment.c`): a command line
@@ -361,8 +380,6 @@ reads (`InstallEvidence::unit_texts`, the same selection as
   written, and rule 6 declines its enable as `NotInSnapshot` naming it,
   since `Destination` refuses `..` and no export entry can sit there.
   A data path with `..` is still dropped: it gives only an advisory.
-- The type-wide (`service.d`) and dash-prefix drop-in directories are not
-  read here, as for `[Install]`.
 - Existence is `Executor::file_exists`, true for a directory on both
   executors (`MockExecutor` counts a registered directory).
 

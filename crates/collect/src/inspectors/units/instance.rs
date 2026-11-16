@@ -18,12 +18,16 @@
 //! needs unknown ([`NeedsUnknown`]): its enable is not carried, rather than
 //! carried with the path dropped.
 
+use super::install::DROP_IN_DIR_SUFFIX;
+use super::resolve::unit_search_path;
 use super::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{
     UNIT_FILE_WHITESPACE, UnitName, is_instance_config_path, is_instance_data_path, logical_lines,
+    systemd_reads_drop_in,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::ErrorKind;
 use std::path::Path;
 
 /// Templates whose instance reads a configuration file its unit file does
@@ -171,20 +175,30 @@ pub(crate) enum NeedsUnknown {
     /// quote, an escape systemd refuses, a specifier inspectah does not
     /// expand, or a configuration path holding a control character.
     Uninterpretable { key: String, value: String },
+    /// A runtime drop-in directory or drop-in at `path` could not be read
+    /// in full, or a drop-in there is not text: one of its settings may
+    /// name a path.
+    Unreadable { path: String, error: String },
 }
 
-/// What the instance `name` needs, read from `unit_texts`, its effective
-/// unit file and the drop-ins that apply in load order, and the fixed
-/// tables for its template. A data path is kept only when `exec` finds
-/// something there. A unit that is not an instance needs nothing.
+/// What the instance `name` needs, read from `fragment`, the text of its
+/// effective unit file, and the runtime drop-ins systemd applies to it
+/// ([`runtime_drop_ins`]), in load order, and the fixed tables for its
+/// template. A data path is kept only when `exec` finds something there. A
+/// unit that is not an instance needs nothing.
 pub(crate) fn instance_needs(
     exec: &dyn Executor,
     name: &UnitName,
-    unit_texts: &[String],
+    fragment: Option<&str>,
 ) -> Result<InstanceNeeds, NeedsUnknown> {
     let Some(instance) = name.instance() else {
         return Ok(InstanceNeeds::default());
     };
+    let unit_texts: Vec<String> = fragment
+        .map(str::to_owned)
+        .into_iter()
+        .chain(runtime_drop_ins(exec, name)?)
+        .collect();
     let template = instance.template();
     let (stem, _) = name
         .as_str()
@@ -196,7 +210,7 @@ pub(crate) fn instance_needs(
 
     let mut required_config = BTreeSet::new();
     let mut data = BTreeSet::new();
-    for (key, value) in effective_assignments(unit_texts) {
+    for (key, value) in effective_assignments(&unit_texts) {
         let uninterpretable = || NeedsUnknown::Uninterpretable {
             key: key.clone(),
             value: value.clone(),
@@ -249,6 +263,112 @@ pub(crate) fn instance_needs(
         required_config: required_config.into_iter().collect(),
         data_paths,
     })
+}
+
+/// The texts of the drop-ins systemd applies to `name` when it loads the
+/// unit, in load order, as `unit_file_find_dropin_paths` finds them
+/// (systemd 252 and 257, `src/shared/dropin.c`, identical in both): for
+/// each directory of the search path ([`unit_search_path`]), the `.d`
+/// directories of the unit's names ([`named_drop_in_dirs`]); then, in each
+/// directory of the search path, the type-wide `<type>.d`. Of the drop-ins
+/// that share a file name, the first in that list of directories is read
+/// (`conf_files_list_strv`), and they are applied in file-name order. A
+/// hidden name is skipped ([`systemd_reads_drop_in`]).
+///
+/// This is the runtime selection, separate from the `[Install]` reader's
+/// (`install::selected_drop_ins`), which reads only the own and template
+/// `.d` in its own order: `enable` does not read `[Install]` from a
+/// type-wide or dash-prefix directory. A unit's aliases' directories are
+/// not read: an alias of a template instance is not modeled.
+///
+/// A directory listing that fails in any way but `NotFound` (an iteration
+/// error included, through `read_dir_strict`), and a drop-in that cannot be
+/// read as text, are [`NeedsUnknown::Unreadable`]: systemd reads what the
+/// collector cannot.
+fn runtime_drop_ins(exec: &dyn Executor, name: &UnitName) -> Result<Vec<String>, NeedsUnknown> {
+    let unreadable = |path: &str, error: String| NeedsUnknown::Unreadable {
+        path: path.to_owned(),
+        error,
+    };
+    let mut named = Vec::new();
+    named_drop_in_dirs(name.as_str(), &mut named);
+    let (_, suffix) = name
+        .as_str()
+        .rsplit_once('.')
+        .expect("a unit name ends in its type suffix");
+    let type_wide = format!("{suffix}{DROP_IN_DIR_SUFFIX}");
+    let dirs: Vec<String> = unit_search_path()
+        .flat_map(|root| named.iter().map(move |dir| format!("{root}/{dir}")))
+        .chain(unit_search_path().map(|root| format!("{root}/{type_wide}")))
+        .collect();
+
+    let mut chosen: BTreeMap<String, String> = BTreeMap::new();
+    for dir in &dirs {
+        let entries = match exec.read_dir_strict(Path::new(dir)) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+            Err(e) => return Err(unreadable(dir, e.to_string())),
+        };
+        for entry in entries.into_iter().filter(|e| systemd_reads_drop_in(e)) {
+            let path = format!("{dir}/{entry}");
+            chosen.entry(entry).or_insert(path);
+        }
+    }
+    chosen
+        .values()
+        .map(|path| {
+            exec.read_file(Path::new(path))
+                .map_err(|e| unreadable(path, e.to_string()))
+        })
+        .collect()
+}
+
+/// Add the `.d` directory names systemd reads for the unit `name` to
+/// `dirs`, as `unit_file_find_dirs` does (systemd 252 and 257,
+/// `src/shared/dropin.c`): its own; for an instance, its template's and
+/// what that gives; then, for a name with a `-` in its prefix, the name cut
+/// after its last `-` (`a-b-c.service` gives `a-b-.service`, which gives
+/// `a-.service`), keeping the instance (`a-b@x.service` gives
+/// `a-@x.service`), and what that gives in turn.
+fn named_drop_in_dirs(name: &str, dirs: &mut Vec<String>) {
+    let dir = format!("{name}{DROP_IN_DIR_SUFFIX}");
+    if dirs.contains(&dir) {
+        return;
+    }
+    dirs.push(dir);
+    let Some((stem, suffix)) = name.rsplit_once('.') else {
+        return;
+    };
+    let (prefix, instance) = match stem.split_once('@') {
+        Some((prefix, instance)) => (prefix, Some(instance).filter(|i| !i.is_empty())),
+        None => (stem, None),
+    };
+    if instance.is_some() {
+        named_drop_in_dirs(&format!("{prefix}@.{suffix}"), dirs);
+    }
+    // A trailing `-` is cut once before the next one is looked for, so
+    // `a-.service` gives `a`, which has none.
+    let mut prefix = prefix.to_owned();
+    let mut chopped = false;
+    loop {
+        let Some(dash) = prefix.rfind('-') else {
+            return;
+        };
+        if dash == 0 {
+            return;
+        }
+        if dash + 1 < prefix.len() || chopped {
+            prefix.truncate(dash + 1);
+            break;
+        }
+        prefix.truncate(dash);
+        chopped = true;
+    }
+    let cut = match instance {
+        Some(instance) => format!("{prefix}@{instance}.{suffix}"),
+        None => format!("{prefix}.{suffix}"),
+    };
+    named_drop_in_dirs(&cut, dirs);
 }
 
 /// `path` with each run of `/` made one, each `.` component dropped and a
@@ -948,12 +1068,11 @@ mod tests {
         let needs = instance_needs(
             &exec,
             &name,
-            &[
+            Some(
                 "[Unit]\nConditionPathExists=/etc/x//%i/\nConditionPathExists=/etc/./z/%i\n\
                ConditionPathExists=/etc/w/../%i.conf\n\
-               [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=./y/%i/\n"
-                    .to_owned(),
-            ],
+               [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=./y/%i/\n",
+            ),
         )
         .expect("interpretable needs");
         assert_eq!(
@@ -972,6 +1091,35 @@ mod tests {
             ("./y/a/", "y/a"),
         ] {
             assert_eq!(simplify_path(path), simple, "{path}");
+        }
+    }
+
+    /// `unit_file_find_dirs`'s order (systemd 252 and 257): own, template
+    /// and the template's prefixes, then the instance's prefixes.
+    #[test]
+    fn the_named_drop_in_dirs_are_systemds() {
+        for (name, expected) in [
+            ("plain.service", vec!["plain.service.d"]),
+            (
+                "a-b-c.service",
+                vec!["a-b-c.service.d", "a-b-.service.d", "a-.service.d"],
+            ),
+            (
+                "worker-job@site.service",
+                vec![
+                    "worker-job@site.service.d",
+                    "worker-job@.service.d",
+                    "worker-.service.d",
+                    "worker-@site.service.d",
+                    "worker-@.service.d",
+                ],
+            ),
+            ("t@x.timer", vec!["t@x.timer.d", "t@.timer.d"]),
+            ("-a.service", vec!["-a.service.d"]),
+        ] {
+            let mut dirs = Vec::new();
+            named_drop_in_dirs(name, &mut dirs);
+            assert_eq!(dirs, expected, "{name}");
         }
     }
 

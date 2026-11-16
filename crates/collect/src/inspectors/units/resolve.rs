@@ -38,6 +38,25 @@ pub(super) const UNREAD_SEARCH_PATH: [(&str, DropInRoot); 9] = [
     ("/usr/local/lib/systemd/system", DropInRoot::Vendor),
 ];
 
+/// The last directory on systemd's unit search path, after the vendor
+/// directory.
+const GENERATOR_LATE_DIR: &str = "/run/systemd/generator.late";
+
+/// Every directory on systemd's system unit search path, in its order
+/// (`systemd.unit(5)`): [`UNREAD_SEARCH_PATH`]'s four ranked above `/etc`,
+/// `/etc/systemd/system`, its five ranked between, the vendor directory,
+/// then `/run/systemd/generator.late`. The runtime drop-ins of a unit are
+/// read from each (§ 7.5).
+pub(super) fn unit_search_path() -> impl Iterator<Item = &'static str> {
+    let (above, between) = UNREAD_SEARCH_PATH.split_at(above_etc_dirs().count());
+    above
+        .iter()
+        .map(|(dir, _)| *dir)
+        .chain([ETC_UNIT_DIR])
+        .chain(between.iter().map(|(dir, _)| *dir))
+        .chain([VENDOR_UNIT_DIR, GENERATOR_LATE_DIR])
+}
+
 /// The directories of [`UNREAD_SEARCH_PATH`] that outrank
 /// `/etc/systemd/system`, in search-path order. The `[Install]` reader
 /// reads their drop-ins as [`DropInRoot::AboveEtc`], so a drop-in there
@@ -441,6 +460,27 @@ mod tests {
 
     fn name(n: &str) -> UnitName {
         UnitName::try_from(n.to_owned()).expect("test unit names are valid")
+    }
+
+    #[test]
+    fn the_unit_search_path_is_systemds_order() {
+        assert_eq!(
+            unit_search_path().collect::<Vec<_>>(),
+            [
+                "/etc/systemd/system.control",
+                "/run/systemd/system.control",
+                "/run/systemd/transient",
+                "/run/systemd/generator.early",
+                "/etc/systemd/system",
+                "/etc/systemd/system.attached",
+                "/run/systemd/system",
+                "/run/systemd/system.attached",
+                "/run/systemd/generator",
+                "/usr/local/lib/systemd/system",
+                "/usr/lib/systemd/system",
+                "/run/systemd/generator.late",
+            ]
+        );
     }
 
     fn vendor(file: &str) -> UnitFragment {

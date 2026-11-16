@@ -30,7 +30,7 @@ pub(crate) mod specifiers;
 
 use install::{
     DropInRoot, DropInSource, InstallRead, InstallSection, drop_in_dirs, read_install,
-    read_vendor_install, selected_drop_ins,
+    read_vendor_install,
 };
 use instance::NeedsUnknown;
 use links::{HostLinks, InstallDifference};
@@ -861,12 +861,16 @@ fn build_state_changes(
                     let needs = match instance::instance_needs(
                         exec,
                         change.unit().name(),
-                        &evidence.unit_texts,
+                        evidence.fragment_text.as_deref(),
                     ) {
                         Ok(needs) => needs,
                         // What it reads is unknown, so rule 6 could not
-                        // check its enable: it is not carried.
+                        // check its enable: it is not carried. A read
+                        // failure degrades the scan too, as any other does.
                         Err(unknown) => {
+                            if let NeedsUnknown::Unreadable { path, error } = &unknown {
+                                read_failures.push(format!("{path}: {error}"));
+                            }
                             warnings.push(needs_unknown_warning(warn, &unknown));
                             continue;
                         }
@@ -1086,11 +1090,10 @@ struct InstallEvidence {
     hiding_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply, sorted.
     vendor_drop_ins: Vec<String>,
-    /// The unit file's text, then the texts of the drop-ins of its own and
-    /// its template's `.d` that systemd reads, in load order: what an
-    /// instance's needs are read from (§ 7.5). A file that is not text is
-    /// left out. Empty for a unit that is not an instance.
-    unit_texts: Vec<String>,
+    /// The unit file's text, for an instance whose unit file is text: its
+    /// needs are read from it and from its runtime drop-ins (§ 7.5,
+    /// `instance::instance_needs`). `None` for any other unit.
+    fragment_text: Option<String>,
 }
 
 impl InstallEvidence {
@@ -1213,19 +1216,9 @@ fn install_evidence(
         .iter()
         .map(|(source, text)| (source.clone(), text.as_str()))
         .collect();
-    // Only an instance's needs are read from these texts (§ 7.5).
-    let unit_texts = match name.instance() {
-        Some(_) => fragment_text
-            .iter()
-            .cloned()
-            .chain(
-                selected_drop_ins(name, &drop_ins)
-                    .into_iter()
-                    .map(str::to_owned),
-            )
-            .collect(),
-        None => Vec::new(),
-    };
+    // Only an instance's needs are read from its unit file here, with its
+    // runtime drop-ins, which `instance_needs` reads itself (§ 7.5).
+    let instance_fragment_text = name.instance().and(fragment_text.clone());
     // The vendor-side read (§ 7.2): for a packaged unit file with an
     // install file under `/etc`, a shadow or an install drop-in.
     let vendor_text = match fragment {
@@ -1265,7 +1258,7 @@ fn install_evidence(
         install_drop_ins,
         hiding_drop_ins: hiding_drop_ins.into_iter().collect(),
         vendor_drop_ins: vendor_names.into_iter().collect(),
-        unit_texts,
+        fragment_text: instance_fragment_text,
     })
 }
 
@@ -1392,6 +1385,15 @@ fn needs_unknown_warning(warn: impl FnOnce(&str) -> Warning, unknown: &NeedsUnkn
             warning
                 .extra
                 .insert("value".into(), serde_json::json!(value));
+            warning
+        }
+        NeedsUnknown::Unreadable { path, error } => {
+            let mut warning = warn(&format!(
+                "{path}, a drop-in directory or drop-in systemd reads for the instance, cannot \
+                 be read ({error}), so what the instance reads is unknown and its enable is not \
+                 carried"
+            ));
+            warning.extra.insert("path".into(), serde_json::json!(path));
             warning
         }
     }
