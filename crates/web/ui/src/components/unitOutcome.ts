@@ -1,10 +1,14 @@
 /**
  * The units section's rules, decided without React: row keys and
- * occurrence keys (spec § 6.11). Nothing else spells a key.
+ * occurrence keys (spec § 6.11; nothing else spells a key), outcomes and
+ * counts (§ 6.1, § 6.4), groups (§ 6.2, § 6.8) and labels (§ 7).
  */
 import type {
+  DeclinedView,
   DefaultTargetView,
   DropInDecisionDto,
+  LinkRelation,
+  ManualLinkCause,
   ManualLinkView,
   MountFindingDto,
   ServiceDecisionDto,
@@ -146,4 +150,239 @@ export function keyFields(fields: UnitFields): KeyedFields {
     manualLinks: wrap("manual_link", fields.manual_links),
     undeterminedInstalls: wrap("undetermined_install", fields.undetermined_installs),
   };
+}
+
+// --- Outcomes and counts (§ 6.1, § 6.4) ---
+
+export type Outcome = "needs_follow_up" | "carried" | "excluded";
+
+/** A row's outcome; `null` for a drop-in, which follows its parent. */
+export function outcomeOf(record: UnitRecord): Outcome | null {
+  switch (record.kind) {
+    case "unit_state":
+    case "default_target":
+      if (record.data.declined) return "needs_follow_up";
+      return record.data.include ? "carried" : "excluded";
+    case "dropin":
+      return null;
+    case "manual_link":
+    case "undetermined_install":
+    case "mount_finding":
+      return "needs_follow_up";
+  }
+}
+
+export interface OutcomeCounts {
+  all: number;
+  needs_follow_up: number;
+  carried: number;
+  excluded: number;
+}
+
+/** The filter's counts: every row with an outcome, drop-ins not counted. */
+export function outcomeCounts(keyed: KeyedFields): OutcomeCounts {
+  const counts: OutcomeCounts = { all: 0, needs_follow_up: 0, carried: 0, excluded: 0 };
+  const rows: Keyed[] = [
+    ...keyed.unitStates,
+    ...(keyed.defaultTarget ? [keyed.defaultTarget] : []),
+    ...keyed.mountFindings,
+    ...keyed.manualLinks,
+    ...keyed.undeterminedInstalls,
+  ];
+  for (const { record } of rows) {
+    const outcome = outcomeOf(record);
+    if (outcome === null) continue;
+    counts.all += 1;
+    counts[outcome] += 1;
+  }
+  return counts;
+}
+
+// --- Groups (§ 6.2, § 6.3, § 6.6 item 11, § 6.8) ---
+
+export type GroupId =
+  | "default_target"
+  | "services"
+  | "sockets"
+  | "timers"
+  | "paths"
+  | "other_units"
+  | "reported";
+
+export const GROUP_ORDER: readonly GroupId[] = [
+  "default_target",
+  "services",
+  "sockets",
+  "timers",
+  "paths",
+  "other_units",
+  "reported",
+];
+
+/** § 7 strings 2 to 5. */
+export const GROUP_TITLES: Record<GroupId, string> = {
+  default_target: "Default target",
+  services: "Services",
+  sockets: "Sockets",
+  timers: "Timers",
+  paths: "Paths",
+  other_units: "Other units",
+  reported: "Reported, not carried",
+};
+
+/** The kinds with a group of their own; every other kind is Other units. */
+const KIND_GROUPS: Readonly<Record<string, GroupId>> = {
+  service: "services",
+  socket: "sockets",
+  timer: "timers",
+  path: "paths",
+};
+
+export interface UnitBranch {
+  head: Keyed<RecordOf<"unit_state">>;
+  dropins: Keyed<RecordOf<"dropin">>[];
+}
+
+export interface OrphanBlock {
+  unit: string;
+  dropins: Keyed<RecordOf<"dropin">>[];
+}
+
+export type ReportedRow = Keyed<RecordOf<"mount_finding" | "manual_link" | "undetermined_install">>;
+
+export interface ReportedBlock {
+  unit: string;
+  rows: ReportedRow[];
+}
+
+export interface UnitGroupModel {
+  id: GroupId;
+  target?: Keyed<RecordOf<"default_target">>;
+  branches: UnitBranch[];
+  orphans: OrphanBlock[];
+  reported: ReportedBlock[];
+  /** § 6.3 item 4's N, kind groups only, else 0. */
+  followUpTotal: number;
+}
+
+function groupOfKind(kind: string | undefined): GroupId {
+  if (kind !== undefined && Object.prototype.hasOwnProperty.call(KIND_GROUPS, kind)) {
+    return KIND_GROUPS[kind];
+  }
+  return "other_units";
+}
+
+/** Plain string order (code-point), § 6.2; with a stable sort, ties keep response order. */
+function byCodePoint(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function emptyGroup(id: GroupId): UnitGroupModel {
+  return { id, branches: [], orphans: [], reported: [], followUpTotal: 0 };
+}
+
+/**
+ * Places every row by kind and name only (§ 6.2): never by outcome, so a
+ * toggle never moves a row. Groups with no row are left out.
+ */
+export function groupUnits(keyed: KeyedFields): UnitGroupModel[] {
+  const groups = new Map<GroupId, UnitGroupModel>(GROUP_ORDER.map((id) => [id, emptyGroup(id)]));
+  const at = (id: GroupId) => groups.get(id)!;
+
+  if (keyed.defaultTarget) at("default_target").target = keyed.defaultTarget;
+
+  // Drop-ins nest under the first branch, in response order, of their unit.
+  const firstBranch = new Map<string, UnitBranch>();
+  for (const head of keyed.unitStates) {
+    const branch: UnitBranch = { head, dropins: [] };
+    if (!firstBranch.has(head.record.data.unit)) firstBranch.set(head.record.data.unit, branch);
+    const g = at(groupOfKind(head.record.data.kind));
+    g.branches.push(branch);
+    if (outcomeOf(head.record) === "needs_follow_up") g.followUpTotal += 1;
+  }
+
+  const orphanBlocks = new Map<string, OrphanBlock>();
+  for (const dropin of keyed.dropins) {
+    const unit = dropin.record.data.unit;
+    const parent = firstBranch.get(unit);
+    if (parent) {
+      parent.dropins.push(dropin);
+      continue;
+    }
+    let block = orphanBlocks.get(unit);
+    if (!block) {
+      block = { unit, dropins: [] };
+      orphanBlocks.set(unit, block);
+      at(groupOfKind(dropin.record.data.kind)).orphans.push(block);
+    }
+    block.dropins.push(dropin);
+  }
+
+  // Per unit: its mount finding, then its links, then its undetermined install.
+  const reportedBlocks = new Map<string, ReportedBlock>();
+  const reportedRows: ReportedRow[] = [
+    ...keyed.mountFindings,
+    ...keyed.manualLinks,
+    ...keyed.undeterminedInstalls,
+  ];
+  for (const row of reportedRows) {
+    const unit = row.record.data.unit;
+    let block = reportedBlocks.get(unit);
+    if (!block) {
+      block = { unit, rows: [] };
+      reportedBlocks.set(unit, block);
+    }
+    block.rows.push(row);
+  }
+  at("reported").reported = [...reportedBlocks.values()].sort((a, b) => byCodePoint(a.unit, b.unit));
+
+  for (const g of groups.values()) {
+    g.branches.sort((a, b) => byCodePoint(a.head.record.data.unit, b.head.record.data.unit));
+  }
+
+  return GROUP_ORDER.map(at).filter(
+    (g) => g.target || g.branches.length > 0 || g.orphans.length > 0 || g.reported.length > 0,
+  );
+}
+
+// --- Labels (§ 7) ---
+
+/** § 7 string 15, by `declined.renders`: the Containerfile's own prefixes. */
+export const OUTCOME_LABELS: Record<DeclinedView["renders"], "FIXME" | "Advisory" | "Omitted"> = {
+  fixme: "FIXME",
+  advisory: "Advisory",
+  omitted: "Omitted",
+};
+
+/** § 7 string 17, shown before a link's parent. */
+export const RELATION_LABELS: Record<LinkRelation, string> = {
+  wants: "wanted by",
+  requires: "required by",
+  upholds: "upheld by",
+  alias: "has alias",
+  also: "named in Also= by",
+};
+
+/** § 7 string 18 for `undetermined`, and for every undetermined-install row. */
+export const UNDETERMINED_CAUSE_LABEL = "[Install] cannot be relied on";
+
+/** § 7 string 18 for the causes that serialize as a bare string. */
+const CAUSE_LABELS: Record<Exclude<ManualLinkCause, object>, string> = {
+  static_unit: "Link its [Install] does not make",
+  not_in_install: "Link made by hand",
+  partial_install: "Only some of its links",
+  host_device: "Tied to a host device",
+  host_install_only: "Only the /etc files name it",
+  vendor_install_only: "Only the package unit names it",
+};
+
+/** A link's cause label. `cause` is externally tagged: branch on `typeof`. */
+export function causeLabel(cause: ManualLinkCause): string {
+  return typeof cause === "string" ? CAUSE_LABELS[cause] : UNDETERMINED_CAUSE_LABEL;
+}
+
+/** § 7 string 10; `null` when no row of the group needs follow-up. */
+export function followUpFlagText(n: number): string | null {
+  if (n === 0) return null;
+  return n === 1 ? `${n} needs follow-up` : `${n} need follow-up`;
 }
