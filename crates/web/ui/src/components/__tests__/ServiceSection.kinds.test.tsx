@@ -298,8 +298,14 @@ describe("ServiceSection: what an instance needs", () => {
   const INSTANCE = "dirsrv@example.service";
   const CONFIG = ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"];
   const DATA = ["/var/lib/dirsrv/slapd-example"];
+  /** The data advisory the server sends for a carried instance with data
+   * (`unit_plan::data_advisory`). */
+  const ADVISORY =
+    `${INSTANCE} keeps data under ${DATA[0]}. The image does not carry it, and the ` +
+    "carried enable may start the unit on first boot. Put the data in place before " +
+    "that boot, or the unit starts without it.";
 
-  it("shows an instance's template, configuration paths and data paths, tied to its toggle", () => {
+  it("shows an instance's data advisory once, then its template, configuration paths and data paths, tied to its toggle", () => {
     render(
       <ServiceSection
         {...baseProps}
@@ -309,6 +315,7 @@ describe("ServiceSection: what an instance needs", () => {
             instance_of: "dirsrv@.service",
             required_config: CONFIG,
             data_paths: DATA,
+            attention_reason: ADVISORY,
           }),
         ]}
       />,
@@ -336,7 +343,9 @@ describe("ServiceSection: what an instance needs", () => {
     const notes = describedBy(
       screen.getByRole("checkbox", { name: `Toggle ${INSTANCE}` }),
     );
+    expect(screen.getAllByText(ADVISORY)).toHaveLength(1);
     expect(notes).toEqual([
+      ADVISORY,
       "Instance of dirsrv@.service",
       `Needs configuration: ${CONFIG.join(" ")}`,
       `Keeps data in: ${DATA[0]}`,
