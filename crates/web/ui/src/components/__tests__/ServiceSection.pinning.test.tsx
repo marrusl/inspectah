@@ -511,5 +511,12 @@ describe("a failed op", () => {
     expect(count("Needs follow-up")).toBe(9);
     expect(count("Excluded")).toBe(0);
     expect(within(rowNow).getByRole("checkbox", { name: "Toggle cups.service" })).toBeChecked();
+
+    // The pin outlives the failure: a later view that would hide the row
+    // under Needs follow-up (excluded, declined cleared) still shows it.
+    act(() => pushView(cupsExcluded()));
+    expect(screen.getByTestId("service-item-cups.service")).toBe(row);
+    expect(count("Needs follow-up")).toBe(8);
+    expect(count("Excluded")).toBe(1);
   });
 });
