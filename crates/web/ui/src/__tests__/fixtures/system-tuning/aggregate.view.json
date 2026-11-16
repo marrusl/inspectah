@@ -80,7 +80,7 @@
       }
     }
   ],
-  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# Leaf classification: 0/2 hosts (partial authority)\n\n\n# === Manual Follow-up Required ===\n# TODO: 'bash.x86_64' has no recorded repository source — verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
+  "containerfile_preview": "# FROM line omitted — target image could not be determined. Use --base-image to specify.\n\n# Leaf classification: 0/2 hosts (partial authority)\n\n\n# === Manual Follow-up Required ===\n# TODO: 'bash.x86_64' has no recorded repository source. Verify how to reinstall it in the image.\n\n# === Validate bootc compatibility ===\nRUN bootc container lint\n",
   "declined_generated": [],
   "flatpaks": [],
   "generated_timers": [],

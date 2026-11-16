@@ -93,17 +93,17 @@ fn manual_follow_up_reason(pkg: &PackageEntry) -> Option<ManualFollowUpReason> {
 pub(crate) fn manual_follow_up_line(pkg: &PackageEntry) -> Option<String> {
     match manual_follow_up_reason(pkg) {
         Some(ManualFollowUpReason::LocalInstall) => Some(format!(
-            "# TODO: '{}' was installed locally (state: {}) \u{2014} provide a .rpm or custom repo.",
+            "# TODO: '{}' was installed locally (state: {}). Provide a .rpm or custom repo.",
             package_display_name(pkg),
             package_state_label(pkg)
         )),
         Some(ManualFollowUpReason::NoRepo) => Some(format!(
-            "# TODO: '{}' has no repository source (state: {}) \u{2014} provide a .rpm or custom repo.",
+            "# TODO: '{}' has no repository source (state: {}). Provide a .rpm or custom repo.",
             package_display_name(pkg),
             package_state_label(pkg)
         )),
         Some(ManualFollowUpReason::MissingSourceRepo) => Some(format!(
-            "# TODO: '{}' has no recorded repository source \u{2014} verify how to reinstall it in the image.",
+            "# TODO: '{}' has no recorded repository source. Verify how to reinstall it in the image.",
             package_display_name(pkg)
         )),
         None => None,
@@ -3215,5 +3215,43 @@ mod tests {
     #[test]
     fn the_flatpak_service_constant_is_a_unit_name() {
         assert_eq!(flatpak_service_unit().as_str(), FLATPAK_SERVICE);
+    }
+
+    /// Each manual follow-up line, in full: the reason, then what to do,
+    /// as a second sentence. No em dash: the line is generated text in
+    /// the Containerfile the operator reads.
+    #[test]
+    fn each_manual_follow_up_line_reads_as_two_sentences() {
+        let package = |state, source_repo: &str| PackageEntry {
+            name: "tool".into(),
+            arch: "x86_64".into(),
+            state,
+            source_repo: source_repo.into(),
+            ..Default::default()
+        };
+        for (pkg, expected) in [
+            (
+                package(PackageState::LocalInstall, ""),
+                "# TODO: 'tool.x86_64' was installed locally (state: local_install). \
+                 Provide a .rpm or custom repo.",
+            ),
+            (
+                package(PackageState::NoRepo, ""),
+                "# TODO: 'tool.x86_64' has no repository source (state: no_repo). \
+                 Provide a .rpm or custom repo.",
+            ),
+            (
+                package(PackageState::Added, ""),
+                "# TODO: 'tool.x86_64' has no recorded repository source. Verify how to \
+                 reinstall it in the image.",
+            ),
+        ] {
+            assert_eq!(
+                manual_follow_up_line(&pkg).as_deref(),
+                Some(expected),
+                "{:?}",
+                pkg.state
+            );
+        }
     }
 }
