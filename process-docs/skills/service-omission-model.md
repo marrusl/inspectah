@@ -409,7 +409,8 @@ showed, and the build failed with no warning anywhere.
   can change the trigger**: the one that holds the accepted `Unit=`, and
   one at or before it that hides a drop-in of its file name. A drop-in
   whose `Unit=` lines are all ignored, or that comes after the accepted
-  one, is not evidence, so excluding it never omits the enable. The value is
+  one, is not evidence, so excluding it never omits the enable, unless it
+  hides another applicable drop-in. The value is
   expanded with `SpecifierSet::TriggerUnit` (`%i`, `%p`, `%N`, `%%`); a
   specifier systemd does resolve and the scan does not (`%H`, `%n`, `%j`)
   leaves the trigger `Unresolved`. An instance timer has no timer file, so
