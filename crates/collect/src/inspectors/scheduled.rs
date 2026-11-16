@@ -1,3 +1,5 @@
+use super::units::install::{DropInRoot, DropInSource, drop_in_dirs, selected_drop_ins};
+use super::units::links::read_host_links;
 use super::units::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
@@ -124,6 +126,7 @@ impl Inspector for ScheduledTasksInspector {
             "vendor",
             &mut degraded_reasons,
         );
+        scan_instance_timers(exec, &mut section);
 
         // --- At jobs ---
         scan_at_jobs(exec, &mut section, &mut hints, &mut degraded_reasons);
@@ -830,13 +833,81 @@ fn scan_systemd_timers(
     }
 }
 
-/// The directories a timer's drop-ins are read from, in the order a
-/// drop-in of one file name overrides: the administrator's first.
-const TIMER_DROP_IN_DIRS: [&str; 2] = ["/etc/systemd/system", "/usr/lib/systemd/system"];
+/// The unit directories a timer's drop-ins are read from, with the root
+/// each is ranked as: of two drop-ins of one file name in one directory
+/// name, the administrator's overrides the vendor one.
+const TIMER_DROP_IN_ROOTS: [(DropInRoot, &str); 2] = [
+    (DropInRoot::Etc, ETC_TIMER_DROP_IN_DIR),
+    (DropInRoot::Vendor, VENDOR_TIMER_DIR),
+];
 
 /// The administrator's unit directory, whose drop-ins setting `Unit=` are
 /// recorded as the trigger's evidence.
 const ETC_TIMER_DROP_IN_DIR: &str = "/etc/systemd/system";
+
+/// The directory packages install unit files into.
+const VENDOR_TIMER_DIR: &str = "/usr/lib/systemd/system";
+
+/// The suffix of a timer unit's name.
+const TIMER_SUFFIX: &str = ".timer";
+
+/// The suffix of a service unit's name.
+const SERVICE_SUFFIX: &str = ".service";
+
+/// Describes each instance timer linked under `/etc/systemd/system` that
+/// has no description yet (§ 8). An instance timer has no timer file of
+/// its own, so it is described from its template's file: the one under
+/// `/etc` as `local` and the vendor one as `vendor`, each that exists, as
+/// a plain timer is described from each of its files. The command is read
+/// from the instance's own service file beside the template when there is
+/// one, else from the template service. The links are the ones the units
+/// inspector finds instances by ([`read_host_links`]); a failed read there
+/// is the units inspector's to report, and an instance it hides is left
+/// undescribed, which rule 5 reads as an unresolved trigger.
+fn scan_instance_timers(exec: &dyn Executor, section: &mut ScheduledTaskSection) {
+    let (host_links, _failures) = read_host_links(exec);
+    for unit in host_links.admin.keys() {
+        let Some(parts) = unit.instance() else {
+            continue;
+        };
+        let Some(name) = unit.as_str().strip_suffix(TIMER_SUFFIX) else {
+            continue;
+        };
+        if section.systemd_timers.iter().any(|t| t.name == name) {
+            continue;
+        }
+        let template = parts.template();
+        let template_service = format!("{}@{SERVICE_SUFFIX}", parts.prefix());
+        for (dir, source_label) in [
+            (ETC_TIMER_DROP_IN_DIR, "local"),
+            (VENDOR_TIMER_DIR, "vendor"),
+        ] {
+            let template_path = format!("{dir}/{}", template.as_str());
+            let timer_text = match exec.read_file(Path::new(&template_path)) {
+                Ok(text) if !text.is_empty() => text,
+                _ => continue,
+            };
+            let service_text = [format!("{name}{SERVICE_SUFFIX}"), template_service.clone()]
+                .iter()
+                .map(|service| format!("{dir}/{service}"))
+                .find(|path| exec.file_exists(Path::new(path)))
+                .map(|path| exec.read_file(Path::new(&path)).unwrap_or_default())
+                .unwrap_or_default();
+            let (trigger, trigger_drop_ins) = timer_trigger(exec, name, &timer_text);
+            section.systemd_timers.push(SystemdTimer {
+                name: name.to_owned(),
+                on_calendar: parse_unit_field(&timer_text, "OnCalendar"),
+                exec_start: parse_unit_field(&service_text, "ExecStart"),
+                description: parse_unit_field(&timer_text, "Description"),
+                source: source_label.to_owned(),
+                path: strip_leading_slash(&template_path),
+                trigger,
+                trigger_drop_ins,
+                ..Default::default()
+            });
+        }
+    }
+}
 
 /// Every `Unit=` value assigned in the `[Timer]` section of `content`, in
 /// order, read by logical line as systemd reads keys.
@@ -862,46 +933,68 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
     values
 }
 
-/// The trigger of the timer `name` whose own file reads `timer_text`, and
-/// the `/etc` drop-ins that assign its `Unit=` (§ 8). Drop-ins are
-/// `<name>.timer.d/*.conf` under each of [`TIMER_DROP_IN_DIRS`], applied
-/// after the file in file-name order, an `/etc` file overriding a vendor
-/// one of the same name; the last `Unit=` wins and an empty one resets
-/// it. With none, the trigger is `<name>.service`. A value with a
-/// specifier the reader does not expand, or that is not a unit name, is
-/// [`TimerTrigger::Unresolved`].
+/// The trigger of the timer `name` whose own file reads `timer_text` (for
+/// an instance timer, its template's file), and the `/etc` drop-ins that
+/// assign its `Unit=` (§ 8). Drop-ins are the `.conf` files of
+/// `<name>.timer.d` and, for an instance timer, of its template's
+/// `<prefix>@.timer.d`, under each of [`TIMER_DROP_IN_ROOTS`], applied
+/// after the file in the order `[Install]` is read in
+/// ([`selected_drop_ins`]): file-name order across every directory, and of
+/// the files of one name the first in the instance's own directory before
+/// the template's, `/etc` before the vendor directory within each. The
+/// last `Unit=` wins and an empty one resets it. With none, the trigger is
+/// `<name>.service`. A value with a specifier the reader does not expand,
+/// or that is not a unit name, is [`TimerTrigger::Unresolved`], as is the
+/// trigger of a timer whose name is not a unit name.
 fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTrigger, Vec<String>) {
-    let mut drop_ins: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
-    for dir in TIMER_DROP_IN_DIRS.iter().rev() {
-        let dir = format!("{dir}/{name}.timer.d");
-        let Ok(entries) = exec.read_dir(Path::new(&dir)) else {
-            continue;
-        };
-        for entry in entries.into_iter().filter(|e| e.ends_with(".conf")) {
-            drop_ins.insert(entry.clone(), format!("{dir}/{entry}"));
+    let Ok(unit) = UnitName::try_from(format!("{name}{TIMER_SUFFIX}")) else {
+        return (TimerTrigger::Unresolved, Vec::new());
+    };
+    // Each drop-in's source, with its path standing in for its text: the
+    // selection reads only the sources, so what it returns is the paths
+    // in load order.
+    let mut found: Vec<(DropInSource, String)> = Vec::new();
+    for (root, base) in TIMER_DROP_IN_ROOTS {
+        for dir in drop_in_dirs(&unit) {
+            let dir_path = format!("{base}/{dir}");
+            let Ok(entries) = exec.read_dir(Path::new(&dir_path)) else {
+                continue;
+            };
+            for entry in entries.into_iter().filter(|e| e.ends_with(".conf")) {
+                let path = format!("{dir_path}/{entry}");
+                let source = DropInSource {
+                    root,
+                    dir: dir.clone(),
+                    file_name: entry,
+                };
+                found.push((source, path));
+            }
         }
     }
+    let sources: Vec<(DropInSource, &str)> = found
+        .iter()
+        .map(|(source, path)| (source.clone(), path.as_str()))
+        .collect();
     let mut assigned: Option<String> = None;
     for value in timer_unit_assignments(timer_text) {
         assigned = (!value.is_empty()).then_some(value);
     }
     let mut evidence = Vec::new();
-    for path in drop_ins.values() {
+    for path in selected_drop_ins(&unit, &sources) {
         let content = exec.read_file(Path::new(path)).unwrap_or_default();
         let values = timer_unit_assignments(&content);
         if values.is_empty() {
             continue;
         }
         if path.starts_with(&format!("{ETC_TIMER_DROP_IN_DIR}/")) {
-            evidence.push(path.clone());
+            evidence.push(path.to_owned());
         }
         for value in values {
             assigned = (!value.is_empty()).then_some(value);
         }
     }
     let unit = match assigned {
-        None => Some(format!("{name}.service")),
+        None => Some(format!("{name}{SERVICE_SUFFIX}")),
         Some(value) => expand_unit_specifiers(&value, name, SpecifierSet::Runtime),
     };
     let trigger = unit
@@ -1542,6 +1635,157 @@ mod tests {
                 "[Timer]\nUnit=x.service\nUnit=\n"
             ),
             (unit("plain.service"), Vec::new())
+        );
+    }
+
+    /// The timer descriptions the inspector records on `exec`.
+    fn timers_on(exec: &MockExecutor) -> Vec<SystemdTimer> {
+        let rpm_state = empty_rpm_state();
+        let source = test_source_system();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: exec,
+            rpm_state: Some(&rpm_state),
+            baseline_data: None,
+        };
+        let output = match ScheduledTasksInspector::new().inspect(&ctx, &NullProgress) {
+            Ok(output) => output,
+            Err(InspectorError::Degraded { partial, .. }) => *partial,
+            Err(e) => panic!("the inspector fails: {e:?}"),
+        };
+        match output.section {
+            SectionData::ScheduledTasks(section) => section.systemd_timers,
+            _ => panic!("expected ScheduledTasks section"),
+        }
+    }
+
+    const WORKER_TEMPLATE: &str = "/etc/systemd/system/worker@.timer";
+    const WORKER_LINK: &str = "/etc/systemd/system/timers.target.wants/worker@a.timer";
+
+    /// A host with the local template `worker@.timer`, whose `[Timer]`
+    /// adds `timer_extra`, and its instance `worker@a.timer` enabled by a
+    /// link in `timers.target.wants`.
+    fn worker_host(timer_extra: &str) -> MockExecutor {
+        MockExecutor::new()
+            .with_dir(
+                "/etc/systemd/system",
+                vec!["worker@.timer", "worker@.service", "timers.target.wants"],
+            )
+            .with_file(
+                WORKER_TEMPLATE,
+                &format!(
+                    "[Unit]\nDescription=Worker %i\n[Timer]\nOnCalendar=daily\n{timer_extra}\
+                     [Install]\nWantedBy=timers.target\n"
+                ),
+            )
+            .with_file(
+                "/etc/systemd/system/worker@.service",
+                "[Service]\nExecStart=/usr/local/bin/worker %i\n",
+            )
+            .with_dir(
+                "/etc/systemd/system/timers.target.wants",
+                vec!["worker@a.timer"],
+            )
+            .with_link(WORKER_LINK, WORKER_TEMPLATE)
+    }
+
+    /// The description recorded for `worker@a.timer`.
+    fn worker_a(timers: &[SystemdTimer]) -> &SystemdTimer {
+        timers
+            .iter()
+            .find(|t| t.name == "worker@a")
+            .unwrap_or_else(|| panic!("presence: worker@a's description in {timers:?}"))
+    }
+
+    /// § 8, Task 5.1a: an instance timer linked under `/etc/systemd/system`
+    /// has no timer file of its own, so its description is recorded from
+    /// its template's file, with `Unit=` expanded for the instance. With no
+    /// `Unit=` the trigger is the instance's same-named service.
+    #[test]
+    fn an_instance_timers_description_is_read_from_its_template() {
+        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
+        for (extra, trigger) in [
+            ("Unit=worker-run@%i.service\n", "worker-run@a.service"),
+            ("", "worker@a.service"),
+        ] {
+            let timers = timers_on(&worker_host(extra));
+            let timer = worker_a(&timers);
+            assert_eq!(timer.trigger, unit(trigger), "{extra:?}");
+            assert!(timer.trigger_drop_ins.is_empty(), "{extra:?}");
+            assert_eq!(timer.description, "Worker %i");
+            assert_eq!(timer.on_calendar, "daily");
+            assert_eq!(timer.exec_start, "/usr/local/bin/worker %i");
+            assert_eq!(timer.source, "local");
+            assert_eq!(timer.path, "etc/systemd/system/worker@.timer");
+        }
+    }
+
+    /// § 8: `Unit=` set only in a drop-in of the template's
+    /// `<prefix>@.timer.d` under `/etc` is read and that drop-in is the
+    /// trigger's evidence; a specifier the reader does not expand is
+    /// `Unresolved`.
+    #[test]
+    fn an_instance_timers_trigger_is_read_from_the_template_directory() {
+        const DROP_IN: &str = "/etc/systemd/system/worker@.timer.d/10-unit.conf";
+        let exec = worker_host("")
+            .with_dir("/etc/systemd/system/worker@.timer.d", vec!["10-unit.conf"])
+            .with_file(DROP_IN, "[Timer]\nUnit=other@%i.service\n");
+        let timers = timers_on(&exec);
+        let timer = worker_a(&timers);
+        assert_eq!(
+            timer.trigger,
+            TimerTrigger::Unit("other@a.service".to_owned().try_into().unwrap())
+        );
+        assert_eq!(timer.trigger_drop_ins, [DROP_IN]);
+
+        let timers = timers_on(&worker_host("Unit=worker-%H.service\n"));
+        assert_eq!(worker_a(&timers).trigger, TimerTrigger::Unresolved);
+    }
+
+    /// § 8 with G2's order: the instance's own `.d` and the template's are
+    /// read in file-name order across both, and of two files of one name
+    /// the instance's directory wins over the template's whatever the
+    /// root, then `/etc` over the vendor directory. A hidden `/etc` file is
+    /// not evidence; one overridden by a later file name still is.
+    #[test]
+    fn an_instance_timers_drop_ins_follow_the_load_order() {
+        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
+        let exec = MockExecutor::new()
+            .with_dir(
+                "/etc/systemd/system/worker@.timer.d",
+                vec!["10-a.conf", "20-b.conf"],
+            )
+            .with_file(
+                "/etc/systemd/system/worker@.timer.d/10-a.conf",
+                "[Timer]\nUnit=hidden@%i.service\n",
+            )
+            .with_file(
+                "/etc/systemd/system/worker@.timer.d/20-b.conf",
+                "[Timer]\nUnit=etc-template@%i.service\n",
+            )
+            .with_dir(
+                "/usr/lib/systemd/system/worker@a.timer.d",
+                vec!["10-a.conf", "30-c.conf"],
+            )
+            .with_file(
+                "/usr/lib/systemd/system/worker@a.timer.d/10-a.conf",
+                "[Timer]\nOnCalendar=weekly\n",
+            )
+            .with_file(
+                "/usr/lib/systemd/system/worker@a.timer.d/30-c.conf",
+                "[Timer]\nUnit=vendor-instance.service\n",
+            );
+        assert_eq!(
+            timer_trigger(&exec, "worker@a", "[Timer]\nOnCalendar=daily\n"),
+            (
+                unit("vendor-instance.service"),
+                vec!["/etc/systemd/system/worker@.timer.d/20-b.conf".to_owned()]
+            )
+        );
+        // The plain timer `worker` reads neither directory.
+        assert_eq!(
+            timer_trigger(&exec, "worker", "[Timer]\nOnCalendar=daily\n"),
+            (unit("worker.service"), Vec::new())
         );
     }
 

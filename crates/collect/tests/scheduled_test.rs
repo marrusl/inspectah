@@ -9,7 +9,7 @@ use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorE
 use inspectah_core::traits::progress::NullProgress;
 use inspectah_core::types::completeness::SectionData;
 use inspectah_core::types::os::OsRelease;
-use inspectah_core::types::scheduled::ScheduledTaskSection;
+use inspectah_core::types::scheduled::{ScheduledTaskSection, TimerTrigger};
 use inspectah_core::types::system::SourceSystem;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -409,4 +409,63 @@ fn a_collected_timer_is_a_description_only() {
     );
     assert_eq!(cleanup["source"], "local");
     assert_eq!(cleanup["path"], "etc/systemd/system/cleanup.timer");
+}
+
+/// § 8, Task 5.1a: an instance of a template a package ships, enabled by
+/// a link under `/etc/systemd/system`, is described from the vendor
+/// template's file and its trigger is expanded for the instance. The
+/// template's own description is recorded under its own name as before,
+/// and an instance with no link under `/etc` is not described.
+#[test]
+fn a_linked_instance_of_a_vendor_template_timer_is_described() {
+    const TEMPLATE: &str = "/usr/lib/systemd/system/fetch@.timer";
+    let exec = MockExecutor::new()
+        .with_dir(
+            "/etc/systemd/system",
+            vec!["timers.target.wants", "multi-user.target.wants"],
+        )
+        .with_dir(
+            "/etc/systemd/system/timers.target.wants",
+            vec!["fetch@mirror.timer"],
+        )
+        .with_link(
+            "/etc/systemd/system/timers.target.wants/fetch@mirror.timer",
+            TEMPLATE,
+        )
+        .with_dir("/etc/systemd/system/multi-user.target.wants", vec![])
+        .with_dir("/usr/lib/systemd/system", vec!["fetch@.timer"])
+        .with_file(
+            TEMPLATE,
+            "[Unit]\nDescription=Fetch %i\n[Timer]\nOnCalendar=hourly\nUnit=fetch-run@%i.service\n",
+        );
+    let source = pkg_source();
+    let rpm_state = mock_rpm_state();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+        baseline_data: None,
+    };
+    let output = ScheduledTasksInspector::new()
+        .inspect(&ctx, &NullProgress)
+        .expect("inspector should succeed");
+    let SectionData::ScheduledTasks(section) = &output.section else {
+        panic!("expected SectionData::ScheduledTasks");
+    };
+    let names: Vec<&str> = section
+        .systemd_timers
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    assert_eq!(names, ["fetch@", "fetch@mirror"]);
+    let instance = &section.systemd_timers[1];
+    assert_eq!(instance.source, "vendor");
+    assert_eq!(instance.path, "usr/lib/systemd/system/fetch@.timer");
+    assert_eq!(instance.description, "Fetch %i");
+    assert_eq!(instance.on_calendar, "hourly");
+    assert_eq!(
+        instance.trigger,
+        TimerTrigger::Unit("fetch-run@mirror.service".to_owned().try_into().unwrap())
+    );
+    assert!(instance.trigger_drop_ins.is_empty());
 }

@@ -289,7 +289,16 @@ showed, and the build failed with no warning anywhere.
   read as no local trigger. A local trigger is a unit file under
   `/etc/systemd/system` with no vendor file (`local_trigger_missing`); a
   staged file at its path, a generated one included, or a package in the
-  image that owns it, provides it.
+  image that owns it, provides it. On the collector side
+  (`scheduled.rs`, `timer_trigger`), drop-ins are selected with the
+  `[Install]` reader's `selected_drop_ins`, so `Unit=` and `[Install]`
+  cannot disagree on load order; for an instance timer that includes the
+  template's `<prefix>@.timer.d`. An instance timer has no timer file, so
+  `scan_instance_timers` describes each instance linked under `/etc`
+  (the units inspector's `read_host_links`, the links instances are found
+  by) from its template's file, once per root the template sits under.
+  Without that description, every carried instance timer `enable` would
+  decline as `TimerTriggerUnresolved`.
 - `GeneratedNameCollision { name, reserved_by }`: a generated request
   whose files the stager withheld because a collected unit, `name`, has
   one file's name. A FIXME, with exclude advice for `Reservation::Row`

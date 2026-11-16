@@ -6381,6 +6381,96 @@ fn t37_timers_whose_trigger_is_provided_are_carried() {
     assert!(acts(&cf, "mask", "report.timer"), "mask:\n{cf}");
 }
 
+const WORKER_INSTANCE_TIMER: &str = "worker@a.timer";
+const WORKER_UNIT_DROP_IN: &str = "/etc/systemd/system/worker@.timer.d/10-unit.conf";
+
+/// The local template `worker@.timer`, whose `[Timer]` adds `timer_extra`,
+/// with `worker@.service` and `other@.service`, and its instance
+/// `worker@a.timer` enabled by its link under `/etc` alone.
+fn t37_instance_host(timer_extra: &str) -> UnitHost {
+    let host = UnitHost::new()
+        .base_package("glibc")
+        .unit("worker@.timer", "indirect")
+        .unit("worker@.service", "static")
+        .unit("other@.service", "static")
+        .preset("disable *")
+        .etc_unit(
+            "worker@.timer",
+            &format!(
+                "[Unit]\nDescription=Worker %i\n[Timer]\nOnCalendar=daily\n{timer_extra}\
+                 [Install]\nWantedBy=timers.target\n"
+            ),
+        )
+        .etc_unit(
+            "worker@.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/worker %i\n",
+        )
+        .etc_unit(
+            "other@.service",
+            "[Service]\nType=oneshot\nExecStart=/usr/local/bin/other %i\n",
+        );
+    instance_link(
+        host,
+        "/etc/systemd/system",
+        "timers.target",
+        WORKER_INSTANCE_TIMER,
+        &etc_path("worker@.timer"),
+    )
+}
+
+/// The description recorded for `worker@a.timer`.
+fn worker_timer(snap: &InspectionSnapshot) -> &inspectah_core::types::scheduled::SystemdTimer {
+    snap.scheduled_tasks
+        .as_ref()
+        .and_then(|st| st.systemd_timers.iter().find(|t| t.name == "worker@a"))
+        .expect("presence: worker@a.timer's description")
+}
+
+/// T37's scan-built instance case through the real inspectors (Task 5.1a):
+/// an enabled instance timer, found by its link, is described from its
+/// local template with its trigger expanded for the instance, from the
+/// template's file or from a drop-in in the template's `<prefix>@.timer.d`,
+/// which is then the trigger's evidence and a row refine can exclude. Its
+/// enable is still declined by the phase 4 placeholder: the omissions this
+/// trigger leads to (`TimerTriggerNotStaged` with the trigger's file
+/// excluded, `TimerTriggerEvidenceChanged` with the drop-in excluded) are
+/// asserted once Task 5.2 carries instances.
+#[test]
+fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
+    for (extra, trigger) in [
+        ("", "worker@a.service"),
+        ("Unit=other@%i.service\n", "other@a.service"),
+    ] {
+        let snap = scan(t37_instance_host(extra));
+        let timer = worker_timer(&snap);
+        assert_eq!(timer.trigger, trigger_unit(trigger), "{extra:?}");
+        assert!(timer.trigger_drop_ins.is_empty(), "{extra:?}");
+        assert_eq!(timer.source, "local");
+        assert_eq!(timer.description, "Worker %i");
+        assert_eq!(
+            change(&snap, WORKER_INSTANCE_TIMER).current_state(),
+            UnitState::Enabled
+        );
+        assert_placeholder_omits(&snap, WORKER_INSTANCE_TIMER, extra);
+    }
+
+    let snap =
+        scan(t37_instance_host("").file(WORKER_UNIT_DROP_IN, "[Timer]\nUnit=other@%i.service\n"));
+    let timer = worker_timer(&snap);
+    assert_eq!(timer.trigger, trigger_unit("other@a.service"));
+    assert_eq!(timer.trigger_drop_ins, [WORKER_UNIT_DROP_IN]);
+    let mut refine = session(&snap);
+    refine
+        .apply(set_include(
+            ItemId::DropIn {
+                path: WORKER_UNIT_DROP_IN.into(),
+            },
+            false,
+        ))
+        .expect("the template drop-in is a row refine can exclude");
+    assert_placeholder_omits(&snap, WORKER_INSTANCE_TIMER, "drop-in");
+}
+
 // ---------------------------------------------------------------------
 // § 10.2 "Never the machine-id" (T33).
 // ---------------------------------------------------------------------

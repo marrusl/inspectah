@@ -22,9 +22,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 mod also;
-mod install;
+pub(crate) mod install;
 mod instance;
-mod links;
+pub(crate) mod links;
 mod resolve;
 pub(crate) mod specifiers;
 
