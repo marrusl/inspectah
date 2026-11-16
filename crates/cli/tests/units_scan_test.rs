@@ -7179,6 +7179,136 @@ fn name(unit: &str) -> UnitName {
     UnitName::try_from(unit.to_owned()).expect("a unit name")
 }
 
+/// A unit with some of the links its `[Install]` names and not others,
+/// and two links under `/etc` its section does not name, a `.wants` link
+/// and an alias (Mark Russell, 2026-11-15): the named link is
+/// `PartialInstall`, with its "Present:" line, and each unnamed one is
+/// `NotInInstall`, with the hand-made text, in the snapshot, refine's
+/// `manual_links` and both exports. The unit has no state change.
+#[test]
+fn a_partial_unit_reports_a_link_its_section_does_not_name_as_hand_made() {
+    const UNIT: &str = "part.service";
+    let snap = scan(
+        UnitHost::new()
+            .unit(UNIT, "enabled")
+            .vendor_unit(
+                UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target graphical.target\n",
+                None,
+            )
+            .link(
+                "/etc/systemd/system/multi-user.target.wants/part.service",
+                "/usr/lib/systemd/system/part.service",
+            )
+            .link(
+                "/etc/systemd/system/rescue.target.wants/part.service",
+                "/usr/lib/systemd/system/part.service",
+            )
+            .link(
+                "/etc/systemd/system/part-alias.service",
+                "/usr/lib/systemd/system/part.service",
+            ),
+    );
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    let mut found: Vec<_> = links_of(&snap)
+        .iter()
+        .map(|l| (l.relation, l.parent.as_str(), l.unit.as_str(), l.cause))
+        .collect();
+    found.sort_by_key(|(_, parent, ..)| *parent);
+    assert_eq!(
+        found,
+        [
+            (
+                LinkRelation::Wants,
+                "multi-user.target",
+                UNIT,
+                ManualLinkCause::PartialInstall
+            ),
+            (
+                LinkRelation::Alias,
+                "part-alias.service",
+                UNIT,
+                ManualLinkCause::NotInInstall
+            ),
+            (
+                LinkRelation::Wants,
+                "rescue.target",
+                UNIT,
+                ManualLinkCause::NotInInstall
+            ),
+        ]
+    );
+    let blocks = [
+        (
+            "multi-user.target",
+            [
+                "# Advisory: part.service has some of the links its [Install] section names and \
+                 not others, so neither enable nor disable reproduces the source host. Not \
+                 carried. Present: multi-user.target.wants/part.service."
+                    .to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'multi-user.target' 'part.service'"
+                    .to_owned(),
+            ],
+        ),
+        (
+            "rescue.target",
+            [
+                "# Advisory: rescue.target.wants/part.service is a link made by hand on the \
+                 source host (the unit's [Install] section does not name rescue.target). Not \
+                 carried."
+                    .to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'rescue.target' 'part.service'"
+                    .to_owned(),
+            ],
+        ),
+        (
+            "part-alias.service",
+            [
+                "# Advisory: part-alias.service is a link to part.service made by hand on the \
+                 source host (the unit's [Install] section does not name part-alias.service). \
+                 Not carried."
+                    .to_owned(),
+                "#   No systemctl verb but enable makes an alias link. To carry it, make the \
+                 link in the Containerfile after the configuration COPY, or add \
+                 Alias=part-alias.service in a drop-in for part.service and run systemctl \
+                 enable on part.service after that COPY, which also makes every other link its \
+                 [Install] section and Also= name: check those first."
+                    .to_owned(),
+            ],
+        ),
+    ];
+    let refine = session(&snap);
+    let rows = &refine.decisions().manual_links;
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    for (parent, expected) in &blocks {
+        let row = rows
+            .iter()
+            .find(|r| r.parent.as_str() == *parent)
+            .unwrap_or_else(|| panic!("{parent}: a refine row: {rows:?}"));
+        assert_eq!(&row.advisories, expected, "{parent}: the refine row");
+    }
+    for (route, containerfile) in both_routes(&snap) {
+        for (parent, expected) in &blocks {
+            assert_eq!(
+                block_from(&containerfile, &expected[0]),
+                expected,
+                "{route} {parent}:\n{containerfile}"
+            );
+        }
+        assert!(
+            !containerfile.contains("Present: rescue.target")
+                && !containerfile.contains("Present: part-alias.service"),
+            "{route}: an unnamed link is not Present:\n{containerfile}"
+        );
+        assert!(
+            only_comments_name(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// T23: a `multi-user.target.wants/backup.service` link to a unit with no
 /// `[Install]`. The `StaticUnit` link and its refine row exist first; then
 /// the advisory holds § 10.9's text and the `add-wants` line on the scan

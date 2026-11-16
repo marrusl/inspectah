@@ -318,9 +318,10 @@ pub(crate) struct LinkFindings {
 /// - With no section, or a `Known` one that names no link, each link under
 ///   `/etc` is a `StaticUnit` link.
 /// - With a `Known` section that names links, a link outside them is a
-///   `NotInInstall` link when the unit is `Enabled` or `Disabled`; when
-///   neither verb reproduces the links, each link under `/etc` is a
-///   `PartialInstall` link.
+///   `NotInInstall` link. When the unit is `Enabled` or `Disabled` that is
+///   all; when neither verb reproduces the links, each link under `/etc`
+///   the section names is a `PartialInstall` link (Mark Russell,
+///   2026-11-15).
 /// - With an `Undetermined` section, each link under `/etc` is an
 ///   `Undetermined` link with its reason. The unit has one
 ///   [`UndeterminedInstall`] when it assigns `Also=` or has an install file
@@ -374,7 +375,17 @@ pub(crate) fn link_findings(
                     ManualLinkCause::NotInInstall,
                     &mut admin.iter().filter(|link| !expected.contains(link)),
                 ),
-                None => report(ManualLinkCause::PartialInstall, &mut admin.iter()),
+                None => admin
+                    .iter()
+                    .flat_map(|link| {
+                        let cause = if expected.contains(link) {
+                            ManualLinkCause::PartialInstall
+                        } else {
+                            ManualLinkCause::NotInInstall
+                        };
+                        report(cause, &mut std::iter::once(link))
+                    })
+                    .collect(),
             };
             LinkFindings {
                 state,
@@ -1191,6 +1202,36 @@ mod tests {
         assert_eq!(
             found(&partial),
             [(LinkRelation::Wants, "multi-user.target", PartialInstall)]
+        );
+        // A partial unit's link the section does not name, a `.wants` link
+        // or an alias, is not in the section (Mark Russell, 2026-11-15).
+        let partial_and_more = link_findings(
+            &unit("a.service"),
+            &section(
+                &["multi-user.target", "graphical.target"],
+                &[],
+                &["a-alias.service", "b-alias.service"],
+            ),
+            &host_with(
+                "a.service",
+                vec![
+                    wants("multi-user.target"),
+                    rescue.clone(),
+                    alias("a-alias.service"),
+                    alias("c-alias.service"),
+                ],
+            ),
+            &[],
+        );
+        assert_eq!(partial_and_more.state, None);
+        assert_eq!(
+            found(&partial_and_more),
+            [
+                (LinkRelation::Wants, "multi-user.target", PartialInstall),
+                (LinkRelation::Wants, "rescue.target", NotInInstall),
+                (LinkRelation::Alias, "a-alias.service", PartialInstall),
+                (LinkRelation::Alias, "c-alias.service", NotInInstall),
+            ]
         );
 
         // `Undetermined`: each link carries the reason; the record comes

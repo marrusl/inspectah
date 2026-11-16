@@ -164,7 +164,11 @@ directory. A drop-in there that cannot be decoded counts as a hit.
   `Undetermined` (with its reason) or `HostDevice` (an instance of
   `HOST_DEVICE_TEMPLATES`, never carried). § 7.4's comparison adds
   `HostInstallOnly` and `VendorInstallOnly`, and relation `Also` for an
-  `Also=` name only one side assigns.
+  `Also=` name only one side assigns. `PartialInstall` is only for a link
+  the section names: a partial unit's link it does not name is
+  `NotInInstall`, as for an `Enabled` or `Disabled` unit, so the
+  "Present:" line never lists a link the section does not make (Mark
+  Russell, 2026-11-15).
 - **`UndeterminedInstall`**, one per unit, for an `Undetermined` section
   that assigns `Also=` or has an install file under `/etc`. Such a unit has
   no state and no row, so the record is what keeps it from disappearing
