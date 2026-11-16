@@ -10561,6 +10561,31 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// § 7.5 and rule 6 through the scan: a configuration path written with
+/// `%E` (`/etc`) is required and gates the enable: carried while the file
+/// is in the export, omitted naming the file when it is excluded.
+#[test]
+fn a_configuration_path_under_e_gates_the_enable() {
+    const UNIT: &str = "t@site.service";
+    const CONF: &str = "/etc/t/site.conf";
+    let snap = scan(t_reads_host(
+        "EnvironmentFile=%E/t/%i.conf\nExecStart=/usr/bin/t",
+        &[(CONF, "PORT=1\n")],
+    ));
+    assert_eq!(change(&snap, UNIT).required_config, [CONF]);
+    assert_instance_carried(&snap, UNIT, "staged");
+    let containerfile = containerfile_in(&exported_after(&snap, &[(config_item(CONF), false)]));
+    assert_eq!(
+        omitted(&containerfile, UNIT),
+        Some(config_omitted(UNIT, CONF, "is excluded from the export").as_str()),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+}
+
 /// The unknown-needs warning names the unit, the setting and the file it
 /// is in, with its line, and never the value, which can hold a credential
 /// the redaction pass never sees in a warning. A command line holding a

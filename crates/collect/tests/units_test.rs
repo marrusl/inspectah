@@ -6143,6 +6143,74 @@ fn an_assignment_systemd_ignores_removes_nothing() {
     }
 }
 
+/// § 7.5: a single-path replacement whose value holds a directory
+/// specifier the reader expands (`WorkingDirectory=%S/w`, which is
+/// `/var/lib/w`) is one systemd accepts. It replaces the template's
+/// `WorkingDirectory=/etc/w/%i`, so nothing is required, and the drop-in
+/// that removed the path joins `install_drop_ins` as an overriding
+/// drop-in. Control: `%h/w`, whose acceptance inspectah cannot tell, is
+/// not applied: the earlier path stays required and the drop-in is not
+/// recorded.
+#[test]
+fn a_directory_specifier_replacement_overrides_the_earlier_path() {
+    const UNIT: &str = "worker@site.service";
+    let drop_in_path = format!("{ETC}/worker@site.service.d/10-override.conf");
+    let scan_with = |value: &str| {
+        let exec = with_drop_in(
+            instance_host(
+                "worker@.service",
+                &template_with("WorkingDirectory=/etc/w/%i\nExecStart=/usr/bin/worker\n"),
+                UNIT,
+            )
+            .with_dir_entry(ETC, "worker@site.service.d"),
+            &format!("{ETC}/worker@site.service.d"),
+            "10-override.conf",
+            &format!("[Service]\nWorkingDirectory={value}\n"),
+        );
+        let (section, warnings) = scan(&exec);
+        let change = section
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == UNIT)
+            .unwrap_or_else(|| panic!("presence: {UNIT}'s state change: {warnings:?}"))
+            .clone();
+        (change.required_config, change.install_drop_ins)
+    };
+    assert_eq!(
+        scan_with("%S/w"),
+        (Vec::<String>::new(), vec![drop_in_path.clone()]),
+        "%S/w"
+    );
+    assert_eq!(
+        scan_with("%h/w"),
+        (vec!["/etc/w/site".to_owned()], Vec::<String>::new()),
+        "%h/w"
+    );
+}
+
+/// § 7.5: a path written with the system manager's `%E` (`/etc`) and `%i`
+/// is a `required_config` entry like one written out, so it gates the
+/// instance's enable (rule 6). Control: the same path written as
+/// `/etc/w/%i.conf` gives the same entry.
+#[test]
+fn a_configuration_path_under_e_is_required() {
+    for service in [
+        "EnvironmentFile=%E/w/%i.conf\nExecStart=/usr/bin/worker\n",
+        "EnvironmentFile=/etc/w/%i.conf\nExecStart=/usr/bin/worker\n",
+    ] {
+        let (section, warnings) = scan(&instance_host(
+            "worker@.service",
+            &template_with(service),
+            "worker@site.service",
+        ));
+        assert_eq!(
+            needs_of(&section, "worker@site.service"),
+            (vec!["/etc/w/site.conf".to_owned()], vec![]),
+            "{service}: {warnings:?}"
+        );
+    }
+}
+
 /// § 7.5: an empty `StateDirectory=` clears the data directories before
 /// it. Control: without the reset the directory is data.
 #[test]
