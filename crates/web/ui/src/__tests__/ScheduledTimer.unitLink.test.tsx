@@ -182,7 +182,7 @@ describe("scheduled timer row", () => {
     const list = await openScheduledTasks();
     await userEvent.click(within(list).getByRole("link", { name: TIMER_UNIT }));
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Services" }),
+      await screen.findByRole("heading", { level: 2, name: "Systemd units" }),
     ).toBeInTheDocument();
     // The app reveals and focuses the row it was sent to.
     const row = await screen.findByTestId(`service-item-${TIMER_UNIT}`);
@@ -195,7 +195,7 @@ describe("scheduled timer row", () => {
       within(list).getByRole("link", { name: ESCAPED_UNIT }),
     );
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Services" }),
+      await screen.findByRole("heading", { level: 2, name: "Systemd units" }),
     ).toBeInTheDocument();
     const row = await screen.findByTestId(`service-item-${ESCAPED_UNIT}`);
     await waitFor(() => expect(row).toHaveFocus());

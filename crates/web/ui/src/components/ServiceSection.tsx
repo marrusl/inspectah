@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
   ServiceDecisionDto,
@@ -20,6 +20,20 @@ import {
   triageBucketToAttention,
   extractTriageBucket,
 } from "./attentionUtils";
+import {
+  GROUP_ORDER,
+  GROUP_TITLES,
+  followUpFlagText,
+  groupUnits,
+  keyFields,
+  showGroups,
+  type GroupId,
+  type ReportedRow,
+  type RowKey,
+  type ShowState,
+  type UnitBranch,
+} from "./unitOutcome";
+import { UnitGroup } from "./UnitGroup";
 
 export interface ServiceSectionProps {
   services: ServiceDecisionDto[];
@@ -76,21 +90,31 @@ function causeName(cause: ManualLinkCause): string {
   return typeof cause === "string" ? cause : "undetermined";
 }
 
-/** Group drop-ins by their parent unit name. */
-function groupDropinsByUnit(
-  dropins: DropInDecisionDto[],
-): Map<string, DropInDecisionDto[]> {
-  const map = new Map<string, DropInDecisionDto[]>();
-  for (const d of dropins) {
-    const existing = map.get(d.unit);
-    if (existing) {
-      existing.push(d);
-    } else {
-      map.set(d.unit, [d]);
-    }
-  }
-  return map;
-}
+/** § 7 string 1: the section's accessible name. */
+const SECTION_NAME = "Systemd units";
+
+/** § 7 string 6, under the Reported, not carried header. */
+const REPORTED_DESCRIPTION =
+  "inspectah reports these and does not carry them. No toggle: the lines under each row are the Containerfile's comments for it.";
+
+/** § 7 string 11, under the default target row. */
+const DEFAULT_TARGET_EXPLANATION =
+  "The target the source host boots to. Included, the image boots to it too.";
+
+/** § 7 string 12: no row but the default target. */
+const EMPTY_WITH_TARGET = "No other unit differs from its preset, and no drop-in was found.";
+
+/** § 7 string 13: no row at all. */
+const EMPTY_SECTION = "No unit differs from its preset, and no drop-in was found.";
+
+/** "All", with no query and no pin: the section has no filter bar yet. */
+const SHOW_ALL: ShowState = { filter: "all", query: "", pins: new Set() };
+
+/** Every group open. */
+const NONE_COLLAPSED = Object.fromEntries(GROUP_ORDER.map((id) => [id, false])) as Record<
+  GroupId,
+  boolean
+>;
 
 const LEVEL_BORDER: Record<string, string> = {
   investigate: "3px solid var(--pf-t--global--color--status--danger--default)",
@@ -144,6 +168,8 @@ function badgeTextForTriage(triage: TriageTag): string | null {
 
 interface DropInRowProps {
   dropin: DropInDecisionDto;
+  /** The row key (§ 6.11), carried in `data-unit-key`. */
+  unitKey: RowKey;
   /** The parent service row is excluded, so this drop-in cannot apply. */
   parentExcluded: boolean;
   /** The parent service row is locked, which locks its drop-ins too. */
@@ -156,6 +182,7 @@ interface DropInRowProps {
 
 function DropInRow({
   dropin: di,
+  unitKey,
   parentExcluded,
   parentLocked,
   isInstallDropIn = false,
@@ -198,6 +225,7 @@ function DropInRow({
       aria-describedby={diLocked ? lockedReasonId : undefined}
       tabIndex={diLocked ? 0 : -1}
       data-testid={`dropin-item-${di.path}`}
+      data-unit-key={unitKey}
       data-locked={diLocked ? "true" : undefined}
       className={`inspectah-decision-row inspectah-service-dropin${diLocked ? " inspectah-decision-row--locked" : ""}`}
       style={{
@@ -324,6 +352,7 @@ function DropInRow({
 
 interface MountFindingRowProps {
   finding: MountFindingDto;
+  unitKey: RowKey;
   onNavigateToConfig?: (path: string) => void;
 }
 
@@ -333,7 +362,7 @@ interface MountFindingRowProps {
  * the export decides nothing here. The unit file is decided on its config
  * row, which `unit_file_path` names.
  */
-function MountFindingRow({ finding: f, onNavigateToConfig }: MountFindingRowProps) {
+function MountFindingRow({ finding: f, unitKey, onNavigateToConfig }: MountFindingRowProps) {
   const advisoriesId = `mount-finding-advisories-${f.unit}`;
   const path = f.unit_file_path;
   return (
@@ -343,6 +372,7 @@ function MountFindingRow({ finding: f, onNavigateToConfig }: MountFindingRowProp
       aria-describedby={describedBy(f.advisories.length > 0 && advisoriesId)}
       tabIndex={-1}
       data-testid={`mount-finding-${f.unit}`}
+      data-unit-key={unitKey}
       className="inspectah-decision-row inspectah-mount-finding"
     >
       <div className="inspectah-decision-row__main">
@@ -486,7 +516,7 @@ function AdvisoryLines({
  * its relation, its parent and the export's lines, as given. No toggle
  * and no keyboard action: the export decides nothing here.
  */
-function ManualLinkRow({ link }: { link: ManualLinkView }) {
+function ManualLinkRow({ link, unitKey }: { link: ManualLinkView; unitKey: RowKey }) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
   const notAppliedId = `${baseId}-not-applied`;
@@ -501,6 +531,7 @@ function ManualLinkRow({ link }: { link: ManualLinkView }) {
       )}
       tabIndex={-1}
       data-testid={`manual-link-${linkIdentity(link)}`}
+      data-unit-key={unitKey}
       data-cause={causeName(link.cause)}
       className="inspectah-decision-row inspectah-manual-link"
     >
@@ -538,7 +569,13 @@ function ManualLinkRow({ link }: { link: ManualLinkView }) {
  * files and the export's block, as given. No toggle and no keyboard
  * action.
  */
-function UndeterminedInstallRow({ record: r }: { record: UndeterminedInstallView }) {
+function UndeterminedInstallRow({
+  record: r,
+  unitKey,
+}: {
+  record: UndeterminedInstallView;
+  unitKey: RowKey;
+}) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
   const notAppliedId = `${baseId}-not-applied`;
@@ -553,6 +590,7 @@ function UndeterminedInstallRow({ record: r }: { record: UndeterminedInstallView
       )}
       tabIndex={-1}
       data-testid={`undetermined-install-${r.unit}`}
+      data-unit-key={unitKey}
       data-reason={r.reason}
       className="inspectah-decision-row inspectah-undetermined-install"
     >
@@ -589,6 +627,7 @@ function UndeterminedInstallRow({ record: r }: { record: UndeterminedInstallView
 
 interface DefaultTargetRowProps {
   target: DefaultTargetView;
+  unitKey: RowKey;
   isPending: boolean;
   onToggle: (currentInclude: boolean) => void;
 }
@@ -597,7 +636,7 @@ interface DefaultTargetRowProps {
  * The default target the export sets with `systemctl set-default`, and
  * its toggle. `declined` is the export's reason when it writes no line.
  */
-function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowProps) {
+function DefaultTargetRow({ target: t, unitKey, isPending, onToggle }: DefaultTargetRowProps) {
   const declinedId = "declined-default-target";
   return (
     <div
@@ -605,6 +644,7 @@ function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowPr
       aria-label={t.target}
       tabIndex={0}
       data-testid="default-target"
+      data-unit-key={unitKey}
       data-locked={t.locked ? "true" : undefined}
       className={`inspectah-decision-row${t.locked ? " inspectah-decision-row--locked" : ""}`}
       onKeyDown={(e) => {
@@ -632,8 +672,10 @@ function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowPr
         </div>
         <div role="gridcell" className="inspectah-decision-row__name">
           <span data-testid="default-target-name">{t.target}</span>
-          <span className="inspectah-unit-kind">default target</span>
         </div>
+      </div>
+      <div className="inspectah-decision-row__helper-text inspectah-unit-note">
+        {DEFAULT_TARGET_EXPLANATION}
       </div>
       {t.declined && (
         <RowNote
@@ -645,6 +687,240 @@ function DefaultTargetRow({ target: t, isPending, onToggle }: DefaultTargetRowPr
       )}
     </div>
   );
+}
+
+interface UnitBranchViewProps {
+  branch: UnitBranch;
+  /** Holds the section's one tab stop (today's rule: the first unit row, when there is no target). */
+  isTabStop: boolean;
+  pendingKeys: ReadonlySet<string>;
+  onToggleService: (unit: string, currentInclude: boolean) => void;
+  onToggleDropin: (path: string, currentInclude: boolean) => void;
+}
+
+/** A unit row and the drop-ins nested under it (§ 6.2, § 6.12). */
+function UnitBranchView({
+  branch,
+  isTabStop,
+  pendingKeys,
+  onToggleService,
+  onToggleDropin,
+}: UnitBranchViewProps) {
+  const svc = branch.head.record.data;
+  const bucket = extractTriageBucket(svc.triage);
+  const badge = badgeTextForTriage(svc.triage);
+  const level = triageBucketToAttention(svc.triage);
+  const isPending = pendingKeys.has(serviceKey(svc.unit));
+  const svcLocked = svc.locked === true;
+  const borderLeft = LEVEL_BORDER[bucket] ?? "none";
+  // A locked row shows its reason in the badge; an unlocked one, such
+  // as a runtime updater excluded by default, under the row.
+  const attentionId = `attention-service-${svc.unit}`;
+  // A scanned protected unit's attention_reason and its declined text
+  // are the same served sentence: show it once, as the decline.
+  const attention =
+    svcLocked || svc.attention_reason === svc.declined?.text
+      ? null
+      : (svc.attention_reason ?? null);
+  const declinedId = `declined-service-${svc.unit}`;
+  // What an instance needs (§ 11.1): its template, the configuration
+  // its enable needs and the data the image does not carry. Any
+  // advisory about them is already in attention_reason.
+  const instanceOfId = `instance-of-${svc.unit}`;
+  const requiredConfigId = `required-config-${svc.unit}`;
+  const dataPathsId = `data-paths-${svc.unit}`;
+
+  return (
+    <div data-testid={`service-group-${svc.unit}`}>
+      {/* Parent service row */}
+      <div
+        role="row"
+        aria-label={svc.unit}
+        tabIndex={isTabStop ? 0 : -1}
+        data-testid={`service-item-${svc.unit}`}
+        data-unit-key={branch.head.rowKey}
+        data-locked={svcLocked ? "true" : undefined}
+        className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
+        style={{ borderLeft }}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (svcLocked) return;
+          if (e.key === " " || e.key === "x") {
+            e.preventDefault();
+            onToggleService(svc.unit, svc.include);
+          }
+        }}
+      >
+        <div className="inspectah-decision-row__main">
+          <div role="gridcell" className="inspectah-decision-row__toggle">
+            <input
+              type="checkbox"
+              role="checkbox"
+              id={`switch-service-${svc.unit}`}
+              checked={svc.include}
+              onChange={() => onToggleService(svc.unit, svc.include)}
+              disabled={isPending || svcLocked}
+              aria-label={
+                svcLocked
+                  ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
+                  : `Toggle ${svc.unit}`
+              }
+              aria-describedby={describedBy(
+                svcLocked && `locked-reason-service-${svc.unit}`,
+                attention && attentionId,
+                svc.declined && declinedId,
+                svc.instance_of && instanceOfId,
+                svc.required_config.length > 0 && requiredConfigId,
+                svc.data_paths.length > 0 && dataPathsId,
+              )}
+              style={{ minWidth: 20, minHeight: 20 }}
+            />
+          </div>
+          <div role="gridcell" className="inspectah-decision-row__name">
+            <span>{svc.unit}</span>
+            <span
+              className="inspectah-unit-kind"
+              data-testid={`service-kind-${svc.unit}`}
+            >
+              {svc.kind}
+            </span>
+            {svc.owning_package && (
+              <span
+                style={{
+                  fontSize: "var(--pf-t--global--font--size--xs)",
+                  opacity: 0.6,
+                  marginLeft: "var(--pf-t--global--spacer--xs)",
+                }}
+              >
+                ({svc.owning_package})
+              </span>
+            )}
+            <span
+              data-testid={`service-state-${svc.unit}`}
+              style={{
+                fontSize: "var(--pf-t--global--font--size--xs)",
+                opacity: 0.55,
+                marginLeft: "var(--pf-t--global--spacer--sm)",
+                fontStyle: "italic",
+              }}
+            >
+              {svc.current_state}
+              {svc.default_state && ` (preset: ${svc.default_state})`}
+            </span>
+          </div>
+          {badge && !svcLocked && (
+            <div
+              role="gridcell"
+              className="inspectah-decision-row__badge"
+            >
+              <Label color={attentionLabelColor(level)}>{badge}</Label>
+            </div>
+          )}
+          {svcLocked && (
+            <div
+              role="gridcell"
+              className="inspectah-decision-row__badge"
+              id={`locked-reason-service-${svc.unit}`}
+              data-testid={`locked-badge-service-${svc.unit}`}
+            >
+              <Label color="grey" isCompact>
+                {svc.attention_reason ?? "LOCKED"}
+              </Label>
+            </div>
+          )}
+        </div>
+        {attention && (
+          <RowNote id={attentionId} testId={attentionId} text={attention} />
+        )}
+        {svc.declined && (
+          <RowNote
+            id={declinedId}
+            testId={declinedId}
+            className={`inspectah-unit-declined inspectah-unit-declined--${svc.declined.renders}`}
+            text={svc.declined.text}
+          />
+        )}
+        {svc.also && svc.also.length > 0 && (
+          <div className="inspectah-unit-paths inspectah-unit-also">
+            <span className="inspectah-unit-paths__label">Also=</span>
+            {svc.also.map((m) => (
+              <span key={m.unit} data-testid="also-member">
+                <code data-testid="also-member-unit">{m.unit}</code>{" "}
+                <span className="inspectah-unit-state" data-testid="also-member-links">
+                  {m.links}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+        {svc.instance_of && (
+          <div
+            id={instanceOfId}
+            data-testid={instanceOfId}
+            className="inspectah-unit-paths"
+          >
+            <span className="inspectah-unit-paths__label">Instance of</span>{" "}
+            <code>{svc.instance_of}</code>
+          </div>
+        )}
+        {svc.required_config.length > 0 && (
+          <InstancePaths
+            id={requiredConfigId}
+            label="Needs configuration:"
+            pathTestId="required-config-path"
+            paths={svc.required_config}
+          />
+        )}
+        {svc.data_paths.length > 0 && (
+          <InstancePaths
+            id={dataPathsId}
+            label="Keeps data in:"
+            pathTestId="data-path"
+            paths={svc.data_paths}
+          />
+        )}
+      </div>
+
+      {/* Drop-in children */}
+      {branch.dropins.map((di) => (
+        <DropInRow
+          key={di.occurrenceKey}
+          dropin={di.record.data}
+          unitKey={di.rowKey}
+          parentExcluded={!svc.include}
+          parentLocked={svcLocked}
+          isInstallDropIn={svc.install_drop_ins?.includes(di.record.data.path) ?? false}
+          isPending={pendingKeys.has(dropinKey(di.record.data.path))}
+          onToggle={onToggleDropin}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** A reported row (§ 6.7): no toggle, its kind's row as before. */
+function ReportedRowView({
+  row,
+  onNavigateToConfig,
+}: {
+  row: ReportedRow;
+  onNavigateToConfig?: (path: string) => void;
+}) {
+  const { record } = row;
+  switch (record.kind) {
+    case "mount_finding":
+      return (
+        <MountFindingRow
+          finding={record.data}
+          unitKey={row.rowKey}
+          onNavigateToConfig={onNavigateToConfig}
+        />
+      );
+    case "manual_link":
+      return <ManualLinkRow link={record.data} unitKey={row.rowKey} />;
+    case "undetermined_install":
+      return <UndeterminedInstallRow record={record.data} unitKey={row.rowKey} />;
+  }
 }
 
 export function ServiceSection({
@@ -661,12 +937,29 @@ export function ServiceSection({
 }: ServiceSectionProps) {
   const { pendingKeys, runGuarded } = pendingGuard;
 
-  const dropinsByUnit = useMemo(() => groupDropinsByUnit(dropins), [dropins]);
+  // Keys are assigned once per view response, then grouped (§ 6.11, § 6.2).
+  const groups = useMemo(
+    () =>
+      groupUnits(
+        keyFields({
+          unit_states: services,
+          unit_dropins: dropins,
+          default_target: defaultTarget,
+          mount_findings: mountFindings,
+          manual_links: manualLinks,
+          undetermined_installs: undeterminedInstalls,
+        }),
+      ),
+    [services, dropins, defaultTarget, mountFindings, manualLinks, undeterminedInstalls],
+  );
+  const shown = useMemo(() => showGroups(groups, SHOW_ALL), [groups]);
 
-  const orphanDropins = useMemo(() => {
-    const units = new Set(services.map((s) => s.unit));
-    return dropins.filter((d) => !units.has(d.unit));
-  }, [services, dropins]);
+  // Every group opens on mount; the state goes with the section (§ 6.2).
+  const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
+  const toggleGroup = useCallback(
+    (id: GroupId) => setCollapsed((prev) => ({ ...prev, [id]: !prev[id] })),
+    [],
+  );
 
   const sendInclude = useCallback(
     (key: string, op: RefinementOp) => {
@@ -722,283 +1015,107 @@ export function ServiceSection({
     [sendInclude],
   );
 
-  if (
+  const noOtherRow =
     services.length === 0 &&
     dropins.length === 0 &&
     mountFindings.length === 0 &&
     manualLinks.length === 0 &&
-    undeterminedInstalls.length === 0 &&
-    !defaultTarget
-  ) {
-    return (
-      <div className="inspectah-service-section" data-testid="service-section">
-        <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
-          No service state changes detected.
-        </p>
-      </div>
-    );
-  }
+    undeterminedInstalls.length === 0;
+
+  // Today's tab stop: the target, else the first unit row.
+  const tabStop = defaultTarget
+    ? undefined
+    : shown.find((g) => g.branches.length > 0)?.branches[0].head.occurrenceKey;
 
   return (
     <div
       className="inspectah-service-section"
-      role="grid"
-      aria-label="Services"
+      role="region"
+      aria-label={SECTION_NAME}
       data-testid="service-section"
     >
-      {defaultTarget && (
-        <DefaultTargetRow
-          target={defaultTarget}
-          isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
-          onToggle={handleToggleDefaultTarget}
-        />
-      )}
+      {shown.map((group) => (
+        <UnitGroup
+          key={group.id}
+          groupId={group.id}
+          title={GROUP_TITLES[group.id]}
+          count={group.id === "default_target" ? undefined : group.count}
+          followUpText={group.followUp === null ? null : followUpFlagText(group.followUp)}
+          description={group.id === "reported" ? REPORTED_DESCRIPTION : undefined}
+          expanded={!collapsed[group.id]}
+          onToggle={() => toggleGroup(group.id)}
+        >
+          {group.target && (
+            <DefaultTargetRow
+              key={group.target.occurrenceKey}
+              target={group.target.record.data}
+              unitKey={group.target.rowKey}
+              isPending={pendingKeys.has(DEFAULT_TARGET_KEY)}
+              onToggle={handleToggleDefaultTarget}
+            />
+          )}
 
-      {services.map((svc, idx) => {
-        const unitDropins = dropinsByUnit.get(svc.unit) ?? [];
-        const bucket = extractTriageBucket(svc.triage);
-        const badge = badgeTextForTriage(svc.triage);
-        const level = triageBucketToAttention(svc.triage);
-        const isPending = pendingKeys.has(serviceKey(svc.unit));
-        const svcLocked = svc.locked === true;
-        const borderLeft = LEVEL_BORDER[bucket] ?? "none";
-        // A locked row shows its reason in the badge; an unlocked one, such
-        // as a runtime updater excluded by default, under the row.
-        const attentionId = `attention-service-${svc.unit}`;
-        // A scanned protected unit's attention_reason and its declined text
-        // are the same served sentence: show it once, as the decline.
-        const attention =
-          svcLocked || svc.attention_reason === svc.declined?.text
-            ? null
-            : (svc.attention_reason ?? null);
-        const declinedId = `declined-service-${svc.unit}`;
-        // What an instance needs (§ 11.1): its template, the configuration
-        // its enable needs and the data the image does not carry. Any
-        // advisory about them is already in attention_reason.
-        const instanceOfId = `instance-of-${svc.unit}`;
-        const requiredConfigId = `required-config-${svc.unit}`;
-        const dataPathsId = `data-paths-${svc.unit}`;
+          {group.branches.map((branch) => (
+            <UnitBranchView
+              key={branch.head.occurrenceKey}
+              branch={branch}
+              isTabStop={branch.head.occurrenceKey === tabStop}
+              pendingKeys={pendingKeys}
+              onToggleService={handleToggleService}
+              onToggleDropin={handleToggleDropin}
+            />
+          ))}
 
-        return (
-          <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
-            {/* Parent service row */}
-            <div
-              role="row"
-              aria-rowindex={idx + 1}
-              aria-label={svc.unit}
-              tabIndex={idx === 0 && !defaultTarget ? 0 : -1}
-              data-testid={`service-item-${svc.unit}`}
-              data-locked={svcLocked ? "true" : undefined}
-              className={`inspectah-decision-row${svcLocked ? " inspectah-decision-row--locked" : ""}`}
-              style={{ borderLeft }}
-              onKeyDown={(e) => {
-                if (e.target !== e.currentTarget) return;
-                if (svcLocked) return;
-                if (e.key === " " || e.key === "x") {
-                  e.preventDefault();
-                  handleToggleService(svc.unit, svc.include);
-                }
-              }}
-            >
-              <div className="inspectah-decision-row__main">
-                <div role="gridcell" className="inspectah-decision-row__toggle">
-                  <input
-                    type="checkbox"
-                    role="checkbox"
-                    id={`switch-service-${svc.unit}`}
-                    checked={svc.include}
-                    onChange={() => handleToggleService(svc.unit, svc.include)}
-                    disabled={isPending || svcLocked}
-                    aria-label={
-                      svcLocked
-                        ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
-                        : `Toggle ${svc.unit}`
-                    }
-                    aria-describedby={describedBy(
-                      svcLocked && `locked-reason-service-${svc.unit}`,
-                      attention && attentionId,
-                      svc.declined && declinedId,
-                      svc.instance_of && instanceOfId,
-                      svc.required_config.length > 0 && requiredConfigId,
-                      svc.data_paths.length > 0 && dataPathsId,
-                    )}
-                    style={{ minWidth: 20, minHeight: 20 }}
-                  />
-                </div>
-                <div role="gridcell" className="inspectah-decision-row__name">
-                  <span>{svc.unit}</span>
-                  <span
-                    className="inspectah-unit-kind"
-                    data-testid={`service-kind-${svc.unit}`}
-                  >
-                    {svc.kind}
-                  </span>
-                  {svc.owning_package && (
-                    <span
-                      style={{
-                        fontSize: "var(--pf-t--global--font--size--xs)",
-                        opacity: 0.6,
-                        marginLeft: "var(--pf-t--global--spacer--xs)",
-                      }}
-                    >
-                      ({svc.owning_package})
-                    </span>
-                  )}
-                  <span
-                    data-testid={`service-state-${svc.unit}`}
-                    style={{
-                      fontSize: "var(--pf-t--global--font--size--xs)",
-                      opacity: 0.55,
-                      marginLeft: "var(--pf-t--global--spacer--sm)",
-                      fontStyle: "italic",
-                    }}
-                  >
-                    {svc.current_state}
-                    {svc.default_state && ` (preset: ${svc.default_state})`}
-                  </span>
-                </div>
-                {badge && !svcLocked && (
-                  <div
-                    role="gridcell"
-                    className="inspectah-decision-row__badge"
-                  >
-                    <Label color={attentionLabelColor(level)}>{badge}</Label>
+          {/* Drop-ins whose unit has no state row: a unit at its preset, or one
+              with an undetermined or install-difference record, never reaches
+              `state_changes`, so without this block the drop-in row — which
+              owns the decision for a config path it shadows — would render
+              nowhere. It closes the group of the parent's kind (§ 6.8). */}
+          {group.orphans.length > 0 && (
+            <div data-testid="dropin-orphans">
+              <h3 className="inspectah-service-section__orphan-heading">
+                Other drop-in overrides
+              </h3>
+              <p className="inspectah-service-section__orphan-note">
+                These overrides have no unit-state decision row.
+              </p>
+              {group.orphans.map((block) => (
+                <div key={block.unit} data-testid={`dropin-orphan-group-${block.unit}`}>
+                  <div className="inspectah-service-section__orphan-unit">
+                    {block.unit}
                   </div>
-                )}
-                {svcLocked && (
-                  <div
-                    role="gridcell"
-                    className="inspectah-decision-row__badge"
-                    id={`locked-reason-service-${svc.unit}`}
-                    data-testid={`locked-badge-service-${svc.unit}`}
-                  >
-                    <Label color="grey" isCompact>
-                      {svc.attention_reason ?? "LOCKED"}
-                    </Label>
-                  </div>
-                )}
-              </div>
-              {attention && (
-                <RowNote id={attentionId} testId={attentionId} text={attention} />
-              )}
-              {svc.declined && (
-                <RowNote
-                  id={declinedId}
-                  testId={declinedId}
-                  className={`inspectah-unit-declined inspectah-unit-declined--${svc.declined.renders}`}
-                  text={svc.declined.text}
-                />
-              )}
-              {svc.also && svc.also.length > 0 && (
-                <div className="inspectah-unit-paths inspectah-unit-also">
-                  <span className="inspectah-unit-paths__label">Also=</span>
-                  {svc.also.map((m) => (
-                    <span key={m.unit} data-testid="also-member">
-                      <code data-testid="also-member-unit">{m.unit}</code>{" "}
-                      <span className="inspectah-unit-state" data-testid="also-member-links">
-                        {m.links}
-                      </span>
-                    </span>
+                  {block.dropins.map((di) => (
+                    <DropInRow
+                      key={di.occurrenceKey}
+                      dropin={di.record.data}
+                      unitKey={di.rowKey}
+                      parentExcluded={false}
+                      parentLocked={false}
+                      isPending={pendingKeys.has(dropinKey(di.record.data.path))}
+                      onToggle={handleToggleDropin}
+                    />
                   ))}
                 </div>
-              )}
-              {svc.instance_of && (
-                <div
-                  id={instanceOfId}
-                  data-testid={instanceOfId}
-                  className="inspectah-unit-paths"
-                >
-                  <span className="inspectah-unit-paths__label">Instance of</span>{" "}
-                  <code>{svc.instance_of}</code>
-                </div>
-              )}
-              {svc.required_config.length > 0 && (
-                <InstancePaths
-                  id={requiredConfigId}
-                  label="Needs configuration:"
-                  pathTestId="required-config-path"
-                  paths={svc.required_config}
-                />
-              )}
-              {svc.data_paths.length > 0 && (
-                <InstancePaths
-                  id={dataPathsId}
-                  label="Keeps data in:"
-                  pathTestId="data-path"
-                  paths={svc.data_paths}
-                />
-              )}
+              ))}
             </div>
+          )}
 
-            {/* Drop-in children */}
-            {unitDropins.map((di) => (
-              <DropInRow
-                key={di.path}
-                dropin={di}
-                parentExcluded={!svc.include}
-                parentLocked={svcLocked}
-                isInstallDropIn={svc.install_drop_ins?.includes(di.path) ?? false}
-                isPending={pendingKeys.has(dropinKey(di.path))}
-                onToggle={handleToggleDropin}
+          {group.reported
+            .flatMap((block) => block.rows)
+            .map((row) => (
+              <ReportedRowView
+                key={row.occurrenceKey}
+                row={row}
+                onNavigateToConfig={onNavigateToConfig}
               />
             ))}
-          </div>
-        );
-      })}
-
-      {mountFindings.map((f) => (
-        <MountFindingRow
-          key={f.unit}
-          finding={f}
-          onNavigateToConfig={onNavigateToConfig}
-        />
+        </UnitGroup>
       ))}
 
-      {manualLinks.map((link) => (
-        <ManualLinkRow key={linkIdentity(link)} link={link} />
-      ))}
-
-      {undeterminedInstalls.map((r) => (
-        // Not the bare unit name: service and mount rows beside it use it.
-        <UndeterminedInstallRow
-          key={JSON.stringify(["undetermined", r.unit])}
-          record={r}
-        />
-      ))}
-
-      {/* Drop-ins whose unit has no state row: a unit at its preset, or one
-          with an undetermined or install-difference record, never reaches
-          `state_changes`, so without this group the drop-in row — which
-          owns the decision for a config path it shadows — would render
-          nowhere. */}
-      {orphanDropins.length > 0 && (
-        <div data-testid="dropin-orphans">
-          <h3 className="inspectah-service-section__orphan-heading">
-            Other drop-in overrides
-          </h3>
-          <p className="inspectah-service-section__orphan-note">
-            These overrides have no unit-state decision row.
-          </p>
-          {[...groupDropinsByUnit(orphanDropins).entries()].map(
-            ([unit, unitDropins]) => (
-              <div key={unit} data-testid={`dropin-orphan-group-${unit}`}>
-                <div className="inspectah-service-section__orphan-unit">
-                  {unit}
-                </div>
-                {unitDropins.map((di) => (
-                  <DropInRow
-                    key={di.path}
-                    dropin={di}
-                    parentExcluded={false}
-                    parentLocked={false}
-                    isPending={pendingKeys.has(dropinKey(di.path))}
-                    onToggle={handleToggleDropin}
-                  />
-                ))}
-              </div>
-            ),
-          )}
-        </div>
+      {noOtherRow && (
+        <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
+          {defaultTarget ? EMPTY_WITH_TARGET : EMPTY_SECTION}
+        </p>
       )}
     </div>
   );

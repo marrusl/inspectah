@@ -50,7 +50,7 @@ const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
   config: "Configuration Files",
   configs: "Config Files",
-  units: "Services",
+  units: "Systemd units",
   containers: "Containers",
   compose: "Compose",
   network: "Network",
@@ -763,18 +763,11 @@ export function MainContent({
     const mountFindings = viewData ? viewData.mount_findings : [];
     const manualLinks = viewData ? viewData.manual_links : [];
     const undeterminedInstalls = viewData ? viewData.undetermined_installs : [];
-    const shadowCount = dropins.filter(
-      (d) => d.shadow_type === "full_shadow",
-    ).length;
-    const headerText =
-      shadowCount > 0
-        ? `${SECTION_LABELS.units} (${shadowCount} shadow override${shadowCount === 1 ? "" : "s"})`
-        : SECTION_LABELS.units;
-
+    // No shadow-override count: a full shadow has its own label on its row (§ 6.14).
     return (
       <>
         <Content>
-          <h2>{headerText}</h2>
+          <h2>{SECTION_LABELS.units}</h2>
         </Content>
         <ServiceSection
           services={services}

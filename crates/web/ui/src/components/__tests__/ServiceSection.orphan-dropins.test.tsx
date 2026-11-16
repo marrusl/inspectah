@@ -101,7 +101,9 @@ describe("ServiceSection drop-ins without a parent service row", () => {
 
   it("keeps the empty state when there are neither services nor drop-ins", () => {
     render(<ServiceSection {...defaultProps} />);
-    expect(screen.getByText(/no service state changes/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("No unit differs from its preset, and no drop-in was found."),
+    ).toBeInTheDocument();
   });
 
   it("does not duplicate a drop-in that already nests under its service", () => {

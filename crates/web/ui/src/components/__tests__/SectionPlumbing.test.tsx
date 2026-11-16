@@ -423,11 +423,11 @@ describe("MainContent: unit section", () => {
     );
     expect(screen.getByTestId("service-item-kdump.service")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
-      /^Services$/,
+      /^Systemd units$/,
     );
   });
 
-  it("counts shadow overrides from the full-shadow drop-ins", () => {
+  it("shows no shadow-override count in the heading", () => {
     render(
       <MainContent
         activeSection="units"
@@ -444,9 +444,9 @@ describe("MainContent: unit section", () => {
       />,
     );
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
-      "Services (1 shadow override)",
+      /^Systemd units$/,
     );
-    // Both drop-ins are listed; only the full shadow is counted.
+    // Both drop-ins are listed.
     expect(
       screen.getByTestId("dropin-item-/etc/systemd/system/sshd.service"),
     ).toBeInTheDocument();

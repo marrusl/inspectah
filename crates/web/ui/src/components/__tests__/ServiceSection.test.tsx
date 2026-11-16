@@ -116,7 +116,9 @@ describe("ServiceSection", () => {
   it("renders empty state when no services", () => {
     render(<ServiceSection {...defaultProps} />);
     expect(screen.getByTestId("service-section")).toBeInTheDocument();
-    expect(screen.getByText(/no service state changes/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("No unit differs from its preset, and no drop-in was found."),
+    ).toBeInTheDocument();
   });
 
   it("renders service rows with unit names", () => {
