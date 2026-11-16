@@ -145,17 +145,19 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
   and the same against a vendor drop-in and across the instance and
   template `.d`, with the G2 order above.
 
-- **Resets, as measured on RHEL 9 and 10:** an empty `WantedBy=` or
-  `Alias=` clears the values before it; an empty `Also=` clears nothing.
-  An empty `RequiredBy=` after a value is `Undetermined(RequiredByReset)`,
-  since its effect was not measured.
+- **Resets, as measured on RHEL 9 and 10:** an empty `WantedBy=`,
+  `RequiredBy=` or `Alias=` clears the values before it; an empty `Also=`
+  clears nothing. The `RequiredBy=` reset was measured on 2026-11-16
+  (`real-host-validation-runs.md`): an empty one in an `/etc` drop-in
+  leaves `enable` nothing to link, and one followed by a value links only
+  that value.
 - **Only the unit's own `.d` and, for an instance, its template's.** The
   type-wide (`service.d`) and dash-prefix (`a-.service.d`) directories
   apply to the unit's other sections but `enable` does not read
   `[Install]` there (measured), so `drop_in_dirs` never lists them and the
   reader skips a source from any other directory. An instance's needs are
   read from them all the same, through their own selection (below).
-- **`Undetermined`** for any `UpheldBy=`, that `RequiredBy=` reset, a
+- **`Undetermined`** for any `UpheldBy=`, a
   specifier other than `%i`, `%p`, `%N` and `%%`, or a value that is not a
   `UnitName`. `%I` is undetermined here: `systemctl enable` does not expand
   it (systemd's install expansion table, 252 and 257), while the scheduled

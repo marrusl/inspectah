@@ -1262,7 +1262,7 @@ mod tests {
 
         // `Undetermined`: each link carries the reason; the record comes
         // with an `/etc` install file or `Also=`, and then no state.
-        let reason = InstallUnknown::RequiredByReset;
+        let reason = InstallUnknown::Specifier;
         let undetermined = |assigns_also| InstallRead::Undetermined {
             reason,
             assigns_also,

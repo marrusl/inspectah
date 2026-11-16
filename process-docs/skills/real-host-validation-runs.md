@@ -2103,8 +2103,10 @@ resets on RHEL 10.** Unit under `/usr/lib`, drop-in under `/etc`:
 
 RHEL 9 prints `Unknown key name 'UpheldBy' in section 'Install',
 ignoring.` for every such line, links nothing and reads `static`. § 7.2
-declines the `RequiredBy=` reset as `Undetermined(RequiredByReset)`; § 17
-names this measurement as one that moves the reader to follow it.
+declined the `RequiredBy=` reset as `Undetermined(RequiredByReset)`; § 17
+names this measurement as one that moves the reader to follow it. The
+build after this run follows it: the `[Install]` reader resets
+`RequiredBy=` as it resets `WantedBy=`, and `RequiredByReset` is gone.
 
 **The additive sequence leaves an existing alias link alone.** In a fresh
 container of each base, for `bluetooth.service` (`WantedBy=bluetooth.target`,

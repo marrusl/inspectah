@@ -758,9 +758,6 @@ pub enum InstallUnknown {
     /// A value holds a specifier other than `%i`, `%p` or `%N`. `systemctl
     /// enable` does not expand `%I`.
     Specifier,
-    /// An empty `RequiredBy=` follows a `RequiredBy=` value in load order.
-    /// Whether it clears the value was not measured.
-    RequiredByReset,
     /// A value is not a unit name this model admits.
     ForeignName,
     /// The section assigns `UpheldBy=`, an empty assignment included.
@@ -2400,7 +2397,6 @@ mod tests {
     fn an_install_unknown_round_trips_by_its_snake_case_name() {
         for (reason, text) in [
             (InstallUnknown::Specifier, "\"specifier\""),
-            (InstallUnknown::RequiredByReset, "\"required_by_reset\""),
             (InstallUnknown::ForeignName, "\"foreign_name\""),
             (InstallUnknown::UpheldBy, "\"upheld_by\""),
             (InstallUnknown::Unreadable, "\"unreadable\""),

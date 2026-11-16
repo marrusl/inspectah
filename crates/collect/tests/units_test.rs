@@ -4351,9 +4351,11 @@ fn t23_hand_made_link_causes() {
 ///   a `StaticUnit` link, the drop-in shown collected first. Control:
 ///   without the drop-in the link is enable-made and reports nothing.
 /// - `RequiredBy=a.target` in a vendor unit, an `/etc` drop-in holding an
-///   empty `RequiredBy=`, and the `a.target.requires` link: an
-///   `Undetermined(RequiredByReset)` link, no state change, and one record
-///   naming the drop-in.
+///   empty `RequiredBy=`, and the `a.target.requires` link: the reset
+///   clears `RequiredBy=` as it clears `WantedBy=` (measured on RHEL 9 and
+///   10, 2026-11-16), so the link is a `StaticUnit` link and there is no
+///   undetermined record. Control: without the drop-in the link is
+///   enable-made and reports nothing.
 #[test]
 fn t24_reset_links() {
     let drop_in_dir = format!("{ETC}/app.service.d");
@@ -4398,7 +4400,7 @@ fn t24_reset_links() {
     let need_dir = format!("{ETC}/need.service.d");
     let required = with_drop_in(
         with_link_in(
-            unlinked_host(&[("need.service", "enabled")], "enable need.service\n")
+            unlinked_host(&[("need.service", "enabled")], "disable *\n")
                 .with_file(
                     &format!("{VENDOR}/need.service"),
                     "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
@@ -4413,32 +4415,42 @@ fn t24_reset_links() {
         "[Install]\nRequiredBy=\n",
     );
     let (section, _) = scan(&required);
-    let reason = InstallUnknown::RequiredByReset;
     assert_eq!(
         manual_links(&section),
         [(
             LinkRelation::Requires,
             "a.target",
             "need.service",
-            ManualLinkCause::Undetermined { reason }
+            ManualLinkCause::StaticUnit
         )]
     );
-    assert!(section.state_changes.is_empty());
-    assert_eq!(
-        undetermined(&section),
-        [(
-            "need.service",
-            reason,
-            vec![format!("{need_dir}/10-reset.conf").as_str()]
-        )]
+    assert!(undetermined(&section).is_empty());
+
+    let (control, _) = scan(&with_link_in(
+        unlinked_host(&[("need.service", "enabled")], "disable *\n").with_file(
+            &format!("{VENDOR}/need.service"),
+            "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
+        ),
+        ETC,
+        "a.target.requires",
+        "need.service",
+    ));
+    assert!(
+        control.manual_links.is_empty(),
+        "{:?}",
+        control.manual_links
     );
+    assert!(undetermined(&control).is_empty());
 }
 
 /// T40 through the scan, each a vendor unit under an `enable` preset:
-/// - `RequiredBy=a.target` with an `/etc` drop-in holding `RequiredBy=`
+/// - `RequiredBy=a.target` with an `/etc` drop-in holding `UpheldBy=`
 ///   and no link: the drop-in is collected, then no state change, no link
-///   and one record naming the unit, `RequiredByReset` and the drop-in;
-/// - the same with an `UpheldBy=` drop-in: the record with `UpheldBy`;
+///   and one record naming the unit, `UpheldBy` and the drop-in;
+/// - the same with a drop-in holding an empty `RequiredBy=`, which resets
+///   the value as an empty `WantedBy=` does: no state change and no
+///   record, and the `a.target.requires` link only the package's unit
+///   names is a `VendorInstallOnly` finding;
 /// - control: `UpheldBy=` in the unit's own file, no `/etc` file and no
 ///   link: a `Disabled` state change and no record; with one link: no
 ///   state change, the link, and no record;
@@ -4461,24 +4473,38 @@ fn t40_undetermined_installs() {
     };
     let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
     let drop_in = format!("{dir}/10-reset.conf");
-    for (text, reason) in [
-        ("[Install]\nRequiredBy=\n", InstallUnknown::RequiredByReset),
-        ("[Install]\nUpheldBy=a.target\n", InstallUnknown::UpheldBy),
-    ] {
-        let (section, _) = scan(&with_reset(host(required), text));
-        assert!(
-            drop_in_paths(&section).contains(&drop_in.as_str()),
-            "{reason:?}: {:?}",
-            drop_in_paths(&section)
-        );
-        assert!(section.state_changes.is_empty(), "{reason:?}");
-        assert!(section.manual_links.is_empty(), "{reason:?}");
-        assert_eq!(
-            undetermined(&section),
-            [("need.service", reason, vec![drop_in.as_str()])],
-            "{reason:?}"
-        );
-    }
+    let (section, _) = scan(&with_reset(
+        host(required),
+        "[Install]\nUpheldBy=a.target\n",
+    ));
+    assert!(
+        drop_in_paths(&section).contains(&drop_in.as_str()),
+        "{:?}",
+        drop_in_paths(&section)
+    );
+    assert!(section.state_changes.is_empty());
+    assert!(section.manual_links.is_empty());
+    assert_eq!(
+        undetermined(&section),
+        [(
+            "need.service",
+            InstallUnknown::UpheldBy,
+            vec![drop_in.as_str()]
+        )]
+    );
+
+    let (reset, _) = scan(&with_reset(host(required), "[Install]\nRequiredBy=\n"));
+    assert!(reset.state_changes.is_empty());
+    assert_eq!(
+        manual_links(&reset),
+        [(
+            LinkRelation::Requires,
+            "a.target",
+            "need.service",
+            ManualLinkCause::VendorInstallOnly
+        )]
+    );
+    assert!(undetermined(&reset).is_empty());
 
     let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
     let (no_link, _) = scan(&host(upheld));
@@ -5179,7 +5205,7 @@ fn each_member_links_value_comes_from_the_links() {
         ("hand-made.service", NO_INSTALL),
         ("also-only.service", "[Install]\nAlso=unlinked.service\n"),
         ("masked.service", WANTS_MULTI_USER),
-        ("undetermined.service", REQUIRED_BY_RESET),
+        ("undetermined.service", UNDETERMINED_SECTION),
         ("unsupported.service", WANTS_MULTI_USER),
     ];
     let also: Vec<&str> = members
@@ -5231,15 +5257,15 @@ fn each_member_links_value_comes_from_the_links() {
     );
 }
 
-/// An `[Install]` section whose `RequiredBy=` is reset after a value, which
-/// the reader records as `Undetermined(RequiredByReset)`.
-const REQUIRED_BY_RESET: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
-                                 RequiredBy=a.target\nRequiredBy=\n";
+/// An `[Install]` section with a specifier the reader does not expand,
+/// which it records as `Undetermined(Specifier)`.
+const UNDETERMINED_SECTION: &str = "[Service]\nExecStart=/bin/true\n\n[Install]\n\
+                                    WantedBy=%H.target\n";
 
 /// § 7.3: the walk does not continue through a member whose section could
-/// not be read. A member whose `RequiredBy=` is reset holds
-/// `Also=deep.service`: the member is `Other` and `deep.service` is not
-/// recorded. The control, the same member with a readable section, records
+/// not be read. A member whose section holds a specifier the reader does
+/// not expand, and `Also=deep.service`: the member is `Other` and
+/// `deep.service` is not recorded. The control, the same member with a readable section, records
 /// `deep.service`.
 #[test]
 fn the_also_walk_stops_at_a_member_whose_section_cannot_be_read() {
@@ -5265,7 +5291,7 @@ fn the_also_walk_stops_at_a_member_whose_section_cannot_be_read() {
         ]
     );
 
-    let unreadable = format!("{REQUIRED_BY_RESET}Also=deep.service\n");
+    let unreadable = format!("{UNDETERMINED_SECTION}Also=deep.service\n");
     let (section, _) = scan(&host(&unreadable));
     assert_eq!(
         also_of(&section, "owner.service"),

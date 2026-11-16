@@ -7379,9 +7379,9 @@ fn t24_type_wide_and_dash_prefix_drop_ins_are_not_install_files() {
 
 /// T24 resets, through the scan: a drop-in that resets `WantedBy=` and
 /// then assigns it is an install drop-in like any other. An empty
-/// `RequiredBy=` after `RequiredBy=a.target` makes the section
-/// undetermined: no state change and no enable (its advisory comes with
-/// the link findings). Control: without the drop-in, the unit is a state
+/// `RequiredBy=` after `RequiredBy=a.target` clears it, as an empty
+/// `WantedBy=` clears that key, so the section names no link: no state
+/// change and no enable. Control: without the drop-in, the unit is a state
 /// change and enabled.
 #[test]
 fn t24_resets_through_the_scan() {
@@ -8157,9 +8157,11 @@ fn t23_an_upholds_link_is_advised_and_never_carried() {
 ///   holding only `WantedBy=` and its `multi-user.target.wants` link: the
 ///   `StaticUnit` advisory and its `add-wants` line;
 /// - `RequiredBy=a.target` in a vendor unit, an empty `RequiredBy=` in an
-///   `/etc` drop-in and the `a.target.requires` link: the `Undetermined`
-///   advisory naming `RequiredByReset` in words, and the unit-level block
-///   naming the drop-in. No instruction names either unit.
+///   `/etc` drop-in and the `a.target.requires` link: the reset clears
+///   `RequiredBy=` as it clears `WantedBy=` (measured on RHEL 9 and 10,
+///   2026-11-16), so the link gets the same `StaticUnit` advisory and its
+///   `add-requires` line, and there is no unit-level block. No instruction
+///   names either unit.
 #[test]
 fn t24_reset_links_are_advised() {
     let snap = scan(
@@ -8195,13 +8197,10 @@ fn t24_reset_links_are_advised() {
                         host that app.service's [Install] section there does not make (it names \
                         no link: none, only Also=, or a list a drop-in reset to empty). Not \
                         carried.";
-    let reset_first = "# Advisory: a.target.requires/need.service is not carried: the unit's \
-                       [Install] section cannot be relied on (an empty RequiredBy= whose effect \
-                       was not measured).";
-    let record_first = "# Advisory: need.service is not carried: its [Install] section on the \
-                        source host cannot be relied on (an empty RequiredBy= whose effect was \
-                        not measured), and these files under /etc/systemd/system change it: \
-                        /etc/systemd/system/need.service.d/10-reset.conf.";
+    let reset_first = "# Advisory: a.target.requires/need.service is a link on the source \
+                       host that need.service's [Install] section there does not make (it names \
+                       no link: none, only Also=, or a list a drop-in reset to empty). Not \
+                       carried.";
     for (route, containerfile) in both_routes(&snap) {
         assert_eq!(
             block_from(&containerfile, static_first),
@@ -8223,12 +8222,8 @@ fn t24_reset_links_are_advised() {
             ],
             "{route}:\n{containerfile}"
         );
-        assert_eq!(
-            block_from(&containerfile, record_first),
-            [
-                record_first.to_owned(),
-                undetermined_second_line("need.service")
-            ],
+        assert!(
+            !containerfile.contains("# Advisory: need.service is not carried"),
             "{route}:\n{containerfile}"
         );
         for unit in ["app.service", "need.service"] {
@@ -8636,27 +8631,23 @@ fn t40_host(unit_file: &str, drop_in: Option<&str>) -> UnitHost {
 const T40_DROP_IN: &str = "/etc/systemd/system/need.service.d/10-reset.conf";
 
 /// T40 through the scan, the render and refine: the `RequiredBy=`-only
-/// vendor unit with a drop-in holding `RequiredBy=` and no link has its
+/// vendor unit with a drop-in holding `UpheldBy=` and no link has its
 /// record, the block naming the unit, the reason and the drop-in on both
 /// routes, the refine row with the same block and no include field, and no
-/// `systemctl` line for the unit. The `UpheldBy=` drop-in gives the same
-/// with its reason. Control: the vendor unit with no `/etc` file and
-/// `UpheldBy=` in its own file has no record, and its `disable` is carried.
+/// `systemctl` line for the unit. A drop-in holding an empty `RequiredBy=`
+/// resets the value, as an empty `WantedBy=` does (measured on RHEL 9 and
+/// 10, 2026-11-16): no record, and the link only the package install makes
+/// gets the same advisory block as for the `WantedBy=` reset. Control: the
+/// vendor unit with no `/etc` file and `UpheldBy=` in its own file has no
+/// record, and its `disable` is carried.
 #[test]
 fn t40_an_undetermined_section_with_an_etc_file_and_no_link() {
     let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
-    for (drop_in, reason, words) in [
-        (
-            "[Install]\nRequiredBy=\n",
-            InstallUnknown::RequiredByReset,
-            "an empty RequiredBy= whose effect was not measured",
-        ),
-        (
-            "[Install]\nUpheldBy=a.target\n",
-            InstallUnknown::UpheldBy,
-            "enabling the unit would also make an .upholds link",
-        ),
-    ] {
+    for (drop_in, reason, words) in [(
+        "[Install]\nUpheldBy=a.target\n",
+        InstallUnknown::UpheldBy,
+        "enabling the unit would also make an .upholds link",
+    )] {
         let snap = scan(t40_host(required, Some(drop_in)));
         let units = snap.units.as_ref().expect("a units section");
         assert!(
@@ -8701,6 +8692,40 @@ fn t40_an_undetermined_section_with_an_etc_file_and_no_link() {
                 "{route} {reason:?}:\n{containerfile}"
             );
         }
+    }
+
+    let reset = scan(t40_host(required, Some("[Install]\nRequiredBy=\n")));
+    let wanted_reset = scan(t40_host(
+        &required.replace("RequiredBy=", "WantedBy="),
+        Some("[Install]\nWantedBy=\n"),
+    ));
+    for snap in [&reset, &wanted_reset] {
+        let units = snap.units.as_ref().expect("a units section");
+        assert!(units.undetermined_installs.is_empty());
+        assert!(units.state_changes.is_empty());
+    }
+    let first = "# Advisory: a.target.requires/need.service is not on the source host: \
+                 need.service's files under /etc/systemd/system do not name it, and the \
+                 package's unit does. The image was linked from the package's unit, so it has \
+                 this link.";
+    for ((route, containerfile), (_, wanted)) in both_routes(&reset)
+        .into_iter()
+        .zip(both_routes(&wanted_reset))
+    {
+        let block = block_from(&containerfile, first);
+        assert!(!block.is_empty(), "{route}:\n{containerfile}");
+        let wanted_block: Vec<String> = block_from(
+            &wanted,
+            &first.replace("a.target.requires", "a.target.wants"),
+        )
+        .iter()
+        .map(|line| line.replace("a.target.wants", "a.target.requires"))
+        .collect();
+        assert_eq!(block, wanted_block, "{route}:\n{containerfile}");
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "need.service"),
+            "{route}:\n{containerfile}"
+        );
     }
 
     let upheld = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\nUpheldBy=multi-user.target\n";
@@ -9595,14 +9620,14 @@ fn t41_a_partly_excluded_set_of_install_files() {
     assert_eq!(count_lines(&restored, &line), 0, "{restored}");
 }
 
-/// T40 with the drop-in excluded: the `RequiredBy=` reset unit's
+/// T40 with the drop-in excluded: the `UpheldBy=` drop-in unit's
 /// `# Omitted:` line naming it and the drop-in, in place of its block, and
 /// the `undetermined_installs[]` row `not_applied` with the path and that
 /// line. Control: with the drop-in staged, the block and no line.
 #[test]
 fn t40_an_excluded_install_file_omits_the_undetermined_block() {
     let required = "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n";
-    let snap = scan(t40_host(required, Some("[Install]\nRequiredBy=\n")));
+    let snap = scan(t40_host(required, Some("[Install]\nUpheldBy=a.target\n")));
     let line = install_omitted("need.service", &[T40_DROP_IN]);
     let block_start = "# Advisory: need.service is not carried:";
 

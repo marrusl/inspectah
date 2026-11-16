@@ -102,9 +102,9 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// source (252 and 257: the search order in `install.c`, the first file of
 /// a name kept in `conf-files.c`) and not measured on RHEL 9 or 10.
 ///
-/// An empty `WantedBy=` or `Alias=` clears every value of that key before
-/// it; an empty `Also=` clears nothing. An empty `RequiredBy=` after a
-/// `RequiredBy=` value, any `UpheldBy=`, a specifier the reader does not
+/// An empty `WantedBy=`, `RequiredBy=` or `Alias=` clears every value of
+/// that key before it (measured on RHEL 9 and 10); an empty `Also=` clears
+/// nothing. Any `UpheldBy=`, a specifier the reader does not
 /// expand and a value that is not a [`UnitName`] each make the section
 /// [`InstallRead::Undetermined`], with the first such reason in load order.
 /// A reason, once found, stands even if a later reset clears the value
@@ -229,11 +229,7 @@ impl<'a> Reader<'a> {
                 self.assigns_also = true;
                 self.extend(value, |s| &mut s.also);
             }
-            "RequiredBy" if value.is_empty() => {
-                if !self.section.required_by.is_empty() {
-                    self.decline(InstallUnknown::RequiredByReset);
-                }
-            }
+            "RequiredBy" if value.is_empty() => self.section.required_by.clear(),
             "RequiredBy" => self.extend(value, |s| &mut s.required_by),
             "UpheldBy" => self.decline(InstallUnknown::UpheldBy),
             "DefaultInstance" if value.is_empty() => self.section.default_instance = None,
@@ -322,6 +318,11 @@ mod tests {
 
     /// A unit file whose section wants `multi-user.target`.
     const WANTS_MULTI_USER: &str = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n";
+
+    /// A unit file whose section requires it from `multi-user.target`, the
+    /// unit of the 2026-11-16 `RequiredBy=` measurement.
+    const REQUIRED_BY_MULTI_USER: &str =
+        "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=multi-user.target\n";
 
     /// A unit file with no `[Install]` section.
     const NO_INSTALL: &str = "[Unit]\nDescription=x\n\n[Service]\nExecStart=/bin/true\n";
@@ -689,11 +690,50 @@ mod tests {
                 }),
             ),
             (
-                "an empty RequiredBy= after a value is undetermined",
+                "an empty RequiredBy= in a drop-in clears the unit file's values",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[(Etc, "a.service.d", "10-a.conf", "[Install]\nRequiredBy=\n")],
+                InstallRead::Known(InstallSection::default()),
+            ),
+            (
+                "an empty RequiredBy= then a value in a drop-in expects the value only",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[(
+                    Etc,
+                    "a.service.d",
+                    "10-a.conf",
+                    "[Install]\nRequiredBy=\nRequiredBy=graphical.target\n",
+                )],
+                InstallRead::Known(InstallSection {
+                    required_by: units(&["graphical.target"]),
+                    ..InstallSection::default()
+                }),
+            ),
+            (
+                "a value then an empty RequiredBy= in the unit file expects nothing",
+                "a.service",
+                "[Install]\nRequiredBy=multi-user.target\nRequiredBy=\n",
+                &[],
+                InstallRead::Known(InstallSection::default()),
+            ),
+            (
+                "the empty RequiredBy= clears RequiredBy= alone",
                 "a.service",
                 "[Install]\nWantedBy=multi-user.target\nRequiredBy=a.target\n",
                 &[(Etc, "a.service.d", "10-a.conf", "[Install]\nRequiredBy=\n")],
-                undetermined(InstallUnknown::RequiredByReset, false),
+                wanted(&["multi-user.target"]),
+            ),
+            (
+                "control: RequiredBy= with no drop-in is kept",
+                "a.service",
+                REQUIRED_BY_MULTI_USER,
+                &[],
+                InstallRead::Known(InstallSection {
+                    required_by: units(&["multi-user.target"]),
+                    ..InstallSection::default()
+                }),
             ),
             (
                 "an empty RequiredBy= with no value before it is ignored",

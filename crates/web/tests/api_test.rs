@@ -5771,7 +5771,7 @@ async fn the_view_serves_install_difference_links_and_their_omission() {
     assert!(!preview.contains(&omitted), "{preview}");
 }
 
-/// T40's `RequiredBy=`-reset unit: an `undetermined_installs[]` row with
+/// T40's `UpheldBy=` drop-in unit: an `undetermined_installs[]` row with
 /// its reason, its install file and the Containerfile's block, and no
 /// `include` key. With the drop-in excluded, `not_applied` holds it and
 /// `advisories` the unit's `# Omitted:` line, which the preview holds.
@@ -5787,11 +5787,11 @@ async fn the_view_serves_undetermined_installs_and_their_omission() {
             "[Service]\nExecStart=/bin/true\n\n[Install]\nRequiredBy=a.target\n",
             Some("needpkg"),
         )
-        .file(DROP_IN, "[Install]\nRequiredBy=\n");
+        .file(DROP_IN, "[Install]\nUpheldBy=a.target\n");
     let app = scanned_app(host);
     let (_, json) = get_json(&app, "/api/view").await;
     let row = row_by(&json["undetermined_installs"], "unit", "need.service");
-    assert_eq!(row["reason"], "required_by_reset", "{row}");
+    assert_eq!(row["reason"], "upheld_by", "{row}");
     assert_eq!(row["install_files"], serde_json::json!([DROP_IN]), "{row}");
     let block = advisories_in_preview(row, preview_of(&json));
     assert!(

@@ -3815,7 +3815,7 @@ fn manual_links_merge_by_relation_parent_and_unit() {
 /// unit is a row of its own.
 #[test]
 fn undetermined_installs_merge_by_unit() {
-    use inspectah_core::types::units::InstallUnknown::{RequiredByReset, Specifier, UpheldBy};
+    use inspectah_core::types::units::InstallUnknown::{ForeignName, Specifier, UpheldBy};
     use inspectah_core::types::units::UndeterminedInstall;
     let record = |unit: &str, reason, files: &[&str]| UndeterminedInstall {
         unit: unit_name(unit),
@@ -3835,7 +3835,7 @@ fn undetermined_installs_merge_by_unit() {
         vec![
             section(vec![record("u.service", Specifier, &[A])]),
             section(vec![
-                record("u.service", RequiredByReset, &[B, A]),
+                record("u.service", ForeignName, &[B, A]),
                 record("v.service", UpheldBy, &[]),
             ]),
         ],

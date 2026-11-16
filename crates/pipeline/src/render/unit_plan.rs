@@ -1299,7 +1299,6 @@ const UNDETERMINED_MAY_ASSIGN_ALSO: &str = "It may assign Also=, so units it nam
 pub fn install_unknown_words(reason: InstallUnknown) -> &'static str {
     match reason {
         InstallUnknown::Specifier => "a specifier inspectah does not expand",
-        InstallUnknown::RequiredByReset => "an empty RequiredBy= whose effect was not measured",
         InstallUnknown::ForeignName => "a name this model does not admit",
         InstallUnknown::UpheldBy => "enabling the unit would also make an .upholds link",
         InstallUnknown::Unreadable => "a file of it inspectah could not read as text",
