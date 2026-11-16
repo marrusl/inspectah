@@ -248,7 +248,7 @@ other name with an `/etc` link that never reached it, skipping a name
 the gate already warned about. One warning per cause names the first
 `UNREPORTED_LINKS_SHOWN` links and counts the rest ("and N more"), with
 `cause` and `links` (every link: `path`, `unit`, and `listed_state`,
-`search_path` or `alias_of`) among its fields. They are never read
+`starts`, `search_path` or `alias_of`) among its fields. They are never read
 failures: a resolve error falls back to the not-read cause, so the scan
 does not degrade. A dangling link to an instance or to a listed `static`
 name already gets the unit's "no unit file" warning and no other. A test
