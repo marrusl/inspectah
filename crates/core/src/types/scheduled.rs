@@ -40,10 +40,13 @@ pub struct SystemdTimer {
     /// file and its drop-ins (§ 8).
     #[serde(default)]
     pub trigger: TimerTrigger,
-    /// Every drop-in under `/etc/systemd/system` that assigns `Unit=` in
-    /// the timer's `[Timer]` section, whether or not a later one overrides
-    /// it: the files that set `trigger`, besides the timer's own file.
-    /// Empty when no `/etc` drop-in assigns `Unit=`.
+    /// The drop-ins under `/etc/systemd/system` whose leaving out can
+    /// change `trigger` (§ 8): the one that holds the accepted `Unit=`, and
+    /// any at or before it that hides a drop-in of its file name. A drop-in
+    /// after the accepted value, or one whose `Unit=` lines are all
+    /// ignored, is not listed unless it hides another. For an `Unresolved`
+    /// trigger, every `/etc` drop-in up to and including the one holding
+    /// that value. The timer's own file is never listed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trigger_drop_ins: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -98,9 +98,10 @@ pub(crate) fn drop_in_dirs(name: &UnitName) -> Vec<String> {
 /// (in search-path order among those), then `/etc`, then the vendor one.
 /// So a vendor file in the instance's `.d` hides an `/etc` file of its
 /// name in the template's, and a `system.control` file hides an `/etc`
-/// file of its name in the same `.d`. That order was read from systemd's
-/// source (252 and 257: the search order in `install.c`, the first file of
-/// a name kept in `conf-files.c`) and not measured on RHEL 9 or 10.
+/// file of its name in the same `.d`. That order follows systemd's source
+/// (252 and 257: the search order in `install.c`, the first file of a name
+/// kept in `conf-files.c`) and was measured on RHEL 9 and 10: "R5's open
+/// items" in `process-docs/skills/real-host-validation-runs.md`.
 ///
 /// An empty `WantedBy=`, `RequiredBy=` or `Alias=` clears every value of
 /// that key before it (measured on RHEL 9 and 10); an empty `Also=` clears
