@@ -398,7 +398,11 @@ the fixed tables. Non-obvious points:
   `WorkingDirectory=` `~` or an absolute path (after `-`), `RootDirectory=`
   and `RootImage=` an absolute path (no `-`), `PIDFile=` any path, a
   relative one under `/run`, none under `/proc`, `/sys` or `/dev` (257);
-  each simplified, within `PATH_MAX` and `NAME_MAX`, with no `..`. A value
+  each expanded to at most 4095 bytes (`unit_path_printf`, measured on the
+  expansion as written, after `WorkingDirectory=`'s `-` and before the
+  `/run` prefix: `-/` and 2048 `./` and `srv` replaces nothing although it
+  simplifies to `/srv`), then simplified, within `PATH_MAX` and
+  `NAME_MAX`, with no `..`. Never check the limit after simplifying. A value
   inspectah cannot expand cannot be judged, so it replaces nothing. An
   ignored assignment that adds a value still adds its path: toward
   omitting. Never apply a reset before checking its section: the earlier

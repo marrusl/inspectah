@@ -205,7 +205,8 @@ const HOME_DIRECTORY: &str = "~";
 const API_VFS_ROOTS: [&str; 3] = ["/proc", "/sys", "/dev"];
 
 /// The longest path systemd takes, its terminating NUL excluded
-/// (`PATH_MAX` less one, `path_is_valid`).
+/// (`PATH_MAX` less one): the most `unit_path_printf` expands a value to,
+/// and the most `path_is_valid` takes once it is simplified.
 const PATH_MAX_LENGTH: usize = 4095;
 
 /// The longest component systemd takes (`NAME_MAX`, `path_is_valid`).
@@ -792,14 +793,17 @@ fn section_takes(section: &str, key: &str, suffix: &str) -> bool {
 /// `RootDirectory=` and `RootImage=` take an absolute, valid and
 /// normalized path, with no `-`; `PIDFile=` takes any path, a relative one
 /// made absolute under `/run`, that is valid and normalized and, in 257,
-/// not under an API file system. A key that is no single-path setting is
-/// not checked here: only its empty value resets anything.
+/// not under an API file system. Each first expands the value with
+/// [`unit_path_printf`], whose length limit is checked before anything
+/// simplifies or prefixes it, so `expand` must not simplify. A key that is
+/// no single-path setting is not checked here: only its empty value resets
+/// anything.
 fn single_path_accepted(key: &str, value: &str, expand: &dyn Fn(&str) -> Option<String>) -> bool {
     if Syntax::of(key) != Syntax::SinglePath {
         return true;
     }
     if key == PID_FILE_KEY {
-        return expand(value).is_some_and(|path| {
+        return unit_path_printf(value, expand).is_some_and(|path| {
             let path = if path.starts_with('/') {
                 path
             } else {
@@ -822,11 +826,27 @@ fn single_path_accepted(key: &str, value: &str, expand: &dyn Fn(&str) -> Option<
     } else {
         value
     };
-    expand(value).is_some_and(|path| systemd_accepts_path(&path))
+    unit_path_printf(value, expand).is_some_and(|path| systemd_accepts_path(&path))
+}
+
+/// `value` expanded with `expand` as systemd's `unit_path_printf` expands a
+/// single-path setting (252 and 257, `src/core/unit-printf.h`: the
+/// expansion limited to `PATH_MAX - 1` bytes, which `specifier_printf` in
+/// `src/shared/specifier.c` refuses with `ENAMETOOLONG`). `None` when
+/// `expand` cannot expand it or the expansion is longer than
+/// [`PATH_MAX_LENGTH`]. The limit applies to the expansion as written,
+/// before the parser simplifies it or makes a relative `PIDFile=` absolute,
+/// so `/` followed by 2048 `./` and `srv` is refused although it simplifies
+/// to `/srv`. On that refusal the parser keeps the earlier value (an
+/// optional `WorkingDirectory=`, `PIDFile=`) or fails the unit's load
+/// (`load-fragment.c`); either way the earlier assignment stays required.
+fn unit_path_printf(value: &str, expand: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    expand(value).filter(|path| path.len() <= PATH_MAX_LENGTH)
 }
 
 /// Whether systemd's `path_simplify_and_warn` with `PATH_CHECK_ABSOLUTE`
-/// accepts the expanded `path` (systemd 252 `src/shared/parse-helpers.c`,
+/// accepts the expanded `path`, which has passed [`unit_path_printf`]
+/// already (systemd 252 `src/shared/parse-helpers.c`,
 /// 257 the same file): absolute before it is simplified, then, simplified,
 /// no longer than `PATH_MAX` with no component longer than `NAME_MAX`
 /// (`path_is_valid`) and with no `..` component (`path_is_normalized`,
@@ -1584,6 +1604,58 @@ mod tests {
         assert!(!systemd_accepts_path(&long_component));
         let long_path = format!("/{}", ["x"; PATH_MAX_LENGTH / 2 + 1].join("/"));
         assert!(!systemd_accepts_path(&long_path));
+    }
+
+    /// `unit_path_printf` refuses an expansion longer than 4095 bytes before
+    /// anything simplifies it (systemd 252 and 257,
+    /// `src/core/unit-printf.h`), so a replacement whose expansion is over
+    /// the limit replaces nothing, however short it simplifies. The length
+    /// is the expansion's (`%i` gives `a`), after `WorkingDirectory=`'s `-`
+    /// and before `PIDFile=`'s `/run` prefix.
+    #[test]
+    fn a_replacement_expanding_past_the_limit_is_refused_before_simplifying() {
+        let expand = |value: &str| expand_unit_specifiers(value, "w@a", SpecifierSet::Runtime);
+        // An absolute value of `length` bytes that simplifies to `/srv`.
+        let collapsing = |length: usize| format!("{}srv", "/".repeat(length - 3));
+        // A relative value of `length` bytes that simplifies to `w.pid`.
+        let relative = |length: usize| format!(".{}w.pid", "/".repeat(length - 6));
+        let at = PATH_MAX_LENGTH;
+        for (key, value, accepted) in [
+            ("WorkingDirectory", collapsing(at), true),
+            ("WorkingDirectory", collapsing(at + 1), false),
+            ("WorkingDirectory", format!("-{}", collapsing(at)), true),
+            (
+                "WorkingDirectory",
+                format!("-{}", collapsing(at + 1)),
+                false,
+            ),
+            (
+                "WorkingDirectory",
+                format!("-/{}", "./".repeat(2048) + "srv"),
+                false,
+            ),
+            (
+                "WorkingDirectory",
+                format!("{}%i", collapsing(at - 1)),
+                true,
+            ),
+            ("WorkingDirectory", format!("{}%i", collapsing(at)), false),
+            ("RootDirectory", collapsing(at), true),
+            ("RootDirectory", collapsing(at + 1), false),
+            ("RootImage", collapsing(at), true),
+            ("RootImage", collapsing(at + 1), false),
+            ("PIDFile", collapsing(at), true),
+            ("PIDFile", collapsing(at + 1), false),
+            ("PIDFile", relative(at), true),
+            ("PIDFile", relative(at + 1), false),
+        ] {
+            assert_eq!(
+                single_path_accepted(key, &value, &expand),
+                accepted,
+                "{key}= of {} bytes",
+                value.len()
+            );
+        }
     }
 
     #[test]

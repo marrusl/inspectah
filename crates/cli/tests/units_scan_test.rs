@@ -10171,20 +10171,32 @@ fn a_reset_drop_in_the_export_does_not_carry_omits_the_enable() {
 /// resetting `EnvironmentFile=` under `[Unit]`, a section that does not
 /// take the key. For each, the requirement stands: the file missing omits
 /// the enable on both routes and in refine, present it is carried, and
-/// excluded through refine it is omitted naming it. Control: the override
-/// systemd accepts (an absolute directory, the reset under `[Service]`)
-/// removes the requirement, and the enable is carried with the file
-/// missing.
+/// excluded through refine it is omitted naming it. The same for an
+/// optional `WorkingDirectory=` replacement whose expansion is longer than
+/// systemd's 4095 bytes but simplifies to `/srv` (`unit_path_printf`
+/// refuses it before anything simplifies it, and the `-` keeps the earlier
+/// directory). Control: the override systemd accepts (an absolute
+/// directory, a short optional one, the reset under `[Service]`) removes
+/// the requirement, and the enable is carried with the file missing.
 #[test]
 fn an_override_systemd_ignores_keeps_the_requirement_through_the_scan() {
     const UNIT: &str = "t@site.service";
     const DROP_IN: &str = "/etc/systemd/system/t@site.service.d/10-override.conf";
+    let overlong = format!("[Service]\nWorkingDirectory=-/{}srv\n", "./".repeat(2048));
     for (label, service, ignored, accepted, path, file) in [
         (
             "an invalid WorkingDirectory= replacement",
             "WorkingDirectory=/etc/t/%i\nExecStart=/usr/bin/t",
             "[Service]\nWorkingDirectory=-relative\n",
             "[Service]\nWorkingDirectory=/srv/t\n",
+            "/etc/t/site",
+            "/etc/t/site/app.conf",
+        ),
+        (
+            "an optional WorkingDirectory= replacement expanding past the limit",
+            "WorkingDirectory=/etc/t/%i\nExecStart=/usr/bin/t",
+            overlong.as_str(),
+            "[Service]\nWorkingDirectory=-/srv/t\n",
             "/etc/t/site",
             "/etc/t/site/app.conf",
         ),
