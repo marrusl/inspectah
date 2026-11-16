@@ -10472,27 +10472,57 @@ fn t25_c_a_member_whose_configuration_argument_is_quoted() {
 
 /// § 7.5 through the scan: a command argument that names a path for the
 /// instance and that systemd's parser refuses (an unbalanced quote) makes
-/// what the instance reads unknown. The instance has no state change and
-/// no refine row, no `systemctl` line names it on either route, and the
-/// snapshot's warning names the unit, the setting and the file, never the
-/// value. Control: the quote closed, the instance is carried.
+/// what the instance reads unknown. The instance keeps its state change,
+/// recording the setting, the file and the line in `needs_unknown`; the
+/// plan omits its enable as `InstanceNeedsUnknown`, with an `# Omitted:`
+/// line on both routes and the same text on its refine row, and no
+/// `systemctl` line names it. The snapshot's warning still names the unit,
+/// the setting and the file, never the value. Control: the quote closed,
+/// the instance is carried.
 #[test]
 fn an_uninterpretable_instance_argument_declines_the_enable_through_the_scan() {
     const UNIT: &str = "t@site.service";
     let broken = "ExecStart=/usr/bin/t --config=\"/etc/t/%i.conf";
     let snap = scan(t_reads_host(broken, &[("/etc/t/site.conf", "PORT=1\n")]));
-    assert_eq!(changes_named(&snap, UNIT), 0);
-    assert!(
-        session(&snap)
-            .decisions()
-            .unit_states
-            .iter()
-            .all(|r| r.unit.as_str() != UNIT),
-        "no refine row"
+    assert_eq!(changes_named(&snap, UNIT), 1);
+    assert_eq!(
+        serde_json::to_value(change(&snap, UNIT)).expect("the row serializes")["needs_unknown"],
+        serde_json::json!({
+            "cause": "uninterpretable",
+            "key": "ExecStart",
+            "path": T_TEMPLATE_PATH,
+            "line": 2,
+        })
+    );
+    let text = format!(
+        "its ExecStart= setting in {T_TEMPLATE_PATH} (line 2) names a path for the instance \
+         that inspectah cannot read as systemd does, so what the instance reads is unknown and \
+         its enable is not carried"
+    );
+    let refine = session(&snap);
+    let row = refine
+        .decisions()
+        .unit_states
+        .iter()
+        .find(|r| r.unit.as_str() == UNIT)
+        .expect("a refine row");
+    let declined = serde_json::to_value(row).expect("the row serializes")["declined"].clone();
+    assert_eq!(
+        declined,
+        serde_json::json!({
+            "renders": "omitted",
+            "reason": "InstanceNeedsUnknown",
+            "text": format!("{UNIT} ({text})"),
+        })
     );
     for (route, containerfile) in both_routes(&snap) {
         assert!(
             in_no_systemctl_instruction(&containerfile, UNIT),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            omitted(&containerfile, UNIT),
+            Some(format!("# Omitted: {UNIT} ({text})").as_str()),
             "{route}:\n{containerfile}"
         );
     }
@@ -10546,7 +10576,15 @@ fn an_uninterpretable_value_is_reported_without_its_value() {
     const SENTINEL: &str = "inspectah-sentinel-credential-5b1e";
     let service = format!("ExecStart=/usr/bin/t --token={SENTINEL} --config=%h/t/%i.conf");
     let snap = scan(t_reads_host(&service, &[]));
-    assert_eq!(changes_named(&snap, UNIT), 0);
+    assert_eq!(changes_named(&snap, UNIT), 1);
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            omitted(&containerfile, UNIT).is_some_and(|line| line.contains(&format!(
+                "its ExecStart= setting in {T_TEMPLATE_PATH} (line 2)"
+            ))),
+            "{route}:\n{containerfile}"
+        );
+    }
     let warning = snap
         .warnings
         .iter()

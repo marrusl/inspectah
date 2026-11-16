@@ -177,6 +177,7 @@ A command the export cannot reproduce is left out with a `# Omitted:` line namin
 | A template instance's `enable` whose configuration file was not captured | its configuration was not captured |
 | A template instance's `enable` whose configuration file holds a value the redaction pass replaced | its configuration holds a redacted value; provision the secret on the deployed host and enable the unit there |
 | On a fleet aggregate, a template instance's `enable` whose configuration file has more than one content variant across hosts | its configuration differs between hosts in the fleet, so the staged copy may not be the one this instance reads |
+| A template instance's `enable` when a setting of its unit file or drop-ins names a path for it in a form inspectah cannot read as systemd does, or a drop-in directory or drop-in it reads could not be read | the setting and the file and line it is on, or the file that could not be read, never the setting's value, and that the `enable` is not carried |
 | A package-owned mount, automount or swap unit with an administrator's file staged at its name | the export carries an administrator's unit file for it |
 | A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
 | A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |

@@ -13,9 +13,10 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
     AlsoMember, CarriedUnit, INSTANCE_CARRIED_ALONE, INSTANCE_READS_UNKNOWN, InstallUnknown,
-    LinkRelation, ManualLink, ManualLinkCause, MemberLinks, MountUnitFinding, OrdinaryKind,
-    StorageKind, SystemdDropIn, TargetUnitName, UndeterminedInstall, UnitAction, UnitFragment,
-    UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section, systemd_reads_drop_in,
+    InstanceNeedsUnknown, LinkRelation, ManualLink, ManualLinkCause, MemberLinks, MountUnitFinding,
+    OrdinaryKind, StorageKind, SystemdDropIn, TargetUnitName, UndeterminedInstall, UnitAction,
+    UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section,
+    systemd_reads_drop_in,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -298,6 +299,11 @@ pub enum OmissionReason {
     /// source host had it (§ 10.2 rule 6, § 10.8). `path` is the
     /// configuration path, or the file under it that falls short.
     InstanceConfigNotStaged { path: String, gap: ConfigGap },
+    /// What a template instance reads could not be read on the source
+    /// host, so rule 6 cannot check its enable (§ 7.5, § 10.2 rule 6).
+    /// `cause` names the setting and its file, or the file that could not
+    /// be read, never the setting's value.
+    InstanceNeedsUnknown { cause: InstanceNeedsUnknown },
     /// The command would also act on `member` (§ 10.2 rule 7). An
     /// advisory ([`also_advisory_lines`]). `member` is the first member in
     /// `also` order that fails the first failing condition, or for
@@ -443,6 +449,20 @@ impl OmissionReason {
                      tell which file it reads"
                 ),
             },
+            Self::InstanceNeedsUnknown {
+                cause: InstanceNeedsUnknown::Uninterpretable { key, path, line },
+            } => format!(
+                "its {key}= setting in {path} (line {line}) names a path for the instance that \
+                 inspectah cannot read as systemd does, so what the instance reads is unknown \
+                 and its enable is not carried"
+            ),
+            Self::InstanceNeedsUnknown {
+                cause: InstanceNeedsUnknown::Unreadable { path },
+            } => format!(
+                "{path}, a drop-in directory or drop-in systemd reads for the instance, could not \
+                 be read on the source host, so what the instance reads is unknown and its enable \
+                 is not carried"
+            ),
             Self::GeneratedNameCollision {
                 name,
                 reserved_by: Reservation::Inventory,
@@ -486,6 +506,7 @@ impl OmissionReason {
             Self::MaskPathOccupied { .. } => "MaskPathOccupied",
             Self::GeneratedNameCollision { .. } => "GeneratedNameCollision",
             Self::InstanceConfigNotStaged { .. } => "InstanceConfigNotStaged",
+            Self::InstanceNeedsUnknown { .. } => "InstanceNeedsUnknown",
             Self::AlsoMember { .. } => "AlsoMember",
         }
     }
@@ -511,6 +532,7 @@ impl OmissionReason {
             | Self::MaskPathOccupied { .. }
             | Self::GeneratedNameCollision { .. }
             | Self::InstanceConfigNotStaged { .. }
+            | Self::InstanceNeedsUnknown { .. }
             | Self::AlsoMember { .. } => None,
         }
     }
@@ -2417,8 +2439,10 @@ pub fn data_advisory(unit: &UnitName, paths: &[String]) -> Option<String> {
     ))
 }
 
-/// Rule 6 (§ 10.2, § 10.8), for an `enable` on a template instance: every
-/// path in `required_config` is in the export as the source host had it.
+/// Rule 6 (§ 10.2, § 10.8), for an `enable` on a template instance: what
+/// it reads is known ([`OmissionReason::InstanceNeedsUnknown`] when the
+/// row's `needs_unknown` says it is not, whatever the row's name), and
+/// every path in `required_config` is in the export as the source host had it.
 /// For each path, in order, the config entries at it or under it decide,
 /// in path order:
 ///
@@ -2445,6 +2469,11 @@ fn rule_6_instance_config(
     staged: &StagedWrites<'_>,
 ) -> Result<Vec<String>, OmissionReason> {
     let mut notes = Vec::new();
+    if let Some(cause) = &change.needs_unknown {
+        return Err(OmissionReason::InstanceNeedsUnknown {
+            cause: cause.clone(),
+        });
+    }
     if change.unit().name().instance().is_none() {
         return Ok(notes);
     }

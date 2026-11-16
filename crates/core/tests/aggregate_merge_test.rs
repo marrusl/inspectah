@@ -3602,6 +3602,45 @@ fn instance_change(required_config: &[&str], data_paths: &[&str]) -> UnitStateCh
     change
 }
 
+/// § 12: an instance whose needs one host could not read keeps that
+/// host's `needs_unknown` on the merged row, whichever host's row the
+/// merge keeps, so the plan omits the fleet's enable. Control: with no
+/// host recording one, the merged row has none.
+#[test]
+fn an_instance_merges_the_needs_unknown_of_any_host() {
+    use inspectah_core::types::units::InstanceNeedsUnknown;
+    let known = instance_change(&["/etc/dirsrv/slapd-example"], &[]);
+    let mut unknown = instance_change(&[], &[]);
+    let cause = InstanceNeedsUnknown::Unreadable {
+        path: "/etc/systemd/system/service.d".to_owned(),
+    };
+    unknown.needs_unknown = Some(cause.clone());
+    for sections in [
+        vec![
+            changes_section(vec![known.clone()]),
+            changes_section(vec![unknown.clone()]),
+        ],
+        vec![
+            changes_section(vec![unknown.clone()]),
+            changes_section(vec![known.clone()]),
+        ],
+    ] {
+        let result = merge_service_sections(sections, 2, &host_names(2)).expect("a merged section");
+        assert_eq!(result.state_changes.len(), 1, "one row per unit name");
+        assert_eq!(result.state_changes[0].needs_unknown, Some(cause.clone()));
+    }
+    let control = merge_service_sections(
+        vec![
+            changes_section(vec![known.clone()]),
+            changes_section(vec![known]),
+        ],
+        2,
+        &host_names(2),
+    )
+    .expect("a merged section");
+    assert_eq!(control.state_changes[0].needs_unknown, None);
+}
+
 /// § 12: an instance's `required_config` and `data_paths` are each the
 /// union across every host that has it, sorted, whichever host's row the
 /// merge keeps. Control: one host alone keeps its lists.

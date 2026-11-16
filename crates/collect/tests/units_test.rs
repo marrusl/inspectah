@@ -12,9 +12,9 @@ use inspectah_core::types::finding::{AdvisoryType, FindingKind, ShadowType};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::units::{
-    AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLinkCause, MemberLinks,
-    OrdinaryKind, PresetDefault, UnitAction, UnitFragment, UnitKind, UnitName, UnitSection,
-    UnitState,
+    AdminStorageFragment, CarriedUnit, InstallUnknown, InstanceNeedsUnknown, LinkRelation,
+    ManualLinkCause, MemberLinks, OrdinaryKind, PresetDefault, UnitAction, UnitFragment, UnitKind,
+    UnitName, UnitSection, UnitState,
 };
 use inspectah_core::types::warnings::Warning;
 
@@ -5838,11 +5838,11 @@ fn a_quoted_or_punctuated_command_argument_records_the_whole_path() {
 
 /// § 7.5: a value that names a path for the instance and cannot be
 /// interpreted (an unbalanced quote, an escape systemd refuses, a
-/// specifier inspectah does not expand) declines the enable: the instance
-/// has no state change, and a warning names the unit, the setting and the
-/// unit file with its line, never the value. A value that holds no `%i` or
-/// `%I` declines nothing. Control: the same template with the value written
-/// well is a state change.
+/// specifier inspectah does not expand) declines the enable: the
+/// instance's state change records the setting, the unit file and the
+/// line in `needs_unknown`, and a warning names the unit, the setting and
+/// the unit file with its line, never the value. A value that holds no
+/// `%i` or `%I` declines nothing: its row has no `needs_unknown`.
 #[test]
 fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
     for value in [
@@ -5853,12 +5853,24 @@ fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
         "ReadOnlyPaths=\"/etc/worker/%i",
     ] {
         let text = template_with(&format!("{value}\n"));
-        let (row, warnings) = row_and_warnings(
-            &instance_host("worker@.service", &text, "worker@site.service"),
-            "worker@site.service",
-        );
-        assert!(!row, "{value}: no state change");
+        let exec = instance_host("worker@.service", &text, "worker@site.service");
+        let (section, warnings) = scan(&exec);
         let (key, rest) = value.split_once('=').expect("a key");
+        assert_eq!(
+            needs_unknown_of(&section, "worker@site.service"),
+            Some(InstanceNeedsUnknown::Uninterpretable {
+                key: key.to_owned(),
+                path: format!("{VENDOR}/worker@.service"),
+                line: 2,
+            }),
+            "{value}"
+        );
+        assert!(
+            !serde_json::to_string(&section)
+                .expect("the section serializes")
+                .contains(rest),
+            "{value}: the value is not recorded"
+        );
         assert!(
             warnings.iter().any(|w| w.contains("worker@site.service")
                 && w.contains(&format!(
@@ -5875,12 +5887,29 @@ fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
         "ExecStart=/usr/bin/worker --name=%H-%i",
     ] {
         let text = template_with(&format!("{harmless}\n"));
-        let (row, warnings) = row_and_warnings(
-            &instance_host("worker@.service", &text, "worker@site.service"),
+        let (section, warnings) = scan(&instance_host(
+            "worker@.service",
+            &text,
             "worker@site.service",
+        ));
+        assert_eq!(
+            needs_unknown_of(&section, "worker@site.service"),
+            None,
+            "{harmless}: {warnings:?}"
         );
-        assert!(row, "{harmless}: {warnings:?}");
     }
+}
+
+/// The recorded `needs_unknown` of `unit`'s state change, which must
+/// exist.
+fn needs_unknown_of(section: &UnitSection, unit: &str) -> Option<InstanceNeedsUnknown> {
+    section
+        .state_changes
+        .iter()
+        .find(|c| c.unit().name().as_str() == unit)
+        .unwrap_or_else(|| panic!("presence: {unit}'s state change"))
+        .needs_unknown
+        .clone()
 }
 
 /// § 7.5: the directives are applied in load order, the unit file then
@@ -6236,8 +6265,10 @@ fn a_named_drop_in_hides_a_type_wide_one_of_its_name() {
 
 /// § 7.5, R4: a runtime drop-in directory that cannot be listed in full,
 /// and a drop-in there that is not text, leave what the instance reads
-/// unknown: the instance has no state change, a warning names the unit and
-/// the path, and the scan degrades naming the path. Healthy first.
+/// unknown: the instance keeps its state change with `needs_unknown`
+/// naming the path and nothing it reads, a warning names the unit and the
+/// path, and the scan degrades naming the path. Healthy first, with no
+/// `needs_unknown`.
 #[test]
 fn an_unreadable_runtime_drop_in_declines_the_instance() {
     const UNIT: &str = "worker@site.service";
@@ -6255,13 +6286,17 @@ fn an_unreadable_runtime_drop_in_declines_the_instance() {
             "[Service]\nNice=5\n",
         )
     };
-    let (section, _, reason) = scan_maybe_degraded(&host());
-    assert!(
-        section
+    let needs_unknown = |section: &UnitSection| {
+        let change = section
             .state_changes
             .iter()
-            .any(|c| c.unit().name().as_str() == UNIT)
-    );
+            .find(|c| c.unit().name().as_str() == UNIT)
+            .unwrap_or_else(|| panic!("presence: {UNIT}'s state change"));
+        assert!(change.required_config.is_empty() && change.data_paths.is_empty());
+        serde_json::to_value(change).expect("the row serializes")["needs_unknown"].clone()
+    };
+    let (section, _, reason) = scan_maybe_degraded(&host());
+    assert_eq!(needs_unknown(&section), serde_json::Value::Null);
     assert_eq!(reason, None);
 
     for (label, exec, path) in [
@@ -6285,12 +6320,10 @@ fn an_unreadable_runtime_drop_in_declines_the_instance() {
         ),
     ] {
         let (section, warnings, reason) = scan_maybe_degraded(&exec);
-        assert!(
-            section
-                .state_changes
-                .iter()
-                .all(|c| c.unit().name().as_str() != UNIT),
-            "{label}: no state change"
+        assert_eq!(
+            needs_unknown(&section),
+            serde_json::json!({"cause": "unreadable", "path": path}),
+            "{label}"
         );
         assert!(
             warnings.iter().any(|w| w.contains(UNIT)

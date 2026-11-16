@@ -4239,6 +4239,76 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
     }
 }
 
+/// § 7.5 and § 10.2 rule 6, on the plan: an instance row whose
+/// `needs_unknown` is set has its `enable` omitted as
+/// `InstanceNeedsUnknown`, in either form, even with a `required_config`
+/// path staged; the `# Omitted:` text names the setting, the file and the
+/// line, or the file that could not be read. Its `disable` is carried, as
+/// rule 6 asks nothing of one. Control: the same row without it is carried.
+#[test]
+fn rule_6_omits_an_instance_whose_needs_are_unknown() {
+    use inspectah_core::types::units::InstanceNeedsUnknown;
+    const CONF: &str = "/etc/w/a.conf";
+    let instance = |needs_unknown: Option<InstanceNeedsUnknown>, state| {
+        let mut change = change_with("w@a.service", vendor("w@.service"), state);
+        change.required_config = vec![CONF.to_owned()];
+        change.needs_unknown = needs_unknown;
+        change
+    };
+    let control = units_snapshot(vec![instance(None, UnitState::Enabled)], vec![(CONF, "x")]);
+    assert_eq!(rule_5_outcome(&control, "w@a.service"), Ok(()));
+
+    let name = UnitName::try_from("w@a.service".to_owned()).unwrap();
+    for (cause, text) in [
+        (
+            InstanceNeedsUnknown::Uninterpretable {
+                key: "ExecStart".to_owned(),
+                path: "/usr/lib/systemd/system/w@.service".to_owned(),
+                line: 4,
+            },
+            "its ExecStart= setting in /usr/lib/systemd/system/w@.service (line 4) names a path \
+             for the instance that inspectah cannot read as systemd does, so what the instance \
+             reads is unknown and its enable is not carried",
+        ),
+        (
+            InstanceNeedsUnknown::Unreadable {
+                path: "/etc/systemd/system/service.d".to_owned(),
+            },
+            "/etc/systemd/system/service.d, a drop-in directory or drop-in systemd reads for the \
+             instance, could not be read on the source host, so what the instance reads is \
+             unknown and its enable is not carried",
+        ),
+    ] {
+        let reason = OmissionReason::InstanceNeedsUnknown {
+            cause: cause.clone(),
+        };
+        let snap = units_snapshot(
+            vec![instance(Some(cause.clone()), UnitState::Enabled)],
+            vec![(CONF, "x")],
+        );
+        assert_eq!(
+            rule_5_outcome(&snap, "w@a.service"),
+            Err(reason.clone()),
+            "{cause:?}"
+        );
+        assert_eq!(reason.describe(), text, "{cause:?}");
+        assert_eq!(reason.name(), "InstanceNeedsUnknown");
+        let line = declined_line(&name, UnitAction::Enable, &reason);
+        assert_eq!(line.marker, DeclinedMarker::Omitted, "{cause:?}");
+        assert_eq!(line.text, format!("w@a.service ({text})"), "{cause:?}");
+
+        let disabled = units_snapshot(
+            vec![instance(Some(cause.clone()), UnitState::Disabled)],
+            vec![],
+        );
+        assert_eq!(
+            rule_5_outcome(&disabled, "w@a.service"),
+            Ok(()),
+            "{cause:?} disable"
+        );
+    }
+}
+
 /// § 10.8 "Data under `/var`", on the plan: a carried instance enable
 /// with `data_paths` gets one data advisory naming every path, written as
 /// one `# Advisory:` line before the `RUN` lines. No advisory for an

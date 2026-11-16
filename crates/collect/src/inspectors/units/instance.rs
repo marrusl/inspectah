@@ -23,8 +23,8 @@ use super::resolve::unit_search_path;
 use super::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{
-    UNIT_FILE_WHITESPACE, UnitName, is_instance_config_path, is_instance_data_path,
-    numbered_logical_lines, systemd_reads_drop_in,
+    InstanceNeedsUnknown, UNIT_FILE_WHITESPACE, UnitName, is_instance_config_path,
+    is_instance_data_path, numbered_logical_lines, systemd_reads_drop_in,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -322,6 +322,23 @@ pub(crate) enum NeedsUnknown {
     /// in full, or a drop-in there is not text: one of its settings may
     /// name a path.
     Unreadable { path: String, error: String },
+}
+
+impl NeedsUnknown {
+    /// What the state change records: the same fields, the read error
+    /// left to the warning and the scan's degraded reason.
+    pub(crate) fn record(&self) -> InstanceNeedsUnknown {
+        match self {
+            Self::Uninterpretable { key, path, line } => InstanceNeedsUnknown::Uninterpretable {
+                key: key.clone(),
+                path: path.clone(),
+                line: *line,
+            },
+            Self::Unreadable { path, .. } => {
+                InstanceNeedsUnknown::Unreadable { path: path.clone() }
+            }
+        }
+    }
 }
 
 /// What the instance `name` needs, read from `fragment`, the path and text

@@ -76,7 +76,7 @@ each included state change. The first that fails declines the command.
 | 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them, and, for an enabled instance, a runtime drop-in whose reset, replacement or hiding changed what the instance reads. | `enable`, `disable` | `InstallEvidenceChanged`; `InstanceNeedsEvidenceChanged` for a missing runtime drop-in of the second kind |
 | 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 | 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
-| 8 | Rule 6, an instance's configuration (`rule_6_instance_config`), below. | `enable` of a template instance | `InstanceConfigNotStaged` |
+| 8 | Rule 6, an instance's configuration (`rule_6_instance_config`), below. A row whose `needs_unknown` is set declines first, since what it reads was never read. | `enable` of a template instance | `InstanceNeedsUnknown`; `InstanceConfigNotStaged` |
 | 9 | Rule 7, `Also=` members (`rule_7_also`), once every row has passed or failed the rules above. | `enable`, `disable` with a non-empty `also` | `AlsoMember`, an advisory |
 
 **Instances are planned like any row.** There is no instance step before

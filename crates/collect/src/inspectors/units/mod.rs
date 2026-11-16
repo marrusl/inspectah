@@ -880,14 +880,17 @@ fn build_state_changes(
                             .map(|(path, text)| (path.as_str(), text.as_str())),
                     ) {
                         Ok(needs) => needs,
-                        // What it reads is unknown, so rule 6 could not
-                        // check its enable: it is not carried. A read
-                        // failure degrades the scan too, as any other does.
+                        // What it reads is unknown, so rule 6 cannot
+                        // check its enable: the row records why, and the
+                        // plan omits the enable saying so. A read failure
+                        // degrades the scan too, as any other does.
                         Err(unknown) => {
                             if let NeedsUnknown::Unreadable { path, error } = &unknown {
                                 read_failures.push(format!("{path}: {error}"));
                             }
                             warnings.push(needs_unknown_warning(warn, &unknown));
+                            change.needs_unknown = Some(unknown.record());
+                            state_changes.push(change);
                             continue;
                         }
                     };

@@ -376,8 +376,9 @@ the fixed tables. Non-obvious points:
 - **A runtime source that cannot be read declines the enable by name.**
   A listing that fails other than `NotFound` (an iteration error too,
   through `read_dir_strict`) or a drop-in that is not text is
-  `NeedsUnknown::Unreadable`: no state change, a warning naming the unit
-  and the path, and the path in `read_failures`, so the scan degrades.
+  `NeedsUnknown::Unreadable`: the row's `needs_unknown` names the path,
+  a warning names the unit and the path, and the path is in
+  `read_failures`, so the scan degrades.
 
 - **Each setting is read with its own syntax** (`Syntax`), as systemd's
   parser for it reads it (252 and 257, `load-fragment.c`): a command line
@@ -400,7 +401,11 @@ the fixed tables. Non-obvious points:
   systemd's parser refuses (unbalanced quote, unknown escape), a path
   operand holding a specifier `expand_unit_specifiers` does not know, and
   a configuration path the form check refuses are `NeedsUnknown`: the
-  instance gets no state change and a warning (`needs_unknown_warning`)
+  instance's row keeps its state change with `needs_unknown` set
+  (`InstanceNeedsUnknown` in core: the key, the file and the line, or the
+  unreadable path), the plan omits its enable as `InstanceNeedsUnknown`
+  with an `# Omitted:` line and the same text on the refine row, and a
+  warning (`needs_unknown_warning`)
   names the unit, the setting's key and the file and line it is on
   (`numbered_logical_lines` in core, `key`, `path` and `line` among its
   fields). **Never the value**: a command line can carry a credential

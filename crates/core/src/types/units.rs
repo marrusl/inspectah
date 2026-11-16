@@ -768,6 +768,27 @@ pub enum InstallUnknown {
     Unreadable,
 }
 
+/// Why what an enabled template instance reads is unknown (§ 7.5 of the
+/// units spec). The plan omits its enable (§ 10.2 rule 6), naming the
+/// setting and the file, or the file that could not be read. The
+/// setting's value is never kept: it can hold a credential, and nothing
+/// redacts these fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum InstanceNeedsUnknown {
+    /// The setting `key`, on line `line` of the unit file or drop-in at
+    /// `path`, names a path for the instance in a form inspectah cannot
+    /// read as systemd does.
+    Uninterpretable {
+        key: String,
+        path: String,
+        line: usize,
+    },
+    /// A runtime drop-in directory or drop-in at `path` could not be read
+    /// in full on the source host.
+    Unreadable { path: String },
+}
+
 /// How a link on the source host ties a unit to its parent (§ 6.6 of the
 /// units spec).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -944,6 +965,12 @@ pub struct UnitStateChange {
     /// [`is_instance_data_path`], checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_paths: Vec<String>,
+    /// Why what an enabled template instance reads is unknown, when the
+    /// collector could not read it (§ 7.5). `required_config` and
+    /// `data_paths` are then empty, and the plan omits the enable. Recorded
+    /// only: the plan decides from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs_unknown: Option<InstanceNeedsUnknown>,
     #[serde(default)]
     pub disposition: FindingKind,
     #[serde(default, skip_serializing_if = "crate::is_false")]
@@ -970,6 +997,8 @@ struct UnitStateChangeWire {
     required_config: Vec<String>,
     #[serde(default)]
     data_paths: Vec<String>,
+    #[serde(default)]
+    needs_unknown: Option<InstanceNeedsUnknown>,
     #[serde(default)]
     disposition: FindingKind,
     #[serde(default)]
@@ -1011,6 +1040,7 @@ impl TryFrom<UnitStateChangeWire> for UnitStateChange {
         change.vendor_drop_ins = wire.vendor_drop_ins;
         change.required_config = wire.required_config;
         change.data_paths = wire.data_paths;
+        change.needs_unknown = wire.needs_unknown;
         change.disposition = wire.disposition;
         change.locked = wire.locked;
         change.aggregate = wire.aggregate;
@@ -1280,6 +1310,7 @@ impl UnitStateChange {
             vendor_drop_ins: Vec::new(),
             required_config: Vec::new(),
             data_paths: Vec::new(),
+            needs_unknown: None,
             disposition: FindingKind::included(),
             locked: false,
             aggregate: None,
@@ -1509,6 +1540,7 @@ mod tests {
                 vendor_drop_ins: _,  // identifiers: file names, no content
                 required_config: _,  // identifiers: paths under /etc, no content
                 data_paths: _,       // identifiers: paths under /var, no content
+                needs_unknown: _,    // identifiers: a key, a path and a line, never the value
                 disposition: _,      // decision
                 locked: _,           // decision
                 aggregate: _,        // fleet counts
@@ -2389,6 +2421,55 @@ mod tests {
         assert_eq!(finding(Some(serde_json::json!(true))), Some(true));
         assert_eq!(finding(Some(serde_json::Value::Null)), None);
         assert_eq!(finding(None), None);
+    }
+
+    /// A state change's `needs_unknown` round-trips tagged by its cause,
+    /// and a row without one omits the field and loads as `None`.
+    #[test]
+    fn a_state_changes_needs_unknown_round_trips() {
+        let name = UnitName::try_from("w@a.service".to_owned()).expect("a unit name");
+        let unit = CarriedUnit::try_from(
+            UnitSubject::new(
+                name,
+                UnitFragment::Vendor {
+                    file: UnitName::try_from("w@.service".to_owned()).expect("a unit name"),
+                    owning_package: None,
+                },
+            )
+            .expect("a subject"),
+        )
+        .expect("a carried unit");
+        let plain = UnitStateChange::new(unit, UnitState::Enabled, None).expect("a state change");
+        let json = serde_json::to_value(&plain).expect("serializes");
+        assert!(json.get("needs_unknown").is_none(), "{json}");
+        for (cause, wire) in [
+            (
+                InstanceNeedsUnknown::Uninterpretable {
+                    key: "ExecStart".to_owned(),
+                    path: "/usr/lib/systemd/system/w@.service".to_owned(),
+                    line: 2,
+                },
+                serde_json::json!({
+                    "cause": "uninterpretable",
+                    "key": "ExecStart",
+                    "path": "/usr/lib/systemd/system/w@.service",
+                    "line": 2,
+                }),
+            ),
+            (
+                InstanceNeedsUnknown::Unreadable {
+                    path: "/etc/systemd/system/service.d".to_owned(),
+                },
+                serde_json::json!({"cause": "unreadable", "path": "/etc/systemd/system/service.d"}),
+            ),
+        ] {
+            let mut change = plain.clone();
+            change.needs_unknown = Some(cause);
+            let json = serde_json::to_value(&change).expect("serializes");
+            assert_eq!(json["needs_unknown"], wire);
+            let back: UnitStateChange = serde_json::from_value(json).expect("loads");
+            assert_eq!(back, change);
+        }
     }
 
     /// Each reason an `[Install]` section is undetermined round-trips as
