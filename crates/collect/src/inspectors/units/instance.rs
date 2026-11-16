@@ -44,13 +44,6 @@ const INSTANCE_CONFIG_TABLE: [(&str, &str); 3] = [
 /// name, and that path (Mark Russell, 2026-11-13).
 const INSTANCE_DATA_TABLE: [(&str, &str); 1] = [("dirsrv@.service", "/var/lib/dirsrv/slapd-%i")];
 
-/// The attention note of an enabled instance of a template on no list
-/// whose unit file names nothing it reads or keeps (§ 7.5, Mark Russell,
-/// 2026-11-13).
-pub(crate) const INSTANCE_READS_UNKNOWN: &str = "inspectah does not know what this instance \
-     reads: its template is on no list, and its unit file names no path under /etc or /var \
-     for it. It is carried on its unit file alone.";
-
 /// Whether `template` is on one of the three fixed lists of § 7.5: the
 /// configuration and data tables here, and the templates tied to a host's
 /// devices.

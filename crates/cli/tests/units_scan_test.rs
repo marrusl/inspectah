@@ -9454,10 +9454,13 @@ const T_TEMPLATE: &str = "t@.service";
 const T_TEMPLATE_PATH: &str = "/usr/lib/systemd/system/t@.service";
 
 /// § 7.5's attention note for an instance of a template on no list whose
-/// unit file names nothing it reads.
+/// unit file names nothing it reads, as the collector records it.
 const INSTANCE_READS_UNKNOWN: &str = "inspectah does not know what this instance reads: its \
-     template is on no list, and its unit file names no path under /etc or /var for it. It is \
-     carried on its unit file alone.";
+     template is on no list, and its unit file names no path under /etc or /var for it.";
+
+/// The note the plan adds to [`INSTANCE_READS_UNKNOWN`] on the refine row
+/// once the instance's enable is planned.
+const INSTANCE_CARRIED_ALONE: &str = "It is carried on its unit file alone.";
 
 /// A template `t@.service` wanted by `multi-user.target`, with
 /// `DefaultInstance=` when given.
@@ -9630,8 +9633,8 @@ fn t27_an_enabled_instance_found_by_its_link_is_carried() {
         Some(INSTANCE_READS_UNKNOWN)
     );
     assert_eq!(
-        unit_row(&snap, UNIT).attention_reason.as_deref(),
-        Some(INSTANCE_READS_UNKNOWN)
+        unit_row(&snap, UNIT).attention_reason,
+        Some(format!("{INSTANCE_READS_UNKNOWN} {INSTANCE_CARRIED_ALONE}"))
     );
     assert_instance_carried(&snap, UNIT, "one parent");
 
@@ -9699,6 +9702,52 @@ fn t27_an_enabled_instance_found_by_its_link_is_carried() {
     let present = scan(host(true));
     assert_eq!(change(&present, UNIT).attention_reason, None);
     assert_instance_carried(&present, UNIT, "configuration present");
+}
+
+/// R3: the unknown-template note claims carriage only for an enable the
+/// plan carries. `worker@a.timer`'s template is on no list and names
+/// nothing it reads, so its row has the collector's note; carried, refine
+/// adds that it is carried on its unit file alone. With its trigger's file
+/// excluded, the enable is declined as `TimerTriggerNotStaged` and the row
+/// keeps the collector's note with no carriage claim. With its unit file
+/// excluded, likewise.
+#[test]
+fn the_unknown_template_note_claims_carriage_only_when_carried() {
+    let snap = scan(t37_instance_host(""));
+    assert_eq!(
+        change(&snap, WORKER_INSTANCE_TIMER)
+            .attention_reason
+            .as_deref(),
+        Some(INSTANCE_READS_UNKNOWN)
+    );
+    assert_eq!(
+        unit_row(&snap, WORKER_INSTANCE_TIMER).attention_reason,
+        Some(format!("{INSTANCE_READS_UNKNOWN} {INSTANCE_CARRIED_ALONE}"))
+    );
+    for (label, file, reason) in [
+        ("trigger", "worker@.service", "TimerTriggerNotStaged"),
+        ("unit file", "worker@.timer", "UnitFileNotStaged"),
+    ] {
+        let excluded = [(config_item(&etc_path(file)), false)];
+        let refine = session_after(&snap, &excluded);
+        assert_eq!(
+            declined_in(&refine, WORKER_INSTANCE_TIMER).map(|d| d.reason),
+            Some(reason.to_owned()),
+            "{label}"
+        );
+        let row = refine
+            .decisions()
+            .unit_states
+            .iter()
+            .find(|r| r.unit.as_str() == WORKER_INSTANCE_TIMER)
+            .cloned()
+            .expect("the row");
+        assert_eq!(
+            row.attention_reason.as_deref(),
+            Some(INSTANCE_READS_UNKNOWN),
+            "{label}"
+        );
+    }
 }
 
 /// Rule 6 (§ 10.8): a configuration path the template names with a `..`

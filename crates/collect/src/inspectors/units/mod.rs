@@ -11,11 +11,11 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::finding::ShadowType;
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use inspectah_core::types::units::{
-    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, DefaultTarget, InstallUnknown,
-    ManualLink, MountUnitFinding, PresetDefault, StorageKind, SystemdDropIn, TargetUnit,
-    UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES, UndeterminedInstall, UnitFragment,
-    UnitInventoryEntry, UnitKind, UnitName, UnitSection, UnitState, UnitStateChange, UnitSubject,
-    holds_install_section, logical_lines,
+    AdminStorageFragment, AdvisoryUnit, AlsoMember, Classified, DefaultTarget,
+    INSTANCE_READS_UNKNOWN, InstallUnknown, ManualLink, MountUnitFinding, PresetDefault,
+    StorageKind, SystemdDropIn, TargetUnit, UNIT_FILE_WHITESPACE, UNIT_TYPE_SUFFIXES,
+    UndeterminedInstall, UnitFragment, UnitInventoryEntry, UnitKind, UnitName, UnitSection,
+    UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -878,8 +878,9 @@ fn build_state_changes(
                     change.required_config = needs.required_config;
                     change.data_paths = needs.data_paths;
                     // § 7.5: an instance of a template on no list that
-                    // names nothing it reads is carried on its unit file
-                    // alone, with a note saying so.
+                    // names nothing it reads gets a note saying so; the
+                    // plan adds that it is carried on its unit file alone
+                    // once its enable is planned.
                     let unknown = change
                         .unit()
                         .name()
@@ -887,10 +888,7 @@ fn build_state_changes(
                         .is_some_and(|parts| !instance::on_a_list(&parts.template()));
                     if unknown && change.required_config.is_empty() && change.data_paths.is_empty()
                     {
-                        add_note(
-                            &mut change.attention_reason,
-                            instance::INSTANCE_READS_UNKNOWN,
-                        );
+                        add_note(&mut change.attention_reason, INSTANCE_READS_UNKNOWN);
                     }
                 }
                 state_changes.push(change);

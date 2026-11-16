@@ -12,10 +12,10 @@ use inspectah_core::types::redaction::{RedactionKind, RedactionState};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::TimerTrigger;
 use inspectah_core::types::units::{
-    AlsoMember, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
-    MemberLinks, MountUnitFinding, OrdinaryKind, StorageKind, SystemdDropIn, TargetUnitName,
-    UndeterminedInstall, UnitAction, UnitFragment, UnitKind, UnitName, UnitState, UnitStateChange,
-    holds_install_section, systemd_reads_drop_in,
+    AlsoMember, CarriedUnit, INSTANCE_CARRIED_ALONE, INSTANCE_READS_UNKNOWN, InstallUnknown,
+    LinkRelation, ManualLink, ManualLinkCause, MemberLinks, MountUnitFinding, OrdinaryKind,
+    StorageKind, SystemdDropIn, TargetUnitName, UndeterminedInstall, UnitAction, UnitFragment,
+    UnitKind, UnitName, UnitState, UnitStateChange, holds_install_section, systemd_reads_drop_in,
 };
 
 use inspectah_core::types::verified_upload::VerifiedUploads;
@@ -556,8 +556,10 @@ pub struct UnitPlan {
     pub advisories: Vec<ServiceAdvisory>,
     /// The attention notes of carried instance enables (§ 10.8): a
     /// configuration path staged from a scan with no redaction, or holding
-    /// a value the redaction pass flagged and did not change. Not a
-    /// Containerfile line: refine shows each on its row.
+    /// a value the redaction pass flagged and did not change, and
+    /// [`INSTANCE_CARRIED_ALONE`] for a row the collector gave
+    /// [`INSTANCE_READS_UNKNOWN`]. Not a Containerfile line: refine shows
+    /// each on its row.
     pub instance_notes: Vec<(UnitName, String)>,
     /// § 10.8 "Data under `/var`": one sentence per carried instance
     /// enable whose `data_paths` is not empty ([`data_advisory`]). Written
@@ -2711,6 +2713,18 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
                         .iter()
                         .map(|note| (planned.name.clone(), note.clone())),
                 );
+                // § 7.5, R3: the unknown-template note claims carriage only
+                // for an instance enable the plan carries.
+                if planned.action == UnitAction::Enable
+                    && planned.name.instance().is_some()
+                    && sc
+                        .attention_reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains(INSTANCE_READS_UNKNOWN))
+                {
+                    plan.instance_notes
+                        .push((planned.name.clone(), INSTANCE_CARRIED_ALONE.to_owned()));
+                }
                 if planned.action == UnitAction::Enable
                     && planned.name.instance().is_some()
                     && let Some(sentence) = data_advisory(&planned.name, &sc.data_paths)

@@ -301,9 +301,12 @@ read by its own name, so a bare template rule does not match it.
 
 **The unknown-template note.** An `Enabled` instance of a template on no
 § 7.5 list (`instance::on_a_list`: the config and data tables and the
-device templates) with both lists empty gets `INSTANCE_READS_UNKNOWN` as
-its `attention_reason` (appended to any earlier note): it is carried on
-its unit file alone.
+device templates) with both lists empty gets `INSTANCE_READS_UNKNOWN`
+(in core) as its `attention_reason` (appended to any earlier note). The
+note claims no carriage: the plan adds `INSTANCE_CARRIED_ALONE` to
+`instance_notes` only once that enable is planned, so an omitted instance
+keeps its other notes with no carriage claim (a provisional ruling for the
+owner, 2026-11-15).
 
 **What an enabled instance needs** (`instance.rs`). An `Enabled` instance
 row records `required_config` (paths under `/etc`, kept whether or not

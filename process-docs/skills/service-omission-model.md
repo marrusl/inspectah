@@ -102,8 +102,8 @@ required directory would pass it. A `required_config`
 path with a `..` component is kept by the collector and fails first, as
 `Unverifiable` naming it ("inspectah cannot tell which file it reads"),
 whatever the export holds, since `Destination` refuses `..` (a
-provisional ruling for the owner; it said "is not in the export" until
-2026-11-15, which misdiagnosed a clean, staged file).
+provisional ruling for the owner, 2026-11-15): "is not in the export"
+would misdiagnose a clean, staged file.
 Package ownership is never evidence: a package-owned file the
 administrator did not change has no config entry and fails, by design
 (§ 10.8 "Only a file the export carries passes"). Not captured is checked
@@ -117,7 +117,9 @@ to `UnitPlan.instance_notes` only once the enable is planned (after rule
 `attention_reason`; they are not Containerfile lines. An instance with an
 empty `required_config` passes; when its template is on no § 7.5 list and
 `data_paths` is empty too, the collector gives the row
-`INSTANCE_READS_UNKNOWN` as its note.
+`INSTANCE_READS_UNKNOWN` as its note, and a planned enable of such a row
+gets `INSTANCE_CARRIED_ALONE` in `instance_notes` (found by the note on
+the row, the only trace of the lists the plan cannot read).
 
 **Data under `/var` (§ 10.8).** A carried instance `enable` (after rule
 7) whose row has a non-empty `data_paths` gets one sentence in
