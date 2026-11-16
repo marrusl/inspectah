@@ -42,7 +42,6 @@ import {
   revealPlan,
   rowKeyForItemId,
   showGroups,
-  shownOutcomeRowCount,
   shownRowCount,
   type FilterValue,
   type GroupId,
@@ -1221,7 +1220,7 @@ export function ServiceSection({
       setFilter(value);
       clearPins();
       const next = showGroups(groups, { filter: value, query: filterText, pins: NO_PINS });
-      setAnnouncement(liveRegionText(value, shownOutcomeRowCount(next)));
+      setAnnouncement(liveRegionText(value, shownRowCount(next)));
     },
     [groups, filterText, clearPins],
   );
@@ -1283,7 +1282,7 @@ export function ServiceSection({
           query: plan.clearQuery ? NO_QUERY : filterText,
           pins: NO_PINS,
         });
-        setAnnouncement(liveRegionText("all", shownOutcomeRowCount(all)));
+        setAnnouncement(liveRegionText("all", shownRowCount(all)));
       }
       if (plan.clearPins) clearPins();
       const openGroup = plan.openGroup;

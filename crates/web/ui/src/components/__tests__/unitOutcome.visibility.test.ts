@@ -23,12 +23,12 @@ import {
   keyFields,
   liveRegionText,
   locateRow,
+  outcomeCounts,
   pinsInView,
   revealPlan,
   rowKey,
   sectionSearchText,
   showGroups,
-  shownOutcomeRowCount,
   shownRowCount,
   type FilterValue,
   type GroupId,
@@ -627,10 +627,11 @@ describe("the filter bar and the live region's count (§ 6.4)", () => {
     expect(filterBarDrawn(counts)).toBe(drawn);
   });
 
-  it("counts the shown rows with an outcome, not the orphan drop-ins", () => {
-    // 19 unit rows, the target and 3 reported rows: the All count, without
-    // the sshd.service orphan that shownRowCount includes.
-    expect(shownOutcomeRowCount(showGroups(ksGroups, state()))).toBe(23);
+  it("announces the rows now shown under All, the orphan drop-in included", () => {
+    // 19 unit rows, the target, 3 reported rows and the sshd.service orphan,
+    // while the All count is 23.
+    expect(shownRowCount(showGroups(ksGroups, state()))).toBe(24);
+    expect(outcomeCounts(ksKeyed).all).toBe(23);
   });
 
   it.each<[FilterValue, number]>([
@@ -638,15 +639,26 @@ describe("the filter bar and the live region's count (§ 6.4)", () => {
     ["carried", 14],
     ["excluded", 0],
   ])("matches the %s count with no pin", (filter, n) => {
-    expect(shownOutcomeRowCount(showGroups(ksGroups, state({ filter })))).toBe(n);
+    expect(shownRowCount(showGroups(ksGroups, state({ filter })))).toBe(n);
   });
 
   it("counts the target once and a pinned branch's head, not its drop-ins", () => {
     const httpd = headKey(ksGroups, "httpd.service");
     const shown = showGroups(ksGroups, state({ filter: "needs_follow_up", pins: new Set([httpd]) }));
-    expect(shownOutcomeRowCount(shown)).toBe(10);
+    expect(shownRowCount(shown)).toBe(10);
     const target = showGroups(ksGroups, state({ filter: "carried", query: "graphical" }));
-    expect(shownOutcomeRowCount(target)).toBe(1);
+    expect(shownRowCount(target)).toBe(1);
+  });
+
+  it("counts an orphan drop-in that is the only row of its group", () => {
+    const fields = loadUnitFields("stock10");
+    fields.default_target = { ...fields.default_target!, include: false };
+    fields.unit_dropins = kitchenSink.unit_dropins.filter((d) => d.unit === "sshd.service");
+    const shown = showGroups(groupUnits(keyFields(fields)), state());
+    expect(shown.map((g) => g.id)).toEqual(["default_target", "services"]);
+    expect(shown[1].branches).toEqual([]);
+    expect(shownRowCount(shown)).toBe(2);
+    expect(shownRowCount(showGroups(ksGroups, state({ query: "sshd" })))).toBe(1);
   });
 });
 

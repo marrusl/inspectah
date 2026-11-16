@@ -596,29 +596,18 @@ export function showGroups(groups: UnitGroupModel[], state: ShowState): ShownGro
   return out;
 }
 
-/** `resultCount` (§ 6.12): unit rows, the target, orphan drop-ins, reported rows. */
+/**
+ * The rows shown (§ 6.12 `resultCount`): unit rows, the target, orphan
+ * drop-ins and reported rows; nested drop-ins are not counted. Also the
+ * live region's n after a filter change (§ 6.4 Announcement: "the number
+ * of rows now shown").
+ */
 export function shownRowCount(shown: ShownGroup[]): number {
   let n = 0;
   for (const group of shown) {
     if (group.target) n += 1;
     n += group.branches.length;
     for (const block of group.orphans) n += block.dropins.length;
-    for (const block of group.reported) n += block.rows.length;
-  }
-  return n;
-}
-
-/**
- * The live region's n (§ 6.4 Announcement): the shown rows that have an
- * outcome, the rows the filter counts (unit rows, the target, reported
- * rows), so "Showing all n rows." agrees with "All n". Drop-ins, nested or
- * orphan, are not counted.
- */
-export function shownOutcomeRowCount(shown: ShownGroup[]): number {
-  let n = 0;
-  for (const group of shown) {
-    if (group.target) n += 1;
-    n += group.branches.length;
     for (const block of group.reported) n += block.rows.length;
   }
   return n;

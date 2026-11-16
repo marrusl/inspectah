@@ -391,7 +391,71 @@ describe("U33: the live region", () => {
     await select("Carried");
     expect(liveRegion()!.textContent).toBe("Showing 14 carried rows.");
     await select("All");
-    expect(liveRegion()!.textContent).toBe("Showing all 23 rows.");
+    // The rows now shown: 23 with an outcome and the sshd.service orphan
+    // drop-in, while the bar still reads All 23.
+    expect(liveRegion()!.textContent).toBe("Showing all 24 rows.");
+    expect(filterButton("All")).toHaveTextContent("All 23");
+  });
+
+  it("counts an orphan drop-in that is the only row of its group", async () => {
+    const fields = stock10WithTarget({ include: false });
+    fields.unit_dropins = loadUnitFields("kitchen-sink").unit_dropins.filter(
+      (d) => d.unit === "sshd.service",
+    );
+    renderUnits(fields);
+    expect(groupTitles()).toEqual(["Default target", "Services"]);
+    expect(unitRows("Services")).toEqual([]);
+    await select("Excluded");
+    expect(liveRegion()!.textContent).toBe("Showing 1 excluded row.");
+    await select("All");
+    expect(liveRegion()!.textContent).toBe("Showing all 2 rows.");
+    expect(barTexts()[0]).toBe("All 1");
+  });
+
+  it("states the rows now shown when a reveal sets the filter to All", async () => {
+    const fields = loadUnitFields("kitchen-sink");
+    const { rerender } = renderUnits(fields);
+    await select("Carried");
+    rerender(
+      <ServiceSection
+        services={fields.unit_states}
+        dropins={fields.unit_dropins}
+        mountFindings={fields.mount_findings}
+        manualLinks={fields.manual_links}
+        undeterminedInstalls={fields.undetermined_installs}
+        defaultTarget={fields.default_target}
+        revealItemId="cups.service"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        pendingGuard={stubGuard}
+      />,
+    );
+    expect(selected()).toBe("All");
+    expect(liveRegion()!.textContent).toBe("Showing all 24 rows.");
+  });
+
+  it("counts the rows shown under a section query", async () => {
+    const fields = loadUnitFields("kitchen-sink");
+    render(
+      <ServiceSection
+        services={fields.unit_states}
+        dropins={fields.unit_dropins}
+        mountFindings={fields.mount_findings}
+        manualLinks={fields.manual_links}
+        undeterminedInstalls={fields.undetermined_installs}
+        defaultTarget={fields.default_target}
+        filterText="sshd"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        pendingGuard={stubGuard}
+      />,
+    );
+    await select("Carried");
+    expect(liveRegion()!.textContent).toBe("Showing 0 carried rows.");
+    await select("All");
+    // Only the sshd.service orphan drop-in matches, alone in Services.
+    expect(groupTitles()).toEqual(["Services"]);
+    expect(liveRegion()!.textContent).toBe("Showing all 1 row.");
   });
 
   it("states two excluded rows, plural", async () => {
