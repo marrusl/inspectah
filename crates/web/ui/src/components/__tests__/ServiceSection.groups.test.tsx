@@ -349,6 +349,48 @@ describe("ServiceSection true duplicates (U35 a)", () => {
   });
 });
 
+describe("ServiceSection grid structure: controls sit in cells", () => {
+  /** Every required_config path of a fixture, so each renders as a link. */
+  function requiredConfigPaths(fields: UnitFields): ReadonlySet<string> {
+    return new Set(fields.unit_states.flatMap((r) => r.required_config));
+  }
+
+  it.each(["kitchen-sink", "planted"] as const)(
+    "every link and button inside a role=row has a role=gridcell ancestor inside that row (%s)",
+    (name) => {
+      const fields = loadUnitFields(name);
+      render(
+        <ServiceSection
+          services={fields.unit_states}
+          dropins={fields.unit_dropins}
+          mountFindings={fields.mount_findings}
+          manualLinks={fields.manual_links}
+          undeterminedInstalls={fields.undetermined_installs}
+          defaultTarget={fields.default_target}
+          onNavigateToItem={vi.fn()}
+          onNavigateToConfig={vi.fn()}
+          configPaths={requiredConfigPaths(fields)}
+          onViewUpdate={vi.fn()}
+          onMutationError={vi.fn()}
+          pendingGuard={stubGuard}
+        />,
+      );
+      const controls = rows().flatMap((row) =>
+        Array.from(row.querySelectorAll<HTMLElement>("a, button, input")).map((el) => ({ row, el })),
+      );
+      // The fixtures draw Also= links and needed-configuration links.
+      expect(controls.filter(({ el }) => el.tagName === "A").length).toBeGreaterThan(0);
+      const outside = controls
+        .filter(({ row, el }) => {
+          const cell = el.closest('[role="gridcell"]');
+          return cell === null || cell.closest('[role="row"]') !== row;
+        })
+        .map(({ row, el }) => `${row.getAttribute("aria-label")}: ${el.textContent}`);
+      expect(outside).toEqual([]);
+    },
+  );
+});
+
 describe("ServiceSection data-unit-key", () => {
   it("gives every row its record's row key", () => {
     const planted = loadUnitFields("planted");

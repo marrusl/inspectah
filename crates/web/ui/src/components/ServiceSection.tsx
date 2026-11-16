@@ -580,7 +580,7 @@ function InstancePaths({
   onNavigateToConfig?: (path: string) => void;
 }) {
   return (
-    <div id={id} data-testid={testId} className="inspectah-unit-paths">
+    <div id={id} role="gridcell" data-testid={testId} className="inspectah-unit-paths">
       <span className="inspectah-unit-paths__label">{label}</span>
       {/* The spaces are not drawn in the flex row; they keep the paths
           apart in the text a screen reader reads from aria-describedby. */}
@@ -1002,7 +1002,7 @@ function UnitBranchView({
           />
         )}
         {svc.also && svc.also.length > 0 && (
-          <div className="inspectah-unit-paths inspectah-unit-also">
+          <div role="gridcell" className="inspectah-unit-paths inspectah-unit-also">
             <span className="inspectah-unit-paths__label">Also=</span>
             {svc.also.map((m) => {
               // A bare member name reveals `["unit_state", member]`, so it
