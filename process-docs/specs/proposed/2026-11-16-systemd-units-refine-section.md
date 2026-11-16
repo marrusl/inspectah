@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-16 |
-| Status | Proposed. Scope and seven design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. One question is open for Mark (§ 13): the Containerfile panel footer in the fleet view. |
+| Status | Proposed. Scope and eight design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. No question is open (§ 13). |
 | Scope | Single-host refine only: the "Systemd units" section (today "Services"), and five defects in the refine UI around it. Grouping and presentation. No field added to the view response, no snapshot or schema change, no change to what the Containerfile renders. |
 | Parent | Phase 6 of `process-docs/specs/implemented/2026-11-13-unified-systemd-units.md`, which recommends a section design in § 11.2 and leaves it to a frontend design pass. This spec is that pass's result. |
 | Basis | A design pass with mockups on a real kitchen-sink scan: the view response of a driftify kitchen-sink scan of RHEL 10.2 served by inspectah `e6591669`, unedited, and two stock hosts (RHEL 10.2 and RHEL 9.8) built from the stock-host records in `process-docs/skills/real-host-validation-runs.md`. The pass rendered three options in headless Chromium. It did not check keyboard use, screen readers or widths under 1440 px; § 6.13 states those requirements instead. |
@@ -75,6 +75,9 @@ Other things get in the way:
    Russell, 2026-11-16)
 7. **Phase 6 also fixes five defects in the current refine UI** (§ 9).
    (Mark Russell, 2026-11-16)
+8. **The Containerfile panel footer fix (§ 9.5) applies in single-host
+   mode only.** The fleet view's footer stays as it is. (Mark Russell,
+   2026-11-16)
 
 ## 3. Goals, non-goals, anti-goals
 
@@ -101,6 +104,8 @@ Other things get in the way:
   `AppShell` itself. Each change to them is scoped to single-host mode by
   the mechanism of § 6.15, and a regression test holds the fleet view
   unchanged (U34).
+- **The fleet view's Containerfile panel footer.** It keeps a sentence
+  that is wrong there too (§ 9.5, § 2 item 8). **Known limit.**
 - **Showing `Also=` repair commands on a row.** The Containerfile's
   `Also=` advisory gives the lines to add (`RUN systemctl enable --
   'cups.socket'` and so on); the view response carries only
@@ -462,6 +467,9 @@ or `x` on a focused row, the test ids `service-item-<unit>`,
 `service-group-<unit>`, `dropin-item-<path>`, `manual-link-<identity>`,
 `undetermined-install-<unit>`, `mount-finding-<unit>` and
 `default-target`, the `declined` note's classes, and every served string.
+Added: each row of this section carries its row key in `data-unit-key`
+(§ 6.11), on the element that carries its row test id, and the reveal
+reads the key in place of the test id.
 
 ### 6.7 Reported, not carried
 
@@ -564,13 +572,13 @@ With "Needs follow-up" selected, the same host shows Services with its 5
 declined rows, Other units with `tmp.mount`, and Reported, not carried;
 Default target, Sockets and Timers are not drawn.
 
-### 6.11 Reaching a row: Scheduled Tasks, `Also=`, search
+### 6.11 Reaching a row: Scheduled Tasks, `Also=`, search, "Go to owner"
 
 Every route that sends the operator to a row in this section lands on
 it, shown and focused, whatever the section's filter, collapse state and
 section search.
 
-**Routes.** All three end in `App.tsx`'s `handleNavigateFromSearch`,
+**Routes.** All four end in `App.tsx`'s `handleNavigateFromSearch`,
 which sets `revealItemId`, the pending focus item and the navigation
 counter:
 
@@ -587,15 +595,53 @@ counter:
   The section does not change, so the section stays mounted with its
   filter, collapse state and query as they were; the reveal below
   undoes whichever of them hides the destination.
+- **"Go to owner"** on a config row a drop-in shadows (`shadowOwner.ts`,
+  through `MainContent`'s `onNavigateToItem`). It changes section, so
+  the units section mounts fresh, as for Scheduled Tasks. It sends the
+  drop-in's row key (below), not its bare `path`.
 
-**Which row an item id names.** Resolved against this section's rows:
+**Row keys.** Every row of this section has a row key: its kind and its
+complete identity, JSON-encoded as an array of strings, kind first. One
+pure function in `unitOutcome.ts` builds it from a row, and one parses
+it back; nothing else spells a key.
 
-| Item id | Row |
-|---|---|
-| A bare unit name | The `unit_states` row with that `unit` (`service-item-<unit>`), never a reported row of the same name. The Scheduled Tasks link and `Also=` links send bare names, and both link only when such a row exists (`unit_row`; § 6.6 item 5). |
-| A drop-in `path` | That drop-in (`dropin-item-<path>`); its branch is its parent's, or itself when it is an orphan. |
-| `default-target` | The default target row. |
-| `manual-link-<identity>`, `undetermined-install-<unit>`, `mount-finding-<unit>` | The reported row with exactly that test id (§ 6.12). |
+| Row kind | Row key | Identity, from source |
+|---|---|---|
+| Unit state | `["unit_state", unit]` | `UnitStateView.unit`; the op's `ItemId` and guard key (`serviceKey`) name the unit alone |
+| Drop-in or full shadow | `["dropin", path]` | `path`; the op's `ItemId` and `dropinKey` name the path alone |
+| Default target | `["default_target"]` | none: a snapshot records at most one (`ItemId::DefaultTarget` has no key) |
+| Manual link | `["manual_link", relation, parent, unit]` | `relation`, `parent` and `unit`, as `linkIdentity` in `ServiceSection.tsx` encodes them; `cause` is not part of it |
+| Undetermined install | `["undetermined_install", unit]` | `unit`, the row's React key today (`["undetermined", unit]`) |
+| Mount finding | `["mount_finding", unit]` | `unit`, the row's React key today |
+
+`relation` is the wire word (`wants`, `requires`, `upholds`, `alias`,
+`also`). Each row carries its key in a `data-unit-key` attribute.
+
+**Which row an item id names.** An item id that reaches this section is
+one of two forms, told apart by its first character:
+
+| Item id | Sent by | Row |
+|---|---|---|
+| Starts with `[`: a row key | Global search (every units entry, § 6.12); "Go to owner" (`["dropin", path]`) | The row whose own key equals it, compared as a string |
+| Anything else: a bare unit name | The Scheduled Tasks link and `Also=` links only | Read as `["unit_state", <name>]`: the `unit_states` row with that `unit`, never a reported row of the same name. Both links link only when such a row exists (`unit_row`; § 6.6 item 5). |
+
+The two forms cannot be confused. A bare id is a unit name, and
+`UnitName` admits only ASCII letters and digits and `:_.\@-`
+(`UNIT_NAME_PUNCTUATION` in `crates/core/src/types/units.rs`, enforced
+by `TryFrom<String> for UnitName`); every unit field of the rows above
+is a `UnitName` in the projection (`UnitStateView`, `ManualLinkView`,
+`UndeterminedInstallView`, `MountFindingView`, and `AlsoView` for an
+`Also=` member). So a unit name never holds `[` or `"`, and every row
+key starts with `["`. Two row keys are equal only when their kinds and
+every identity part are equal, since a JSON array of strings decodes to
+exactly the strings it was built from; a separator inside a unit name
+(`-`, `:`, `.`) or a backslash (`backup\x2djob.timer`) is a character of
+a JSON string, never a boundary. A unit named
+`undetermined-install-demo.service` has the key
+`["unit_state","undetermined-install-demo.service"]`, and an undetermined
+install for `demo.service` has `["undetermined_install","demo.service"]`.
+An id that starts with `[` and does not parse to a key of the kinds above
+names no row.
 
 **The reveal.** When `revealItemId` names a row of this section, the
 destination is made visible before `App.tsx`'s reveal effect looks it
@@ -617,13 +663,18 @@ groups: `ServiceSection` owns collapse state and has opened the group
 before the lookup. A reveal that finds no row after these steps is a
 defect, and U26 proves it does not happen.
 
-**Reveal lookup.** `REVEAL_TESTID_PREFIXES` in `App.tsx` is unchanged.
-After the prefixes, the reveal tries the item id itself as an exact test
-id, so `default-target`, `manual-link-<identity>`,
-`undetermined-install-<unit>` and `mount-finding-<unit>` reach their
-rows. The fallback runs only when every prefix has failed, and every
-units item id is distinct (§ 6.12). Matching stays exact-string, never a
-CSS selector (`process-docs/skills/web-disposition-contract.md`).
+**Reveal lookup.** When the navigation's section is `units`, `App.tsx`'s
+reveal effect turns the item id into a row key as the table above says
+(a bare name becomes `["unit_state", <name>]`) and finds the element
+whose `data-unit-key` equals that key, compared as a string, as
+`elementByTestId` compares test ids; it never builds a CSS selector from
+the key (`process-docs/skills/web-disposition-contract.md`). It does not
+try `REVEAL_TESTID_PREFIXES` for `units`. Every other section resolves
+through the prefixes as today, and the list itself is unchanged. The test
+ids are no key for this section: `mount-finding-kind-<unit>`, the kind
+cell of one mount finding's row, is also the row test id of a mount
+finding for a unit named `kind-<unit>`, and `kind-tmp.mount` is a valid
+name.
 
 ### 6.12 Search
 
@@ -651,38 +702,59 @@ closes and clears as elsewhere.
 
 **Global search, single-host mode only.** In single-host mode
 (§ 6.15), `GlobalSearch` indexes the view response's rows in place of
-the `units` reference section. Each kind of row has its own item id, so
-no two entries share one:
+the `units` reference section. Every units entry is a
+`GlobalSearchResult` with `sectionId` `units`, `itemId` the row's key
+(§ 6.11), so the entry carries its kind, and its own search text:
 
-| Entry | `itemId` | Search text |
+| Entry | Kind in `itemId` | Search text |
 |---|---|---|
-| Each `unit_states` row | `unit` (resolves to `service-item-<unit>`) | as section search, minus drop-in paths |
-| The default target | `default-target` | `target`, `default target` |
-| Each `unit_dropins` entry | `path` (as today) | `path`, `unit` |
-| Each manual link | its row test id, `manual-link-<identity>`, with the identity as `linkIdentity` builds it | `unit`, `parent`, `relation`, advisories |
-| Each undetermined install | its row test id, `undetermined-install-<unit>` | `unit`, reason, `install_files`, advisories |
-| Each mount finding | its row test id, `mount-finding-<unit>` | `unit`, `kind`, `mount_point`, advisories |
+| Each `unit_states` row | `unit_state` | as section search, minus drop-in paths |
+| The default target | `default_target` | `target`, `default target` |
+| Each `unit_dropins` entry | `dropin` | `path`, `unit` |
+| Each manual link | `manual_link` | `unit`, `parent`, `relation`, advisories |
+| Each undetermined install | `undetermined_install` | `unit`, reason, `install_files`, advisories |
+| Each mount finding | `mount_finding` | `unit`, `kind`, `mount_point`, advisories |
 
-A unit name can appear in more than one of these collections: the
-snapshot keeps `state_changes`, `mount_findings`, `manual_links` and
-`undetermined_installs` as separate lists (`UnitSection` in
-`crates/core/src/types/units.rs`), loading does not require them to be
-disjoint, and the projection projects each on its own
-(`project_decisions`). The item ids above keep such rows apart: each
-result has its own search text and focuses its own row, and a bare unit
-name means the `unit_states` row (§ 6.11). Two entries of one kind with
-the same unit would share a row test id as well; that is a data defect
-outside this section and is not handled here.
+**Search text travels on the entry.** `GlobalSearchResult` gains an
+optional `searchText`, lowercased, which only units entries set, and the
+filter reads `r.searchText` before its two map lookups. Units entries put
+nothing in `searchTextMap`, so no map key, bare or `sectionId:itemId`,
+can hand one entry another's text. Every other section's entries keep
+the map as today. The drop-in entries already built from
+`serviceDropins` take the `dropin` key and carry their text in single-host
+mode; only `SingleHostApp` sets that prop (`App.tsx`,
+`searchServiceDropins`), so the fleet view has no drop-in entries either
+way.
 
-In single-host mode it stops indexing the reference section whose `id`
-is `units`; every other reference section is indexed as today.
+**Duplicates are by complete identity.** The identity of each kind is
+the one in § 6.11's row-key table. A unit name can appear in more than
+one kind: the snapshot keeps `state_changes`, `drop_ins`,
+`mount_findings`, `manual_links` and `undetermined_installs` as separate
+lists (`UnitSection` in `crates/core/src/types/units.rs`), and loading
+does not require them to be disjoint. Within one kind, rows that differ
+in any part of the identity are different rows: two manual links for one
+unit with a different `relation` or `parent` are both valid, since the
+collector emits one record per link (`link_findings` and
+`apply_install_difference` in
+`crates/collect/src/inspectors/units/links.rs`), and all of them are
+rendered, indexed and found, each focusing its own row. A true duplicate is two
+rows of one kind with the same complete identity. The response can carry
+one: `UnitSection` is a plain serde struct whose lists have no
+uniqueness check, and the projection makes one view per record
+(`link_finding_views` and `mount_finding_views` in
+`crates/refine/src/projection/decisions.rs`) and merges none, so a
+snapshot that holds a duplicate passes it to the browser. The section
+adds no handling for it: each record is rendered and indexed as any
+other, and since both entries share one key, both results reveal the
+first row in section order that carries it.
+
+In single-host mode `GlobalSearch` stops indexing the reference section
+whose `id` is `units`; every other reference section is indexed as today.
 `/api/snapshot/sections` and `adapter.rs` are unchanged, and nothing else
 in the single-host UI reads the `units` reference section (it is not in
 `MainContent`'s `contextSectionIds`). Because `declined.text` is indexed,
-an omitted unit is found by its reason. Entries use the existing
-`sectionId:itemId` composite key for the search-text map, so a unit name
-cannot collide with another section's bare id. Units results are
-labelled "Systemd units" (string 1).
+an omitted unit is found by its reason. Units results are labelled
+"Systemd units" (string 1).
 
 In aggregate mode `GlobalSearch` is unchanged: it indexes the fleet
 view's `units` section through `buildAggregateSearchSections`, labels
@@ -787,12 +859,12 @@ mechanism: `AppShell`'s existing `isAggregateMode` prop, which
   `mount_findings`, `manual_links`, `undetermined_installs`), which
   `AggregateApp` does not set.
 - `GlobalSearch` with `isAggregateMode` false applies § 6.12: the unit
-  rows indexed, the `units` reference section skipped, units results
-  labelled "Systemd units". With it true, indexing, labels and
-  navigation are as today.
+  rows indexed under their row keys with their own search text, the
+  `units` reference section skipped, units results labelled "Systemd
+  units". With it true, indexing, labels and navigation are as today.
 - `ContainerfilePanel` with `isAggregateMode` false shows string 25 as
-  its footer (§ 9.5). With it true, the footer is today's text; § 13
-  asks Mark whether the fleet view should take the fix as well.
+  its footer (§ 9.5). With it true, the footer is today's text (§ 2
+  item 8).
 - `isAggregateMode` keeps its current effect on the panel's default
   open state; its doc comment in `AppShell.tsx` names both uses.
 
@@ -839,7 +911,7 @@ configuration:", "Keeps data in:", "Not in the export:", "Instance of",
 | 22 | `Showing {n} excluded rows.` (`1 excluded row`) | Live region |
 | 23 | `Unit excluded` | Drop-in badge while its parent is excluded (was `Service excluded`) |
 | 24 | `Incompatible with image mode` | Badge and checkbox label of a locked row whose `attention_reason` is `service-image-mode-incompatible` (§ 9.3) |
-| 25 | `Preview reflects every include and exclude decision you make in refine.` | Containerfile panel footer in single-host mode (§ 9.5, § 6.15; the fleet view is § 13) |
+| 25 | `Preview reflects every include and exclude decision you make in refine.` | Containerfile panel footer in single-host mode (§ 9.5, § 6.15) |
 
 Strings 17 and 18 are short names for a wire word, like the triage labels
 in `attentionUtils.ts`; the sentence that explains each case stays the
@@ -853,7 +925,8 @@ served advisory line under the row.
   (§ 6.1); the filter counts (§ 6.4); grouping into the seven groups with
   sort order and orphan placement (§ 6.2, § 6.8); filter and search
   matching (§ 6.4, § 6.12); reported rows grouped per unit (§ 6.6 item
-  11); the relation and cause label maps (§ 7). Tested directly.
+  11); the relation and cause label maps (§ 7); building a row's key
+  and parsing an item id into one (§ 6.11). Tested directly.
 - `components/UnitGroup.tsx`: a collapsible group, header (title, count,
   flag) and labelled grid. Follows `TriageBucketGroup`'s button pattern;
   `TriageBucketGroup` itself is not reused, since its labels and colours
@@ -867,9 +940,11 @@ served advisory line under the row.
   changes of § 6.6; filter state, pinned branches, collapse state and
   its part of the reveal (§ 6.11 steps 2 and 3); `Also=` links through
   `onNavigateToItem`; roving focus and keys (§ 6.13); the empty states
-  (§ 6.9); the section search text; the locked label (§ 9.3). The file
-  and component names and the `service-section` test id stay, so the
-  reveal prefixes and existing tests keep working.
+  (§ 6.9); the section search text; the locked label (§ 9.3);
+  `data-unit-key` on every row, and resolving `revealItemId` to a row
+  through `unitOutcome.ts` (§ 6.11). The file and component names, the
+  `service-section` test id and every row test id stay, so existing
+  tests keep working.
 - `components/MainContent.tsx`: heading and label (§ 6.14); renders
   `SectionSearch` for `units` and passes the text, `revealItemId`,
   `onNavigateToItem` and `config_files` paths to the section; clears the
@@ -878,12 +953,16 @@ served advisory line under the row.
 - `components/AppShell.tsx`: passes `isAggregateMode` to `GlobalSearch`
   and `ContainerfilePanel`, and passes the unit-row search props through
   (§ 6.15).
-- `components/GlobalSearch.tsx`: the single-host index of § 6.12 and the
-  "Systemd units" label, both only while `isAggregateMode` is false
-  (§ 6.15).
+- `components/GlobalSearch.tsx`: the single-host index of § 6.12, with
+  row keys as item ids and the optional `searchText` on
+  `GlobalSearchResult`, read first by the filter, and the "Systemd
+  units" label, all only while `isAggregateMode` is false (§ 6.15).
 - `App.tsx`: `SingleHostApp` passes `unit_states`, `default_target` and
-  the reported rows to `AppShell` for `GlobalSearch`; the reveal tries
-  the item id as an exact test id after the prefixes (§ 6.11).
+  the reported rows to `AppShell` for `GlobalSearch`; for the `units`
+  section the reveal resolves the item id to a row key and finds the
+  element by `data-unit-key` instead of the prefixes (§ 6.11).
+- `components/shadowOwner.ts`: "Go to owner" sends the drop-in's row key
+  (§ 6.11); `shadowOwner.test.ts` expects that key as the target.
 - `components/Sidebar.tsx`: the Scheduled Tasks count (§ 9.4).
 - `components/ContainerfilePanel.tsx`: the single-host footer (§ 9.5,
   § 6.15).
@@ -987,9 +1066,8 @@ Confirmed by reading the component and where its content comes from.
 renders the same component, and its preview comes from the same
 projection (`aggregate_handlers.rs` passes the view's
 `containerfile_preview` through), so today's footer is wrong there too.
-§ 2 puts this fix in scope and also holds the fleet view unchanged; § 13
-asks Mark which governs the fleet footer. Until he answers, the fleet
-footer keeps today's text.
+The fix is single-host only (§ 2 item 8): the fleet footer keeps today's
+text, a known limit (§ 3.2).
 
 ## 10. Verification
 
@@ -1019,6 +1097,12 @@ footer keeps today's text.
     row declined because its recorded `[Install]` drop-in is excluded,
     and the same row after that drop-in is included again, with
     `declined` cleared, as the response the mocked `applyOp` returns.
+    For the row keys of § 6.11 it also has a `unit_states` row for a unit
+    literally named `undetermined-install-demo.service` beside an
+    undetermined install for `demo.service`, and three manual links for
+    one unit: two with relation `wants` under different parents
+    (`multi-user.target`, `graphical.target`), and one with relation
+    `requires` under `multi-user.target`.
     Strings copied from source, never invented.
   - `stock10.units.json` (target only) and `stock9.units.json` (target and
     `NetworkManager-wait-online.service`). U23's excluded and declined
@@ -1106,7 +1190,7 @@ footer keeps today's text.
 | U22 | "Unit excluded" on a drop-in whose parent is excluded. |
 | U23 | Empty states: `stock10` shows string 12 and no filter bar; `stock10` with the target excluded shows the bar with All 1 and Excluded 1, and with the target declined, the bar with All 1, Needs follow-up 1 and the hint, string 12 in both; an empty view shows string 13 and never "No service state changes detected."; a filter left empty shows string 14 and "Show all" resets it. |
 | U24 | Section search: `/` opens it in units; matching on `declined.text`, drop-in path (parent shown with its drop-ins), reported advisory text; result count; no-match `EmptyState`; ArrowDown focuses the first shown row; search and filter combine. |
-| U25 | Global search, single-host: a `unit_states` row, the default target, a manual link, an undetermined install and a mount finding are each indexed and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. |
+| U25 | Global search, single-host: a `unit_states` row, a drop-in, the default target, a manual link, an undetermined install and a mount finding are each indexed under their row key (§ 6.11) and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. Prefixed name: the unit row for `undetermined-install-demo.service` and the undetermined install for `demo.service` give two results with different item ids and different search text, the first focusing `service-item-undetermined-install-demo.service` and the second the undetermined-install row of `demo.service`; a bare-name navigation to `undetermined-install-demo.service` focuses the unit row. Several links for one unit: `planted`'s three manual links give three results; of those three, a search for `graphical` lists only the link under `graphical.target` and `requires` only the `requires` link, and each result focuses its own link row. "Go to owner" on a shadowed config focuses its drop-in. |
 | U26 | Reveal into retained state, mounting `App` with the units section open (§ 6.11). Each case starts with the destination hidden and ends with it shown and focused: an `Also=` link whose member is hidden by the filter (filter set to All), in a collapsed group (group opened), and failing the section query (query cleared, search box still open); a query the member matches is kept; a global search result selected from within the section, with a filter selected and the destination's group collapsed. |
 | U27 | Scheduled Tasks, reset on remount: in the units section, select a filter and collapse Timers; go to Scheduled Tasks, which unmounts the section; follow the timer row's link (`unit_row: true`). The section mounts with filter All and every group open, and the unit row is focused (extends `ScheduledTimer.unitLink.test.tsx`). |
 | U28 | Defect 9.3: with `planted`, the locked row's badge and checkbox label read "Incompatible with image mode"; the slug appears nowhere in the DOM; a null reason shows "LOCKED". |
@@ -1115,7 +1199,7 @@ footer keeps today's text.
 | U31 | Heading and labels: the heading is "Systemd units" with no shadow count; in single-host mode `GlobalSearch` labels units results "Systemd units". |
 | U32 | Keyboard and grid structure. Movement: `j`/`k`/arrows move across groups and skip collapsed ones; `g`/`G`; Space and `x` toggle. Structure: each header's `aria-controls` equals its grid's `id`; each grid's `aria-labelledby` names an element whose text is the group title; every `role="row"` element has a `role="rowgroup"` ancestor inside its `role="grid"`. Roving tab stop: exactly one row in the section has `tabIndex` 0 and it is shown (no `[hidden]` ancestor); this holds after collapsing the group that holds it, after a filter change and after a section query hides it, each time on the first shown row. Headers toggle on Enter and Space with `aria-expanded` updated. |
 | U33 | Live region: an element with `aria-live="polite"` is in the DOM, empty, before the first filter change; after each change its text is strings 19 to 22, singular and plural. |
-| U34 | Fleet view unchanged (§ 6.15), mounting `AggregateApp` with a fleet view holding a `units` section (extends `AggregateApp.integration.test.tsx`): a global search for one of its items lists a result labelled "Services", selecting it navigates as today, and no "Systemd units" text appears; the Containerfile panel footer reads today's text, an assertion § 13's answer keeps or changes. |
+| U34 | Fleet view unchanged (§ 6.15), mounting `AggregateApp` with a fleet view holding a `units` section (extends `AggregateApp.integration.test.tsx`): a global search for one of its items lists a result labelled "Services", selecting it navigates as today, and no "Systemd units" text appears; the Containerfile panel footer reads today's text (§ 2 item 8). |
 
 No Rust test asserts the `units` section label at `e6591669`; add one
 assertion for "Systemd units" beside the existing `SectionMeta` tests in
@@ -1165,9 +1249,8 @@ changes visibly and four of the fixes are user-visible bugs. Under
   "Non-Default State" badge), and that the fleet view is unchanged.
 - `### Fixed`: the empty-state text, section search in the units
   section, the locked row's badge, the Scheduled Tasks badge, and the
-  Containerfile panel footer in single-host refine (and in the fleet
-  view, if § 13 is answered that way). One entry each, or one entry
-  naming all five; the policy allows either.
+  Containerfile panel footer in single-host refine. One entry each, or
+  one entry naming all five; the policy allows either.
 
 **Docs under `docs/`.**
 
@@ -1193,7 +1276,8 @@ changes visibly and four of the fixes are user-visible bugs. Under
   holds the pure logic and is tested on its own.
 - How the pinned set is stored (a `Set` of branch keys, cleared by the
   events of § 6.4, is enough).
-- The exact form of the exact-test-id reveal fallback in `App.tsx`.
+- The exact form of the `data-unit-key` lookup in `App.tsx`, as long as
+  it compares strings and builds no selector from the key (§ 6.11).
 - How the reveal steps of § 6.11 are sequenced against `App.tsx`'s
   reveal frame (a layout effect keyed on the reveal request, or deriving
   the state during render), as long as the destination is shown when the
@@ -1205,28 +1289,7 @@ changes visibly and four of the fixes are user-visible bugs. Under
 
 ## 13. Open questions
 
-**Q1. Does the fleet view's Containerfile panel footer take the fix of
-§ 9.5?** `ContainerfilePanel` is shared through `AppShell`, and the
-fleet view's preview comes from the same `containerfile_preview`
-projection as single-host's, so the footer "Preview reflects package and
-config decisions. Context sections are included as-is." is wrong in the
-fleet view too. § 2 item 7 puts the five fixes in scope; § 2 item 2
-holds the fleet view unchanged. This spec specifies the fix for
-single-host mode only (§ 6.15) and leaves the fleet footer as it is
-until Mark answers.
-
-- **Option 1, fix it in both modes.** `ContainerfilePanel` shows string
-  25 whatever the mode, and needs no mode prop. Cost: a visible change
-  to the fleet view, which § 2 item 2 rules out unless Mark widens it
-  for this sentence; and string 25 says "every include and exclude
-  decision you make in refine", which this spec has checked against the
-  single-host view only. Before taking this option, someone checks that
-  every fleet-view decision reaches the preview, or the fleet view gets
-  its own sentence. U34's footer assertion changes to string 25.
-- **Option 2, single-host only (as specified).** Cost: the fleet view
-  keeps a sentence known to be wrong, `ContainerfilePanel` carries a
-  mode prop for one sentence, and the fleet design pass that § 3.2
-  defers has to remember to remove both. U34 asserts today's text.
+None.
 
 ## 14. The spec author's calls
 
@@ -1261,7 +1324,7 @@ review.
 10. The locked slug maps to "Incompatible with image mode" in the
     frontend rather than changing the served value (§ 9.3).
 11. The Scheduled Tasks count rule (§ 9.4) and the footer text (string
-    25), the footer in single-host mode only pending § 13.
+    25).
 12. Global search drops the `units` reference section in single-host mode
     instead of changing the server (§ 6.12).
 13. Row movement keys (`j`/`k`, arrows, `g`/`G`) are added to the units
@@ -1277,10 +1340,16 @@ review.
 17. A reveal clears the section query only when the query hides the
     destination; global search keeps clearing it always, as today
     (§ 6.11).
-18. Reported rows' search item ids are their row test ids, resolved by
-    an exact-test-id lookup after the existing prefixes, instead of new
-    reveal prefixes; a bare unit name always means the `unit_states` row
-    (§ 6.11, § 6.12).
+18. Every row of the section has a row key, its kind and complete
+    identity JSON-encoded as an array of strings, carried in
+    `data-unit-key`; global search and "Go to owner" send row keys, and
+    the reveal for `units` finds the row by that attribute instead of
+    by test-id prefixes, so no lookup order decides which row an id
+    names. A bare unit name, from the Scheduled Tasks and `Also=` links
+    only, always means the `unit_states` row (§ 6.11, § 6.12). New
+    reveal prefixes or a separator-joined id were not taken: a unit name
+    can hold `-`, `:` and `.`, so one prefix and name can spell another
+    prefix and name.
 19. A masked template's row sits in its kind group sorted by name, and
     instances never nest under it (§ 6.2).
 20. The roving tab stop moves to the first shown row when its row stops
@@ -1290,6 +1359,14 @@ review.
     trimmed, not hand-written; `/api/groups` is served from the
     system-tuning recording, which a test already holds to the real
     handler (§ 10.1).
+22. Units search entries carry their search text on the result
+    (`searchText` on `GlobalSearchResult`) rather than in
+    `searchTextMap`, so no map key can be shared (§ 6.12).
+23. A manual link's identity is `relation`, `parent` and `unit`, as
+    `linkIdentity` has it, without `cause`. A true duplicate (one kind,
+    one complete identity, twice) gets no handling: each record is
+    rendered and indexed, and both results reveal the first such row
+    (§ 6.12).
 
 ## 15. Related
 
