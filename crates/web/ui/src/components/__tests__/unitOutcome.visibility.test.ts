@@ -21,6 +21,7 @@ import {
   keyFields,
   liveRegionText,
   locateRow,
+  pinsInView,
   rowKey,
   sectionSearchText,
   showGroups,
@@ -515,5 +516,33 @@ describe("the filter bar and the live region's count (§ 6.4)", () => {
     expect(shownOutcomeRowCount(shown)).toBe(10);
     const target = showGroups(ksGroups, state({ filter: "carried", query: "graphical" }));
     expect(shownOutcomeRowCount(target)).toBe(1);
+  });
+});
+
+describe("pins kept by a new view (§ 6.4)", () => {
+  const httpd = headKey(ksGroups, "httpd.service");
+  const target = '["default_target"]#0';
+
+  it("keeps the pins whose occurrence key the view holds: a head, the target, an orphan", () => {
+    const pins = new Set([httpd, target, sshdOrphan().occurrenceKey]);
+    expect(pinsInView(pins, ksKeyed)).toBe(pins);
+  });
+
+  it("drops a pin whose record left the view", () => {
+    const without = keyFields({
+      ...kitchenSink,
+      unit_states: kitchenSink.unit_states.filter((r) => r.unit !== "httpd.service"),
+    });
+    expect([...pinsInView(new Set([httpd, target]), without)]).toEqual([target]);
+  });
+
+  it("drops the pin on a duplicate's second occurrence when that record leaves", () => {
+    const second = plantedKeyed.unitStates.filter((k) => k.record.data.unit === "dup-state-demo.service")[1];
+    const fewer = keyFields({
+      ...planted,
+      unit_states: planted.unit_states.filter((r) => r !== second.record.data),
+    });
+    // The first record keeps #0, so a row-key match would wrongly keep the pin.
+    expect([...pinsInView(new Set([second.occurrenceKey]), fewer)]).toEqual([]);
   });
 });

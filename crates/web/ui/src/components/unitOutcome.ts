@@ -635,6 +635,25 @@ export function branchHeadOf(groups: UnitGroupModel[], toggled: OccurrenceKey): 
   return toggled;
 }
 
+/**
+ * The pins a new view keeps (§ 6.4): a pin whose occurrence key the view
+ * no longer holds is dropped. Returns `pins` itself when none is dropped.
+ */
+export function pinsInView(pins: ReadonlySet<OccurrenceKey>, keyed: KeyedFields): ReadonlySet<OccurrenceKey> {
+  const present = new Set<OccurrenceKey>(
+    [
+      ...keyed.unitStates,
+      ...keyed.dropins,
+      ...(keyed.defaultTarget ? [keyed.defaultTarget] : []),
+      ...keyed.mountFindings,
+      ...keyed.manualLinks,
+      ...keyed.undeterminedInstalls,
+    ].map((k) => k.occurrenceKey),
+  );
+  const kept = [...pins].filter((pin) => present.has(pin));
+  return kept.length === pins.size ? pins : new Set(kept);
+}
+
 export interface RowLocation {
   groupId: GroupId;
   branchHead: OccurrenceKey;
