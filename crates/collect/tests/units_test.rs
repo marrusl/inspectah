@@ -5823,7 +5823,7 @@ fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
         "ExecStart=/usr/bin/worker \"/etc/worker/%i.conf",
         "ExecStart=/usr/bin/worker /etc/worker\\q/%i.conf",
         "EnvironmentFile=/etc/worker/%H/%i.env",
-        "ExecStart=/usr/bin/worker %E/worker/%i.conf",
+        "ExecStart=/usr/bin/worker %h/worker/%i.conf",
         "ReadOnlyPaths=\"/etc/worker/%i",
     ] {
         let text = template_with(&format!("{value}\n"));

@@ -23,7 +23,7 @@ All under `crates/collect/src/inspectors/units/`:
 | `install.rs` | The `[Install]` reader: `read_install`, `read_vendor_install`, `drop_in_dirs`, `InstallRead`, `InstallSection` |
 | `links.rs` | The links and what they mean: `read_host_links` (`HostLinks`), `expected_links`, `install_state`, `link_findings`, `compare_install`, `apply_install_difference`, `HOST_DEVICE_TEMPLATES` |
 | `also.rs` | The `Also=` walk: `also_name`, `also_members`, `is_off` |
-| `specifiers.rs` | `expand_unit_specifiers` and its `SpecifierSet`: `Install` for the reader, `Runtime` for the scheduled inspector's timer trigger |
+| `specifiers.rs` | `expand_unit_specifiers` and its `SpecifierSet`: `Install` for the reader, `Runtime` for the instance reader and the scheduled inspector's timer trigger; `SYSTEM_DIRECTORY_SPECIFIERS` |
 | `resolve.rs` | The file a name loads, and the search-path test (`UNREAD_SEARCH_PATH`) |
 | `mod.rs` | The name gate (`gate`), `linked_instances`, `install_evidence`, `install_difference`, `build_state_changes`, `default_target` |
 
@@ -465,7 +465,19 @@ the fixed tables. Non-obvious points:
   vendor drop-in recorded this way is never staged either, so its enable
   is withheld: toward omitting.
 - Values are expanded with `SpecifierSet::Runtime`, so `%I` is
-  unescaped; `[Install]` never is (`%I` is not expanded there).
+  unescaped, and the system manager's fixed directory specifiers expand
+  (`SYSTEM_DIRECTORY_SPECIFIERS`: `%t` `/run`, `%S` `/var/lib`, `%C`
+  `/var/cache`, `%L` `/var/log`, `%E` `/etc`, `%T` `/tmp`, `%V`
+  `/var/tmp`, read from systemd 252 and 257 and cited in the code).
+  `[Install]` expands neither: its table has no `%I` and no directory
+  specifier. Without `%t`, the shipped `openvpn-server@.service`
+  (`--status %t/openvpn-server/status-%i.log`) was uninterpretable and its
+  enable never carried (measured, 2026-11-16); its `/run` path is now no
+  requirement and the fixed table decides. `%T` and `%V` follow PID 1's
+  `$TMPDIR`, which the scan does not read. In a timer's `Unit=` a
+  directory specifier expands to a path, never a unit name, so the
+  trigger stays `Unresolved`. A test that needs a specifier the reader
+  does not expand uses `%h`.
 - A path counts only when the value itself holds `%i` or `%I`. An
   `EnvironmentFile=` with the `-` prefix and a negated condition (`!`) are
   left out. A triggering condition (`|`) is recorded as required although

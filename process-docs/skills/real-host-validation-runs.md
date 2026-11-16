@@ -1878,6 +1878,10 @@ state 'enabled' - its ExecStart= setting in
 for the instance that inspectah cannot read as systemd does, so what
 the instance reads is unknown and its enable is not carried`. The
 Containerfile names the unit nowhere. systemd expands `%t` to `/run`.
+The reader now expands `%t` and the system manager's other fixed
+directory specifiers, so the instance's `required_config` is the fixed
+table's `/etc/openvpn/server/<i>.conf` and its enable is carried when
+that file is staged.
 
 **`dirsrv@` names its directory.** The derivation finds both the
 directory and `dse.ldif` from the unit's own lines, and the fixed table

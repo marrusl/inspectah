@@ -10509,7 +10509,7 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// The unknown-needs warning names the unit, the setting and the file it
 /// is in, with its line, and never the value, which can hold a credential
 /// the redaction pass never sees in a warning. A command line holding a
-/// token and a path inspectah cannot expand (`%E`) declines the enable,
+/// token and a path inspectah cannot expand (`%h`) declines the enable,
 /// and the token is in no exported artifact: not in the snapshot or its
 /// warnings, not in any file either route writes (the snapshot JSON, the
 /// Containerfile, the scan's README, refine's audit report and the rest),
@@ -10519,7 +10519,7 @@ fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 fn an_uninterpretable_value_is_reported_without_its_value() {
     const UNIT: &str = "t@site.service";
     const SENTINEL: &str = "inspectah-sentinel-credential-5b1e";
-    let service = format!("ExecStart=/usr/bin/t --token={SENTINEL} --config=%E/t/%i.conf");
+    let service = format!("ExecStart=/usr/bin/t --token={SENTINEL} --config=%h/t/%i.conf");
     let snap = scan(t_reads_host(&service, &[]));
     assert_eq!(changes_named(&snap, UNIT), 0);
     let warning = snap
@@ -11867,6 +11867,92 @@ fn t28_a_carried_instance() {
     assert_eq!(row.attention_reason, None);
     assert_instance_carried(&snap, OPENVPN_SITE, "T28");
     assert_eq!(unit_row(&snap, OPENVPN_SITE).attention_reason, None);
+}
+
+/// The OpenVPN server template as EPEL ships it for RHEL 9
+/// (`openvpn-2.5.11`: upstream's `distro/systemd/openvpn-server@.service.in`
+/// at `v2.5.11` with the package's cipher patch) and RHEL 10
+/// (`openvpn-2.7.9`: upstream's at `v2.7.9`), `@sbindir@` as
+/// `/usr/sbin`. Its `ExecStart=` on line 13 names
+/// `%t/openvpn-server/status-%i.log`, which the system manager expands
+/// under `/run`, and § 7.5's table gives `/etc/openvpn/server/%i.conf`.
+const OPENVPN_SERVER_EL9: &str = "[Unit]\nDescription=OpenVPN service for %I\n\
+     After=syslog.target network-online.target\nWants=network-online.target\n\
+     Documentation=man:openvpn(8)\n\
+     Documentation=https://community.openvpn.net/openvpn/wiki/Openvpn24ManPage\n\
+     Documentation=https://community.openvpn.net/openvpn/wiki/HOWTO\n\n\
+     [Service]\nType=notify\nPrivateTmp=true\nWorkingDirectory=/etc/openvpn/server\n\
+     ExecStart=/usr/sbin/openvpn --status %t/openvpn-server/status-%i.log --status-version 2 \
+     --suppress-timestamps --cipher AES-256-GCM \
+     --data-ciphers AES-256-GCM:AES-128-GCM:AES-256-CBC:AES-128-CBC --config %i.conf\n\
+     CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW \
+     CAP_SETGID CAP_SETUID CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_AUDIT_WRITE\n\
+     LimitNPROC=10\nDeviceAllow=/dev/null rw\nDeviceAllow=/dev/net/tun rw\n\
+     ProtectSystem=true\nProtectHome=true\nKillMode=process\nRestartSec=5s\n\
+     Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n";
+const OPENVPN_SERVER_EL10: &str = "[Unit]\nDescription=OpenVPN service for %i\n\
+     After=network-online.target\nWants=network-online.target\n\
+     Documentation=man:openvpn(8)\n\
+     Documentation=https://openvpn.net/community-resources/reference-manual-for-openvpn-2-7/\n\
+     Documentation=https://community.openvpn.net/openvpn/wiki/HOWTO\n\n\
+     [Service]\nType=notify\nPrivateTmp=true\nWorkingDirectory=/etc/openvpn/server\n\
+     ExecStart=/usr/sbin/openvpn --status %t/openvpn-server/status-%i.log --status-version 2 \
+     --suppress-timestamps --config %i.conf\n\
+     CapabilityBoundingSet=CAP_IPC_LOCK CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW \
+     CAP_SETGID CAP_SETUID CAP_SETPCAP CAP_SYS_CHROOT CAP_DAC_OVERRIDE CAP_SYS_NICE \
+     CAP_AUDIT_WRITE\nTasksMax=20\nDeviceAllow=/dev/null rw\nDeviceAllow=/dev/net/tun rw\n\
+     ProtectSystem=true\nProtectHome=true\nKillMode=process\nRestartSec=5s\n\
+     Restart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n";
+
+/// `openvpn-server@` from the shipped unit, through the real inspectors,
+/// for each release's text: the `%t` status path expands under `/run` and
+/// is no requirement, so `required_config` is the fixed table's
+/// `/etc/openvpn/server/s1.conf` alone, no warning names the unit, and the
+/// enable is carried with the file staged, on both routes. The file
+/// excluded through refine omits the enable. Measured on RHEL 9.8 and 10.2
+/// (2026-11-16), the instance was never carried while `%t` was not
+/// expanded.
+#[test]
+fn an_openvpn_server_instance_is_carried_from_the_shipped_unit() {
+    const UNIT: &str = "openvpn-server@s1.service";
+    const CONF: &str = "/etc/openvpn/server/s1.conf";
+    for (release, text) in [
+        ("RHEL 9", OPENVPN_SERVER_EL9),
+        ("RHEL 10", OPENVPN_SERVER_EL10),
+    ] {
+        let snap = scan(
+            instance_host("openvpn", "openvpn-server@.service", text, UNIT)
+                .file(CONF, OPENVPN_CONF_TEXT),
+        );
+        assert_eq!(
+            changes_named(&snap, UNIT),
+            1,
+            "{release}: {:?}",
+            snap.warnings
+        );
+        let row = change(&snap, UNIT);
+        assert_eq!(row.current_state(), UnitState::Enabled, "{release}");
+        assert_eq!(row.required_config, [CONF], "{release}");
+        assert!(row.data_paths.is_empty(), "{release}");
+        assert!(
+            snap.warnings.iter().all(|w| !w.message.contains(UNIT)),
+            "{release}: {:?}",
+            snap.warnings
+        );
+        assert_instance_carried(&snap, UNIT, release);
+
+        let excluded = containerfile_in(&exported_after(&snap, &[(config_item(CONF), false)]));
+        let line = config_omitted(UNIT, CONF, "is excluded from the export");
+        assert_eq!(
+            omitted(&excluded, UNIT),
+            Some(line.as_str()),
+            "{release}:\n{excluded}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&excluded, UNIT),
+            "{release}:\n{excluded}"
+        );
+    }
 }
 
 /// The 389 Directory Server template, cut to what § 7.5 reads: its unit

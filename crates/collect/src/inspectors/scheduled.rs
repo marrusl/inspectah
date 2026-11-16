@@ -1582,7 +1582,9 @@ mod tests {
     /// line, the last assignment winning and an empty one resetting it,
     /// and expanded for the timer's own name: `%i`, `%I`, `%p` and `%N`,
     /// for a concrete instance timer and for a plain one. Any other
-    /// specifier, or a result that is not a unit name, is `Unresolved`.
+    /// specifier, or a result that is not a unit name, is `Unresolved`: a
+    /// directory specifier the runtime set expands (`%t`, `%E`) gives a
+    /// path, never a unit name.
     #[test]
     fn a_timers_unit_assignment_is_read_and_expanded() {
         assert_eq!(
@@ -1610,6 +1612,9 @@ mod tests {
             ("x@%I.service", "worker@a-b", None),
             ("report-%H.service", "report", None),
             ("report%", "report", None),
+            // A directory specifier expands to a path, never a unit name.
+            ("%t.service", "report", None),
+            ("x@%E.service", "worker@a", None),
         ] {
             assert_eq!(
                 resolved(value, name).as_deref(),
