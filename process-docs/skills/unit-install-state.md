@@ -280,12 +280,16 @@ reads (`InstallEvidence::unit_texts`, the same selection as
 - A path counts only when the value itself holds `%i` or `%I`. An
   `EnvironmentFile=` with the `-` prefix and a negated condition (`!`) are
   left out; a path inside a word (`--config=/etc/x/%i.conf`, `src:dst`)
-  is found.
+  is found. A triggering condition (`|`) is recorded as required although
+  it is one of several alternatives: the spec says every path in the file,
+  and the error is toward omitting an enable, never carrying one unchecked.
 - The form check (`is_instance_config_path`, `is_instance_data_path` in
   core) is shared by the collector and the snapshot loader, which refuses
   any other value: `..` or `.` components, control characters, the root
   itself. A path with a line break would otherwise reach a Containerfile
-  comment.
+  comment. The collector first simplifies an expanded value as systemd
+  does (`simplify_path`: runs of `/` made one, a trailing `/` dropped), so
+  `/var/lib/x/%i/` is kept, not refused; the loader stays strict.
 - The type-wide (`service.d`) and dash-prefix drop-in directories are not
   read here, as for `[Install]`.
 - Existence is `Executor::file_exists`, true for a directory on both

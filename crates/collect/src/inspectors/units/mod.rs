@@ -937,7 +937,7 @@ struct InstallEvidence {
     /// The unit file's text, then the texts of the drop-ins of its own and
     /// its template's `.d` that systemd reads, in load order: what an
     /// instance's needs are read from (§ 7.5). A file that is not text is
-    /// left out.
+    /// left out. Empty for a unit that is not an instance.
     unit_texts: Vec<String>,
 }
 
@@ -1061,15 +1061,19 @@ fn install_evidence(
         .iter()
         .map(|(source, text)| (source.clone(), text.as_str()))
         .collect();
-    let unit_texts = fragment_text
-        .iter()
-        .cloned()
-        .chain(
-            selected_drop_ins(name, &drop_ins)
-                .into_iter()
-                .map(str::to_owned),
-        )
-        .collect();
+    // Only an instance's needs are read from these texts (§ 7.5).
+    let unit_texts = match name.instance() {
+        Some(_) => fragment_text
+            .iter()
+            .cloned()
+            .chain(
+                selected_drop_ins(name, &drop_ins)
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .collect(),
+        None => Vec::new(),
+    };
     // The vendor-side read (§ 7.2): for a packaged unit file with an
     // install file under `/etc`, a shadow or an install drop-in.
     let vendor_text = match fragment {

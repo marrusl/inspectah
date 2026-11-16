@@ -365,7 +365,11 @@ fn state_change_instance_paths_are_checked_on_load() {
         ))
         .expect_err("not an instance configuration path")
         .to_string();
-        assert!(err.contains("required_config"), "{refused:?}: {err}");
+        // The error quotes the value, so a control character prints escaped.
+        assert!(
+            err.contains("required_config") && err.contains(&format!("{refused:?}")),
+            "{refused:?}: {err}"
+        );
     }
     for refused in [
         "var/lib/x",

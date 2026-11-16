@@ -105,7 +105,9 @@ pub(crate) fn instance_needs(
         named.extend(found.paths);
         state_directories.extend(found.state_directories);
     }
-    let expand = |value: &str| expand_unit_specifiers(value, stem, SpecifierSet::Runtime);
+    let expand = |value: &str| {
+        expand_unit_specifiers(value, stem, SpecifierSet::Runtime).map(|path| simplify_path(&path))
+    };
     let named: Vec<String> = named.iter().filter_map(|value| expand(value)).collect();
 
     let required_config: BTreeSet<String> = named
@@ -130,6 +132,23 @@ pub(crate) fn instance_needs(
         required_config: required_config.into_iter().collect(),
         data_paths: data_paths.into_iter().collect(),
     }
+}
+
+/// `path` with each run of `/` made one and a trailing `/` dropped, as
+/// systemd simplifies a path it loads, so `/var/lib/x/%i/` names the
+/// directory it reads as and is not refused by the form check. Only the
+/// collector simplifies: the snapshot loader keeps the strict form.
+fn simplify_path(path: &str) -> String {
+    let mut simple = String::with_capacity(path.len());
+    for c in path.chars() {
+        if !(c == '/' && simple.ends_with('/')) {
+            simple.push(c);
+        }
+    }
+    if simple.len() > 1 && simple.ends_with('/') {
+        simple.pop();
+    }
+    simple
 }
 
 /// The unexpanded paths `table` gives `template`.
@@ -280,10 +299,43 @@ mod tests {
                 vec!["/etc/x/%i.conf"],
                 vec![],
             ),
+            (
+                "[Service]\nReadWritePaths=/var/lib/x/%i/ /etc//x/%i\n",
+                vec!["/var/lib/x/%i/", "/etc//x/%i"],
+                vec![],
+            ),
         ] {
             let named = named_paths(text);
             assert_eq!(named.paths, paths, "{text:?}");
             assert_eq!(named.state_directories, state, "{text:?}");
+        }
+    }
+
+    /// A path written with a trailing or doubled `/` is kept, simplified as
+    /// systemd loads it, and not dropped by the form check: dropping a
+    /// `required_config` path would let the enable go unchecked.
+    #[test]
+    fn a_path_with_a_trailing_or_doubled_slash_is_kept_simplified() {
+        let exec = crate::executor::mock::MockExecutor::new()
+            .with_dir("/var/lib/x/a", vec![])
+            .with_dir("/var/lib/y/a", vec![]);
+        let name = UnitName::try_from("x@a.service".to_owned()).expect("a unit name");
+        let needs = instance_needs(
+            &exec,
+            &name,
+            &["[Unit]\nConditionPathExists=/etc/x//%i/\n\
+               [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=y/%i/\n"
+                .to_owned()],
+        );
+        assert_eq!(needs.required_config, ["/etc/x/a"]);
+        assert_eq!(needs.data_paths, ["/var/lib/x/a", "/var/lib/y/a"]);
+        for (path, simple) in [
+            ("/etc/x/a/", "/etc/x/a"),
+            ("/etc//x///a", "/etc/x/a"),
+            ("/", "/"),
+            ("/etc/x/a", "/etc/x/a"),
+        ] {
+            assert_eq!(simplify_path(path), simple, "{path}");
         }
     }
 
