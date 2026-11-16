@@ -387,10 +387,19 @@ showed, and the build failed with no warning anywhere.
   template's `<prefix>@.timer.d`. **The first `Unit=` systemd accepts
   is the trigger, not the last** (`config_parse_trigger_unit`, 252 and
   257, logs "Multiple units to trigger specified" for every later one),
-  and an assignment systemd ignores counts as absent: an empty one, and
-  one holding a specifier outside `unit_name_printf`'s table, such as
-  `%I` or a directory specifier ("Invalid slot", measured 2026-11-16),
-  which `trigger_unit_ignored` in `specifiers.rs` tests. The value is
+  and an assignment systemd ignores counts as absent: an empty one, one
+  holding a specifier outside `unit_name_printf`'s table, such as `%I` or
+  a directory specifier ("Invalid slot", measured 2026-11-16), which
+  `trigger_unit_ignored` in `specifiers.rs` tests, and one that names the
+  timer itself ("Units cannot trigger themselves"), skipped in
+  `accepted_trigger` before the first accepted value is chosen. Skipping
+  it matters: recorded as the trigger, the timer's own staged file would
+  satisfy `local_trigger_missing` while the real trigger is excluded.
+  **`trigger_drop_ins` holds only the `/etc` drop-ins whose leaving out
+  can change the trigger**: the one that holds the accepted `Unit=`, and
+  one at or before it that hides a drop-in of its file name. A drop-in
+  whose `Unit=` lines are all ignored, or that comes after the accepted
+  one, is not evidence, so excluding it never omits the enable. The value is
   expanded with `SpecifierSet::TriggerUnit` (`%i`, `%p`, `%N`, `%%`); a
   specifier systemd does resolve and the scan does not (`%H`, `%n`, `%j`)
   leaves the trigger `Unresolved`. An instance timer has no timer file, so

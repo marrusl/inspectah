@@ -6275,6 +6275,69 @@ fn t37_a_timer_whose_unit_drop_in_is_excluded_is_not_enabled() {
     assert!(acts(&cf, "enable", "report.timer"), "{cf}");
 }
 
+/// T37, a self-trigger: systemd rejects `Unit=report.timer` in
+/// `report.timer` and accepts the next `Unit=`, so the recorded trigger is
+/// `other.service`. With `other.service` excluded the enable is omitted
+/// as `TimerTriggerNotStaged` naming it, although the timer's own file is
+/// staged; with `report.service` excluded instead, the enable is carried.
+#[test]
+fn t37_a_self_trigger_is_skipped_through_the_export() {
+    let snap = scan(t37_host("Unit=report.timer\nUnit=other.service\n"));
+    assert_eq!(report_timer(&snap).trigger, trigger_unit("other.service"));
+    let cf = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(&etc_path("other.service")), false)],
+    ));
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert_eq!(
+        omitted(&cf, "report.timer"),
+        Some(trigger_not_staged("other.service").as_str()),
+        "{cf}"
+    );
+    let cf = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(&etc_path("report.service")), false)],
+    ));
+    assert!(acts(&cf, "enable", "report.timer"), "{cf}");
+}
+
+/// T37, an ignored assignment is absent: an `/etc` drop-in whose only
+/// `Unit=` holds `%I`, which systemd ignores, is no trigger evidence, so
+/// excluding it carries the timer's enable exactly as excluding the same
+/// drop-in with no `Unit=` does. Control: a drop-in whose `Unit=` is the
+/// accepted trigger is evidence, and excluding it omits the enable.
+#[test]
+fn t37_an_ignored_only_drop_in_does_not_gate_the_enable() {
+    const DROP_IN: &str = "/etc/systemd/system/report.timer.d/unit.conf";
+    let drop_in = ItemId::DropIn {
+        path: DROP_IN.into(),
+    };
+    for text in [
+        "[Timer]\nUnit=tiu@%I.service\n",
+        "[Timer]\nOnCalendar=weekly\n",
+    ] {
+        let snap = scan(t37_host("").file(DROP_IN, text));
+        let timer = report_timer(&snap);
+        assert_eq!(timer.trigger, trigger_unit("report.service"), "{text:?}");
+        assert!(timer.trigger_drop_ins.is_empty(), "{text:?}");
+        for include in [true, false] {
+            let cf = containerfile_in(&exported_after(&snap, &[(drop_in.clone(), include)]));
+            assert!(
+                acts(&cf, "enable", "report.timer"),
+                "{text:?} included {include}:\n{cf}"
+            );
+        }
+    }
+    let snap = scan(t37_host("").file(DROP_IN, "[Timer]\nUnit=other.service\n"));
+    assert_eq!(report_timer(&snap).trigger_drop_ins, [DROP_IN]);
+    let cf = containerfile_in(&exported_after(&snap, &[(drop_in, false)]));
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert!(
+        omitted(&cf, "report.timer").is_some_and(|line| line.contains("that sets its Unit=")),
+        "{cf}"
+    );
+}
+
 /// T37, an unresolved trigger: `Unit=` with a specifier the inspector does
 /// not expand records the trigger as `Unresolved`, and the enable is
 /// omitted as `TimerTriggerUnresolved`, through both exports.
