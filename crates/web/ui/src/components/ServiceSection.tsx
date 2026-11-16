@@ -135,6 +135,15 @@ function describedBy(...ids: (string | false | null | undefined)[]): string | un
 }
 
 /**
+ * A row's DOM id. The first record with a row key keeps `base`; a later
+ * one (a true duplicate, § 6.12) appends its own generated id, so its
+ * `aria-describedby` names its own notes and not the first row's.
+ */
+function ownId(base: string, ordinal: number, generated: string): string {
+  return ordinal === 0 ? base : `${base}${generated}`;
+}
+
+/**
  * A reason the server wrote, under its row. The text is shown as given:
  * never composed, rephrased or parsed here.
  */
@@ -170,6 +179,8 @@ interface DropInRowProps {
   dropin: DropInDecisionDto;
   /** The row key (§ 6.11), carried in `data-unit-key`. */
   unitKey: RowKey;
+  /** The record's ordinal among the records with its row key (§ 6.11). */
+  ordinal: number;
   /** The parent service row is excluded, so this drop-in cannot apply. */
   parentExcluded: boolean;
   /** The parent service row is locked, which locks its drop-ins too. */
@@ -183,6 +194,7 @@ interface DropInRowProps {
 function DropInRow({
   dropin: di,
   unitKey,
+  ordinal,
   parentExcluded,
   parentLocked,
   isInstallDropIn = false,
@@ -252,7 +264,7 @@ function DropInRow({
           <input
             type="checkbox"
             role="checkbox"
-            id={`switch-dropin-${di.path}`}
+            id={ownId(`switch-dropin-${di.path}`, ordinal, noteId)}
             checked={di.include}
             onChange={() => onToggle(di.path, di.include)}
             disabled={disabled}
@@ -353,6 +365,7 @@ function DropInRow({
 interface MountFindingRowProps {
   finding: MountFindingDto;
   unitKey: RowKey;
+  ordinal: number;
   onNavigateToConfig?: (path: string) => void;
 }
 
@@ -362,8 +375,8 @@ interface MountFindingRowProps {
  * the export decides nothing here. The unit file is decided on its config
  * row, which `unit_file_path` names.
  */
-function MountFindingRow({ finding: f, unitKey, onNavigateToConfig }: MountFindingRowProps) {
-  const advisoriesId = `mount-finding-advisories-${f.unit}`;
+function MountFindingRow({ finding: f, unitKey, ordinal, onNavigateToConfig }: MountFindingRowProps) {
+  const advisoriesId = ownId(`mount-finding-advisories-${f.unit}`, ordinal, useId());
   const path = f.unit_file_path;
   return (
     <div
@@ -464,17 +477,19 @@ function NotAppliedPaths({
  */
 function InstancePaths({
   id,
+  testId,
   label,
   pathTestId,
   paths,
 }: {
   id: string;
+  testId: string;
   label: string;
   pathTestId: string;
   paths: string[];
 }) {
   return (
-    <div id={id} data-testid={id} className="inspectah-unit-paths">
+    <div id={id} data-testid={testId} className="inspectah-unit-paths">
       <span className="inspectah-unit-paths__label">{label}</span>
       {/* The spaces are not drawn in the flex row; they keep the paths
           apart in the text a screen reader reads from aria-describedby. */}
@@ -713,22 +728,32 @@ function UnitBranchView({
   const isPending = pendingKeys.has(serviceKey(svc.unit));
   const svcLocked = svc.locked === true;
   const borderLeft = LEVEL_BORDER[bucket] ?? "none";
+  // Test ids stay the unit's; DOM ids are the row's own (see ownId).
+  const generatedId = useId();
+  const rowId = (base: string) => ownId(base, branch.head.ordinal, generatedId);
+  const lockedReasonTestId = `locked-reason-service-${svc.unit}`;
   // A locked row shows its reason in the badge; an unlocked one, such
   // as a runtime updater excluded by default, under the row.
-  const attentionId = `attention-service-${svc.unit}`;
+  const attentionTestId = `attention-service-${svc.unit}`;
   // A scanned protected unit's attention_reason and its declined text
   // are the same served sentence: show it once, as the decline.
   const attention =
     svcLocked || svc.attention_reason === svc.declined?.text
       ? null
       : (svc.attention_reason ?? null);
-  const declinedId = `declined-service-${svc.unit}`;
+  const declinedTestId = `declined-service-${svc.unit}`;
   // What an instance needs (§ 11.1): its template, the configuration
   // its enable needs and the data the image does not carry. Any
   // advisory about them is already in attention_reason.
-  const instanceOfId = `instance-of-${svc.unit}`;
-  const requiredConfigId = `required-config-${svc.unit}`;
-  const dataPathsId = `data-paths-${svc.unit}`;
+  const instanceOfTestId = `instance-of-${svc.unit}`;
+  const requiredConfigTestId = `required-config-${svc.unit}`;
+  const dataPathsTestId = `data-paths-${svc.unit}`;
+  const lockedReasonId = rowId(lockedReasonTestId);
+  const attentionId = rowId(attentionTestId);
+  const declinedId = rowId(declinedTestId);
+  const instanceOfId = rowId(instanceOfTestId);
+  const requiredConfigId = rowId(requiredConfigTestId);
+  const dataPathsId = rowId(dataPathsTestId);
 
   return (
     <div data-testid={`service-group-${svc.unit}`}>
@@ -756,7 +781,7 @@ function UnitBranchView({
             <input
               type="checkbox"
               role="checkbox"
-              id={`switch-service-${svc.unit}`}
+              id={rowId(`switch-service-${svc.unit}`)}
               checked={svc.include}
               onChange={() => onToggleService(svc.unit, svc.include)}
               disabled={isPending || svcLocked}
@@ -766,7 +791,7 @@ function UnitBranchView({
                   : `Toggle ${svc.unit}`
               }
               aria-describedby={describedBy(
-                svcLocked && `locked-reason-service-${svc.unit}`,
+                svcLocked && lockedReasonId,
                 attention && attentionId,
                 svc.declined && declinedId,
                 svc.instance_of && instanceOfId,
@@ -820,7 +845,7 @@ function UnitBranchView({
             <div
               role="gridcell"
               className="inspectah-decision-row__badge"
-              id={`locked-reason-service-${svc.unit}`}
+              id={lockedReasonId}
               data-testid={`locked-badge-service-${svc.unit}`}
             >
               <Label color="grey" isCompact>
@@ -830,12 +855,12 @@ function UnitBranchView({
           )}
         </div>
         {attention && (
-          <RowNote id={attentionId} testId={attentionId} text={attention} />
+          <RowNote id={attentionId} testId={attentionTestId} text={attention} />
         )}
         {svc.declined && (
           <RowNote
             id={declinedId}
-            testId={declinedId}
+            testId={declinedTestId}
             className={`inspectah-unit-declined inspectah-unit-declined--${svc.declined.renders}`}
             text={svc.declined.text}
           />
@@ -856,7 +881,7 @@ function UnitBranchView({
         {svc.instance_of && (
           <div
             id={instanceOfId}
-            data-testid={instanceOfId}
+            data-testid={instanceOfTestId}
             className="inspectah-unit-paths"
           >
             <span className="inspectah-unit-paths__label">Instance of</span>{" "}
@@ -866,6 +891,7 @@ function UnitBranchView({
         {svc.required_config.length > 0 && (
           <InstancePaths
             id={requiredConfigId}
+            testId={requiredConfigTestId}
             label="Needs configuration:"
             pathTestId="required-config-path"
             paths={svc.required_config}
@@ -874,6 +900,7 @@ function UnitBranchView({
         {svc.data_paths.length > 0 && (
           <InstancePaths
             id={dataPathsId}
+            testId={dataPathsTestId}
             label="Keeps data in:"
             pathTestId="data-path"
             paths={svc.data_paths}
@@ -887,6 +914,7 @@ function UnitBranchView({
           key={di.occurrenceKey}
           dropin={di.record.data}
           unitKey={di.rowKey}
+          ordinal={di.ordinal}
           parentExcluded={!svc.include}
           parentLocked={svcLocked}
           isInstallDropIn={svc.install_drop_ins?.includes(di.record.data.path) ?? false}
@@ -913,6 +941,7 @@ function ReportedRowView({
         <MountFindingRow
           finding={record.data}
           unitKey={row.rowKey}
+          ordinal={row.ordinal}
           onNavigateToConfig={onNavigateToConfig}
         />
       );
@@ -1089,6 +1118,7 @@ export function ServiceSection({
                       key={di.occurrenceKey}
                       dropin={di.record.data}
                       unitKey={di.rowKey}
+                      ordinal={di.ordinal}
                       parentExcluded={false}
                       parentLocked={false}
                       isPending={pendingKeys.has(dropinKey(di.record.data.path))}

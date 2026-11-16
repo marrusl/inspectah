@@ -53,6 +53,8 @@ export interface Keyed<R extends UnitRecord = UnitRecord> {
   record: R;
   rowKey: RowKey;
   occurrenceKey: OccurrenceKey;
+  /** How many records before this one carry its row key: 0 for the first. */
+  ordinal: number;
 }
 
 export interface KeyedFields {
@@ -131,7 +133,7 @@ function keyList<R extends UnitRecord>(records: R[]): Keyed<R>[] {
     const key = rowKey(record);
     const ordinal = seen.get(key) ?? 0;
     seen.set(key, ordinal + 1);
-    return { record, rowKey: key, occurrenceKey: `${key}#${ordinal}` };
+    return { record, rowKey: key, occurrenceKey: `${key}#${ordinal}`, ordinal };
   });
 }
 

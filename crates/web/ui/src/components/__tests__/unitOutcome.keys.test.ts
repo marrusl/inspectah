@@ -162,6 +162,16 @@ describe("§ 6.11 keys", () => {
       expect(dropins.map((k) => k.occurrenceKey)).toEqual([`${key}#0`, `${key}#1`]);
     });
 
+    it("gives each record its ordinal among the records with its row key", () => {
+      const rows = keyed.unitStates.filter((k) => k.record.data.unit === DUP_STATE);
+      expect(rows.map((k) => k.ordinal)).toEqual([0, 1]);
+      const links = keyed.manualLinks.filter((k) => k.record.data.unit === DUP_LINK);
+      expect(links.map((k) => k.ordinal)).toEqual([0, 1]);
+      const other = keyed.manualLinks.find((k) => k.record.data.unit === DUP_LINK_OTHER)!;
+      expect(other.ordinal).toBe(0);
+      expect(keyed.defaultTarget?.ordinal).toBe(0);
+    });
+
     it("keys the default target", () => {
       expect(keyed.defaultTarget?.rowKey).toBe('["default_target"]');
       expect(keyed.defaultTarget?.occurrenceKey).toBe('["default_target"]#0');
