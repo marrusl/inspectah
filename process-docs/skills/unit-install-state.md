@@ -235,6 +235,23 @@ The advisory text for both is § 10.9's, built in
 load, so hand-built snapshot JSON needs both keys; `default_target` is
 skipped when `None`.
 
+A link under `/etc` that none of this reads gets a scan warning and
+nothing else (`UnreportedLinks`, `unreported_link_warnings`): a masked
+unit's link, a link to a template that is not masked, to a unit the
+search path refuses (beside the refusal warning), to an alias name, to
+a name with no unit file, or to a unit the listing does not print as one
+the scan reads. `build_state_changes` records the masked and refused
+units it reads; `unexamined_links` resolves every other name with an
+`/etc` link that never reached it, skipping a name the gate already
+warned about. One warning per cause lists every link, with `cause` and
+`links` (`path`, `unit`, and `listed_state`, `search_path` or
+`alias_of`) among its fields. They are never read failures: a resolve
+error falls back to the not-read cause, so the scan does not degrade.
+A dangling link to an instance or to a listed `static` name already
+gets the unit's "no unit file" warning and no other. A test host with an
+empty listing ends the section before any link is read, so a link case
+needs at least one listed unit.
+
 ## A unit at its preset whose `/etc` files change `[Install]`
 
 The package install links a preset-enabled unit from the vendor

@@ -14,6 +14,7 @@ use inspectah_core::aggregate::merge_snapshots;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::FindingKind;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::units::{
     AdminStorageFragment, CarriedUnit, InstallUnknown, LinkRelation, ManualLink, ManualLinkCause,
     MountUnitFinding, PresetDefault, UnitFragment, UnitName, UnitState,
@@ -13904,85 +13905,139 @@ fn a_default_target_follows_its_package() {
     assert_eq!(omitted(&included, "app.target"), None, "{included}");
 }
 
+/// The warnings that list the link at `path` among the links the scan does
+/// not report (§ 7.3), by message.
+fn unreported_link_warnings<'s>(snap: &'s InspectionSnapshot, path: &str) -> Vec<&'s str> {
+    snap.warnings
+        .iter()
+        .filter(|w| {
+            w.extra
+                .get("links")
+                .and_then(|links| links.as_array())
+                .is_some_and(|links| links.iter().any(|link| link["path"] == path))
+        })
+        .map(|w| w.message.as_str())
+        .collect()
+}
+
 /// § 7.3's units that a link under `/etc` names and the listing does not
-/// print as a unit this scan reads, through the scan. What the code does
-/// today, asserted so a change is seen (the task report records each for
-/// the project owner): only a listed `static` or `indirect` unit is
-/// admitted by its link, and an instance by its link alone. A unit the
-/// listing does not print at all is not read, so its link is reported
-/// nowhere. A masked unit's `/etc` links produce no `ManualLink`. A link
-/// to a unit the search path refuses gives the refusal warning and no
-/// `ManualLink`. A link to an alias name (listed `alias`) produces nothing.
-/// A dangling link produces nothing when the listing does not print its
-/// name, an instance's included, and the "no unit file" warning when it
-/// lists the name `static`.
+/// print as a unit this scan reads, through the scan. None of these links
+/// is reported as a `ManualLink` or carried, and each that no other warning
+/// accounts for gets a warning naming the link, its unit and why: a unit
+/// the listing does not print at all, a masked unit's leftover link, a link
+/// to a unit the search path refuses (beside the refusal warning), a link
+/// to an alias name, and a dangling link to a name the listing does not
+/// print. A dangling link to a listed `static` name, or to an instance,
+/// keeps the unit's "no unit file" warning and gets no other. Each host
+/// lists one unrelated unit, since an empty listing ends the section before
+/// any link is read.
 #[test]
 fn units_an_etc_link_names_that_the_listing_does_not_print() {
     let wants = |unit: &str| format!("/etc/systemd/system/multi-user.target.wants/{unit}");
     let vendor = |unit: &str| format!("/usr/lib/systemd/system/{unit}");
+    let host = || {
+        UnitHost::new()
+            .unit("other.service", "disabled")
+            .vendor_unit("other.service", WANTS_MULTI_USER, None)
+    };
     let alias_unit = "[Service]\nExecStart=/bin/true\n\n[Install]\nWantedBy=multi-user.target\n\
                       Alias=al.service\n";
-    // (label, host, the linked unit, warning naming it, if any)
-    let cases: Vec<(&str, UnitHost, &str, Option<&str>)> = vec![
+    let no_unit_file = "no unit file under /etc/systemd/system or /usr/lib/systemd/system";
+    // (label, host, the linked unit, the unit's own warning, the link's warning)
+    type Case<'a> = (&'a str, UnitHost, &'a str, Option<&'a str>, Option<String>);
+    let cases: Vec<Case> = vec![
         (
             "not listed, a vendor unit with [Install]",
-            UnitHost::new()
+            host()
                 .vendor_unit("ghost.service", WANTS_MULTI_USER, None)
                 .link(&wants("ghost.service"), &vendor("ghost.service")),
             "ghost.service",
             None,
+            Some(format!(
+                "link {} (ghost.service) is not reported or carried: systemctl \
+                 list-unit-files does not list its unit as one this scan reads, so the scan \
+                 does not read the unit or its links",
+                wants("ghost.service")
+            )),
         ),
         (
             "listed masked, with a leftover link",
-            UnitHost::new()
+            host()
                 .unit("m.service", "masked")
                 .vendor_unit("m.service", WANTS_MULTI_USER, None)
                 .mask("m.service")
                 .link(&wants("m.service"), &vendor("m.service")),
             "m.service",
             None,
+            Some(format!(
+                "link {} (m.service) is not reported or carried: its unit is masked, so the \
+                 link has no effect",
+                wants("m.service")
+            )),
         ),
         (
             "refused by the search path",
-            UnitHost::new()
+            host()
                 .unit("u.service", "enabled")
                 .vendor_unit("u.service", WANTS_MULTI_USER, None)
                 .file("/run/systemd/system/u.service", WANTS_MULTI_USER),
             "u.service",
             Some("is on the systemd search path"),
+            Some(format!(
+                "link {} (u.service, changed by /run/systemd/system/u.service) is not \
+                 reported or carried: a file on the systemd search path outside the two unit \
+                 directories this scan reads changes its unit, so the scan does not read the \
+                 unit's links",
+                wants("u.service")
+            )),
         ),
         (
             "an alias name, listed alias",
-            UnitHost::new()
+            host()
                 .unit("real.service", "disabled")
                 .unit("al.service", "alias")
                 .vendor_unit("real.service", alias_unit, None)
+                .link(&vendor("al.service"), &vendor("real.service"))
                 .link(&wants("al.service"), &vendor("real.service")),
             "al.service",
             None,
+            Some(format!(
+                "link {} (al.service, an alias of real.service) is not reported or carried: \
+                 it names its unit by an alias, and the scan reads a unit's links under the \
+                 unit's own name only",
+                wants("al.service")
+            )),
         ),
         (
             "dangling, an instance of no template",
-            UnitHost::new().link(&wants("nof@x.service"), &vendor("nof@.service")),
+            host().link(&wants("nof@x.service"), &vendor("nof@.service")),
             "nof@x.service",
+            Some(no_unit_file),
             None,
         ),
         (
             "dangling, not listed",
-            UnitHost::new().link(&wants("gone.service"), &vendor("gone.service")),
+            host().link(&wants("gone.service"), &vendor("gone.service")),
             "gone.service",
             None,
+            Some(format!(
+                "link {} (gone.service) is not reported or carried: there is no unit file of \
+                 its name under /etc/systemd/system or /usr/lib/systemd/system, so the link \
+                 points at nothing",
+                wants("gone.service")
+            )),
         ),
         (
             "dangling, listed static",
-            UnitHost::new()
+            host()
                 .unit("gone.service", "static")
                 .link(&wants("gone.service"), &vendor("gone.service")),
             "gone.service",
-            Some("no unit file under /etc/systemd/system or /usr/lib/systemd/system"),
+            Some(no_unit_file),
+            None,
         ),
     ];
-    for (label, host, unit, warning) in cases {
+    for (label, host, unit, unit_warning, link_warning) in cases {
         let snap = scan(host.preset("disable *"));
         assert!(
             links_of(&snap).iter().all(|l| l.unit.as_str() != unit),
@@ -13995,19 +14050,66 @@ fn units_an_etc_link_names_that_the_listing_does_not_print() {
             .filter(|w| w.message.starts_with(&format!("unit {unit} ")))
             .map(|w| w.message.as_str())
             .collect();
-        match warning {
+        match unit_warning {
             Some(text) => assert!(
                 named.len() == 1 && named[0].contains(text),
                 "{label}: {named:?}"
             ),
             None => assert!(named.is_empty(), "{label}: {named:?}"),
         }
+        assert_eq!(
+            unreported_link_warnings(&snap, &wants(unit)),
+            link_warning.as_slice(),
+            "{label}: {:?}",
+            snap.warnings
+        );
         let expected_changes = usize::from(unit == "m.service");
         assert_eq!(changes_named(&snap, unit), expected_changes, "{label}");
+        // Not a read failure: the section is not degraded.
+        assert_eq!(snap.completeness, Completeness::Complete, "{label}");
     }
 
+    // Many links of one kind are one warning listing every link, with the
+    // path and unit of each among its fields.
+    let masked = scan(
+        host()
+            .preset("disable *")
+            .unit("m1.service", "masked")
+            .unit("m2.service", "masked")
+            .vendor_unit("m1.service", WANTS_MULTI_USER, None)
+            .vendor_unit("m2.service", WANTS_MULTI_USER, None)
+            .mask("m1.service")
+            .mask("m2.service")
+            .link(&wants("m1.service"), &vendor("m1.service"))
+            .link(&wants("m2.service"), &vendor("m2.service")),
+    );
+    let grouped: Vec<_> = masked
+        .warnings
+        .iter()
+        .filter(|w| w.extra.contains_key("links"))
+        .collect();
+    assert_eq!(grouped.len(), 1, "{:?}", masked.warnings);
+    assert_eq!(
+        grouped[0].message,
+        format!(
+            "2 links are not reported or carried: for each, its unit is masked, so the link \
+             has no effect. The links: {} (m1.service); {} (m2.service)",
+            wants("m1.service"),
+            wants("m2.service")
+        )
+    );
+    assert_eq!(grouped[0].extra["cause"], serde_json::json!("masked"));
+    assert_eq!(
+        grouped[0].extra["links"],
+        serde_json::json!([
+            {"path": wants("m1.service"), "unit": "m1.service"},
+            {"path": wants("m2.service"), "unit": "m2.service"},
+        ])
+    );
+
     // The control: a listed `static` unit with no `[Install]` and the same
-    // link is admitted, and its link is a `StaticUnit` link.
+    // link is admitted, its link is a `StaticUnit` link, and no warning
+    // lists it.
     let control = scan(
         UnitHost::new()
             .unit("ghost.service", "static")
@@ -14021,5 +14123,13 @@ fn units_an_etc_link_names_that_the_listing_does_not_print() {
             .map(|l| (l.unit.as_str(), l.cause))
             .collect::<Vec<_>>(),
         [("ghost.service", ManualLinkCause::StaticUnit)]
+    );
+    assert!(
+        control
+            .warnings
+            .iter()
+            .all(|w| !w.extra.contains_key("links")),
+        "{:?}",
+        control.warnings
     );
 }

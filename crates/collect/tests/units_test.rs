@@ -1799,10 +1799,12 @@ fn an_enabled_storage_unit_refused_by_the_search_path_is_warned_once() {
                 "[Mount]\nWhat=/dev/sdb1\nWhere=/data\n",
             )
     };
+    // The refusal itself; the warning listing the unit's link, which names
+    // the path too, is counted on its own.
     let naming_path = |exec: &MockExecutor| {
         scan_warnings(exec)
             .into_iter()
-            .filter(|w| w.message.contains(path))
+            .filter(|w| w.message.contains(path) && !w.extra.contains_key("links"))
             .count()
     };
 
@@ -1823,6 +1825,15 @@ fn an_enabled_storage_unit_refused_by_the_search_path_is_warned_once() {
         "no finding for the refused unit"
     );
     assert_eq!(naming_path(&refused), 1, "{:?}", scan_warnings(&refused));
+    let link_warnings: Vec<_> = scan_warnings(&refused)
+        .into_iter()
+        .filter(|w| w.extra.get("cause") == Some(&serde_json::json!("refused")))
+        .collect();
+    assert_eq!(link_warnings.len(), 1, "{link_warnings:?}");
+    assert_eq!(
+        link_warnings[0].extra["links"][0]["search_path"],
+        serde_json::json!(path)
+    );
 }
 
 /// T24, what the search path does not change: a drop-in with `[Install]`
@@ -2285,12 +2296,24 @@ fn masked_template_is_a_state_change_and_an_unmasked_one_is_skipped() {
     );
     assert_eq!(inventory_names(&section), vec![template]);
 
-    for state in ["enabled", "disabled"] {
+    // Listed `enabled`, the mock links the template's own name: systemd
+    // starts nothing from that link, and the warning says so.
+    for (state, expected) in [
+        (
+            "enabled",
+            vec![format!(
+                "link /etc/systemd/system/multi-user.target.wants/{template} ({template}) is \
+                 not reported or carried: its unit is a template, and systemd starts no unit \
+                 from a link to a template name without an instance, so the link has no effect"
+            )],
+        ),
+        ("disabled", Vec::new()),
+    ] {
         let exec = kinds_mock(&[(template, state)], "enable *\n");
         let (section, warnings) = scan(&with_vendor_units(exec, &[template]));
         assert!(section.state_changes.is_empty(), "{state}");
         assert!(section.inventory.is_empty(), "{state}");
-        assert!(warnings.is_empty(), "{state}: {warnings:?}");
+        assert_eq!(warnings, expected, "{state}");
     }
 }
 
@@ -3114,7 +3137,16 @@ fn vendor_read_error_under_an_etc_link_does_not_degrade() {
             .with_link(&etc, "/usr/lib/systemd/system/real.service"),
     );
     let (section, warnings) = scan(&linked);
-    assert!(warnings.is_empty(), "{warnings:?}");
+    // The mock's listing does not print `real.service`, so the only warning
+    // is the one saying its alias link is not read.
+    assert_eq!(
+        warnings,
+        [format!(
+            "link {etc} (real.service) is not reported or carried: systemctl list-unit-files \
+             does not list its unit as one this scan reads, so the scan does not read the unit \
+             or its links"
+        )]
+    );
     assert!(section.drop_ins.is_empty(), "{:?}", section.drop_ins);
 
     let regular = host(quiet_mock().with_file(&etc, UNIT_FILE));

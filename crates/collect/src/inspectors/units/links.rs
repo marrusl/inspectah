@@ -91,6 +91,29 @@ impl HostLinks {
         self.vendor.get(unit).map_or(&[], Vec::as_slice)
     }
 
+    /// The path under `/etc/systemd/system` of each link to `unit` whose
+    /// parent parses: the entry of the parent's dependency directory, or
+    /// the alias itself.
+    pub(crate) fn admin_paths(&self, unit: &UnitName) -> Vec<String> {
+        self.admin(unit)
+            .iter()
+            .map(|link| {
+                let suffix = DEPENDENCY_DIRS
+                    .iter()
+                    .find(|(_, relation)| *relation == link.relation)
+                    .map(|(suffix, _)| *suffix);
+                match suffix {
+                    Some(suffix) => format!(
+                        "{ETC_UNIT_DIR}/{}{suffix}/{}",
+                        link.parent.as_str(),
+                        unit.as_str()
+                    ),
+                    None => format!("{ETC_UNIT_DIR}/{}", link.parent.as_str()),
+                }
+            })
+            .collect()
+    }
+
     /// Whether `unit` has a file or a drop-in directory of its own name
     /// directly under `/etc/systemd/system`, where an install file of it
     /// can sit (§ 10.2).

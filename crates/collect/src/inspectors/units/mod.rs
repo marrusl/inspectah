@@ -520,6 +520,9 @@ struct UnitFindings {
     /// The units whose `[Install]` cannot be relied on and whose `/etc`
     /// files change it, or that assign `Also=` (§ 6.6).
     undetermined_installs: Vec<UndeterminedInstall>,
+    /// The masked units and the units the search path refuses, whose links
+    /// under `/etc` are therefore not read (§ 7.3), for the warnings.
+    unreported: Vec<(UnitName, UnreportedLinks)>,
 }
 
 /// Resolve each listed unit's file, read its install state from the links
@@ -552,6 +555,7 @@ fn build_state_changes(
     let mut inventory = Vec::new();
     let mut manual_links = Vec::new();
     let mut undetermined_installs = Vec::new();
+    let mut unreported = Vec::new();
     let mut unknown_lines: BTreeMap<(String, usize), Vec<UnitName>> = BTreeMap::new();
     let mut found = Vec::new();
     let mut fragments = Vec::new();
@@ -582,12 +586,15 @@ fn build_state_changes(
         let warn =
             |detail: &str| service_warning(subject.name.as_str(), &subject.raw_state, detail);
         let (fragment, state, evidence, additive) = match resolve::resolve(exec, &subject.name) {
-            Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => (
-                fragment,
-                UnitState::Masked,
-                InstallEvidence::default(),
-                false,
-            ),
+            Ok(Resolved::File { fragment }) if subject.listed == Some(UnitState::Masked) => {
+                unreported.push((subject.name.clone(), UnreportedLinks::Masked));
+                (
+                    fragment,
+                    UnitState::Masked,
+                    InstallEvidence::default(),
+                    false,
+                )
+            }
             // A read under `/etc/systemd/system` failed, so links there may
             // be missing, and a state read from the rest could carry a
             // command the host never had. The scan degrades, and no unit
@@ -658,6 +665,7 @@ fn build_state_changes(
             }
             // A mask reads no `[Install]`, so it records no install files.
             Ok(Resolved::Masked { hidden }) => {
+                unreported.push((subject.name.clone(), UnreportedLinks::Masked));
                 (hidden, UnitState::Masked, InstallEvidence::default(), false)
             }
             Ok(Resolved::AliasOf(target)) => {
@@ -674,6 +682,10 @@ fn build_state_changes(
                 continue;
             }
             Ok(Resolved::Unsupported { path }) => {
+                unreported.push((
+                    subject.name.clone(),
+                    UnreportedLinks::Refused { path: path.clone() },
+                ));
                 warnings.push(search_path_warning(warn, path, STATE_NOT_CARRIED));
                 reported.insert(subject.name.clone());
                 continue;
@@ -917,6 +929,7 @@ fn build_state_changes(
         mount_findings,
         manual_links,
         undetermined_installs,
+        unreported,
     }
 }
 
@@ -1043,6 +1056,192 @@ fn unparsed_link_warning(path: &str) -> Warning {
         severity: Some(WarningSeverity::Warning),
         extra: std::collections::HashMap::from([("path".into(), serde_json::json!(path))]),
     }
+}
+
+/// Why the scan does not report the links under `/etc/systemd/system` to a
+/// unit (§ 7.3 of the units spec), for one that no `ManualLink`, install
+/// state or other warning accounts for. Each cause is one warning listing
+/// every such link ([`unreported_link_warnings`]). Warnings only: nothing
+/// here is a read failure, a row or a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnreportedLinks {
+    /// The listing does not print the unit as one the scan reads, so it is
+    /// not read. `listed` is the listing's state word when it prints the
+    /// name at all.
+    NotRead { listed: Option<String> },
+    /// The unit is masked: its links have no effect.
+    Masked,
+    /// The unit is a template, not masked: systemd starts nothing from a
+    /// link to a template name without an instance.
+    Template,
+    /// A file at `path`, on the search path outside the two unit
+    /// directories the scan reads, changes the unit (§ 7.1).
+    Refused { path: String },
+    /// The link's name is an alias of `of`; a unit's links are read under
+    /// its own name only.
+    Alias { of: UnitName },
+    /// No unit file of the name is in either unit directory.
+    Dangling,
+}
+
+impl UnreportedLinks {
+    /// The cause's name in the warning's `cause` field, and its place in
+    /// the order the warnings are given.
+    fn cause(&self) -> (u8, &'static str) {
+        match self {
+            Self::NotRead { .. } => (0, "not_read"),
+            Self::Masked => (1, "masked"),
+            Self::Template => (2, "template"),
+            Self::Refused { .. } => (3, "refused"),
+            Self::Alias { .. } => (4, "alias"),
+            Self::Dangling => (5, "dangling"),
+        }
+    }
+
+    /// Why the links are not reported, written about one link.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::NotRead { .. } => {
+                "systemctl list-unit-files does not list its unit as one this scan reads, so \
+                 the scan does not read the unit or its links"
+            }
+            Self::Masked => "its unit is masked, so the link has no effect",
+            Self::Template => {
+                "its unit is a template, and systemd starts no unit from a link to a template \
+                 name without an instance, so the link has no effect"
+            }
+            Self::Refused { .. } => {
+                "a file on the systemd search path outside the two unit directories this scan \
+                 reads changes its unit, so the scan does not read the unit's links"
+            }
+            Self::Alias { .. } => {
+                "it names its unit by an alias, and the scan reads a unit's links under the \
+                 unit's own name only"
+            }
+            Self::Dangling => {
+                "there is no unit file of its name under /etc/systemd/system or \
+                 /usr/lib/systemd/system, so the link points at nothing"
+            }
+        }
+    }
+
+    /// What the warning adds after a link's unit, in its text and as a
+    /// field of the link: the listing's word, the refusing file or the
+    /// aliased unit.
+    fn detail(&self) -> Option<(&'static str, String, String)> {
+        match self {
+            Self::NotRead {
+                listed: Some(state),
+            } => Some(("listed_state", format!("listed '{state}'"), state.clone())),
+            Self::Refused { path } => {
+                Some(("search_path", format!("changed by {path}"), path.clone()))
+            }
+            Self::Alias { of } => Some((
+                "alias_of",
+                format!("an alias of {}", of.as_str()),
+                of.as_str().to_owned(),
+            )),
+            Self::NotRead { listed: None } | Self::Masked | Self::Template | Self::Dangling => None,
+        }
+    }
+}
+
+/// One warning per cause for the links under `/etc/systemd/system` the
+/// scan does not report (§ 7.3 of the units spec), in [`UnreportedLinks`]
+/// order, each naming every link's path and unit, with `cause` and `links`
+/// (each `path`, `unit` and the cause's detail) among its fields. A unit
+/// with no such link gives nothing.
+fn unreported_link_warnings(
+    host_links: &HostLinks,
+    unreported: &[(UnitName, UnreportedLinks)],
+) -> Vec<Warning> {
+    // Per cause (its order, name and reason): each link's text and fields.
+    type Listed = (Vec<String>, Vec<serde_json::Value>);
+    let mut by_cause: BTreeMap<(u8, &str, &str), Listed> = BTreeMap::new();
+    for (unit, why) in unreported {
+        for path in host_links.admin_paths(unit) {
+            let (order, cause) = why.cause();
+            let (texts, fields) = by_cause.entry((order, cause, why.reason())).or_default();
+            let mut field = serde_json::json!({ "path": path, "unit": unit.as_str() });
+            let text = match why.detail() {
+                Some((key, text, value)) => {
+                    field[key] = serde_json::json!(value);
+                    format!("{path} ({}, {text})", unit.as_str())
+                }
+                None => format!("{path} ({})", unit.as_str()),
+            };
+            texts.push(text);
+            fields.push(field);
+        }
+    }
+    by_cause
+        .into_iter()
+        .map(|((_, cause, reason), (texts, fields))| {
+            let message = match texts.as_slice() {
+                [one] => format!("link {one} is not reported or carried: {reason}"),
+                many => format!(
+                    "{} links are not reported or carried: for each, {reason}. The links: {}",
+                    many.len(),
+                    many.join("; ")
+                ),
+            };
+            Warning {
+                inspector: "units".into(),
+                message,
+                severity: Some(WarningSeverity::Warning),
+                extra: std::collections::HashMap::from([
+                    ("cause".into(), serde_json::json!(cause)),
+                    ("links".into(), serde_json::json!(fields)),
+                ]),
+            }
+        })
+        .collect()
+}
+
+/// Why the links under `/etc/systemd/system` to each unit that never
+/// reached [`build_state_changes`] (not in `examined`) are not reported,
+/// from what loads for its name ([`resolve::resolve`]). A unit the name
+/// gate already warned about (`listing` gives its state word) has that
+/// warning and is skipped. A template that is not masked is
+/// [`UnreportedLinks::Template`] whatever loads for it. A name whose
+/// resolution fails, or that is
+/// `linked`, is [`UnreportedLinks::NotRead`]: the scan does not read it
+/// either way, and a failure here only hides the more specific cause, so it
+/// does not degrade the scan.
+fn unexamined_links(
+    exec: &dyn Executor,
+    host_links: &HostLinks,
+    examined: &HashSet<UnitName>,
+    listing: &BTreeMap<UnitName, String>,
+) -> Vec<(UnitName, UnreportedLinks)> {
+    let mut unreported = Vec::new();
+    for unit in host_links
+        .admin
+        .keys()
+        .filter(|unit| !examined.contains(*unit))
+    {
+        let listed = listing.get(unit);
+        if listed.is_some_and(|state| {
+            matches!(
+                parse_unit_state(unit.as_str(), state),
+                ParsedUnitState::Warn(_)
+            )
+        }) {
+            continue;
+        }
+        let why = match resolve::resolve(exec, unit) {
+            Ok(Resolved::Masked { .. }) => UnreportedLinks::Masked,
+            _ if unit.is_template() => UnreportedLinks::Template,
+            Ok(Resolved::Unsupported { path }) => UnreportedLinks::Refused { path },
+            Ok(Resolved::AliasOf(of)) => UnreportedLinks::Alias { of },
+            Ok(Resolved::NotFound) => UnreportedLinks::Dangling,
+            Ok(Resolved::File { .. }) | Err(_) => UnreportedLinks::NotRead {
+                listed: listed.cloned(),
+            },
+        };
+        unreported.push((unit.clone(), why));
+    }
+    unreported
 }
 
 /// The unit file a fragment names, if any.
@@ -1649,6 +1848,10 @@ impl Inspector for UnitsInspector {
         listed.extend(linked_instances(&host_links, &listing));
         let mut known = listing.clone();
         known.extend(listed.iter().map(|subject| subject.name.clone()));
+        // Every name read below whose links can be under `/etc` (§ 7.3): a
+        // derived instance has none.
+        let examined: HashSet<UnitName> =
+            listed.iter().map(|subject| subject.name.clone()).collect();
         let derived = preset_instances(
             exec,
             &units,
@@ -1669,6 +1872,7 @@ impl Inspector for UnitsInspector {
             mut mount_findings,
             manual_links,
             undetermined_installs,
+            mut unreported,
         } = build_state_changes(
             exec,
             listed,
@@ -1679,6 +1883,23 @@ impl Inspector for UnitsInspector {
             &mut unit_file_read_failures,
             &mut reported,
         );
+        // 4b'. The links under `/etc` none of that read or warned about:
+        //      warnings only (§ 7.3).
+        let mut listing_states = BTreeMap::new();
+        for unit in &units {
+            if let Ok(name) = UnitName::try_from(unit.unit.clone()) {
+                listing_states
+                    .entry(name)
+                    .or_insert_with(|| unit.state.clone());
+            }
+        }
+        unreported.extend(unexamined_links(
+            exec,
+            &host_links,
+            &examined,
+            &listing_states,
+        ));
+        warnings.extend(unreported_link_warnings(&host_links, &unreported));
 
         // 4c. The administrator's other storage files, then what each
         //     finding mounts, read from its unit file (§ 6.5).
