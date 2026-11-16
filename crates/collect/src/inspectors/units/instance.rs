@@ -134,21 +134,24 @@ pub(crate) fn instance_needs(
     }
 }
 
-/// `path` with each run of `/` made one and a trailing `/` dropped, as
-/// systemd simplifies a path it loads, so `/var/lib/x/%i/` names the
-/// directory it reads as and is not refused by the form check. Only the
-/// collector simplifies: the snapshot loader keeps the strict form.
+/// `path` with each run of `/` made one, each `.` component dropped and a
+/// trailing `/` dropped, as systemd simplifies a path it loads, so
+/// `/var/lib/x/%i/` and `/etc/x/./%i` name what they read as and are not
+/// refused by the form check. A `..` component is kept, so the form check
+/// still refuses it. Only the collector simplifies: the snapshot loader
+/// keeps the strict form.
 fn simplify_path(path: &str) -> String {
-    let mut simple = String::with_capacity(path.len());
-    for c in path.chars() {
-        if !(c == '/' && simple.ends_with('/')) {
-            simple.push(c);
-        }
+    let absolute = path.starts_with('/');
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|part| !matches!(*part, "" | "."))
+        .collect();
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
     }
-    if simple.len() > 1 && simple.ends_with('/') {
-        simple.pop();
-    }
-    simple
 }
 
 /// The unexpanded paths `table` gives `template`.
@@ -323,17 +326,23 @@ mod tests {
         let needs = instance_needs(
             &exec,
             &name,
-            &["[Unit]\nConditionPathExists=/etc/x//%i/\n\
-               [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=y/%i/\n"
-                .to_owned()],
+            &[
+                "[Unit]\nConditionPathExists=/etc/x//%i/\nConditionPathExists=/etc/./z/%i\n\
+               [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=./y/%i/\n"
+                    .to_owned(),
+            ],
         );
-        assert_eq!(needs.required_config, ["/etc/x/a"]);
+        assert_eq!(needs.required_config, ["/etc/x/a", "/etc/z/a"]);
         assert_eq!(needs.data_paths, ["/var/lib/x/a", "/var/lib/y/a"]);
         for (path, simple) in [
             ("/etc/x/a/", "/etc/x/a"),
             ("/etc//x///a", "/etc/x/a"),
             ("/", "/"),
             ("/etc/x/a", "/etc/x/a"),
+            ("/etc/x/./a", "/etc/x/a"),
+            ("/./etc/./x/.", "/etc/x"),
+            ("/etc/x/../a", "/etc/x/../a"),
+            ("./y/a/", "y/a"),
         ] {
             assert_eq!(simplify_path(path), simple, "{path}");
         }

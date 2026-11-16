@@ -6473,6 +6473,27 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
                 "{extra:?}, {route}:\n{containerfile}"
             );
         }
+        // With the template's config row excluded, the instance moves to
+        // the "not carried" line.
+        let excluded = containerfile_in(&exported_after(
+            &snap,
+            &[(config_item(&etc_path("worker@.timer")), false)],
+        ));
+        let line = |prefix: &str| {
+            excluded
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .map(str::to_owned)
+        };
+        assert!(
+            line("# Local timers not carried").is_some_and(|l| l.contains(WORKER_INSTANCE_TIMER)),
+            "{extra:?}, excluded:\n{excluded}"
+        );
+        assert!(
+            line("# Local timers carried with their configuration or drop-in row")
+                .is_none_or(|l| !l.contains(WORKER_INSTANCE_TIMER)),
+            "{extra:?}, excluded:\n{excluded}"
+        );
     }
 
     let snap =

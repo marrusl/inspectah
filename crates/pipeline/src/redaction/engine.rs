@@ -1601,13 +1601,24 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         for at_job in &sched.at_jobs {
             post_redaction_content.insert(at_job.file.clone(), at_job.command.clone());
         }
+        // An instance timer's description shares its template's `path`
+        // (the scheduled inspector records it from the template), so two
+        // descriptions can hold one path with different commands. Each
+        // command is kept, so a hint at the path is resolved only when its
+        // keyword survives in neither.
         for timer in &sched.systemd_timers {
             let source_path = if timer.path.is_empty() {
                 format!("timer:{}", timer.name)
             } else {
                 timer.path.clone()
             };
-            post_redaction_content.insert(source_path, timer.exec_start.clone());
+            post_redaction_content
+                .entry(source_path)
+                .and_modify(|content| {
+                    content.push('\n');
+                    content.push_str(&timer.exec_start);
+                })
+                .or_insert_with(|| timer.exec_start.clone());
         }
     }
     if let Some(ref nrs) = snapshot.non_rpm_software {
@@ -2132,6 +2143,46 @@ mod tests {
             "credential file path should be preserved, got: {}",
             storage.fstab_entries[0].options
         );
+    }
+
+    /// An instance timer's description shares its template's `path`. A
+    /// high-confidence hint at that path is resolved only when its keyword
+    /// survives in no description there, whichever was recorded last.
+    #[test]
+    fn a_hint_at_a_path_two_timer_descriptions_share_reads_both_commands() {
+        use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+        const PATH: &str = "etc/systemd/system/worker@.timer";
+        for order in [["frobkey", "plain"], ["plain", "frobkey"]] {
+            let mut snapshot = InspectionSnapshot::new();
+            snapshot.scheduled_tasks = Some(ScheduledTaskSection {
+                systemd_timers: order
+                    .iter()
+                    .enumerate()
+                    .map(|(i, arg)| SystemdTimer {
+                        name: ["worker@", "worker@a"][i].into(),
+                        exec_start: format!("/usr/local/bin/worker {arg}"),
+                        source: "local".into(),
+                        path: PATH.into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            snapshot.redaction_hints = vec![RedactionHint {
+                path: PATH.into(),
+                reason: "ExecStart contains frobkey".into(),
+                confidence: Some(Confidence::High),
+            }];
+            redact(&mut snapshot, &RedactOptions::default());
+            assert!(
+                matches!(
+                    snapshot.redaction_state,
+                    Some(RedactionState::PartiallyRedacted { .. })
+                ),
+                "{order:?}: {:?}",
+                snapshot.redaction_state
+            );
+        }
     }
 
     #[test]
