@@ -1075,19 +1075,34 @@ pub const RUNTIME_VAR_DIRS: [&str; 2] = ["/var/run", "/var/lock"];
 /// character, so the path names what it reads as and puts no line break
 /// into a comment the plan writes from it.
 fn is_path_below(path: &str, root: &str) -> bool {
+    is_below_with(path, root, false)
+}
+
+/// [`is_path_below`], with a `..` component after the root allowed when
+/// `parent_ok`. Empty and `.` components and control characters are
+/// refused either way.
+fn is_below_with(path: &str, root: &str, parent_ok: bool) -> bool {
     path.strip_prefix(root)
         .and_then(|rest| rest.strip_prefix('/'))
         .is_some_and(|rest| {
             !path.chars().any(char::is_control)
-                && rest.split('/').all(|part| !matches!(part, "" | "." | ".."))
+                && rest.split('/').all(|part| match part {
+                    "" | "." => false,
+                    ".." => parent_ok,
+                    _ => true,
+                })
         })
 }
 
 /// Whether `path` can be an instance's `required_config` entry: a path
-/// below `/etc` ([`is_path_below`]). The one rule for the form, shared by
-/// the collector and the snapshot loader, so the two cannot disagree.
+/// below `/etc` ([`is_path_below`]), except that a `..` component is
+/// allowed. systemd reads such a path as written, and dropping it would
+/// let rule 6 carry the instance's enable with that path unchecked
+/// (§ 10.8). No export entry sits at a path holding `..`, so rule 6
+/// declines the enable naming it. The one rule for the form, shared by the
+/// collector and the snapshot loader, so the two cannot disagree.
 pub fn is_instance_config_path(path: &str) -> bool {
-    is_path_below(path, INSTANCE_CONFIG_ROOT)
+    is_below_with(path, INSTANCE_CONFIG_ROOT, true)
 }
 
 /// Whether `path` can be an instance's `data_paths` entry: a path below

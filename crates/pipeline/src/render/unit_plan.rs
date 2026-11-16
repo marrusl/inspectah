@@ -302,6 +302,10 @@ pub enum ConfigGap {
     Redacted,
     /// The snapshot holds nothing at the path.
     NotInSnapshot,
+    /// A fleet aggregate's config entries at the path hold more than one
+    /// content variant, so the staged copy may not be the one an instance
+    /// reads ([`holds_variants`]).
+    FleetVariants,
 }
 
 /// Why rule 7 of § 10.2 makes a command an advisory.
@@ -379,6 +383,10 @@ impl OmissionReason {
                 ConfigGap::NotInSnapshot => {
                     format!("its configuration {path} is not in the export")
                 }
+                ConfigGap::FleetVariants => format!(
+                    "its configuration {path} differs between hosts in the fleet, so the staged \
+                     copy may not be the one this instance reads"
+                ),
             },
             Self::GeneratedNameCollision {
                 name,
@@ -1969,6 +1977,13 @@ fn local_trigger_missing(
 /// own, or, for an instance the snapshot holds nothing at the own name of
 /// (no config entry, no drop-in row, no state change recorded from that
 /// file), its template's, which is what systemd loads for it.
+///
+/// Only `/etc` evidence at the own name counts. An instance trigger with
+/// a vendor file of its own under `/usr/lib` beside an `/etc` template is
+/// mapped to the template, although systemd loads the instance's own file
+/// first; with the template excluded, the timer is then declined as
+/// `TimerTriggerNotStaged` although its trigger is provided. That errs
+/// toward omitting an enable, never toward carrying one.
 fn trigger_file(snap: &InspectionSnapshot, trigger: &UnitName) -> UnitName {
     let Some(parts) = trigger.instance() else {
         return trigger.clone();
@@ -2131,15 +2146,24 @@ fn no_file_at(path: String, staged: &StagedWrites<'_>) -> Result<(), OmissionRea
 
 /// `Ok` unless the snapshot is a fleet aggregate whose config entries and
 /// drop-in rows at `path` hold more than one content, whichever of them is
-/// selected.
+/// selected ([`holds_variants`]).
 fn one_variant(snap: &InspectionSnapshot, path: String) -> Result<(), OmissionReason> {
-    if snap.aggregate_meta.is_none() {
-        return Ok(());
+    match Destination::new(&path) {
+        Ok(dest) if holds_variants(snap, &dest) => {
+            Err(OmissionReason::InstallEvidenceChanged { path })
+        }
+        _ => Ok(()),
     }
-    let Ok(dest) = Destination::new(&path) else {
-        return Ok(());
-    };
-    let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == dest);
+}
+
+/// Whether the snapshot is a fleet aggregate whose config entries and
+/// drop-in rows at `dest` hold more than one content, whichever of them is
+/// selected.
+fn holds_variants(snap: &InspectionSnapshot, dest: &Destination) -> bool {
+    if snap.aggregate_meta.is_none() {
+        return false;
+    }
+    let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == *dest);
     let config = snap
         .config
         .iter()
@@ -2153,11 +2177,7 @@ fn one_variant(snap: &InspectionSnapshot, path: String) -> Result<(), OmissionRe
         .filter(|d| at_dest(&d.path))
         .map(|d| d.content.as_str());
     let contents: std::collections::BTreeSet<&str> = config.chain(drop_ins).collect();
-    if contents.len() > 1 {
-        Err(OmissionReason::InstallEvidenceChanged { path })
-    } else {
-        Ok(())
-    }
+    contents.len() > 1
 }
 
 // ---------------------------------------------------------------------------
@@ -2190,7 +2210,10 @@ const CONFIG_FLAGGED_REST: &str = "holds a value the redaction pass flagged and 
 /// - an entry the stager does not write, excluded, left out or withheld:
 ///   [`ConfigGap::Excluded`];
 /// - an entry `snapshot.redactions` holds an `Inline` or `Excluded`
-///   finding for: [`ConfigGap::Redacted`].
+///   finding for: [`ConfigGap::Redacted`];
+/// - on a fleet aggregate, an entry whose path holds more than one content
+///   variant, whichever is staged: [`ConfigGap::FleetVariants`], as rule 5
+///   declines such an install file ([`one_variant`]).
 ///
 /// Each but the first names the entry's path. `Ok` holds the attention
 /// notes of a passing instance: one per entry with a `Flagged` finding,
@@ -2244,6 +2267,9 @@ fn rule_6_instance_config(
                 .any(|kind| matches!(kind, RedactionKind::Inline | RedactionKind::Excluded))
             {
                 return Err(gap(path, ConfigGap::Redacted));
+            }
+            if holds_variants(snap, &dest) {
+                return Err(gap(path, ConfigGap::FleetVariants));
             }
             if unredacted {
                 notes.push(format!(

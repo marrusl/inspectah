@@ -9522,6 +9522,41 @@ fn t27_an_enabled_instance_found_by_its_link_is_carried() {
     assert_instance_carried(&present, UNIT, "configuration present");
 }
 
+/// Rule 6 (§ 10.8): a configuration path the template names with a `..`
+/// component is kept as written, so its enable is never carried with the
+/// path unchecked. The export holds no entry at such a path, so the enable
+/// is omitted naming it, even with the file it reads as present and clean.
+#[test]
+fn an_instance_configuration_path_with_a_parent_component_omits_the_enable() {
+    const UNIT: &str = "t@site.service";
+    let reads = "[Service]\nEnvironmentFile=/etc/t/../t/%i.conf\nExecStart=/usr/bin/t %i\n\n\
+                 [Install]\nWantedBy=multi-user.target\n";
+    let snap = scan(
+        instance_link(
+            UnitHost::new()
+                .unit(T_TEMPLATE, "indirect")
+                .preset("disable *")
+                .vendor_unit(T_TEMPLATE, reads, None),
+            "/etc/systemd/system",
+            "multi-user.target",
+            UNIT,
+            T_TEMPLATE_PATH,
+        )
+        .file("/etc/t/site.conf", "PORT=1\n"),
+    );
+    assert_eq!(
+        change(&snap, UNIT).required_config,
+        ["/etc/t/../t/site.conf"]
+    );
+    assert_instance_omitted(
+        &snap,
+        UNIT,
+        "# Omitted: t@site.service (its configuration /etc/t/../t/site.conf is not in the \
+         export)",
+        "InstanceConfigNotStaged",
+    );
+}
+
 /// T27: an instance linked only under `/run` is not found: no state
 /// change, no inventory entry, no line. Control: the same link under
 /// `/etc` is found.
@@ -10123,6 +10158,21 @@ fn t40_an_undetermined_owner_with_also_derives_no_instance() {
             }
         )]
     );
+    let first = "# Advisory: multi-user.target.wants/need.service is not carried: the unit's \
+                 [Install] section cannot be relied on (enabling the unit would also make an \
+                 .upholds link).";
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, first),
+            [
+                first.to_owned(),
+                "#   To carry it, add after the configuration COPY: RUN systemctl add-wants -- \
+                 'multi-user.target' 'need.service'"
+                    .to_owned()
+            ],
+            "{route}:\n{containerfile}"
+        );
+    }
     assert!(inventory_entry(&snap, "t@two.service").is_none());
     assert_eq!(changes_named(&snap, "t@two.service"), 0);
 }
@@ -10790,7 +10840,8 @@ fn t29_an_unredacted_or_flagged_configuration_is_carried_with_a_note() {
             .file(WG0_CONF, &wg_conf)
     };
 
-    // The scan command's `--no-redaction` path.
+    // The state the scan command's `--no-redaction` flag sets
+    // (`redaction_state` `Raw` on an unredacted scan), set here by hand.
     let mut raw = scan_unredacted(host());
     raw.redaction_state = Some(inspectah_core::types::redaction::RedactionState::Raw);
     assert_instance_carried(&raw, WG0, "--no-redaction");

@@ -342,12 +342,15 @@ fn state_change_instance_paths_are_checked_on_load() {
     };
 
     let snap = InspectionSnapshot::load(&with_lists(
-        serde_json::json!(["/etc/wireguard/wg0.conf"]),
+        serde_json::json!(["/etc/wireguard/wg0.conf", "/etc/x/../y/a.conf"]),
         serde_json::json!(["/var/lib/dirsrv/slapd-example"]),
     ))
     .expect("the collector's forms load");
     let change = &snap.units.expect("units present").state_changes[0];
-    assert_eq!(change.required_config, ["/etc/wireguard/wg0.conf"]);
+    assert_eq!(
+        change.required_config,
+        ["/etc/wireguard/wg0.conf", "/etc/x/../y/a.conf"]
+    );
     assert_eq!(change.data_paths, ["/var/lib/dirsrv/slapd-example"]);
 
     for refused in [
@@ -355,7 +358,8 @@ fn state_change_instance_paths_are_checked_on_load() {
         "/usr/etc/x.conf",
         "/etc",
         "/etcetera/x",
-        "/etc/../usr/x",
+        "/etc/./x",
+        "/etc//x",
         "/etc/x\n# injected",
         "/var/lib/x",
     ] {

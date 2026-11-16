@@ -91,7 +91,12 @@ path, the config entries at it or under it (a directory) decide, by
 path order, content not captured is `NotCaptured`, an entry
 `staged_writes` does not write (excluded, left out or withheld) is
 `Excluded`, and an `Inline` or `Excluded` finding in
-`snapshot.redactions` at the entry is `Redacted`, each naming the entry.
+`snapshot.redactions` at the entry is `Redacted`, and on a fleet
+aggregate an entry whose path holds more than one content variant is
+`FleetVariants` whichever variant is staged (`holds_variants`, which rule
+5's `one_variant` uses too), each naming the entry. A `required_config`
+path with a `..` component is kept by the collector and fails as
+`NotInSnapshot`, since `Destination` refuses it.
 Package ownership is never evidence: a package-owned file the
 administrator did not change has no config entry and fails, by design
 (§ 10.8 "Only a file the export carries passes"). Not captured is checked
@@ -335,8 +340,10 @@ showed, and the build failed with no warning anywhere.
   one file's name. A FIXME, with exclude advice for `Reservation::Row`
   and rename advice for `Reservation::Inventory`.
 - `InstanceConfigNotStaged { path, gap }`: rule 6, with `ConfigGap`
-  `Excluded`, `NotCaptured`, `Redacted` or `NotInSnapshot`. The texts are
-  § 10.8's table, written only by `OmissionReason::describe`.
+  `Excluded`, `NotCaptured`, `Redacted`, `NotInSnapshot` or
+  `FleetVariants`. The first four texts are § 10.8's table; the fleet
+  text is the plan's own. All are written only by
+  `OmissionReason::describe`.
 - `AlsoMember { member, why, verb, named, further, add }`: rule 7. Not an
   `# Omitted:` line but an advisory block (`also_advisory_lines`); refine
   marks it `DeclinedMarker::Advisory`.

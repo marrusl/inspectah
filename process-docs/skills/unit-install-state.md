@@ -314,14 +314,18 @@ reads (`InstallEvidence::unit_texts`, the same selection as
   and the error is toward omitting an enable, never carrying one unchecked.
 - The form check (`is_instance_config_path`, `is_instance_data_path` in
   core) is shared by the collector and the snapshot loader, which refuses
-  any other value: `..` or `.` components, control characters, the root
-  itself. A path with a line break would otherwise reach a Containerfile
-  comment. The collector first simplifies an expanded value as systemd
-  does (`simplify_path`: runs of `/` made one, `.` components and a
-  trailing `/` dropped, `..` kept so the check still refuses it), so
+  any other value: empty or `.` components, control characters, the root
+  itself, and `..` in a data path. A path with a line break would
+  otherwise reach a Containerfile comment. The collector first simplifies
+  an expanded value as systemd does (`simplify_path`: runs of `/` made
+  one, `.` components and a trailing `/` dropped, `..` kept), so
   `/var/lib/x/%i/` and `/etc/x/./%i` are kept, not refused; the loader
   stays strict. Dropping a `required_config` path would leave an enable
-  unchecked by rule 6, so the collector errs toward keeping it.
+  unchecked by rule 6, so every value under `/etc` is kept: a
+  configuration path with a `..` component passes the form check as
+  written, and rule 6 declines its enable as `NotInSnapshot` naming it,
+  since `Destination` refuses `..` and no export entry can sit there.
+  A data path with `..` is still dropped: it gives only an advisory.
 - The type-wide (`service.d`) and dash-prefix drop-in directories are not
   read here, as for `[Install]`.
 - Existence is `Executor::file_exists`, true for a directory on both

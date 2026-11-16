@@ -155,9 +155,10 @@ pub(crate) fn instance_needs(
 /// `path` with each run of `/` made one, each `.` component dropped and a
 /// trailing `/` dropped, as systemd simplifies a path it loads, so
 /// `/var/lib/x/%i/` and `/etc/x/./%i` name what they read as and are not
-/// refused by the form check. A `..` component is kept, so the form check
-/// still refuses it. Only the collector simplifies: the snapshot loader
-/// keeps the strict form.
+/// refused by the form check. A `..` component is kept, as systemd keeps
+/// it: the form check refuses it in a data path, and keeps it in a
+/// configuration path so rule 6 declines the enable naming it. Only the
+/// collector simplifies: the snapshot loader keeps the strict form.
 fn simplify_path(path: &str) -> String {
     let absolute = path.starts_with('/');
     let parts: Vec<&str> = path
@@ -334,7 +335,8 @@ mod tests {
 
     /// A path written with a trailing or doubled `/` is kept, simplified as
     /// systemd loads it, and not dropped by the form check: dropping a
-    /// `required_config` path would let the enable go unchecked.
+    /// `required_config` path would let the enable go unchecked. A
+    /// configuration path with a `..` component is kept as written.
     #[test]
     fn a_path_with_a_trailing_or_doubled_slash_is_kept_simplified() {
         let exec = crate::executor::mock::MockExecutor::new()
@@ -346,11 +348,15 @@ mod tests {
             &name,
             &[
                 "[Unit]\nConditionPathExists=/etc/x//%i/\nConditionPathExists=/etc/./z/%i\n\
+               ConditionPathExists=/etc/w/../%i.conf\n\
                [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=./y/%i/\n"
                     .to_owned(),
             ],
         );
-        assert_eq!(needs.required_config, ["/etc/x/a", "/etc/z/a"]);
+        assert_eq!(
+            needs.required_config,
+            ["/etc/w/../a.conf", "/etc/x/a", "/etc/z/a"]
+        );
         assert_eq!(needs.data_paths, ["/var/lib/x/a", "/var/lib/y/a"]);
         for (path, simple) in [
             ("/etc/x/a/", "/etc/x/a"),

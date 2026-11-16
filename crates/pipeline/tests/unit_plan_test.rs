@@ -4072,6 +4072,59 @@ fn rule_6_needs_each_instance_configuration_in_the_export() {
     }
 }
 
+/// § 10.2 rule 6 on a fleet aggregate: an instance's configuration whose
+/// path holds more than one content variant declines the enable,
+/// whichever variant is staged, since no one host's file is the one every
+/// instance reads (as rule 5 declines an install file with two variants).
+/// Control: one variant carries the enable.
+#[test]
+fn rule_6_declines_a_fleet_configuration_with_two_variants() {
+    use inspectah_pipeline::render::unit_plan::ConfigGap;
+    const CONF: &str = "/etc/w/a.conf";
+    let fleet = |variants: &[&str]| {
+        let mut change = change_with("w@a.service", vendor("w@.service"), UnitState::Enabled);
+        change.required_config = vec![CONF.to_owned()];
+        let mut snap = units_snapshot(vec![change], vec![(CONF, variants[0])]);
+        snap.aggregate_meta = Some(AggregateSnapshotMeta {
+            label: "fleet".into(),
+            host_count: 2,
+            hostnames: vec!["alpha".into(), "beta".into()],
+            merged_at: "2026-11-15T00:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: Default::default(),
+        });
+        for content in &variants[1..] {
+            snap.config
+                .as_mut()
+                .expect("a config section")
+                .files
+                .push(ConfigFileEntry {
+                    path: CONF.into(),
+                    category: ConfigCategory::Other,
+                    content: (*content).into(),
+                    disposition: FindingKind::Actionable { include: false },
+                    ..Default::default()
+                });
+        }
+        snap
+    };
+    assert_eq!(rule_5_outcome(&fleet(&["x"]), "w@a.service"), Ok(()), "one");
+    let reason = OmissionReason::InstanceConfigNotStaged {
+        path: CONF.to_owned(),
+        gap: ConfigGap::FleetVariants,
+    };
+    assert_eq!(
+        rule_5_outcome(&fleet(&["x", "y"]), "w@a.service"),
+        Err(reason.clone()),
+        "two"
+    );
+    assert_eq!(
+        reason.describe(),
+        "its configuration /etc/w/a.conf differs between hosts in the fleet, so the staged \
+         copy may not be the one this instance reads"
+    );
+}
+
 /// § 10.2 rule 5: in a fleet aggregate, a recorded install drop-in whose
 /// path holds more than one content variant fails the rule, whichever
 /// variant is staged, since the row may have been recorded from the
