@@ -395,6 +395,17 @@ export function followUpFlagText(n: number): string | null {
 
 export type FilterValue = "all" | Outcome;
 
+/** The filter's values in the bar's order (§ 6.4). */
+export const FILTER_VALUES: readonly FilterValue[] = ["all", "needs_follow_up", "carried", "excluded"];
+
+/** § 7 string 8, the filter values. */
+export const FILTER_LABELS: Record<FilterValue, string> = {
+  all: "All",
+  needs_follow_up: "Needs follow-up",
+  carried: "Carried",
+  excluded: "Excluded",
+};
+
 export interface ShowState {
   filter: FilterValue;
   query: string;

@@ -1,5 +1,5 @@
 import { useCallback, useId, useMemo, useState } from "react";
-import { Label } from "@patternfly/react-core";
+import { Button, Label } from "@patternfly/react-core";
 import type {
   DeclinedView,
   ServiceDecisionDto,
@@ -28,17 +28,23 @@ import {
   RELATION_LABELS,
   UNDETERMINED_CAUSE_LABEL,
   causeLabel,
+  filterBarDrawn,
   followUpFlagText,
   groupUnits,
   keyFields,
+  liveRegionText,
+  outcomeCounts,
   showGroups,
+  shownOutcomeRowCount,
+  type FilterValue,
   type GroupId,
+  type OccurrenceKey,
   type ReportedRow,
   type RowKey,
-  type ShowState,
   type UnitBranch,
 } from "./unitOutcome";
 import { UnitGroup } from "./UnitGroup";
+import { UnitOutcomeFilter } from "./UnitOutcomeFilter";
 
 export interface ServiceSectionProps {
   services: ServiceDecisionDto[];
@@ -128,8 +134,15 @@ const OUTCOME_COLORS: Record<DeclinedView["renders"], "orange" | "blue" | "grey"
 /** Subtle text for the preset beside a row's state (§ 6.6 item 1). */
 const SUBTLE_TEXT_COLOR = "var(--pf-t--global--text--color--subtle)";
 
-/** "All", with no query and no pin: the section has no filter bar yet. */
-const SHOW_ALL: ShowState = { filter: "all", query: "", pins: new Set() };
+/** § 7 string 14: a filter value that shows no row, and its link button. */
+const FILTER_EMPTY = "No units match this filter.";
+const SHOW_ALL_LABEL = "Show all";
+
+/** No section query yet (§ 6.12 arrives with section search). */
+const NO_QUERY = "";
+
+/** No pinned branch. */
+const NO_PINS: ReadonlySet<OccurrenceKey> = new Set();
 
 /** Every group open. */
 const NONE_COLLAPSED = Object.fromEntries(GROUP_ORDER.map((id) => [id, false])) as Record<
@@ -1016,21 +1029,47 @@ export function ServiceSection({
   const { pendingKeys, runGuarded } = pendingGuard;
 
   // Keys are assigned once per view response, then grouped (§ 6.11, § 6.2).
-  const groups = useMemo(
+  const keyed = useMemo(
     () =>
-      groupUnits(
-        keyFields({
-          unit_states: services,
-          unit_dropins: dropins,
-          default_target: defaultTarget,
-          mount_findings: mountFindings,
-          manual_links: manualLinks,
-          undetermined_installs: undeterminedInstalls,
-        }),
-      ),
+      keyFields({
+        unit_states: services,
+        unit_dropins: dropins,
+        default_target: defaultTarget,
+        mount_findings: mountFindings,
+        manual_links: manualLinks,
+        undetermined_installs: undeterminedInstalls,
+      }),
     [services, dropins, defaultTarget, mountFindings, manualLinks, undeterminedInstalls],
   );
-  const shown = useMemo(() => showGroups(groups, SHOW_ALL), [groups]);
+  const groups = useMemo(() => groupUnits(keyed), [keyed]);
+  const counts = useMemo(() => outcomeCounts(keyed), [keyed]);
+  const barDrawn = filterBarDrawn(counts);
+
+  // The filter is "All" on mount and lives only here: not in the URL or
+  // localStorage (§ 6.4 Persistence).
+  const [filter, setFilter] = useState<FilterValue>("all");
+  const [announcement, setAnnouncement] = useState("");
+  // The bar stopped being drawn: the filter returns to "All", and the live
+  // region starts empty when the bar returns. Adjusted during render, so
+  // no frame shows a filter with no bar.
+  if (!barDrawn && (filter !== "all" || announcement !== "")) {
+    setFilter("all");
+    setAnnouncement("");
+  }
+
+  const shown = useMemo(
+    () => showGroups(groups, { filter, query: NO_QUERY, pins: NO_PINS }),
+    [groups, filter],
+  );
+
+  const changeFilter = useCallback(
+    (value: FilterValue) => {
+      setFilter(value);
+      const next = showGroups(groups, { filter: value, query: NO_QUERY, pins: NO_PINS });
+      setAnnouncement(liveRegionText(value, shownOutcomeRowCount(next)));
+    },
+    [groups],
+  );
 
   // Every group opens on mount; the state goes with the section (§ 6.2).
   const [collapsed, setCollapsed] = useState<Record<GroupId, boolean>>(NONE_COLLAPSED);
@@ -1100,10 +1139,15 @@ export function ServiceSection({
     manualLinks.length === 0 &&
     undeterminedInstalls.length === 0;
 
-  // Today's tab stop: the target, else the first unit row.
-  const tabStop = defaultTarget
+  // Today's tab stop: the target, else the first shown unit row.
+  const targetShown = shown.some((g) => g.target);
+  const tabStop = targetShown
     ? undefined
     : shown.find((g) => g.branches.length > 0)?.branches[0].head.occurrenceKey;
+
+  // § 6.9: a value that shows no row. Section search's own empty state
+  // (row 5) will take precedence over this one.
+  const filterEmpty = filter !== "all" && shown.length === 0;
 
   return (
     <div
@@ -1112,6 +1156,24 @@ export function ServiceSection({
       aria-label={SECTION_NAME}
       data-testid="service-section"
     >
+      {barDrawn && (
+        <UnitOutcomeFilter
+          counts={counts}
+          value={filter}
+          onChange={changeFilter}
+          announcement={announcement}
+        />
+      )}
+
+      {filterEmpty && (
+        <p className="inspectah-unit-filter__empty" style={{ padding: "var(--pf-t--global--spacer--md)" }}>
+          {FILTER_EMPTY}{" "}
+          <Button variant="link" isInline onClick={() => changeFilter("all")}>
+            {SHOW_ALL_LABEL}
+          </Button>
+        </p>
+      )}
+
       {shown.map((group) => (
         <UnitGroup
           key={group.id}
