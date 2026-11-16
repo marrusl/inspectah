@@ -378,6 +378,27 @@ the fixed tables. Non-obvious points:
   whose syntax is not modeled keeps every value: a stale path then omits
   an enable, never carries one. A reset is not the `[Install]` reader's:
   that one has its own measured rules.
+- **A drop-in that removes a requirement is evidence, never a
+  requirement** (`InstanceNeeds::overriding_drop_ins`). Applying a reset
+  is right only while the drop-in that holds it is in the image: excluded
+  in refine, or under `/run` (never exported), its reset is gone and the
+  image reads the earlier path again, which rule 6 never sees. So a
+  drop-in whose reset or replacement removed an assignment naming a path
+  the two lists would otherwise hold, or that hides a drop-in of its file
+  name naming one (systemd reads one file per name), joins the row's
+  `install_drop_ins`, as a drop-in hiding an install file does, and rule 5
+  withholds the enable unless the export stages it. A removed or hidden
+  value that cannot be interpreted, and a hidden file that cannot be read,
+  count. A reset that removes nothing for the instance, one followed by
+  the same path, and one in the unit file itself record nothing. Never add
+  the removed path to `required_config` instead: the included-reset case
+  would then omit an enable the host does not need. The plan tells such a
+  drop-in from an install file by `unit_plan::install_drop_in_role` (where
+  it is, and whether the snapshot's copy holds `[Install]`), so its
+  decline is `InstanceNeedsEvidenceChanged`, not the `[Install]` reason,
+  and refine's `install_drop_ins` (the `[Install]` badge) leaves it out. A
+  vendor drop-in recorded this way is never staged either, so its enable
+  is withheld: toward omitting.
 - Values are expanded with `SpecifierSet::Runtime`, so `%I` is
   unescaped; `[Install]` never is (`%I` is not expanded there).
 - A path counts only when the value itself holds `%i` or `%I`. An

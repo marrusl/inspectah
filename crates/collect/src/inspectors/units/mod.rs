@@ -877,6 +877,18 @@ fn build_state_changes(
                     };
                     change.required_config = needs.required_config;
                     change.data_paths = needs.data_paths;
+                    // § 10.2 rule 5: a runtime drop-in that removed or
+                    // changed a path the lists would hold is evidence the
+                    // export stages, as a drop-in hiding an install file
+                    // is: without it the image reads that path unchecked.
+                    if !needs.overriding_drop_ins.is_empty() {
+                        let paths: BTreeSet<String> = change
+                            .install_drop_ins
+                            .drain(..)
+                            .chain(needs.overriding_drop_ins)
+                            .collect();
+                        change.install_drop_ins = paths.into_iter().collect();
+                    }
                     // § 7.5: an instance of a template on no list that
                     // names nothing it reads gets a note saying so; the
                     // plan adds that it is carried on its unit file alone

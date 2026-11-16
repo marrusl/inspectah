@@ -205,7 +205,12 @@ pub struct UnitStateView {
     /// Every unit `Also=` reaches from this one, with what its links say
     /// (§ 11.1).
     pub also: Vec<AlsoView>,
-    /// The row's install drop-ins under `/etc/systemd/system` (§ 11.1).
+    /// The row's install drop-ins under `/etc/systemd/system` (§ 11.1),
+    /// and a drop-in ranked above `/etc` that hides one. A runtime drop-in
+    /// the row records for what an instance reads is left out: it holds no
+    /// `[Install]` ([`install_drop_in_role`]).
+    ///
+    /// [`install_drop_in_role`]: inspectah_pipeline::render::unit_plan::install_drop_in_role
     pub install_drop_ins: Vec<String>,
     /// The paths under `/etc` a template instance's enable needs in the
     /// export (§ 7.5, § 10.8).

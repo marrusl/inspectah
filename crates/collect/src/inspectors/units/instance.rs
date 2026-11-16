@@ -157,6 +157,12 @@ pub(crate) struct InstanceNeeds {
     /// Paths under `/var` outside `/var/run` and `/var/lock` that exist on
     /// the source host.
     pub(crate) data_paths: Vec<String>,
+    /// Paths of the runtime drop-ins whose reset, replacement or hiding of
+    /// a drop-in of their file name removed or changed a path the two lists
+    /// would otherwise hold. Without one of them the image reads that path
+    /// again, unchecked, so each is evidence the export has to stage (§ 10.2
+    /// rule 5), never a requirement.
+    pub(crate) overriding_drop_ins: Vec<String>,
 }
 
 /// Why what an instance needs is unknown. Its enable is not carried: a
@@ -179,6 +185,15 @@ pub(crate) enum NeedsUnknown {
 /// ([`runtime_drop_ins`]), in load order, and the fixed tables for its
 /// template. A data path is kept only when `exec` finds something there. A
 /// unit that is not an instance needs nothing.
+///
+/// A drop-in whose reset or replacement removed an assignment that named a
+/// path the lists would otherwise hold, or that hides a drop-in of its file
+/// name that names one, is recorded in
+/// [`InstanceNeeds::overriding_drop_ins`]: the lists hold only while it is
+/// there. A removed or hidden assignment that cannot be interpreted, and a
+/// hidden drop-in that cannot be read, count, since what they name is
+/// unknown. A reset in the unit file itself records nothing: the unit file
+/// is rule 5's own evidence.
 pub(crate) fn instance_needs(
     exec: &dyn Executor,
     name: &UnitName,
@@ -187,11 +202,7 @@ pub(crate) fn instance_needs(
     let Some(instance) = name.instance() else {
         return Ok(InstanceNeeds::default());
     };
-    let unit_texts: Vec<String> = fragment
-        .map(str::to_owned)
-        .into_iter()
-        .chain(runtime_drop_ins(exec, name)?)
-        .collect();
+    let drop_ins = runtime_drop_ins(exec, name)?;
     let template = instance.template();
     let (stem, _) = name
         .as_str()
@@ -200,47 +211,20 @@ pub(crate) fn instance_needs(
     let expand = |value: &str| {
         expand_unit_specifiers(value, stem, SpecifierSet::Runtime).map(|path| simplify_path(&path))
     };
+    let keeps_data = |path: &str| is_instance_data_path(path) && exec.file_exists(Path::new(path));
 
+    let effective = effective_assignments(fragment, &drop_ins.chosen);
     let mut required_config = BTreeSet::new();
     let mut data = BTreeSet::new();
-    for (key, value) in effective_assignments(&unit_texts) {
-        let uninterpretable = || NeedsUnknown::Uninterpretable {
-            key: key.clone(),
-            value: value.clone(),
-        };
-        let operands = match operands(&key, &value) {
-            Ok(operands) => operands,
-            Err(Uninterpretable) if holds_instance_specifier(&value) => {
-                return Err(uninterpretable());
+    for assignment in &effective.kept {
+        let named = named_paths(&assignment.key, &assignment.value, &expand).map_err(|_| {
+            NeedsUnknown::Uninterpretable {
+                key: assignment.key.clone(),
+                value: assignment.value.clone(),
             }
-            Err(Uninterpretable) => continue,
-        };
-        for operand in operands {
-            let (text, state_directory) = match &operand {
-                Operand::Path(text) => (text, false),
-                Operand::StateDirectory(text) => (text, true),
-            };
-            if !holds_instance_specifier(text) {
-                continue;
-            }
-            let expanded = expand(text).ok_or_else(uninterpretable)?;
-            if state_directory {
-                if !expanded.starts_with('/') {
-                    data.insert(format!("{STATE_DIRECTORY_ROOT}/{expanded}"));
-                }
-                continue;
-            }
-            if expanded.starts_with(&format!("{CONFIG_ROOT}/")) {
-                // A configuration path is never dropped: one the form check
-                // refuses (a control character) declines the enable.
-                if !is_instance_config_path(&expanded) {
-                    return Err(uninterpretable());
-                }
-                required_config.insert(expanded);
-            } else {
-                data.insert(expanded);
-            }
-        }
+        })?;
+        required_config.extend(named.config);
+        data.extend(named.data);
     }
     required_config.extend(
         table_rows(&INSTANCE_CONFIG_TABLE, &template)
@@ -248,14 +232,107 @@ pub(crate) fn instance_needs(
             .filter(|path| is_instance_config_path(path)),
     );
     data.extend(table_rows(&INSTANCE_DATA_TABLE, &template).filter_map(expand));
-    let data_paths = data
-        .into_iter()
-        .filter(|path| is_instance_data_path(path) && exec.file_exists(Path::new(path)))
-        .collect();
+    let data_paths: BTreeSet<String> = data.into_iter().filter(|p| keeps_data(p)).collect();
+
+    // Whether an assignment the host's files no longer apply would add to
+    // the lists, were it applied again.
+    let changes_lists = |key: &str, value: &str| match named_paths(key, value, &expand) {
+        Err(Uninterpretable) => true,
+        Ok(named) => {
+            named.config.iter().any(|p| !required_config.contains(p))
+                || named
+                    .data
+                    .iter()
+                    .any(|p| keeps_data(p) && !data_paths.contains(p))
+        }
+    };
+    let mut overriding = BTreeSet::new();
+    for (remover, removed) in &effective.removed {
+        if changes_lists(&removed.key, &removed.value) {
+            overriding.insert(drop_ins.chosen[*remover].0.clone());
+        }
+    }
+    for (hider, hidden) in &drop_ins.hidden {
+        let changes = match exec.read_file(Path::new(hidden)) {
+            Ok(text) => assignments(&text)
+                .iter()
+                .any(|(key, value)| changes_lists(key, value)),
+            Err(_) => true,
+        };
+        if changes {
+            overriding.insert(hider.clone());
+        }
+    }
     Ok(InstanceNeeds {
         required_config: required_config.into_iter().collect(),
-        data_paths,
+        data_paths: data_paths.into_iter().collect(),
+        overriding_drop_ins: overriding.into_iter().collect(),
     })
+}
+
+/// The paths for the instance one assignment names, expanded: the
+/// configuration paths under `/etc`, and the other paths, data candidates
+/// for [`instance_needs`] to keep when something is there.
+#[derive(Debug, Default)]
+struct NamedPaths {
+    config: Vec<String>,
+    data: Vec<String>,
+}
+
+/// The paths for the instance the assignment `key=value` names, read with
+/// the setting's [`Syntax`] and expanded with `expand`. A value systemd's
+/// parser refuses names nothing unless it holds `%i` or `%I`.
+/// [`Uninterpretable`] for such a value, an operand `expand` cannot expand,
+/// and a configuration path the form check refuses (a control character):
+/// a configuration path is never dropped.
+fn named_paths(
+    key: &str,
+    value: &str,
+    expand: &dyn Fn(&str) -> Option<String>,
+) -> Result<NamedPaths, Uninterpretable> {
+    let mut named = NamedPaths::default();
+    let operands = match operands(key, value) {
+        Ok(operands) => operands,
+        Err(Uninterpretable) if holds_instance_specifier(value) => return Err(Uninterpretable),
+        Err(Uninterpretable) => return Ok(named),
+    };
+    for operand in operands {
+        let (text, state_directory) = match &operand {
+            Operand::Path(text) => (text, false),
+            Operand::StateDirectory(text) => (text, true),
+        };
+        if !holds_instance_specifier(text) {
+            continue;
+        }
+        let expanded = expand(text).ok_or(Uninterpretable)?;
+        if state_directory {
+            if !expanded.starts_with('/') {
+                named
+                    .data
+                    .push(format!("{STATE_DIRECTORY_ROOT}/{expanded}"));
+            }
+            continue;
+        }
+        if expanded.starts_with(&format!("{CONFIG_ROOT}/")) {
+            if !is_instance_config_path(&expanded) {
+                return Err(Uninterpretable);
+            }
+            named.config.push(expanded);
+        } else {
+            named.data.push(expanded);
+        }
+    }
+    Ok(named)
+}
+
+/// The runtime drop-ins of a unit ([`runtime_drop_ins`]).
+#[derive(Debug, Default)]
+struct RuntimeDropIns {
+    /// The path and text of each drop-in systemd applies, in load order.
+    chosen: Vec<(String, String)>,
+    /// Each drop-in systemd does not read because a chosen one has its file
+    /// name: the chosen one's path, then the hidden one's.
+    hidden: Vec<(String, String)>,
 }
 
 /// The texts of the drop-ins systemd applies to `name` when it loads the
@@ -275,10 +352,10 @@ pub(crate) fn instance_needs(
 /// not read: an alias of a template instance is not modeled.
 ///
 /// A directory listing that fails in any way but `NotFound` (an iteration
-/// error included, through `read_dir_strict`), and a drop-in that cannot be
-/// read as text, are [`NeedsUnknown::Unreadable`]: systemd reads what the
-/// collector cannot.
-fn runtime_drop_ins(exec: &dyn Executor, name: &UnitName) -> Result<Vec<String>, NeedsUnknown> {
+/// error included, through `read_dir_strict`), and a chosen drop-in that
+/// cannot be read as text, are [`NeedsUnknown::Unreadable`]: systemd reads
+/// what the collector cannot. A hidden drop-in is listed, not read.
+fn runtime_drop_ins(exec: &dyn Executor, name: &UnitName) -> Result<RuntimeDropIns, NeedsUnknown> {
     let unreadable = |path: &str, error: String| NeedsUnknown::Unreadable {
         path: path.to_owned(),
         error,
@@ -296,6 +373,7 @@ fn runtime_drop_ins(exec: &dyn Executor, name: &UnitName) -> Result<Vec<String>,
         .collect();
 
     let mut chosen: BTreeMap<String, String> = BTreeMap::new();
+    let mut hidden = Vec::new();
     for dir in &dirs {
         let entries = match exec.read_dir_strict(Path::new(dir)) {
             Ok(entries) => entries,
@@ -304,16 +382,22 @@ fn runtime_drop_ins(exec: &dyn Executor, name: &UnitName) -> Result<Vec<String>,
         };
         for entry in entries.into_iter().filter(|e| systemd_reads_drop_in(e)) {
             let path = format!("{dir}/{entry}");
-            chosen.entry(entry).or_insert(path);
+            match chosen.get(&entry) {
+                Some(hider) => hidden.push((hider.clone(), path)),
+                None => {
+                    chosen.insert(entry, path);
+                }
+            }
         }
     }
-    chosen
-        .values()
-        .map(|path| {
-            exec.read_file(Path::new(path))
-                .map_err(|e| unreadable(path, e.to_string()))
+    let chosen = chosen
+        .into_values()
+        .map(|path| match exec.read_file(Path::new(&path)) {
+            Ok(text) => Ok((path, text)),
+            Err(e) => Err(unreadable(&path, e.to_string())),
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok(RuntimeDropIns { chosen, hidden })
 }
 
 /// Add the `.d` directory names systemd reads for the unit `name` to
@@ -420,26 +504,60 @@ fn assignments(text: &str) -> Vec<(String, String)> {
     found
 }
 
-/// The assignments that are in effect once every text of `unit_texts`
-/// (the unit file, then its drop-ins in load order) is applied with
-/// systemd's resets, in order. An empty value resets the values before it
-/// ([`Syntax::resets`]) and is not kept; a single-path setting keeps only
-/// its last value. A setting whose syntax is not modeled keeps every value,
-/// an empty one dropped: if systemd resets it, a path is required that the
-/// unit no longer reads, which omits an enable rather than carry one.
-fn effective_assignments(unit_texts: &[String]) -> Vec<(String, String)> {
-    let mut kept: Vec<(String, String)> = Vec::new();
-    for (key, value) in unit_texts.iter().flat_map(|text| assignments(text)) {
-        let syntax = Syntax::of(&key);
-        let replaces = syntax == Syntax::SinglePath;
-        if value.is_empty() || replaces {
-            kept.retain(|(earlier, _)| !syntax.resets(&key, earlier));
-        }
-        if !value.is_empty() {
-            kept.push((key, value));
+/// One assignment outside `[Install]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Assignment {
+    key: String,
+    value: String,
+}
+
+/// What [`effective_assignments`] finds.
+#[derive(Debug, Default)]
+struct Effective {
+    /// The assignments in effect, in load order.
+    kept: Vec<Assignment>,
+    /// Each assignment a drop-in's reset or replacement removed, with the
+    /// index of that drop-in. One the unit file removed is not listed.
+    removed: Vec<(usize, Assignment)>,
+}
+
+/// The assignments that are in effect once `fragment`, the unit file's
+/// text, then each of `drop_ins` (path, text) in load order is applied
+/// with systemd's resets, in order. An empty value resets the values before
+/// it ([`Syntax::resets`]) and is not kept; a single-path setting keeps
+/// only its last value. A setting whose syntax is not modeled keeps every
+/// value, an empty one dropped: if systemd resets it, a path is required
+/// that the unit no longer reads, which omits an enable rather than carry
+/// one.
+fn effective_assignments(fragment: Option<&str>, drop_ins: &[(String, String)]) -> Effective {
+    let texts = fragment.map(|text| (None, text)).into_iter().chain(
+        drop_ins
+            .iter()
+            .enumerate()
+            .map(|(index, (_, text))| (Some(index), text.as_str())),
+    );
+    let mut effective = Effective::default();
+    for (source, text) in texts {
+        for (key, value) in assignments(text) {
+            let syntax = Syntax::of(&key);
+            let replaces = syntax == Syntax::SinglePath;
+            if value.is_empty() || replaces {
+                let (removed, kept) = std::mem::take(&mut effective.kept)
+                    .into_iter()
+                    .partition(|earlier: &Assignment| syntax.resets(&key, &earlier.key));
+                effective.kept = kept;
+                if let Some(remover) = source {
+                    effective
+                        .removed
+                        .extend(removed.into_iter().map(|earlier| (remover, earlier)));
+                }
+            }
+            if !value.is_empty() {
+                effective.kept.push(Assignment { key, value });
+            }
         }
     }
-    kept
+    effective
 }
 
 /// How systemd reads one setting's value.

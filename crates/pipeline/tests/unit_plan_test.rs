@@ -3876,6 +3876,122 @@ fn rule_5_needs_exactly_the_recorded_install_drop_ins() {
     }
 }
 
+/// Rule 5 for what an instance reads: the collector records among a row's
+/// `install_drop_ins` a runtime drop-in whose reset, replacement or hiding
+/// changed a path the instance reads. One the export does not stage is
+/// `InstanceNeedsEvidenceChanged` naming it when it is no install file: in
+/// the unit's own or template `.d` under `/etc` with no `[Install]` and no
+/// vendor drop-in's name, in a type-wide or dash-prefix directory, or above
+/// `/etc` hiding no recorded `/etc` file of its name. An install file, and
+/// a drop-in above `/etc` that hides one, keep `InstallEvidenceChanged`.
+/// Each staged, the enable is carried.
+#[test]
+fn rule_5_names_a_runtime_drop_in_by_what_it_changes() {
+    const UNIT: &str = "w@a.service";
+    let reset = "[Service]\nEnvironmentFile=\n";
+    let install = "[Install]\nWantedBy=multi-user.target\n";
+    let own = etc_drop_in(UNIT, "10-reset.conf");
+    let own_install = etc_drop_in(UNIT, "50-x.conf");
+    let template_vendor_named = etc_drop_in("w@.service", "10-members.conf");
+    let etc_type_wide = "/etc/systemd/system/service.d/90-reset.conf";
+    let run_type_wide = "/run/systemd/system/service.d/90-reset.conf";
+    let run_own = "/run/systemd/system/w@a.service.d/90-reset.conf";
+    let control_hiding = "/etc/systemd/system.control/w@a.service.d/50-x.conf";
+    let needs = |path: &str| {
+        Err(OmissionReason::InstanceNeedsEvidenceChanged {
+            path: path.to_owned(),
+        })
+    };
+    let evidence = |path: &str| {
+        Err(OmissionReason::InstallEvidenceChanged {
+            path: path.to_owned(),
+        })
+    };
+    let instance = |recorded: &[&str], vendor_names: &[&str]| {
+        with_install_files(
+            change_with(UNIT, vendor("w@.service"), UnitState::Enabled),
+            recorded,
+            vendor_names,
+        )
+    };
+    type Case<'a> = (
+        &'a str,
+        UnitStateChange,
+        Vec<(&'a str, &'a str)>,
+        Vec<SystemdDropIn>,
+        Result<(), OmissionReason>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a reset in the own .d, its row excluded",
+            instance(&[&own], &[]),
+            vec![],
+            vec![drop_in_row(UNIT, &own, reset, false)],
+            needs(&own),
+        ),
+        (
+            "a reset in the own .d, its row included",
+            instance(&[&own], &[]),
+            vec![],
+            vec![drop_in_row(UNIT, &own, reset, true)],
+            Ok(()),
+        ),
+        (
+            "an [Install] drop-in in the own .d, its row excluded",
+            instance(&[&own], &[]),
+            vec![],
+            vec![drop_in_row(UNIT, &own, install, false)],
+            evidence(&own),
+        ),
+        (
+            "a [Service] drop-in with a vendor drop-in's name, excluded",
+            instance(&[&template_vendor_named], &["10-members.conf"]),
+            vec![],
+            vec![drop_in_row(UNIT, &template_vendor_named, reset, false)],
+            evidence(&template_vendor_named),
+        ),
+        (
+            "a type-wide reset under /etc, its entry excluded",
+            instance(&[etc_type_wide], &[]),
+            vec![],
+            vec![],
+            needs(etc_type_wide),
+        ),
+        (
+            "a type-wide reset under /etc, staged",
+            instance(&[etc_type_wide], &[]),
+            vec![(etc_type_wide, reset)],
+            vec![],
+            Ok(()),
+        ),
+        (
+            "a type-wide reset under /run",
+            instance(&[run_type_wide], &[]),
+            vec![],
+            vec![],
+            needs(run_type_wide),
+        ),
+        (
+            "a reset in the own .d under /run, hiding nothing",
+            instance(&[run_own], &[]),
+            vec![],
+            vec![],
+            needs(run_own),
+        ),
+        (
+            "a system.control drop-in hiding a recorded /etc install drop-in",
+            instance(&[&own_install, control_hiding], &[]),
+            vec![(&own_install, install)],
+            vec![],
+            evidence(control_hiding),
+        ),
+    ];
+    for (label, change, files, rows, expected) in cases {
+        let snap = with_drop_in_rows(units_snapshot(vec![change], files), rows);
+        assert_eq!(rule_5_outcome(&snap, UNIT), expected, "{label}");
+    }
+}
+
 /// § 7.5, phase 5: an instance row is planned like any row. Its
 /// `disable`, and its `mask` over the template's file or with no file, are
 /// carried; nothing declines a row for being an instance.

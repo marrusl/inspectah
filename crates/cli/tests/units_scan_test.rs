@@ -10092,6 +10092,79 @@ fn a_reset_environment_file_is_not_required_through_the_scan() {
     );
 }
 
+/// The `InstanceNeedsEvidenceChanged` line for `unit` and the drop-in
+/// `path`.
+fn needs_evidence_omitted(unit: &str, path: &str) -> String {
+    format!(
+        "# Omitted: {unit} (the drop-in {path} clears or replaces a path the instance reads and \
+         is not in the export as the source host had it, so the instance in the image may read \
+         a path inspectah did not check)"
+    )
+}
+
+/// Rule 5 for what an instance reads, through the scan: the template
+/// requires `/etc/t/old/%i.env` and a drop-in resets `EnvironmentFile=`.
+/// With the reset drop-in under `/etc` and included, nothing is required
+/// and the enable is carried (the positive control). Excluded through
+/// refine, the image reads the template's requirement again, unchecked, so
+/// the enable is omitted naming the drop-in, in the export and in refine,
+/// and including it again restores the enable. The refine row's install
+/// drop-ins do not list it: it holds no `[Install]`. A reset under `/run`,
+/// which no export carries, omits the enable on both routes and in refine.
+#[test]
+fn a_reset_drop_in_the_export_does_not_carry_omits_the_enable() {
+    const UNIT: &str = "t@site.service";
+    const DROP_IN: &str = "/etc/systemd/system/t@site.service.d/10-env.conf";
+    const RUN_RESET: &str = "/run/systemd/system/service.d/90-reset.conf";
+    const RESET: &str = "[Service]\nEnvironmentFile=\n";
+    let service = "EnvironmentFile=/etc/t/old/%i.env\nExecStart=/usr/bin/t %i";
+
+    let included = scan(t_reads_host(service, &[(DROP_IN, RESET)]));
+    let row = change(&included, UNIT);
+    assert!(row.required_config.is_empty());
+    assert_eq!(row.install_drop_ins, [DROP_IN]);
+    assert_instance_carried(&included, UNIT, "the reset included");
+    assert!(
+        unit_row(&included, UNIT).install_drop_ins.is_empty(),
+        "the reset drop-in is not an install file in refine"
+    );
+
+    let line = needs_evidence_omitted(UNIT, DROP_IN);
+    let excluded = (drop_in_item(DROP_IN), false);
+    let containerfile =
+        containerfile_in(&exported_after(&included, std::slice::from_ref(&excluded)));
+    assert_eq!(
+        omitted(&containerfile, UNIT),
+        Some(line.as_str()),
+        "{containerfile}"
+    );
+    assert!(
+        in_no_systemctl_instruction(&containerfile, UNIT),
+        "{containerfile}"
+    );
+    let declined = declined_in(
+        &session_after(&included, std::slice::from_ref(&excluded)),
+        UNIT,
+    )
+    .expect("a declined row");
+    assert_eq!(declined.reason, "InstanceNeedsEvidenceChanged");
+    assert_eq!(format!("# Omitted: {}", declined.text), line);
+    let restored = containerfile_in(&exported_after(
+        &included,
+        &[excluded.clone(), (excluded.0, true)],
+    ));
+    assert!(acts(&restored, "enable", UNIT), "{restored}");
+
+    let run = scan(t_reads_host(service, &[(RUN_RESET, RESET)]));
+    assert!(change(&run, UNIT).required_config.is_empty());
+    assert_instance_omitted(
+        &run,
+        UNIT,
+        &needs_evidence_omitted(UNIT, RUN_RESET),
+        "InstanceNeedsEvidenceChanged",
+    );
+}
+
 /// R4 through the scan: an instance's `EnvironmentFile=` set by a
 /// type-wide drop-in (`/etc/systemd/system/service.d`) or a dash-prefix one
 /// (`/etc/systemd/system/t-.service.d` for `t-job@site.service`) is

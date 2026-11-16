@@ -6075,6 +6075,152 @@ fn an_unreadable_runtime_drop_in_declines_the_instance() {
     }
 }
 
+/// § 10.2 rule 5 for what an instance reads: a runtime drop-in whose reset,
+/// replacement or hiding of another drop-in removed or changed a path the
+/// row records joins the row's `install_drop_ins`, so the plan withholds
+/// the enable unless the export stages it. The image reads the removed
+/// path again whenever that drop-in is missing. The source is evidence,
+/// never a requirement. Controls: a drop-in that only adds a path, a reset
+/// that removes no path for the instance, a reset followed by the same
+/// path, a hidden drop-in that names nothing for the instance, and a reset
+/// in the unit file itself record nothing.
+#[test]
+fn a_drop_in_that_removes_a_requirement_is_install_evidence() {
+    const UNIT: &str = "worker@site.service";
+    const OWN: &str = "/etc/systemd/system/worker@site.service.d";
+    const RUN_TYPE_WIDE: &str = "/run/systemd/system/service.d";
+    const ETC_TYPE_WIDE: &str = "/etc/systemd/system/service.d";
+    const VENDOR_TYPE_WIDE: &str = "/usr/lib/systemd/system/service.d";
+    let own_reset = format!("{OWN}/10-reset.conf");
+    let run_reset = format!("{RUN_TYPE_WIDE}/90-reset.conf");
+    let own_replace = format!("{OWN}/10-wd.conf");
+    let admin_env = format!("{ETC_TYPE_WIDE}/50-env.conf");
+    type Case<'a> = (
+        &'a str,
+        &'a str,
+        Vec<(&'a str, &'a str, &'a str)>,
+        Vec<String>,
+        Vec<&'a str>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "a reset in the instance's own .d",
+            "EnvironmentFile=/etc/old/%i.env\nExecStart=/usr/bin/worker",
+            vec![(OWN, "10-reset.conf", "[Service]\nEnvironmentFile=\n")],
+            vec![own_reset.clone()],
+            vec![],
+        ),
+        (
+            "a reset in a type-wide drop-in under /run",
+            "EnvironmentFile=/etc/old/%i.env\nExecStart=/usr/bin/worker",
+            vec![(
+                RUN_TYPE_WIDE,
+                "90-reset.conf",
+                "[Service]\nEnvironmentFile=\n",
+            )],
+            vec![run_reset.clone()],
+            vec![],
+        ),
+        (
+            "a replacement",
+            "WorkingDirectory=/etc/old/%i\nExecStart=/usr/bin/worker",
+            vec![(
+                OWN,
+                "10-wd.conf",
+                "[Service]\nWorkingDirectory=/etc/new/%i\n",
+            )],
+            vec![own_replace.clone()],
+            vec!["/etc/new/site"],
+        ),
+        (
+            "a drop-in hiding a vendor one of its name",
+            "ExecStart=/usr/bin/worker",
+            vec![
+                (
+                    VENDOR_TYPE_WIDE,
+                    "50-env.conf",
+                    "[Service]\nEnvironmentFile=/etc/vendor/%i.env\n",
+                ),
+                (
+                    ETC_TYPE_WIDE,
+                    "50-env.conf",
+                    "[Service]\nEnvironmentFile=/etc/admin/%i.env\n",
+                ),
+            ],
+            vec![admin_env.clone()],
+            vec!["/etc/admin/site.env"],
+        ),
+        (
+            "control: a drop-in that only adds",
+            "ExecStart=/usr/bin/worker",
+            vec![(
+                OWN,
+                "10-env.conf",
+                "[Service]\nEnvironmentFile=/etc/z/%i.env\n",
+            )],
+            vec![],
+            vec!["/etc/z/site.env"],
+        ),
+        (
+            "control: a reset of a path not the instance's",
+            "EnvironmentFile=/etc/sysconfig/worker\nExecStart=/usr/bin/worker",
+            vec![(OWN, "10-reset.conf", "[Service]\nEnvironmentFile=\n")],
+            vec![],
+            vec![],
+        ),
+        (
+            "control: a reset followed by the same path",
+            "EnvironmentFile=/etc/old/%i.env\nExecStart=/usr/bin/worker",
+            vec![(
+                OWN,
+                "10-reset.conf",
+                "[Service]\nEnvironmentFile=\nEnvironmentFile=/etc/old/%i.env\n",
+            )],
+            vec![],
+            vec!["/etc/old/site.env"],
+        ),
+        (
+            "control: a hidden drop-in that names nothing for the instance",
+            "ExecStart=/usr/bin/worker",
+            vec![
+                (VENDOR_TYPE_WIDE, "50-nice.conf", "[Service]\nNice=5\n"),
+                (ETC_TYPE_WIDE, "50-nice.conf", "[Service]\nNice=1\n"),
+            ],
+            vec![],
+            vec![],
+        ),
+        (
+            "control: a reset in the unit file",
+            "EnvironmentFile=/etc/old/%i.env\nEnvironmentFile=\nExecStart=/usr/bin/worker",
+            vec![],
+            vec![],
+            vec![],
+        ),
+    ];
+    for (label, fragment, drop_ins, evidence, required) in cases {
+        let mut exec = instance_host(
+            "worker@.service",
+            &template_with(&format!("{fragment}\n")),
+            UNIT,
+        );
+        for (dir, file, text) in drop_ins {
+            let (root, name) = dir.rsplit_once('/').expect("a directory under a root");
+            exec = exec
+                .with_dir_entry(root, name)
+                .with_dir(dir, vec![file])
+                .with_file(&format!("{dir}/{file}"), text);
+        }
+        let (section, warnings) = scan(&exec);
+        let change = section
+            .state_changes
+            .iter()
+            .find(|c| c.unit().name().as_str() == UNIT)
+            .unwrap_or_else(|| panic!("{label}: a state change: {warnings:?}"));
+        assert_eq!(change.install_drop_ins, evidence, "{label}");
+        assert_eq!(change.required_config, required, "{label}");
+    }
+}
+
 /// Control: a unit that is not an instance records neither list, though
 /// its file names `%i`.
 #[test]

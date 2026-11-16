@@ -234,6 +234,14 @@ pub enum OmissionReason {
     /// The file that supplies `[Install]` in the image is not the one the
     /// row recorded (§ 10.2 rule 5). `path` is that file's image path.
     InstallEvidenceChanged { path: String },
+    /// A runtime drop-in the row recorded because its reset, replacement or
+    /// hiding of a drop-in of its name changed the paths an instance reads
+    /// is not in the export as the source host had it, so the image's
+    /// instance may read a path rule 6 never checked (§ 10.2 rule 5,
+    /// § 10.8). `path` is the drop-in's recorded path. Its own reason
+    /// because [`Self::InstallEvidenceChanged`]'s text is about `[Install]`
+    /// ([`install_drop_in_role`]).
+    InstanceNeedsEvidenceChanged { path: String },
     /// The export carries an administrator's unit file at a package-owned
     /// storage unit's name, which the image would load in place of the
     /// package's file (§ 10.2 rule 2). `path` is that file's image path.
@@ -346,6 +354,11 @@ impl OmissionReason {
                 "the [Install] section in the image would not be the one recorded on the \
                  source host ({path})"
             ),
+            Self::InstanceNeedsEvidenceChanged { path } => format!(
+                "the drop-in {path} clears or replaces a path the instance reads and is not in \
+                 the export as the source host had it, so the instance in the image may read a \
+                 path inspectah did not check"
+            ),
             Self::StorageFileStaged { path } => {
                 format!("the export carries an administrator's unit file for it ({path})")
             }
@@ -427,6 +440,7 @@ impl OmissionReason {
             Self::NotCarried { .. } => "NotCarried",
             Self::UnitFileNotStaged => "UnitFileNotStaged",
             Self::InstallEvidenceChanged { .. } => "InstallEvidenceChanged",
+            Self::InstanceNeedsEvidenceChanged { .. } => "InstanceNeedsEvidenceChanged",
             Self::StorageFileStaged { .. } => "StorageFileStaged",
             Self::TargetNeedsUnit => "TargetNeedsUnit",
             Self::TimerTriggerEvidenceChanged { .. } => "TimerTriggerEvidenceChanged",
@@ -448,6 +462,7 @@ impl OmissionReason {
             | Self::NotCarried { package } => Some(package),
             Self::UnitFileNotStaged
             | Self::InstallEvidenceChanged { .. }
+            | Self::InstanceNeedsEvidenceChanged { .. }
             | Self::StorageFileStaged { .. }
             | Self::TargetNeedsUnit
             | Self::TimerTriggerEvidenceChanged { .. }
@@ -2090,6 +2105,114 @@ fn install_drop_in_dirs(name: &UnitName) -> Vec<String> {
     dirs
 }
 
+/// What a path among a row's `install_drop_ins` is evidence of
+/// ([`install_drop_in_role`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropInRole {
+    /// An install file, or a drop-in ranked above `/etc` that hides one:
+    /// the file `enable` reads `[Install]` from.
+    Install,
+    /// A runtime drop-in the collector recorded because its reset,
+    /// replacement or hiding of a drop-in of its name changed what an
+    /// instance reads (§ 7.5).
+    InstanceNeeds,
+}
+
+/// What `path`, one of `change`'s `install_drop_ins`, is evidence of. The
+/// row holds both kinds in one list (schema 28 has no field of its own for
+/// the second), so the role is read from where the file is and what the
+/// snapshot holds there:
+///
+/// - a path [`Destination`] refuses: `Install`, as rule 5 always read it;
+/// - outside the unit's own and template `.d` (a type-wide or dash-prefix
+///   directory, which `enable` never reads `[Install]` from):
+///   `InstanceNeeds`;
+/// - in one of them under `/etc/systemd/system`: `Install` when it has the
+///   file name of one of the row's `vendor_drop_ins`, or when any config
+///   entry or drop-in row at the path holds an `[Install]` section, or when
+///   the snapshot holds nothing there; else `InstanceNeeds`;
+/// - in one of them under another directory: `Install` when another
+///   recorded path in one of them under `/etc/systemd/system` has its file
+///   name, which it hides; else `InstanceNeeds`.
+pub fn install_drop_in_role(
+    snap: &InspectionSnapshot,
+    change: &UnitStateChange,
+    path: &str,
+) -> DropInRole {
+    let Ok(dest) = Destination::new(path) else {
+        return DropInRole::Install;
+    };
+    let names = install_drop_in_names(change.unit().name());
+    // The directory the drop-in is in, its name, and its file name.
+    let in_install_dir = |dest: &Destination| -> Option<(String, String)> {
+        let (dir, file) = dest.as_str().rsplit_once('/')?;
+        let (root, dir_name) = dir.rsplit_once('/')?;
+        names
+            .iter()
+            .any(|name| name == dir_name)
+            .then(|| (root.to_owned(), file.to_owned()))
+    };
+    let Some((root, file)) = in_install_dir(&dest) else {
+        return DropInRole::InstanceNeeds;
+    };
+    if root == ETC_UNIT_DIR {
+        let mut contents = recorded_contents(snap, &dest).peekable();
+        let install = change.vendor_drop_ins.contains(&file)
+            || contents.peek().is_none()
+            || contents.any(holds_install_section);
+        return if install {
+            DropInRole::Install
+        } else {
+            DropInRole::InstanceNeeds
+        };
+    }
+    let hides = change.install_drop_ins.iter().any(|other| {
+        Destination::new(other)
+            .ok()
+            .and_then(|other| in_install_dir(&other))
+            .is_some_and(|(other_root, other_file)| {
+                other_root == ETC_UNIT_DIR && other_file == file
+            })
+    });
+    if hides {
+        DropInRole::Install
+    } else {
+        DropInRole::InstanceNeeds
+    }
+}
+
+/// The contents of every config entry and drop-in row at `dest`, whatever
+/// their disposition.
+fn recorded_contents<'s>(
+    snap: &'s InspectionSnapshot,
+    dest: &'s Destination,
+) -> impl Iterator<Item = &'s str> + 's {
+    let at_dest = move |p: &str| Destination::new(p).is_ok_and(|d| d == *dest);
+    let config = snap
+        .config
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter(move |f| at_dest(&f.path))
+        .map(|f| f.content.as_str());
+    let drop_ins = snap
+        .units
+        .iter()
+        .flat_map(|u| &u.drop_ins)
+        .filter(move |d| at_dest(&d.path))
+        .map(|d| d.content.as_str());
+    config.chain(drop_ins)
+}
+
+/// The `.d` directory names `enable` reads `[Install]` from for `name`:
+/// its own and, for an instance, its template's.
+fn install_drop_in_names(name: &UnitName) -> Vec<String> {
+    let mut names = vec![format!("{}.d", name.as_str())];
+    if let Some(parts) = name.instance() {
+        names.push(format!("{}.d", parts.template().as_str()));
+    }
+    names
+}
+
 /// Rule 5 for every fragment, the drop-in half (§ 10.2): the install
 /// drop-ins the export stages for the unit are exactly the row's
 /// `install_drop_ins`, none missing and none added.
@@ -2100,15 +2223,19 @@ fn install_drop_in_dirs(name: &UnitName) -> Vec<String> {
 ///   recorded paths include a drop-in ranked above `/etc` that hides one
 ///   of the `/etc` ones, which the configuration export stages when it is
 ///   under `/etc/systemd/system.control` and included, and never when it
-///   is under `/run`.
+///   is under `/run`, and, for an instance, a runtime drop-in whose reset,
+///   replacement or hiding changed what the instance reads (§ 7.5), which
+///   is staged on the same terms.
 /// - A staged drop-in systemd reads ([`systemd_reads_drop_in`]: a `.conf`
 ///   name that is not hidden) directly in one of [`install_drop_in_dirs`]
 ///   that the row does not record fails when it is an install file: it
 ///   holds an `[Install]` section ([`holds_install_section`]), or it has
 ///   the file name of one of the row's `vendor_drop_ins`.
 ///
-/// Every failure is [`OmissionReason::InstallEvidenceChanged`] naming the
-/// path.
+/// Every failure names the path: a recorded path whose role
+/// ([`install_drop_in_role`]) is `InstanceNeeds` is
+/// [`OmissionReason::InstanceNeedsEvidenceChanged`], any other failure
+/// [`OmissionReason::InstallEvidenceChanged`].
 fn rule_5_drop_ins(
     snap: &InspectionSnapshot,
     change: &UnitStateChange,
@@ -2117,15 +2244,20 @@ fn rule_5_drop_ins(
     let changed = |path: &str| OmissionReason::InstallEvidenceChanged {
         path: path.to_owned(),
     };
+    let recorded_changed = |path: &str| match install_drop_in_role(snap, change, path) {
+        DropInRole::Install => changed(path),
+        DropInRole::InstanceNeeds => OmissionReason::InstanceNeedsEvidenceChanged {
+            path: path.to_owned(),
+        },
+    };
     let mut recorded = Vec::new();
     for path in &change.install_drop_ins {
         let Ok(dest) = Destination::new(path) else {
             return Err(changed(path));
         };
-        if !staged.writes.contains_key(&dest) {
-            return Err(changed(path));
+        if !staged.writes.contains_key(&dest) || holds_variants(snap, &dest) {
+            return Err(recorded_changed(path));
         }
-        one_variant(snap, path.clone())?;
         recorded.push(dest);
     }
     for dir in install_drop_in_dirs(change.unit().name()) {
@@ -2184,20 +2316,7 @@ fn holds_variants(snap: &InspectionSnapshot, dest: &Destination) -> bool {
     if snap.aggregate_meta.is_none() {
         return false;
     }
-    let at_dest = |p: &str| Destination::new(p).is_ok_and(|d| d == *dest);
-    let config = snap
-        .config
-        .iter()
-        .flat_map(|c| &c.files)
-        .filter(|f| at_dest(&f.path))
-        .map(|f| f.content.as_str());
-    let drop_ins = snap
-        .units
-        .iter()
-        .flat_map(|u| &u.drop_ins)
-        .filter(|d| at_dest(&d.path))
-        .map(|d| d.content.as_str());
-    let contents: std::collections::BTreeSet<&str> = config.chain(drop_ins).collect();
+    let contents: std::collections::BTreeSet<&str> = recorded_contents(snap, dest).collect();
     contents.len() > 1
 }
 

@@ -21,8 +21,8 @@ use inspectah_pipeline::render::configtree::{
     Destination, PathError, StagedFileKind, StagedWrites, WithheldWhy, staged_writes,
 };
 use inspectah_pipeline::render::unit_plan::{
-    DeclinedLine, DeclinedMarker, GeneratedSource, OmissionReason, UnitPlan, declined_line,
-    default_target_line, etc_unit_path, plan_units,
+    DeclinedLine, DeclinedMarker, DropInRole, GeneratedSource, OmissionReason, UnitPlan,
+    declined_line, default_target_line, etc_unit_path, install_drop_in_role, plan_units,
 };
 
 use super::types::{
@@ -48,7 +48,7 @@ pub fn project_decisions(session: &RefineSession) -> DecisionProjection {
     let staged = staged_writes(&snap);
     let plan = plan_units(&snap, &staged);
     let withheld = WithheldIndex::new(&staged);
-    let unit_states = unit_state_views(states, &plan);
+    let unit_states = unit_state_views(&snap, states, &plan);
     let unit_dropins = drop_in_views(dropins, &withheld);
     let mount_findings = mount_finding_views(&snap, &plan);
     let (manual_links, undetermined_installs) = link_finding_views(&snap, &plan);
@@ -225,7 +225,11 @@ fn line_view(line: DeclinedLine, reason: &OmissionReason) -> DeclinedView {
 /// runtime updater is) has none. A carried instance's attention notes from
 /// the plan (§ 10.8), then its data advisory, follow the row's own note,
 /// one sentence after another.
-fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<UnitStateView> {
+fn unit_state_views(
+    snap: &InspectionSnapshot,
+    states: Vec<RefinedServiceState>,
+    plan: &UnitPlan,
+) -> Vec<UnitStateView> {
     let declined: BTreeMap<&UnitName, (UnitAction, &OmissionReason)> = plan
         .declined
         .iter()
@@ -269,7 +273,14 @@ fn unit_state_views(states: Vec<RefinedServiceState>, plan: &UnitPlan) -> Vec<Un
                         links: member.links,
                     })
                     .collect(),
-                install_drop_ins: entry.install_drop_ins.clone(),
+                // Only the install files: a runtime drop-in recorded for
+                // what an instance reads holds no `[Install]` (§ 7.5).
+                install_drop_ins: entry
+                    .install_drop_ins
+                    .iter()
+                    .filter(|path| install_drop_in_role(snap, &entry, path) == DropInRole::Install)
+                    .cloned()
+                    .collect(),
                 required_config: entry.required_config.clone(),
                 data_paths: entry.data_paths.clone(),
                 include: entry.disposition.is_included(),

@@ -73,7 +73,7 @@ each included state change. The first that fails declines the command.
 | 2 | Rule 3: no `disable` or `mask` of a unit on `TARGET_NEEDED_UNITS` (`bootc-*`, `ostree-*`, `systemd-remount-fs.service`), and no `mask` of `TMP_MOUNT` (`tmp.mount`). Both constants are in `crates/core/src/baseline.rs`. | `disable`, `mask` | `TargetNeedsUnit` (a FIXME) |
 | 3 | Rule 4: `systemctl mask` makes a link at `/etc/systemd/system/<name>` after every `COPY` and exits 1 on a regular file there, so the path must be free of any staged file. | `mask` | `MaskPathOccupied` |
 | 4 | Rule 5, the row's own file (`rule_5_file`): `Local` needs its unit file staged; `Shadowed` needs its shadow staged; `Vendor` and `PackagedStorage` need no unit file staged at the unit's name, nor, for an instance recorded from its vendor template, at the template's. An instance recorded from a template under `/etc` needs that file staged and none at its own name. On a fleet aggregate, a staged `Local` or `Shadowed` file whose path holds more than one content variant fails too. | `enable`, `disable` | `UnitFileNotStaged` (`Local`), `InstallEvidenceChanged` (the rest) |
-| 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them. | `enable`, `disable` | `InstallEvidenceChanged` |
+| 5 | Rule 5, the install drop-ins (`rule_5_drop_ins`): the install drop-ins the export stages for the unit are exactly the row's `install_drop_ins`, none missing and none added. The list includes a drop-in ranked above `/etc` that hides one of them, and, for an enabled instance, a runtime drop-in whose reset, replacement or hiding changed what the instance reads. | `enable`, `disable` | `InstallEvidenceChanged`; `InstanceNeedsEvidenceChanged` for a missing runtime drop-in of the second kind |
 | 6 | Rule 5, the package (`needs_its_package`): the presence tiers below, for `Vendor` and `PackagedStorage` only. | all, `mask` included | `PackageExcluded`, `NotCarried`, `NotInTargetImage` |
 | 7 | Rule 5 asked of a timer's trigger (`timer_trigger_check`), below. | `enable` of a timer | the three `TimerTrigger` reasons |
 | 8 | Rule 6, an instance's configuration (`rule_6_instance_config`), below. | `enable` of a template instance | `InstanceConfigNotStaged` |
@@ -209,6 +209,25 @@ and dash-prefix directories are never install files (`install_drop_in_dirs`).
   and `one_variant` applies to it as to the rest.
   In a fleet aggregate, a recorded file whose path holds more than one
   content variant fails (`one_variant`).
+- **A drop-in that changed what an instance reads is recorded too, with
+  its own reason.** The collector adds to an enabled instance's
+  `install_drop_ins` each runtime drop-in whose reset, replacement or
+  hiding of a drop-in of its name removed a path `required_config` or
+  `data_paths` would hold (`InstanceNeeds::overriding_drop_ins`, see
+  [unit-install-state](unit-install-state.md)): without it the image
+  reads that path, unchecked by rule 6. The first loop checks it like the
+  rest, so a `/run` one, or an `/etc` one excluded in refine, withholds
+  the enable. Schema 28 has no field of its own for it, so the plan reads
+  each failing path's role (`install_drop_in_role`): outside the own and
+  template `.d`, or in one under `/etc` with no `[Install]` in the
+  snapshot's copy and no vendor drop-in's name, or above `/etc` hiding no
+  recorded `/etc` file of its name, it is `InstanceNeeds` and the decline
+  is `InstanceNeedsEvidenceChanged` ("the drop-in <path> clears or
+  replaces a path the instance reads and is not in the export as the
+  source host had it, ..."); anything else, a path `Destination` refuses
+  and an `/etc` path the snapshot holds no copy of included, keeps
+  `InstallEvidenceChanged`. Refine's `install_drop_ins` keeps only the
+  `Install` role, so the `[Install]` badge never marks a reset drop-in.
 - § 10.2 says a file whose content was not captured counts as an install
   file, and it does reach rule 5. The collector records an `/etc` drop-in
   it cannot read as text in `install_drop_ins` (`install_evidence`:
