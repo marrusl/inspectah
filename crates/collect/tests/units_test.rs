@@ -5803,6 +5803,117 @@ fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
     }
 }
 
+/// § 7.5: the directives are applied in load order, the unit file then
+/// each drop-in, with systemd's resets: an empty `EnvironmentFile=`, path
+/// list, `StateDirectory=` or command clears the values before it (an
+/// empty `BindPaths=` clears `BindReadOnlyPaths=` too, an empty condition
+/// every condition, and a single-path setting keeps its last value), so a
+/// path the effective unit no longer names is not required. Each control
+/// is the same files with the reset line taken out: the old requirement
+/// comes back.
+#[test]
+fn a_reset_in_a_drop_in_clears_what_the_unit_file_required() {
+    for (fragment, drop_in, reset, kept) in [
+        (
+            "EnvironmentFile=/etc/old/%i.env",
+            "[Service]\nEnvironmentFile=\nEnvironmentFile=/etc/new/%i.env\n",
+            "EnvironmentFile=\n",
+            vec!["/etc/new/site.env"],
+        ),
+        (
+            "ExecStart=/usr/bin/worker --config=/etc/old/%i.conf",
+            "[Service]\nExecStart=\nExecStart=/usr/bin/worker --config=/etc/new/%i.conf\n",
+            "ExecStart=\n",
+            vec!["/etc/new/site.conf"],
+        ),
+        (
+            "ExecStartPre=/usr/bin/check /etc/old/%i.conf\nExecStart=/usr/bin/worker",
+            "[Service]\nExecStartPre=\n",
+            "ExecStartPre=\n",
+            vec![],
+        ),
+        (
+            "ReadOnlyPaths=/etc/old/%i\nExecStart=/usr/bin/worker",
+            "[Service]\nReadOnlyPaths=\n",
+            "ReadOnlyPaths=\n",
+            vec![],
+        ),
+        (
+            "BindReadOnlyPaths=/etc/old/%i:/old\nExecStart=/usr/bin/worker",
+            "[Service]\nBindPaths=\n",
+            "BindPaths=\n",
+            vec![],
+        ),
+        (
+            "ExecStart=/usr/bin/worker",
+            "[Unit]\nConditionPathExists=/etc/old/%i\nConditionFileNotEmpty=\n",
+            "ConditionFileNotEmpty=\n",
+            vec![],
+        ),
+        (
+            "WorkingDirectory=/etc/old/%i\nExecStart=/usr/bin/worker",
+            "[Service]\nWorkingDirectory=/etc/new/%i\n",
+            "",
+            vec!["/etc/new/site"],
+        ),
+    ] {
+        let needs = |drop_in: &str| {
+            let exec = with_drop_in(
+                instance_host(
+                    "worker@.service",
+                    &template_with(&format!("{fragment}\n")),
+                    "worker@site.service",
+                )
+                .with_dir_entry(ETC, "worker@site.service.d"),
+                &format!("{ETC}/worker@site.service.d"),
+                "10-reset.conf",
+                drop_in,
+            );
+            needs_of(&scan(&exec).0, "worker@site.service").0
+        };
+        let expected: Vec<String> = kept.iter().map(|p| (*p).to_owned()).collect();
+        assert_eq!(needs(drop_in), expected, "{fragment} / {drop_in:?}");
+        if reset.is_empty() {
+            continue;
+        }
+        let without_reset = needs(&drop_in.replacen(reset, "", 1));
+        assert!(
+            without_reset.iter().any(|p| p.starts_with("/etc/old/")),
+            "control, {fragment} / {drop_in:?}: {without_reset:?}"
+        );
+    }
+}
+
+/// § 7.5: an empty `StateDirectory=` clears the data directories before
+/// it. Control: without the reset the directory is data.
+#[test]
+fn a_state_directory_reset_clears_the_data_path() {
+    let exec = |drop_in: &str| {
+        with_drop_in(
+            instance_host(
+                "worker@.service",
+                &template_with("StateDirectory=worker/%i\nExecStart=/usr/bin/worker\n"),
+                "worker@site.service",
+            )
+            .with_dir("/var/lib/worker/site", vec![])
+            .with_dir_entry(ETC, "worker@site.service.d"),
+            &format!("{ETC}/worker@site.service.d"),
+            "10-reset.conf",
+            drop_in,
+        )
+    };
+    let (section, _) = scan(&exec("[Service]\nStateDirectory=\n"));
+    assert_eq!(
+        needs_of(&section, "worker@site.service").1,
+        Vec::<String>::new()
+    );
+    let (section, _) = scan(&exec("[Service]\n"));
+    assert_eq!(
+        needs_of(&section, "worker@site.service").1,
+        ["/var/lib/worker/site"]
+    );
+}
+
 /// Control: a unit that is not an instance records neither list, though
 /// its file names `%i`.
 #[test]

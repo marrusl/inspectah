@@ -9646,6 +9646,39 @@ fn a_quoted_configuration_argument_is_checked_through_the_scan() {
     }
 }
 
+/// Rule 6 through the scan, with systemd's resets: the template names
+/// `/etc/t/old/%i.env`, and the instance's drop-in under `/etc` resets
+/// `EnvironmentFile=` and names nothing else, so with the old file missing
+/// the enable is carried on both routes and in refine. Control: the drop-in
+/// without the reset line, the old file is required and the enable is
+/// omitted naming it.
+#[test]
+fn a_reset_environment_file_is_not_required_through_the_scan() {
+    const UNIT: &str = "t@site.service";
+    const DROP_IN: &str = "/etc/systemd/system/t@site.service.d/10-env.conf";
+    let host = |drop_in: &str| {
+        t_reads_host(
+            "EnvironmentFile=/etc/t/old/%i.env\nExecStart=/usr/bin/t %i",
+            &[(DROP_IN, drop_in)],
+        )
+    };
+    let reset = scan(host("[Service]\nEnvironmentFile=\n"));
+    assert!(change(&reset, UNIT).required_config.is_empty());
+    assert_instance_carried(&reset, UNIT, "reset");
+
+    let control = scan(host("[Service]\nNice=5\n"));
+    assert_eq!(
+        change(&control, UNIT).required_config,
+        ["/etc/t/old/site.env"]
+    );
+    assert_instance_omitted(
+        &control,
+        UNIT,
+        &config_omitted(UNIT, "/etc/t/old/site.env", "is not in the export"),
+        "InstanceConfigNotStaged",
+    );
+}
+
 /// T25 (c) with the member's configuration named by a quoted argument:
 /// carried with the owner while the configuration is in the export, and
 /// with it excluded, the member omitted naming the whole path and the

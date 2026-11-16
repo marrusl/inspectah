@@ -329,6 +329,17 @@ reads (`InstallEvidence::unit_texts`, the same selection as
   (`Description=` and the rest) is read leniently and never declines.
   The plan cannot decline it by name without a snapshot field, so the
   row is left out (schema 28 has none).
+- **Resets are applied before paths are derived** (`effective_assignments`,
+  `Syntax::resets`, from each parser's empty-value branch in
+  `load-fragment.c`, 252 and 257): over the unit file then the drop-ins in
+  load order, an empty command, `EnvironmentFile=`, path list,
+  `StateDirectory=` or single-path setting clears its own key, an empty
+  `BindPaths=` or `BindReadOnlyPaths=` clears both (one list), an empty
+  condition clears every condition and an empty assertion every
+  assertion, and a single-path setting keeps its last value. A setting
+  whose syntax is not modeled keeps every value: a stale path then omits
+  an enable, never carries one. A reset is not the `[Install]` reader's:
+  that one has its own measured rules.
 - Values are expanded with `SpecifierSet::Runtime`, so `%I` is
   unescaped; `[Install]` never is (`%I` is not expanded there).
 - A path counts only when the value itself holds `%i` or `%I`. An

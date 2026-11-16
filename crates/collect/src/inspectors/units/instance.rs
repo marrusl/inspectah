@@ -196,7 +196,7 @@ pub(crate) fn instance_needs(
 
     let mut required_config = BTreeSet::new();
     let mut data = BTreeSet::new();
-    for (key, value) in unit_texts.iter().flat_map(|text| assignments(text)) {
+    for (key, value) in effective_assignments(unit_texts) {
         let uninterpretable = || NeedsUnknown::Uninterpretable {
             key: key.clone(),
             value: value.clone(),
@@ -307,6 +307,28 @@ fn assignments(text: &str) -> Vec<(String, String)> {
     found
 }
 
+/// The assignments that are in effect once every text of `unit_texts`
+/// (the unit file, then its drop-ins in load order) is applied with
+/// systemd's resets, in order. An empty value resets the values before it
+/// ([`Syntax::resets`]) and is not kept; a single-path setting keeps only
+/// its last value. A setting whose syntax is not modeled keeps every value,
+/// an empty one dropped: if systemd resets it, a path is required that the
+/// unit no longer reads, which omits an enable rather than carry one.
+fn effective_assignments(unit_texts: &[String]) -> Vec<(String, String)> {
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for (key, value) in unit_texts.iter().flat_map(|text| assignments(text)) {
+        let syntax = Syntax::of(&key);
+        let replaces = syntax == Syntax::SinglePath;
+        if value.is_empty() || replaces {
+            kept.retain(|(earlier, _)| !syntax.resets(&key, earlier));
+        }
+        if !value.is_empty() {
+            kept.push((key, value));
+        }
+    }
+    kept
+}
+
 /// How systemd reads one setting's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Syntax {
@@ -334,6 +356,29 @@ enum Syntax {
 }
 
 impl Syntax {
+    /// Whether an empty assignment of `key`, a setting of this syntax,
+    /// clears the earlier assignment of `earlier` (systemd 252 and 257,
+    /// `load-fragment.c`, each parser's `isempty(rvalue)` branch): a
+    /// command, `EnvironmentFile=`, a path list, `StateDirectory=` and a
+    /// single-path setting clear their own key; an empty `BindPaths=` or
+    /// `BindReadOnlyPaths=` clears both, which share one list; an empty
+    /// condition clears every condition, and an empty assertion every
+    /// assertion. A setting whose syntax is not modeled clears nothing.
+    fn resets(self, key: &str, earlier: &str) -> bool {
+        match self {
+            Self::Command
+            | Self::EnvironmentFile
+            | Self::PathList
+            | Self::StateDirectory
+            | Self::SinglePath => earlier == key,
+            Self::Bind => BIND_KEYS.contains(&earlier),
+            Self::Condition => CONDITION_KEY_PREFIXES
+                .iter()
+                .any(|prefix| key.starts_with(prefix) && earlier.starts_with(prefix)),
+            Self::Other => false,
+        }
+    }
+
     /// The syntax of the setting `key`.
     fn of(key: &str) -> Self {
         if COMMAND_KEYS.contains(&key) {
