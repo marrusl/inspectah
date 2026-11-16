@@ -139,12 +139,6 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
 
 - the order across the two directory names (instance `.d` before template
   `.d`), read from systemd's source (252 and 257);
-- the two template-link claims of the unreported-link warnings, recalled
-  from systemd's unit loading: a link to a template name under a plain
-  parent's `.wants` or `.requires` starts nothing (`template`), and one
-  under an instance or template parent is filled in with an instance name
-  (`instance_filled`: `foo@.target.wants/bar@.service` makes each
-  `foo@X.target` want `bar@X.service`);
 - the placement above `/etc`: a `system.control` drop-in (from
   `systemctl set-property`) hiding an `/etc` drop-in of its name, so that
   `systemctl enable` does not act on an `[Install]` in the hidden file,
@@ -243,10 +237,8 @@ skipped when `None`.
 
 A link under `/etc` that none of this reads gets a scan warning and
 nothing else (`UnreportedLinks`, `unreported_link_warnings`): a masked
-unit's link, a link to a template that is not masked (`template` under a
-plain parent; `instance_filled` under an instance or template parent,
-whose instance name systemd fills in, decided per link by `for_parent`),
-to a unit the search path refuses (beside the refusal warning), to an
+unit's link, a link to a template that is not masked, to a unit the search
+path refuses (beside the refusal warning), to an
 alias name, to a name with no unit file, or to a unit the listing does
 not print as one the scan reads. `build_state_changes` records the
 masked and refused units it reads; `unexamined_links` resolves every
@@ -260,6 +252,24 @@ does not degrade. A dangling link to an instance or to a listed `static`
 name already gets the unit's "no unit file" warning and no other. A test
 host with an empty listing ends the section before any link is read, so
 a link case needs at least one listed unit.
+
+**A link to a template name is never inert under a dependency
+directory** (measured on RHEL 9 and 10, 2026-11-16, in
+[real-host-validation-runs](real-host-validation-runs.md)). systemd fills
+in an instance (`resolve_template`, `src/core/unit.c`, 252 and 257): the
+parent's own instance, or for a plain parent the prefix of its id, so
+`multi-user.target.wants/bar@.service` makes `multi-user.target` want and
+start `bar@multi-user.service`, and `foo@.target.wants/bar@.service` makes
+each `foo@X.target` want `bar@X.service`. `started_instance` names the
+instance only for a plain parent that loads from a unit file of its own
+name (`Resolved::File`): that link's cause is `template`, and its text and
+its `starts` field name `<template prefix>@<parent prefix>.<type>`.
+Every other parent (an instance or template, an alias, whose id is the
+unit at its end, a mask, no unit file, a refusal) gives `instance_filled`,
+whose text claims nothing about the effect. `unexamined_links` gives a
+template `TemplateFilled`, and `UnreportedLinks::for_link` reads each link
+again. Never write that such a link has no effect: the host runs a unit
+the image does not.
 
 ## A unit at its preset whose `/etc` files change `[Install]`
 

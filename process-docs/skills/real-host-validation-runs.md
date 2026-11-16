@@ -1650,9 +1650,11 @@ reboot:
 - After the reboot `tl-bar@a.service` and `tl-bar@b.service` ran too.
 
 So a link to a template name is never inert under a `.wants` directory.
-The branch scan names the plain-parent link with cause `template` and the
-text "systemd starts no unit from a link to a template name without an
-instance, so the link has no effect", which this measurement contradicts.
+The branch scan at `f9ddc7de` named the plain-parent link with cause
+`template` and the text "systemd starts no unit from a link to a template
+name without an instance, so the link has no effect", which this
+measurement contradicts. The warning now names the instance systemd starts
+(`starts tl-bar@multi-user.service`, and a `starts` field on the link).
 The two other links get cause `instance_filled`, whose text claims
 nothing about the effect, and that holds. The scan made `enable` rows for
 `tl-fooi@a.target` and `tl-foot@b.target` with the attention reason for an

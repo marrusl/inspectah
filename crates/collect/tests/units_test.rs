@@ -2296,24 +2296,42 @@ fn masked_template_is_a_state_change_and_an_unmasked_one_is_skipped() {
     );
     assert_eq!(inventory_names(&section), vec![template]);
 
-    // Listed `enabled`, the mock links the template's own name: systemd
-    // starts nothing from that link, and the warning says so.
-    for (state, expected) in [
+    // Listed `enabled`, the mock links the template's own name under
+    // `multi-user.target`: systemd fills in the parent's name as the
+    // instance and starts it with the parent, and the warning names that
+    // instance. With no unit file for the parent, the scan does not know
+    // what the link starts, and the warning says nothing of its effect.
+    let link = format!("/etc/systemd/system/multi-user.target.wants/{template}");
+    for (state, parent_file, expected) in [
         (
             "enabled",
+            true,
             vec![format!(
-                "link /etc/systemd/system/multi-user.target.wants/{template} ({template}) is \
-                 not reported or carried: its unit is a template, and systemd starts no unit \
-                 from a link to a template name without an instance, so the link has no effect"
+                "link {link} ({template}, starts worker@multi-user.service) is not reported or \
+                 carried: its unit is a template, and systemd fills in the parent's name without \
+                 its type as the instance and starts that instance with the parent"
             )],
         ),
-        ("disabled", Vec::new()),
+        (
+            "enabled",
+            false,
+            vec![format!(
+                "link {link} ({template}) is not reported or carried: its unit is a template, \
+                 and the scan does not read links that systemd fills in with an instance name"
+            )],
+        ),
+        ("disabled", true, Vec::new()),
     ] {
         let exec = kinds_mock(&[(template, state)], "enable *\n");
-        let (section, warnings) = scan(&with_vendor_units(exec, &[template]));
-        assert!(section.state_changes.is_empty(), "{state}");
-        assert!(section.inventory.is_empty(), "{state}");
-        assert_eq!(warnings, expected, "{state}");
+        let units: &[&str] = if parent_file {
+            &[template, "multi-user.target"]
+        } else {
+            &[template]
+        };
+        let (section, warnings) = scan(&with_vendor_units(exec, units));
+        assert!(section.state_changes.is_empty(), "{state} {parent_file}");
+        assert!(section.inventory.is_empty(), "{state} {parent_file}");
+        assert_eq!(warnings, expected, "{state} {parent_file}");
     }
 }
 

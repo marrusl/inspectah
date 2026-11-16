@@ -18,6 +18,7 @@ use inspectah_core::types::units::{
     UnitState, UnitStateChange, UnitSubject, holds_install_section, logical_lines,
 };
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
@@ -1070,15 +1071,22 @@ enum UnreportedLinks {
     NotRead { listed: Option<String> },
     /// The unit is masked: its links have no effect.
     Masked,
-    /// The unit is a template, not masked, linked under a plain parent:
-    /// systemd starts nothing from a link to a template name without an
-    /// instance. Under an instance or template parent the link is
-    /// [`UnreportedLinks::TemplateFilled`] instead ([`Self::for_parent`]).
-    Template,
-    /// The unit is a template, not masked, linked under an instance or
-    /// template parent, whose instance name systemd fills in. The scan
-    /// does not read such a link, and the warning says nothing of its
-    /// effect.
+    /// The unit is a template, not masked, linked under a plain parent that
+    /// loads from a unit file of its own name: systemd fills in the
+    /// parent's name without its type as the instance and adds `starts`, a
+    /// dependency of the parent (`resolve_template` in `src/core/unit.c`,
+    /// 252 and 257; measured on RHEL 9 and 10, 2026-11-16). Only
+    /// [`Self::for_link`] gives this cause.
+    Template { starts: UnitName },
+    /// The unit is a template, not masked, under any other parent: an
+    /// instance or a template, whose instance name systemd fills in, or a
+    /// plain parent that is an alias (systemd fills in the name of the unit
+    /// at its end), is masked, has no unit file or is refused, where the
+    /// parent's own name does not tell what the link starts. The scan does
+    /// not read such a link, and the warning says nothing of its effect.
+    /// [`unexamined_links`] gives every such template this cause, and
+    /// [`Self::for_link`] makes a link [`Self::Template`] where the
+    /// instance is known.
     TemplateFilled,
     /// A file at `path`, on the search path outside the two unit
     /// directories the scan reads, changes the unit (§ 7.1).
@@ -1097,7 +1105,7 @@ impl UnreportedLinks {
         match self {
             Self::NotRead { .. } => (0, "not_read"),
             Self::Masked => (1, "masked"),
-            Self::Template => (2, "template"),
+            Self::Template { .. } => (2, "template"),
             Self::TemplateFilled => (3, "instance_filled"),
             Self::Refused { .. } => (4, "refused"),
             Self::Alias { .. } => (5, "alias"),
@@ -1113,13 +1121,13 @@ impl UnreportedLinks {
                  the scan does not read the unit or its links"
             }
             Self::Masked => "its unit is masked, so the link has no effect",
-            Self::Template => {
-                "its unit is a template, and systemd starts no unit from a link to a template \
-                 name without an instance, so the link has no effect"
+            Self::Template { .. } => {
+                "its unit is a template, and systemd fills in the parent's name without its type \
+                 as the instance and starts that instance with the parent"
             }
             Self::TemplateFilled => {
-                "its unit is a template and its parent an instance or a template, and the scan \
-                 does not read links that systemd fills in with an instance name"
+                "its unit is a template, and the scan does not read links that systemd fills in \
+                 with an instance name"
             }
             Self::Refused { .. } => {
                 "a file on the systemd search path outside the two unit directories this scan \
@@ -1137,13 +1145,18 @@ impl UnreportedLinks {
     }
 
     /// What the warning adds after a link's unit, in its text and as a
-    /// field of the link: the listing's word, the refusing file or the
-    /// aliased unit.
+    /// field of the link: the listing's word, the instance the link starts,
+    /// the refusing file or the aliased unit.
     fn detail(&self) -> Option<(&'static str, String, String)> {
         match self {
             Self::NotRead {
                 listed: Some(state),
             } => Some(("listed_state", format!("listed '{state}'"), state.clone())),
+            Self::Template { starts } => Some((
+                "starts",
+                format!("starts {}", starts.as_str()),
+                starts.as_str().to_owned(),
+            )),
             Self::Refused { path } => {
                 Some(("search_path", format!("changed by {path}"), path.clone()))
             }
@@ -1154,22 +1167,52 @@ impl UnreportedLinks {
             )),
             Self::NotRead { listed: None }
             | Self::Masked
-            | Self::Template
             | Self::TemplateFilled
             | Self::Dangling => None,
         }
     }
 
-    /// The cause for one link under `parent`: a template's link under an
-    /// instance or a template parent is [`Self::TemplateFilled`].
-    fn for_parent(&self, parent: &UnitName) -> &Self {
+    /// The cause for one link to `unit` under `parent`: a template's link
+    /// under a plain parent that loads from a unit file of its own name is
+    /// [`Self::Template`], naming the instance systemd starts
+    /// ([`started_instance`]). Every other cause is the unit's.
+    fn for_link(&self, exec: &dyn Executor, unit: &UnitName, parent: &UnitName) -> Cow<'_, Self> {
         match self {
-            Self::Template if parent.is_template() || parent.instance().is_some() => {
-                &Self::TemplateFilled
-            }
-            other => other,
+            Self::TemplateFilled => match started_instance(exec, unit, parent) {
+                Some(starts) => Cow::Owned(Self::Template { starts }),
+                None => Cow::Borrowed(self),
+            },
+            other => Cow::Borrowed(other),
         }
     }
+}
+
+/// The instance systemd starts from a link to the template `template`
+/// under the plain `parent`, when the parent's name tells it:
+/// `<template prefix>@<parent prefix>.<type>`. systemd's `resolve_template`
+/// (`src/core/unit.c`, 252 and 257) fills a template dependency in with the
+/// parent unit's own instance or, for a plain unit, the prefix of the
+/// unit's id (`unit_name_to_prefix`, `src/basic/unit-name.c`). The id is
+/// the parent's name only when that name loads from a unit file of its own
+/// ([`Resolved::File`]): an alias's id is the unit at its end, and a
+/// masked parent, one with no unit file and one the search path refuses
+/// start nothing the scan can name. `None` there, for an instance or a
+/// template parent, and when the filled-in name is not a unit name (over
+/// systemd's length limit, which systemd refuses as well).
+fn started_instance(
+    exec: &dyn Executor,
+    template: &UnitName,
+    parent: &UnitName,
+) -> Option<UnitName> {
+    if parent.is_template() || parent.instance().is_some() {
+        return None;
+    }
+    if !matches!(resolve::resolve(exec, parent), Ok(Resolved::File { .. })) {
+        return None;
+    }
+    let (prefix, type_suffix) = template.as_str().split_once('@')?;
+    let (parent_prefix, _) = parent.as_str().rsplit_once('.')?;
+    UnitName::try_from(format!("{prefix}@{parent_prefix}{type_suffix}")).ok()
 }
 
 /// How many links a grouped unreported-link warning names in its text; the
@@ -1183,6 +1226,7 @@ const UNREPORTED_LINKS_SHOWN: usize = 5;
 /// `unit` and the cause's detail, every link) among its fields. A unit
 /// with no such link gives nothing.
 fn unreported_link_warnings(
+    exec: &dyn Executor,
     host_links: &HostLinks,
     unreported: &[(UnitName, UnreportedLinks)],
 ) -> Vec<Warning> {
@@ -1191,7 +1235,7 @@ fn unreported_link_warnings(
     let mut by_cause: BTreeMap<(u8, &str, &str), Listed> = BTreeMap::new();
     for (unit, why) in unreported {
         for (link, path) in host_links.admin_paths(unit) {
-            let why = why.for_parent(&link.parent);
+            let why = why.for_link(exec, unit, &link.parent);
             let (order, cause) = why.cause();
             let (texts, fields) = by_cause.entry((order, cause, why.reason())).or_default();
             let mut field = serde_json::json!({ "path": path, "unit": unit.as_str() });
@@ -1245,7 +1289,8 @@ fn unreported_link_warnings(
 /// from what loads for its name ([`resolve::resolve`]). A unit the name
 /// gate already warned about (`listing` gives its state word) has that
 /// warning and is skipped. A template that is not masked is
-/// [`UnreportedLinks::Template`] whatever loads for it. A name whose
+/// [`UnreportedLinks::TemplateFilled`] whatever loads for it, read again
+/// per link by [`UnreportedLinks::for_link`]. A name whose
 /// resolution fails, or that is
 /// `linked`, is [`UnreportedLinks::NotRead`]: the scan does not read it
 /// either way, and a failure here only hides the more specific cause, so it
@@ -1273,7 +1318,7 @@ fn unexamined_links(
         }
         let why = match resolve::resolve(exec, unit) {
             Ok(Resolved::Masked { .. }) => UnreportedLinks::Masked,
-            _ if unit.is_template() => UnreportedLinks::Template,
+            _ if unit.is_template() => UnreportedLinks::TemplateFilled,
             Ok(Resolved::Unsupported { path }) => UnreportedLinks::Refused { path },
             Ok(Resolved::AliasOf(of)) => UnreportedLinks::Alias { of },
             Ok(Resolved::NotFound) => UnreportedLinks::Dangling,
@@ -1941,7 +1986,7 @@ impl Inspector for UnitsInspector {
             &examined,
             &listing_states,
         ));
-        warnings.extend(unreported_link_warnings(&host_links, &unreported));
+        warnings.extend(unreported_link_warnings(exec, &host_links, &unreported));
 
         // 4c. The administrator's other storage files, then what each
         //     finding mounts, read from its unit file (§ 6.5).

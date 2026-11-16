@@ -13931,10 +13931,14 @@ fn link_warning_of(snap: &InspectionSnapshot, cause: &str) -> (String, serde_jso
     (found[0].message.clone(), found[0].extra["links"].clone())
 }
 
+/// A target unit file, for a parent a link test needs to load.
+const TARGET_UNIT: &str = "[Unit]\nDescription=Test target\n";
+
 /// The branches of the unreported-link warnings beyond the § 7.3 cases:
-/// a template linked under a plain parent, against one under an instance
-/// or a template parent, which systemd fills in with an instance name; a
-/// mask or a search-path file for a name the listing does not print; a
+/// a template linked under a plain parent with a unit file of its own
+/// name, which starts the instance named for the parent, against one
+/// under an instance or a template parent, an alias or a parent with no
+/// unit file, which systemd fills in with an instance name; a mask or a search-path file for a name the listing does not print; a
 /// unit listed `masked` whose file is not a mask; `.requires` and
 /// `.upholds` paths; and the cap on a long list.
 #[test]
@@ -13948,24 +13952,37 @@ fn units_unreported_link_warnings_cover_every_branch() {
             .vendor_unit("other.service", WANTS_MULTI_USER, None)
     };
 
-    // A template under a plain parent: the link has no effect.
+    // A template under a plain parent with a unit file of its own name:
+    // systemd fills in the parent's name as the instance and starts
+    // `bar@multi-user.service` with the parent (measured on RHEL 9 and 10),
+    // and the warning names that instance, in its text and as a field.
     let plain = scan(
         host()
             .unit("bar@.service", "indirect")
             .vendor_unit("bar@.service", NO_INSTALL, None)
+            .vendor_unit("multi-user.target", TARGET_UNIT, None)
             .link(
                 &etc("multi-user.target.wants/bar@.service"),
                 &vendor("bar@.service"),
             ),
     );
+    let (message, links) = link_warning_of(&plain, "template");
     assert_eq!(
-        link_warning_of(&plain, "template").0,
+        message,
         format!(
-            "link {} (bar@.service) is not reported or carried: its unit is a template, and \
-             systemd starts no unit from a link to a template name without an instance, so the \
-             link has no effect",
+            "link {} (bar@.service, starts bar@multi-user.service) is not reported or carried: \
+             its unit is a template, and systemd fills in the parent's name without its type as \
+             the instance and starts that instance with the parent",
             etc("multi-user.target.wants/bar@.service")
         )
+    );
+    assert_eq!(
+        links,
+        serde_json::json!([{
+            "path": etc("multi-user.target.wants/bar@.service"),
+            "unit": "bar@.service",
+            "starts": "bar@multi-user.service",
+        }])
     );
     assert!(
         plain
@@ -13976,12 +13993,17 @@ fn units_unreported_link_warnings_cover_every_branch() {
         plain.warnings
     );
 
-    // Under an instance parent and a template parent: the scan does not
-    // read the link, and the warning claims nothing about its effect.
+    // Under an instance parent and a template parent, whose instance name
+    // systemd fills in, and under a plain parent that is an alias (systemd
+    // fills in the name of the unit at the alias's end) or has no unit
+    // file: the scan does not read the link, and the warning claims
+    // nothing about its effect.
     let filled = scan(
         host()
             .unit("bar@.service", "indirect")
             .vendor_unit("bar@.service", NO_INSTALL, None)
+            .vendor_unit("multi-user.target", TARGET_UNIT, None)
+            .link(&etc("ali.target"), &vendor("multi-user.target"))
             .link(
                 &etc("foo@a.target.wants/bar@.service"),
                 &vendor("bar@.service"),
@@ -13989,16 +14011,26 @@ fn units_unreported_link_warnings_cover_every_branch() {
             .link(
                 &etc("foo@.target.wants/bar@.service"),
                 &vendor("bar@.service"),
+            )
+            .link(
+                &etc("ali.target.wants/bar@.service"),
+                &vendor("bar@.service"),
+            )
+            .link(
+                &etc("gone.target.wants/bar@.service"),
+                &vendor("bar@.service"),
             ),
     );
     assert_eq!(
         link_warning_of(&filled, "instance_filled").0,
         format!(
-            "2 links are not reported or carried: for each, its unit is a template and its \
-             parent an instance or a template, and the scan does not read links that systemd \
-             fills in with an instance name. The links: {} (bar@.service); {} (bar@.service)",
+            "4 links are not reported or carried: for each, its unit is a template, and the \
+             scan does not read links that systemd fills in with an instance name. The links: \
+             {} (bar@.service); {} (bar@.service); {} (bar@.service); {} (bar@.service)",
+            etc("ali.target.wants/bar@.service"),
             etc("foo@.target.wants/bar@.service"),
-            etc("foo@a.target.wants/bar@.service")
+            etc("foo@a.target.wants/bar@.service"),
+            etc("gone.target.wants/bar@.service")
         )
     );
     assert!(
