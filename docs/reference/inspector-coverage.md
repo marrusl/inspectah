@@ -121,6 +121,7 @@ The modernization advisory catalog (`inspectors/modernization.rs`) is not an ins
 | `/etc/systemd/system/<unit>.d/*.conf` | Drop-in overrides, for a unit of any kind |
 | `/etc/systemd/system/<unit>` against `/usr/lib/systemd/system/` | Full unit shadows |
 | `Where=` and `Options=` in an administrator's mount, automount or swap unit file | The mount point and whether the unit is `nofail`, for its mount finding |
+| The paths holding `%i` or `%I` in an enabled template instance's unit file and drop-ins (any key outside `[Install]`, and `StateDirectory=` under `/var/lib`), and inspectah's table for the templates whose unit file does not name them (`wg-quick@.service`, `openvpn-client@.service`, `openvpn-server@.service`, `dirsrv@.service`) | The configuration under `/etc` the instance reads (`required_config`), and the data under `/var` it keeps, recorded when the path exists on the host (`data_paths`) |
 
 **Enablement is read from the links.** `systemctl list-unit-files` says `enabled` whenever it finds a link to a unit, whoever made it. The inspector reads the unit's effective `[Install]` section instead, as `systemctl enable` reads it (an empty `WantedBy=` or `Alias=` in a drop-in clears the values before it; type-wide `service.d/` and dash-prefix `a-.service.d/` drop-ins are not read for it), and compares the links it names with the links on the host. A unit is enabled when every link its section names is under `/etc/systemd/system/` or shipped by a package, and at least one is under `/etc`; it is disabled when none is under `/etc`. A link a package ships completes an install and never starts one. A unit with some of its links and not others, or whose `[Install]` names no link, has no state of its own and gets no state change.
 
@@ -175,11 +176,20 @@ A command the export cannot reproduce is left out with a `# Omitted:` line namin
 | A template instance's `enable` whose configuration file is excluded, or is not in the export | its configuration is excluded from the export, or is not in the export |
 | A template instance's `enable` whose configuration file was not captured | its configuration was not captured |
 | A template instance's `enable` whose configuration file holds a value the redaction pass replaced | its configuration holds a redacted value; provision the secret on the deployed host and enable the unit there |
+| On a fleet aggregate, a template instance's `enable` whose configuration file has more than one content variant across hosts | its configuration differs between hosts in the fleet, so the staged copy may not be the one this instance reads |
 | A package-owned mount, automount or swap unit with an administrator's file staged at its name | the export carries an administrator's unit file for it |
 | A `mask` where a unit file is staged at the same name (`systemctl mask` fails on a regular file) | the export also carries a unit file at that path |
 | A vendor or package-owned storage unit whose package is excluded, not carried, or not in the target image | the package |
 
 A shadowed unit's command depends on its shadow, not on its package; the rules in the table above, and the rule for units the image needs, still apply to it. A mask follows its package like an `enable`: the mask of a vendor unit whose package is excluded, not carried, or not in the target image is left out with the package reason. The rule for units the image needs and the staged-file rule are checked first. A mask with no unit file, or of a unit no package owns, is carried. On a fleet aggregate, a local unit or shadow whose file has more than one content variant across hosts is left out too: the row may have been recorded from another host's file.
+
+A template instance whose `enable` is carried and that keeps data under `/var` gets one `# Advisory:` line before the `RUN` lines, since the image carries the unit's configuration and not its data. `refine` shows the same sentence on the unit row:
+
+```dockerfile
+# Advisory: dirsrv@example.service keeps data under /var/lib/dirsrv/slapd-example. The image does not carry it, and the carried enable starts the unit on first boot. Put the data in place before that boot, or the unit starts without it.
+```
+
+A carried instance's `refine` row also notes each configuration file the export stages unredacted, when the scan ran with `--no-redaction`, and each that holds a value the redaction pass flagged and did not change. These notes are not Containerfile lines.
 
 #### Mount findings
 

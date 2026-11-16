@@ -115,7 +115,9 @@ empty `required_config` passes; when its template is on no § 7.5 list and
 **Data under `/var` (§ 10.8).** A carried instance `enable` (after rule
 7) whose row has a non-empty `data_paths` gets one sentence in
 `UnitPlan.data_advisories` (`data_advisory`, every path in one sentence,
-`a, b and c`). `unit_state_lines` writes it as an `# Advisory:` line
+`a, b and c`, "it" for one path and "them" for several; `None` for an
+empty list, so no caller can write a sentence that names no path).
+`unit_state_lines` writes it as an `# Advisory:` line
 after the `# Omitted:` lines and before the `RUN` lines, escaped, and
 refine appends the same sentence to the row's `attention_reason` after
 the instance notes. A declined enable, a `disable` or `mask`, and a row
