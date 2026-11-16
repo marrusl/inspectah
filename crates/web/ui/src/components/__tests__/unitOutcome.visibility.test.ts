@@ -13,6 +13,7 @@ import type {
 } from "../../api/types";
 import {
   branchHeadOf,
+  filterBarDrawn,
   globalSearchText,
   groupUnits,
   hiddenByFilter,
@@ -23,6 +24,7 @@ import {
   rowKey,
   sectionSearchText,
   showGroups,
+  shownOutcomeRowCount,
   shownRowCount,
   type FilterValue,
   type GroupId,
@@ -479,5 +481,39 @@ describe("liveRegionText (§ 7 strings 19 to 22)", () => {
     ["excluded", 1, "Showing 1 excluded row."],
   ])("(%s, %i)", (filter, n, expected) => {
     expect(liveRegionText(filter, n)).toBe(expected);
+  });
+});
+
+describe("the filter bar and the live region's count (§ 6.4)", () => {
+  it.each<[number, number, number, boolean]>([
+    [0, 5, 0, false],
+    [0, 5, 1, true],
+    [1, 5, 0, true],
+    [2, 0, 3, true],
+  ])("needs follow-up %i, carried %i, excluded %i: drawn %s", (nf, carried, excluded, drawn) => {
+    const counts = { all: nf + carried + excluded, needs_follow_up: nf, carried, excluded };
+    expect(filterBarDrawn(counts)).toBe(drawn);
+  });
+
+  it("counts the shown rows with an outcome, not the orphan drop-ins", () => {
+    // 19 unit rows, the target and 3 reported rows: the All count, without
+    // the sshd.service orphan that shownRowCount includes.
+    expect(shownOutcomeRowCount(showGroups(ksGroups, state()))).toBe(23);
+  });
+
+  it.each<[FilterValue, number]>([
+    ["needs_follow_up", 9],
+    ["carried", 14],
+    ["excluded", 0],
+  ])("matches the %s count with no pin", (filter, n) => {
+    expect(shownOutcomeRowCount(showGroups(ksGroups, state({ filter })))).toBe(n);
+  });
+
+  it("counts the target once and a pinned branch's head, not its drop-ins", () => {
+    const httpd = headKey(ksGroups, "httpd.service");
+    const shown = showGroups(ksGroups, state({ filter: "needs_follow_up", pins: new Set([httpd]) }));
+    expect(shownOutcomeRowCount(shown)).toBe(10);
+    const target = showGroups(ksGroups, state({ filter: "carried", query: "graphical" }));
+    expect(shownOutcomeRowCount(target)).toBe(1);
   });
 });

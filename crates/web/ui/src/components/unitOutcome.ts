@@ -593,6 +593,27 @@ export function shownRowCount(shown: ShownGroup[]): number {
   return n;
 }
 
+/**
+ * The live region's n (§ 6.4 Announcement): the shown rows that have an
+ * outcome, the rows the filter counts (unit rows, the target, reported
+ * rows), so "Showing all n rows." agrees with "All n". Drop-ins, nested or
+ * orphan, are not counted.
+ */
+export function shownOutcomeRowCount(shown: ShownGroup[]): number {
+  let n = 0;
+  for (const group of shown) {
+    if (group.target) n += 1;
+    n += group.branches.length;
+    for (const block of group.reported) n += block.rows.length;
+  }
+  return n;
+}
+
+/** § 6.4 When it is drawn: only while a row needs follow-up or is excluded. */
+export function filterBarDrawn(counts: OutcomeCounts): boolean {
+  return counts.needs_follow_up + counts.excluded > 0;
+}
+
 /** The pin a toggle makes: a nested drop-in pins its parent's branch (§ 6.4). */
 export function branchHeadOf(groups: UnitGroupModel[], toggled: OccurrenceKey): OccurrenceKey {
   for (const group of groups) {
