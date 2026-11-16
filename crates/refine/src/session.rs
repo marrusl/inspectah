@@ -4718,10 +4718,7 @@ fn is_safe_compose_path(path: &str) -> bool {
         }
     }
     // Reject control characters and newlines
-    if path.bytes().any(|b| b < 0x20 || b == 0x7f) {
-        return false;
-    }
-    true
+    !path.bytes().any(|b| b < 0x20 || b == 0x7f)
 }
 
 /// Sanitize a path for safe logging by replacing control characters.

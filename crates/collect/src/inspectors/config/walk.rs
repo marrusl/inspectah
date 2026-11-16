@@ -213,11 +213,7 @@ pub fn is_excluded_unowned(exec: &dyn Executor, path: &str) -> bool {
 
     // Systemd unit links and masks directly under /etc/systemd/system/:
     // state the units inspector records.
-    if is_systemd_unit_symlink(exec, path) {
-        return true;
-    }
-
-    false
+    is_systemd_unit_symlink(exec, path)
 }
 
 /// Returns `true` if the path is unit state rather than a unit file: a
