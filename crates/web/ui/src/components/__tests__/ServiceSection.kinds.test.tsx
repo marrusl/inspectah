@@ -101,22 +101,20 @@ function describedBy(el: HTMLElement): string[] {
 }
 
 describe("ServiceSection: every unit kind", () => {
-  it("renders a socket row with its kind as served", () => {
+  it("shows a kind chip, as served, only on a row in Other units", () => {
     render(
       <ServiceSection
         {...baseProps}
         services={[
           makeUnit({ unit: "cockpit.socket", kind: "socket" }),
           makeUnit({ unit: "httpd.service", kind: "service" }),
+          makeUnit({ unit: "zram0.swap", kind: "swap" }),
         ]}
       />,
     );
-    expect(screen.getByTestId("service-kind-cockpit.socket")).toHaveTextContent(
-      /^socket$/,
-    );
-    expect(screen.getByTestId("service-kind-httpd.service")).toHaveTextContent(
-      /^service$/,
-    );
+    expect(screen.queryByTestId("service-kind-cockpit.socket")).toBeNull();
+    expect(screen.queryByTestId("service-kind-httpd.service")).toBeNull();
+    expect(screen.getByTestId("service-kind-zram0.swap")).toHaveTextContent(/^swap$/);
   });
 
   it("renders a declined row's text with its renders class, tied to the row", () => {
@@ -178,7 +176,7 @@ describe("ServiceSection: every unit kind", () => {
     expect(screen.queryByTestId("attention-service-kdump.service")).not.toBeInTheDocument();
   });
 
-  it("shows both attention_reason and declined when a row carries both", () => {
+  it("shows only declined when a row carries both declined and attention_reason", () => {
     const sentence = "kdump.service is masked on the source host. Not carried: the image needs this unit.";
     render(
       <ServiceSection
@@ -192,13 +190,14 @@ describe("ServiceSection: every unit kind", () => {
         ]}
       />,
     );
-    expect(screen.getByTestId("attention-service-kdump.service").textContent).toBe(sentence);
+    expect(screen.queryByTestId("attention-service-kdump.service")).not.toBeInTheDocument();
+    expect(screen.queryByText(sentence)).toBeNull();
     expect(screen.getByTestId("declined-service-kdump.service").textContent).toBe(
       DECLINED_TEXT,
     );
     expect(
       describedBy(screen.getByRole("checkbox", { name: "Toggle kdump.service" })),
-    ).toEqual([sentence, DECLINED_TEXT]);
+    ).toEqual([DECLINED_TEXT]);
   });
 
   it("shows the reason once when attention_reason and declined.text are the same", () => {
@@ -515,8 +514,8 @@ describe("ServiceSection: mount findings", () => {
 describe("ServiceSection: server text is text", () => {
   it("shows markup characters in reasons and advisories literally", () => {
     const hostile = "pkg <b>bold</b> & co";
-    // A different string, so the attention note is not folded into the
-    // declined one.
+    // A declined row shows no attention note (spec § 6.6 item 4), so the
+    // attention text sits on a second, undeclined row.
     const hostileAttention = "unit <b>x</b> & y";
     render(
       <ServiceSection
@@ -524,9 +523,9 @@ describe("ServiceSection: server text is text", () => {
         services={[
           makeUnit({
             unit: "kdump.service",
-            attention_reason: hostileAttention,
             declined: { renders: "omitted", reason: "PackageExcluded", text: hostile },
           }),
+          makeUnit({ unit: "getty@tty3.service", attention_reason: hostileAttention }),
         ]}
         dropins={[
           makeDropin({
@@ -539,7 +538,7 @@ describe("ServiceSection: server text is text", () => {
     );
     const section = screen.getByTestId("service-section");
     expect(section.querySelector("b")).toBeNull();
-    expect(screen.getByTestId("attention-service-kdump.service").textContent).toBe(
+    expect(screen.getByTestId("attention-service-getty@tty3.service").textContent).toBe(
       hostileAttention,
     );
     for (const id of [

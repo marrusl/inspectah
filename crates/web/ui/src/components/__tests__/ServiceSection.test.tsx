@@ -201,7 +201,7 @@ describe("ServiceSection", () => {
     render(<ServiceSection {...defaultProps} services={services} />);
     const stateLabel = screen.getByTestId("service-state-example.service");
     expect(stateLabel).toBeInTheDocument();
-    expect(stateLabel).toHaveTextContent("disabled (preset: enable)");
+    expect(stateLabel).toHaveTextContent("disabled preset: enable");
   });
 
   it("shows current state without preset when default_state is absent", () => {
@@ -244,7 +244,7 @@ describe("ServiceSection parent-child cascade", () => {
     expect(checkbox).toBeDisabled();
   });
 
-  it("shows 'Service excluded' badge on drop-ins when parent is excluded", () => {
+  it("shows 'Unit excluded' badge on drop-ins when parent is excluded", () => {
     const services = [makeService({ unit: "httpd.service", include: false })];
     const dropins = [
       makeDropin({
@@ -265,7 +265,7 @@ describe("ServiceSection parent-child cascade", () => {
         "dropin-excluded-badge-/etc/systemd/system/httpd.service.d/override.conf",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Service excluded")).toBeInTheDocument();
+    expect(screen.getByText("Unit excluded")).toBeInTheDocument();
   });
 
   it("drop-in checkboxes are enabled when parent is included", () => {

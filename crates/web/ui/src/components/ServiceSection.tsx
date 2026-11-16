@@ -1,6 +1,7 @@
 import { useCallback, useId, useMemo, useState } from "react";
 import { Label } from "@patternfly/react-core";
 import type {
+  DeclinedView,
   ServiceDecisionDto,
   DropInDecisionDto,
   MountFindingDto,
@@ -23,6 +24,10 @@ import {
 import {
   GROUP_ORDER,
   GROUP_TITLES,
+  OUTCOME_LABELS,
+  RELATION_LABELS,
+  UNDETERMINED_CAUSE_LABEL,
+  causeLabel,
   followUpFlagText,
   groupUnits,
   keyFields,
@@ -107,6 +112,22 @@ const EMPTY_WITH_TARGET = "No other unit differs from its preset, and no drop-in
 /** § 7 string 13: no row at all. */
 const EMPTY_SECTION = "No unit differs from its preset, and no drop-in was found.";
 
+/** § 7 string 23, a drop-in's badge while its parent is excluded. */
+const UNIT_EXCLUDED = "Unit excluded";
+
+/** The triage reason a unit row no longer shows as a badge (§ 6.6 item 3). */
+const NON_DEFAULT_STATE_REASON = "service_non_default_state";
+
+/** The outcome label's colour, by `declined.renders` (§ 6.6 item 2). */
+const OUTCOME_COLORS: Record<DeclinedView["renders"], "orange" | "blue" | "grey"> = {
+  fixme: "orange",
+  advisory: "blue",
+  omitted: "grey",
+};
+
+/** Subtle text for the preset beside a row's state (§ 6.6 item 1). */
+const SUBTLE_TEXT_COLOR = "var(--pf-t--global--text--color--subtle)";
+
 /** "All", with no query and no pin: the section has no filter bar yet. */
 const SHOW_ALL: ShowState = { filter: "all", query: "", pins: new Set() };
 
@@ -132,6 +153,28 @@ const LEVEL_BORDER: Record<string, string> = {
 function describedBy(...ids: (string | false | null | undefined)[]): string | undefined {
   const present = ids.filter((id): id is string => !!id);
   return present.length > 0 ? present.join(" ") : undefined;
+}
+
+/** A declined row's outcome label in its badge cell (§ 6.6 item 2, § 7 string 15). */
+function OutcomeLabel({ declined }: { declined: DeclinedView }) {
+  return (
+    <div role="gridcell" className="inspectah-decision-row__badge">
+      <Label color={OUTCOME_COLORS[declined.renders]} variant="outline" isCompact>
+        {OUTCOME_LABELS[declined.renders]}
+      </Label>
+    </div>
+  );
+}
+
+/** A reported row's cause label in its badge cell (§ 6.6 item 12, § 7 string 18). */
+function CauseLabel({ text }: { text: string }) {
+  return (
+    <div role="gridcell" className="inspectah-decision-row__badge">
+      <Label color="grey" variant="outline" isCompact>
+        {text}
+      </Label>
+    </div>
+  );
 }
 
 /**
@@ -289,7 +332,7 @@ function DropInRow({
         {parentExcluded && !diLocked && (
           <div role="gridcell" className="inspectah-decision-row__badge">
             <Label color="grey" data-testid={`dropin-excluded-badge-${di.path}`}>
-              Service excluded
+              {UNIT_EXCLUDED}
             </Label>
           </div>
         )}
@@ -554,12 +597,13 @@ function ManualLinkRow({ link, unitKey }: { link: ManualLinkView; unitKey: RowKe
         <div role="gridcell" className="inspectah-decision-row__name">
           <span>{link.unit}</span>
           <span className="inspectah-unit-kind" data-testid="manual-link-relation">
-            {link.relation}
+            {RELATION_LABELS[link.relation]}
           </span>
           <code className="inspectah-manual-link__parent" data-testid="manual-link-parent">
             {link.parent}
           </code>
         </div>
+        <CauseLabel text={causeLabel(link.cause)} />
       </div>
       {link.advisories.length > 0 && (
         <AdvisoryLines
@@ -621,6 +665,7 @@ function UndeterminedInstallRow({
             </code>
           ))}
         </div>
+        <CauseLabel text={UNDETERMINED_CAUSE_LABEL} />
       </div>
       {r.advisories.length > 0 && (
         <AdvisoryLines
@@ -688,6 +733,7 @@ function DefaultTargetRow({ target: t, unitKey, isPending, onToggle }: DefaultTa
         <div role="gridcell" className="inspectah-decision-row__name">
           <span data-testid="default-target-name">{t.target}</span>
         </div>
+        {t.declined && <OutcomeLabel declined={t.declined} />}
       </div>
       <div className="inspectah-decision-row__helper-text inspectah-unit-note">
         {DEFAULT_TARGET_EXPLANATION}
@@ -706,6 +752,8 @@ function DefaultTargetRow({ target: t, unitKey, isPending, onToggle }: DefaultTa
 
 interface UnitBranchViewProps {
   branch: UnitBranch;
+  /** The kind chip, shown only where the group mixes kinds (§ 6.6 item 10). */
+  showKind: boolean;
   /** Holds the section's one tab stop (today's rule: the first unit row, when there is no target). */
   isTabStop: boolean;
   pendingKeys: ReadonlySet<string>;
@@ -716,6 +764,7 @@ interface UnitBranchViewProps {
 /** A unit row and the drop-ins nested under it (§ 6.2, § 6.12). */
 function UnitBranchView({
   branch,
+  showKind,
   isTabStop,
   pendingKeys,
   onToggleService,
@@ -723,7 +772,8 @@ function UnitBranchView({
 }: UnitBranchViewProps) {
   const svc = branch.head.record.data;
   const bucket = extractTriageBucket(svc.triage);
-  const badge = badgeTextForTriage(svc.triage);
+  const badge =
+    svc.triage.primary_reason === NON_DEFAULT_STATE_REASON ? null : badgeTextForTriage(svc.triage);
   const level = triageBucketToAttention(svc.triage);
   const isPending = pendingKeys.has(serviceKey(svc.unit));
   const svcLocked = svc.locked === true;
@@ -735,12 +785,9 @@ function UnitBranchView({
   // A locked row shows its reason in the badge; an unlocked one, such
   // as a runtime updater excluded by default, under the row.
   const attentionTestId = `attention-service-${svc.unit}`;
-  // A scanned protected unit's attention_reason and its declined text
-  // are the same served sentence: show it once, as the decline.
-  const attention =
-    svcLocked || svc.attention_reason === svc.declined?.text
-      ? null
-      : (svc.attention_reason ?? null);
+  // One reason per row (§ 6.6 item 4): a declined row shows its declined
+  // text and not its attention_reason.
+  const attention = svcLocked || svc.declined ? null : (svc.attention_reason ?? null);
   const declinedTestId = `declined-service-${svc.unit}`;
   // What an instance needs (§ 11.1): its template, the configuration
   // its enable needs and the data the image does not carry. Any
@@ -803,36 +850,48 @@ function UnitBranchView({
           </div>
           <div role="gridcell" className="inspectah-decision-row__name">
             <span>{svc.unit}</span>
-            <span
-              className="inspectah-unit-kind"
-              data-testid={`service-kind-${svc.unit}`}
-            >
-              {svc.kind}
-            </span>
-            {svc.owning_package && (
+            {showKind && (
               <span
-                style={{
-                  fontSize: "var(--pf-t--global--font--size--xs)",
-                  opacity: 0.6,
-                  marginLeft: "var(--pf-t--global--spacer--xs)",
-                }}
+                className="inspectah-unit-kind"
+                data-testid={`service-kind-${svc.unit}`}
               >
-                ({svc.owning_package})
+                {svc.kind}
+              </span>
+            )}
+            {/* The package, or with none the fragment word (§ 6.6 item 9). */}
+            <span
+              style={{
+                fontSize: "var(--pf-t--global--font--size--xs)",
+                opacity: 0.6,
+                marginLeft: "var(--pf-t--global--spacer--xs)",
+              }}
+            >
+              ({svc.owning_package ?? svc.fragment})
+            </span>
+            {svc.instance_of && (
+              <span
+                id={instanceOfId}
+                data-testid={instanceOfTestId}
+                className="inspectah-unit-paths"
+              >
+                <span className="inspectah-unit-paths__label">Instance of</span>{" "}
+                <code>{svc.instance_of}</code>
               </span>
             )}
             <span
               data-testid={`service-state-${svc.unit}`}
-              style={{
-                fontSize: "var(--pf-t--global--font--size--xs)",
-                opacity: 0.55,
-                marginLeft: "var(--pf-t--global--spacer--sm)",
-                fontStyle: "italic",
-              }}
+              style={{ marginLeft: "var(--pf-t--global--spacer--sm)" }}
             >
               {svc.current_state}
-              {svc.default_state && ` (preset: ${svc.default_state})`}
+              {svc.default_state && (
+                <>
+                  {" "}
+                  <span style={{ color: SUBTLE_TEXT_COLOR }}>preset: {svc.default_state}</span>
+                </>
+              )}
             </span>
           </div>
+          {svc.declined && <OutcomeLabel declined={svc.declined} />}
           {badge && !svcLocked && (
             <div
               role="gridcell"
@@ -876,16 +935,6 @@ function UnitBranchView({
                 </span>
               </span>
             ))}
-          </div>
-        )}
-        {svc.instance_of && (
-          <div
-            id={instanceOfId}
-            data-testid={instanceOfTestId}
-            className="inspectah-unit-paths"
-          >
-            <span className="inspectah-unit-paths__label">Instance of</span>{" "}
-            <code>{svc.instance_of}</code>
           </div>
         )}
         {svc.required_config.length > 0 && (
@@ -1088,6 +1137,7 @@ export function ServiceSection({
             <UnitBranchView
               key={branch.head.occurrenceKey}
               branch={branch}
+              showKind={group.id === "other_units"}
               isTabStop={branch.head.occurrenceKey === tabStop}
               pendingKeys={pendingKeys}
               onToggleService={handleToggleService}

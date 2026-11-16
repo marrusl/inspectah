@@ -152,7 +152,7 @@ describe("ServiceSection: hand-made links", () => {
     expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(row).toHaveAttribute("tabindex", "-1");
     expect(row).toHaveAttribute("data-cause", "static_unit");
-    expect(within(row).getByTestId("manual-link-relation")).toHaveTextContent(/^wants$/);
+    expect(within(row).getByTestId("manual-link-relation")).toHaveTextContent(/^wanted by$/);
     expect(within(row).getByTestId("manual-link-parent")).toHaveTextContent(
       /^multi-user\.target$/,
     );
@@ -187,7 +187,9 @@ describe("ServiceSection: hand-made links", () => {
 
     const alsoRow = linkRow(also);
     expect(alsoRow).toHaveAttribute("data-cause", "vendor_install_only");
-    expect(within(alsoRow).getByTestId("manual-link-relation")).toHaveTextContent(/^also$/);
+    expect(within(alsoRow).getByTestId("manual-link-relation")).toHaveTextContent(
+      /^named in Also= by$/,
+    );
     expect(within(alsoRow).getByTestId("manual-link-parent")).toHaveTextContent(
       /^app\.service$/,
     );
