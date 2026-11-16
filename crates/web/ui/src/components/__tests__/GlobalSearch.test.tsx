@@ -10,6 +10,7 @@ import type {
   TriageAnnotation,
   UnmanagedFileGroup,
 } from "../../api/types";
+import { loadUnitFields } from "../../__tests__/fixtures/systemd-units/load";
 
 const DEFAULT_TRIAGE = {
   triage: { mode: "single_host" as const, baseline: null },
@@ -444,5 +445,34 @@ describe("GlobalSearch language packages and unmanaged files", () => {
       "unmanaged_files",
       "/opt/splunk/bin/splunkd",
     );
+  });
+});
+
+describe("GlobalSearch units scoping by mode (§ 6.12, § 6.15)", () => {
+  const unitsReference = makeReferenceSection("units", [{ id: "svc:chronyd", title: "chronyd.service" }]);
+  const unitState = { ...loadUnitFields("kitchen-sink").unit_states[0], unit: "chronyd.service" };
+
+  async function resultsFor(props: Partial<GlobalSearchProps>, query: string) {
+    renderGlobalSearch({ packageItems: [], configItems: [], contextSections: [unitsReference], ...props });
+    await userEvent.type(screen.getByLabelText("Search all sections"), query);
+    return within(screen.getByTestId("global-search-results"))
+      .queryAllByRole("option")
+      .map((o) => Array.from(o.querySelectorAll("span")).map((s) => s.textContent));
+  }
+
+  it("in aggregate mode indexes the units reference section under Services, and no unit row", async () => {
+    const onNavigate = vi.fn();
+    const results = await resultsFor({ isAggregateMode: true, unitStates: [unitState], onNavigate }, "chronyd");
+    expect(results).toEqual([["Services", "chronyd.service"]]);
+    await userEvent.click(screen.getByTestId("global-search-result-0"));
+    expect(onNavigate).toHaveBeenCalledWith("units", "svc:chronyd");
+  });
+
+  it("in single-host mode indexes the unit row under its row key and Systemd units, and not the reference section", async () => {
+    const onNavigate = vi.fn();
+    const results = await resultsFor({ unitStates: [unitState], onNavigate }, "chronyd");
+    expect(results).toEqual([["Systemd units", "chronyd.service"]]);
+    await userEvent.click(screen.getByTestId("global-search-result-0"));
+    expect(onNavigate).toHaveBeenCalledWith("units", JSON.stringify(["unit_state", "chronyd.service"]));
   });
 });

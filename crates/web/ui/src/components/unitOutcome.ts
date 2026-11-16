@@ -509,6 +509,59 @@ export function globalSearchText(record: UnitRecord): string {
 }
 
 /**
+ * A global search entry's title: the row's identity, in words its own
+ * search text holds, so matching the title never finds what its text
+ * would not, and the entries a unit name shares are told apart.
+ */
+function globalSearchTitle(record: UnitRecord): string {
+  switch (record.kind) {
+    case "unit_state":
+      return record.data.unit;
+    case "default_target":
+      return record.data.target;
+    case "dropin":
+      return record.data.path;
+    case "manual_link":
+      return `${record.data.unit} (${record.data.relation} ${record.data.parent})`;
+    case "undetermined_install":
+      return `${record.data.unit} (${reasonWords(record.data.reason)})`;
+    case "mount_finding":
+      return `${record.data.unit} (${record.data.mount_point ?? record.data.kind})`;
+  }
+}
+
+/** One single-host global search entry for a units row (§ 6.12). */
+export interface UnitSearchEntry {
+  /** The row key (§ 6.11): never an occurrence key. */
+  itemId: RowKey;
+  title: string;
+  /** `globalSearchText`, carried on the entry. */
+  searchText: string;
+}
+
+/**
+ * Every record of the six unit fields as a global search entry, one per
+ * record, a true duplicate included (§ 6.12): the default target, unit
+ * rows, drop-ins, then the reported rows.
+ */
+export function unitSearchEntries(fields: UnitFields): UnitSearchEntry[] {
+  const keyed = keyFields(fields);
+  const rows: Keyed[] = [
+    ...(keyed.defaultTarget ? [keyed.defaultTarget] : []),
+    ...keyed.unitStates,
+    ...keyed.dropins,
+    ...keyed.mountFindings,
+    ...keyed.manualLinks,
+    ...keyed.undeterminedInstalls,
+  ];
+  return rows.map(({ record, rowKey: key }) => ({
+    itemId: key,
+    title: globalSearchTitle(record),
+    searchText: globalSearchText(record),
+  }));
+}
+
+/**
  * One unit of visibility: a unit row with its drop-ins, the default
  * target, one orphan drop-in, or one reported row. `outcome` is `null` for
  * an orphan, which only "All" shows.

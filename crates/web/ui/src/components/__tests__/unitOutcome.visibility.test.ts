@@ -31,6 +31,7 @@ import {
   sectionSearchText,
   showGroups,
   shownRowCount,
+  unitSearchEntries,
   type FilterValue,
   type GroupId,
   type OccurrenceKey,
@@ -386,6 +387,50 @@ describe("U25: global search text (§ 6.12 table)", () => {
     const text = globalSearchText(pk.record);
     expect(text).toBe(text.toLowerCase());
     expect(text).toContain("packagekit");
+  });
+});
+
+describe("U25: global search entries (§ 6.12)", () => {
+  const entries = unitSearchEntries(planted);
+  const all = [
+    ...(plantedKeyed.defaultTarget ? [plantedKeyed.defaultTarget] : []),
+    ...plantedKeyed.unitStates,
+    ...plantedKeyed.dropins,
+    ...plantedKeyed.mountFindings,
+    ...plantedKeyed.manualLinks,
+    ...plantedKeyed.undeterminedInstalls,
+  ];
+
+  it("gives one entry per record, its item id the row key and its text globalSearchText", () => {
+    expect(entries).toHaveLength(all.length);
+    expect(entries.map((e) => e.itemId)).toEqual(all.map((k) => k.rowKey));
+    expect(entries.map((e) => e.searchText)).toEqual(all.map((k) => globalSearchText(k.record)));
+  });
+
+  it("titles each entry with its identity, and every title word is in the entry's own text", () => {
+    const titleOf = (key: string) => entries.find((e) => e.itemId === key)!.title;
+    expect(titleOf(rowKey({ kind: "unit_state", data: planted.unit_states[0] }))).toBe(planted.unit_states[0].unit);
+    expect(titleOf('["default_target"]')).toBe("graphical.target");
+    expect(titleOf(JSON.stringify(["dropin", HTTPD_LIMITS]))).toBe(HTTPD_LIMITS);
+    expect(titleOf(JSON.stringify(["manual_link", "wants", "graphical.target", "multi-link-demo.service"]))).toBe(
+      "multi-link-demo.service (wants graphical.target)",
+    );
+    expect(titleOf(JSON.stringify(["undetermined_install", "data-demo.mount"]))).toBe("data-demo.mount (specifier)");
+    expect(titleOf(JSON.stringify(["mount_finding", "data-demo.mount"]))).toBe("data-demo.mount (/data/demo)");
+    for (const e of entries) {
+      for (const word of e.title.toLowerCase().replace(/[()]/g, "").split(" ")) {
+        expect(e.searchText, `${e.title}: ${word}`).toContain(word);
+      }
+    }
+  });
+
+  it("titles a mount finding with no mount point by its kind", () => {
+    const [entry] = unitSearchEntries({
+      ...loadUnitFields("stock10"),
+      default_target: undefined,
+      mount_findings: [{ ...FIELD_MOUNT, mount_point: null }],
+    });
+    expect(entry.title).toBe("data-demo.mount (fieldmountkind)");
   });
 });
 

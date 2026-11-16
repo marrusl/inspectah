@@ -732,6 +732,11 @@ function SingleHostApp({
         searchUserDecisions={view.data?.users_groups_decisions}
         searchContextSections={sections.data}
         searchServiceDropins={view.data?.unit_dropins}
+        searchUnitStates={view.data?.unit_states}
+        searchDefaultTarget={view.data?.default_target}
+        searchMountFindings={view.data?.mount_findings}
+        searchManualLinks={view.data?.manual_links}
+        searchUndeterminedInstalls={view.data?.undetermined_installs}
         searchLanguagePackageEnvs={view.data?.language_packages}
         searchUnmanagedFileGroups={view.data?.unmanaged_files}
         onSearchNavigate={handleNavigateFromSearch}

@@ -11,12 +11,18 @@ import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
 import type {
+  DefaultTargetView,
   DropInDecisionDto,
   LanguagePackageEnv,
+  ManualLinkView,
+  MountFindingDto,
   ReferenceSection,
+  ServiceDecisionDto,
+  UndeterminedInstallView,
   UnmanagedFileGroup,
   UserDecision,
 } from "../api/types";
+import { unitSearchEntries } from "./unitOutcome";
 
 export interface GlobalSearchResult {
   /** Section ID (e.g. "packages", "configs", "units"). */
@@ -27,6 +33,11 @@ export interface GlobalSearchResult {
   title: string;
   /** Unique item ID within the section. */
   itemId: string;
+  /**
+   * The entry's own search text, lowercased. Set by single-host units
+   * entries only, which put nothing in the search text map (§ 6.12).
+   */
+  searchText?: string;
 }
 
 /** Section ID to human-readable label. */
@@ -48,6 +59,12 @@ const SECTION_LABELS: Record<string, string> = {
   unmanaged_files: "Unmanaged Files",
 };
 
+/** The section whose rows single-host mode indexes from the view response. */
+const UNITS_SECTION_ID = "units";
+
+/** § 7 string 1: the label of single-host units results. The fleet view keeps "Services". */
+const SINGLE_HOST_UNITS_LABEL = "Systemd units";
+
 export interface GlobalSearchProps {
   /** All decision items from packages section. */
   packageItems: DecisionItemKind[];
@@ -67,6 +84,22 @@ export interface GlobalSearchProps {
   languagePackageEnvs?: LanguagePackageEnv[];
   /** Unmanaged file groups from --include-unmanaged. */
   unmanagedFileGroups?: UnmanagedFileGroup[];
+  /**
+   * True in the fleet view. While false, the units rows below and
+   * `serviceDropins` are indexed under their row keys in place of the
+   * `units` reference section (§ 6.12, § 6.15).
+   */
+  isAggregateMode?: boolean;
+  /** The view response's unit rows, single-host mode only. */
+  unitStates?: ServiceDecisionDto[];
+  /** The view response's default target, single-host mode only. */
+  defaultTarget?: DefaultTargetView;
+  /** The view response's mount findings, single-host mode only. */
+  mountFindings?: MountFindingDto[];
+  /** The view response's manual links, single-host mode only. */
+  manualLinks?: ManualLinkView[];
+  /** The view response's undetermined installs, single-host mode only. */
+  undeterminedInstalls?: UndeterminedInstallView[];
   /** Called when user selects a result -- navigates to section + item. */
   onNavigate: (sectionId: string, itemId: string) => void;
 }
@@ -117,6 +150,12 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       serviceDropins,
       languagePackageEnvs,
       unmanagedFileGroups,
+      isAggregateMode = false,
+      unitStates,
+      defaultTarget,
+      mountFindings,
+      manualLinks,
+      undeterminedInstalls,
       onNavigate,
     },
     ref,
@@ -165,6 +204,8 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
 
       if (contextSections) {
         for (const section of contextSections) {
+          // Single-host mode indexes the units rows themselves, below.
+          if (!isAggregateMode && section.id === UNITS_SECTION_ID) continue;
           const label = SECTION_LABELS[section.id] ?? section.display_name;
           for (const ci of section.items) {
             results.push({
@@ -190,7 +231,26 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         }
       }
 
-      if (serviceDropins) {
+      if (!isAggregateMode) {
+        // Each units row under its row key, carrying its own search text (§ 6.12).
+        const entries = unitSearchEntries({
+          unit_states: unitStates ?? [],
+          unit_dropins: serviceDropins ?? [],
+          default_target: defaultTarget,
+          mount_findings: mountFindings ?? [],
+          manual_links: manualLinks ?? [],
+          undetermined_installs: undeterminedInstalls ?? [],
+        });
+        for (const entry of entries) {
+          results.push({
+            sectionId: UNITS_SECTION_ID,
+            sectionLabel: SINGLE_HOST_UNITS_LABEL,
+            title: entry.title,
+            itemId: entry.itemId,
+            searchText: entry.searchText,
+          });
+        }
+      } else if (serviceDropins) {
         for (const di of serviceDropins) {
           results.push({
             sectionId: "units",
@@ -243,6 +303,12 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       serviceDropins,
       languagePackageEnvs,
       unmanagedFileGroups,
+      isAggregateMode,
+      unitStates,
+      defaultTarget,
+      mountFindings,
+      manualLinks,
+      undeterminedInstalls,
     ]);
 
     // Build searchable text keyed by a composite of sectionId + itemId.
@@ -265,13 +331,15 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
           );
         }
       }
-      if (serviceDropins) {
+      // Single-host units entries carry their text and put none here (§ 6.12).
+      if (isAggregateMode && serviceDropins) {
         for (const di of serviceDropins) {
           map.set(di.path, `${di.path} ${di.unit}`.toLowerCase());
         }
       }
       if (contextSections) {
         for (const section of contextSections) {
+          if (!isAggregateMode && section.id === UNITS_SECTION_ID) continue;
           for (const ci of section.items) {
             map.set(`${section.id}:${ci.id}`, ci.searchable_text.toLowerCase());
           }
@@ -298,6 +366,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       userDecisions,
       contextSections,
       serviceDropins,
+      isAggregateMode,
     ]);
 
     // Filter results
@@ -306,9 +375,11 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       const q = query.toLowerCase();
       return allItems
         .filter((r) => {
-          // Decision items are keyed by bare itemId; context items use a
-          // "sectionId:itemId" composite key to avoid cross-section collisions.
+          // Single-host units entries carry their own text. Decision items
+          // are keyed by bare itemId; context items use a "sectionId:itemId"
+          // composite key to avoid cross-section collisions.
           const text =
+            r.searchText ??
             searchTextMap.get(r.itemId) ??
             searchTextMap.get(`${r.sectionId}:${r.itemId}`) ??
             r.title.toLowerCase();

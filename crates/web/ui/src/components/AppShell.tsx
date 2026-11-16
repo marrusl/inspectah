@@ -8,7 +8,12 @@ import { GlobalSearch } from "./GlobalSearch";
 import type { GlobalSearchHandle } from "./GlobalSearch";
 import { ExportDialog } from "./ExportDialog";
 import type {
+  DefaultTargetView,
   DropInDecisionDto,
+  ManualLinkView,
+  MountFindingDto,
+  ServiceDecisionDto,
+  UndeterminedInstallView,
   RefineStats,
   ReferenceSection,
   LanguagePackageEnv,
@@ -86,6 +91,12 @@ export interface AppShellProps {
   searchContextSections: ReferenceSection[] | null;
   /** Service drop-in decision rows for GlobalSearch. */
   searchServiceDropins?: DropInDecisionDto[];
+  /** The units rows GlobalSearch indexes in single-host mode (§ 6.12); the fleet view sets none. */
+  searchUnitStates?: ServiceDecisionDto[];
+  searchDefaultTarget?: DefaultTargetView;
+  searchMountFindings?: MountFindingDto[];
+  searchManualLinks?: ManualLinkView[];
+  searchUndeterminedInstalls?: UndeterminedInstallView[];
   /** Language package environments for GlobalSearch. */
   searchLanguagePackageEnvs?: LanguagePackageEnv[];
   /** Unmanaged file groups for GlobalSearch. */
@@ -100,7 +111,12 @@ export interface AppShellProps {
   hamburger?: React.ReactNode;
   /** Aggregate-mode one-line summary for StatsBar. */
   aggregateSummary?: AggregateSummary;
-  /** When true, Containerfile panel defaults to open regardless of viewport width. */
+  /**
+   * True in the fleet view, false in single-host mode. Two uses: the
+   * Containerfile panel defaults to open regardless of viewport width, and
+   * GlobalSearch indexes the fleet view's `units` section as before instead
+   * of the single-host units rows (spec § 6.15).
+   */
   isAggregateMode?: boolean;
   /** Override section IDs for 1-9 keyboard navigation (aggregate mode). */
   sectionIds?: string[];
@@ -148,6 +164,11 @@ export function AppShell({
   searchUserDecisions,
   searchContextSections,
   searchServiceDropins,
+  searchUnitStates,
+  searchDefaultTarget,
+  searchMountFindings,
+  searchManualLinks,
+  searchUndeterminedInstalls,
   searchLanguagePackageEnvs,
   searchUnmanagedFileGroups,
   onSearchNavigate,
@@ -240,6 +261,12 @@ export function AppShell({
       serviceDropins={searchServiceDropins}
       languagePackageEnvs={searchLanguagePackageEnvs}
       unmanagedFileGroups={searchUnmanagedFileGroups}
+      isAggregateMode={isAggregateMode}
+      unitStates={searchUnitStates}
+      defaultTarget={searchDefaultTarget}
+      mountFindings={searchMountFindings}
+      manualLinks={searchManualLinks}
+      undeterminedInstalls={searchUndeterminedInstalls}
       onNavigate={handleSearchNavigate}
     />
   );

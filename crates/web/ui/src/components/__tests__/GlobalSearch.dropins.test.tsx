@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GlobalSearch } from "../GlobalSearch";
 import type { DropInDecisionDto, TriageTag } from "../../api/types";
+import { rowKey } from "../unitOutcome";
 
 const TRIAGE: TriageTag = {
   triage: { mode: "single_host", site: null },
@@ -54,13 +55,13 @@ describe("GlobalSearch service drop-in indexing", () => {
     expect(within(results).getByText(DROPIN_PATH)).toBeInTheDocument();
   });
 
-  it("navigates to the drop-in row in the services section", async () => {
+  it("navigates to the drop-in row in the units section by its row key", async () => {
     const onNavigate = renderSearch();
     await userEvent.type(
       screen.getByLabelText("Search all sections"),
       "override.conf",
     );
     await userEvent.click(screen.getByTestId("global-search-result-0"));
-    expect(onNavigate).toHaveBeenCalledWith("units", DROPIN_PATH);
+    expect(onNavigate).toHaveBeenCalledWith("units", rowKey({ kind: "dropin", data: DROPIN }));
   });
 });

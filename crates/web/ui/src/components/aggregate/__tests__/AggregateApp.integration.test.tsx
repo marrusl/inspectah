@@ -713,6 +713,57 @@ describe("AggregateApp integration", () => {
   });
 
   // -------------------------------------------------------------------------
+  // U34, search half: the fleet view's units search is unchanged by the
+  // single-host units index (spec § 6.12, § 6.15).
+  // -------------------------------------------------------------------------
+  describe("fleet units search (§ 6.15)", () => {
+    const UNIT = "chronyd.service";
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    beforeEach(() => {
+      // jsdom does not implement scrollIntoView, which the fleet reveal calls.
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    function viewWithUnit(): AggregateViewResponse {
+      const view = mockAggregateViewResponse();
+      view.sections = view.sections.map((s) =>
+        s.id === "units"
+          ? { ...s, items: [mockAggregateItem({ item_id: { kind: "Unit", key: { unit: UNIT } } })] }
+          : s,
+      );
+      return view;
+    }
+
+    it('labels the result "Services", navigates as before, and shows no "Systemd units"', async () => {
+      mockFetchAggregateView.mockResolvedValue(viewWithUnit());
+      renderAggregateApp();
+      await waitForContent();
+
+      await userEvent.type(screen.getByLabelText("Search all sections"), "chronyd");
+      const results = within(screen.getByTestId("global-search-results")).getAllByRole("option");
+      expect(results).toHaveLength(1);
+      const [label, title] = Array.from(results[0].querySelectorAll("span")).map((s) => s.textContent);
+      expect(label).toBe("Services");
+      expect(title).toBe(UNIT);
+      expect(screen.queryByText(/Systemd units/)).toBeNull();
+
+      await userEvent.click(results[0]);
+      await waitFor(() =>
+        expect(screen.getByText("Services").closest("[aria-current]")).toHaveAttribute("aria-current", "page"),
+      );
+      const row = document.querySelector<HTMLElement>(
+        `[data-item-id='${JSON.stringify({ kind: "Unit", key: { unit: UNIT } })}']`,
+      );
+      expect(row).not.toBeNull();
+      await waitFor(() => expect(row).toHaveFocus());
+      expect(screen.queryByText(/Systemd units/)).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 11. Aggregate conflict dismiss/restore flow (RepoBar ↔ PackageList)
   // -------------------------------------------------------------------------
   describe("aggregate conflict dismiss/restore flow", () => {
