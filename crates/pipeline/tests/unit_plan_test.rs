@@ -181,7 +181,7 @@ fn test_service_render_plan_omits_proven_absent_service() {
 
     let plan = render(&snap);
 
-    // Omission comment IS in lines — user sees what was excluded
+    // Omission comment IS in lines: user sees what was excluded
     assert!(
         plan.lines
             .iter()
@@ -397,7 +397,7 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
 }
 
 /// Duplicate same-name packages: one excluded, one included+installable.
-/// The included entry should win — package is present, no advisory.
+/// The included entry should win: package is present, no advisory.
 #[test]
 fn test_service_render_plan_duplicate_package_uses_best_entry() {
     let mut snap = InspectionSnapshot::new();
@@ -416,7 +416,7 @@ fn test_service_render_plan_duplicate_package_uses_best_entry() {
                 name: "httpd".into(),
                 arch: "i686".into(),
                 state: PackageState::Added,
-                disposition: FindingKind::included(), // included entry — should win
+                disposition: FindingKind::included(), // included entry: should win
                 source_repo: "appstream".into(),
                 ..Default::default()
             },

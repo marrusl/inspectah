@@ -230,9 +230,9 @@ fn preset_instances(
 enum ParsedUnitState {
     /// Durable administrator intent: produces a `UnitStateChange`.
     Durable(UnitState),
-    /// Known-inert packaging artifact — silently dropped, no warning.
+    /// Known-inert packaging artifact: silently dropped, no warning.
     SilentDrop,
-    /// Runtime/linked/bad/unknown — emits a structured warning and drops.
+    /// Runtime/linked/bad/unknown: emits a structured warning and drops.
     Warn(Warning),
 }
 
@@ -242,9 +242,9 @@ fn parse_unit_state(unit: &str, raw_state: &str) -> ParsedUnitState {
         "enabled" => ParsedUnitState::Durable(UnitState::Enabled),
         "disabled" => ParsedUnitState::Durable(UnitState::Disabled),
         "masked" => ParsedUnitState::Durable(UnitState::Masked),
-        // Packaging/dependency artifacts — no migration relevance.
+        // Packaging/dependency artifacts: no migration relevance.
         "static" | "alias" | "indirect" | "generated" => ParsedUnitState::SilentDrop,
-        // Runtime/volatile states — lost on reboot, cannot be migrated.
+        // Runtime/volatile states: lost on reboot, cannot be migrated.
         "enabled-runtime" | "masked-runtime" | "transient" | "linked-runtime" => {
             ParsedUnitState::Warn(service_warning(
                 unit,
@@ -1444,7 +1444,7 @@ impl Default for UnitsInspector {
 struct UnitFileEntry {
     unit: String,
     state: String,
-    /// Parsed from systemctl output but not used — preset comparison
+    /// Parsed from systemctl output but not used: preset comparison
     /// uses the actual preset files for first-match-wins semantics.
     _preset: String,
 }
@@ -1569,7 +1569,7 @@ impl Inspector for UnitsInspector {
             });
         }
 
-        // 3. Read preset files — try both dirs; if neither readable, degrade
+        // 3. Read preset files: try both dirs; if neither readable, degrade
         let (preset_rules, preset_read_failures) = match read_preset_rules(exec) {
             Ok(pair) => pair,
             Err(reason) => {
@@ -1702,7 +1702,7 @@ impl Inspector for UnitsInspector {
             default_target,
         };
 
-        // Preset file read failures are correctness-bearing — a missing
+        // Preset file read failures are correctness-bearing: a missing
         // preset file means we cannot determine the default state for
         // services whose rules were in that file.
         if !preset_read_failures.is_empty() {
@@ -1737,7 +1737,7 @@ impl Inspector for UnitsInspector {
             });
         }
 
-        // Drop-in read failures are correctness-bearing — a missed override
+        // Drop-in read failures are correctness-bearing: a missed override
         // makes the snapshot look like defaults when there are customizations.
         if !dropin_read_failures.is_empty() {
             let reason = format!(
@@ -1869,7 +1869,7 @@ fn parse_unit_files(stdout: &str) -> Vec<UnitFileEntry> {
 /// Read and merge preset rules from standard preset directories.
 /// Returns `(rules, read_failures)`. Returns Err if neither directory is readable.
 /// Individual file-level read failures are tracked but do not prevent other
-/// files from being read — the caller decides whether failures are fatal.
+/// files from being read: the caller decides whether failures are fatal.
 fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String>), String> {
     let usr_dir = Path::new("/usr/lib/systemd/system-preset");
     let etc_dir = Path::new("/etc/systemd/system-preset");
@@ -1897,11 +1897,11 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
             true
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Directory doesn't exist — normal on systems without vendor presets.
+            // Directory doesn't exist: normal on systems without vendor presets.
             false
         }
         Err(e) => {
-            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // Directory exists but is unreadable (PermissionDenied, etc.):
             // this is a trust gap: vendor presets may be hidden.
             read_failures.push(format!("{}: {e}", usr_dir.display()));
             false
@@ -1928,11 +1928,11 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
             true
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Directory doesn't exist — normal on systems without admin presets.
+            // Directory doesn't exist: normal on systems without admin presets.
             false
         }
         Err(e) => {
-            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // Directory exists but is unreadable (PermissionDenied, etc.):
             // admin preset overrides may be hidden.
             read_failures.push(format!("{}: {e}", etc_dir.display()));
             false
@@ -1945,7 +1945,7 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
         );
     }
 
-    // Sort by filename — numeric prefix ordering (e.g., 85-xxx before 90-xxx)
+    // Sort by filename: numeric prefix ordering (e.g., 85-xxx before 90-xxx)
     preset_files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut rules = Vec::new();
@@ -2060,7 +2060,7 @@ fn detect_shadow_type(exec: &dyn Executor, unit_name: &str) -> Result<Option<Sha
 /// entries.
 ///
 /// Returns (drop_ins, redaction_hints, read_failures).
-/// Read failures on listed `.conf` files are correctness-bearing — the
+/// Read failures on listed `.conf` files are correctness-bearing: the
 /// snapshot would look complete when an override was actually missed.
 fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHint>, Vec<String>) {
     let dropin_base = Path::new(ETC_UNIT_DIR);
@@ -2074,11 +2074,11 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
     let entries = match exec.read_dir_strict(dropin_base) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Directory doesn't exist — no drop-ins to collect.
+            // Directory doesn't exist: no drop-ins to collect.
             return (drop_ins, hints, read_failures);
         }
         Err(e) => {
-            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // Directory exists but is unreadable (PermissionDenied, etc.):
             // all drop-in configurations are hidden.
             read_failures.push(format!("{}: {e}", dropin_base.display()));
             return (drop_ins, hints, read_failures);
@@ -2156,7 +2156,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
             };
             let shadow_rationale = if shadow_type == Some(ShadowType::FullShadow) {
                 Some(
-                    "Full unit shadow — base image updates to this unit will be silently ignored"
+                    "Full unit shadow: base image updates to this unit will be silently ignored"
                         .to_string(),
                 )
             } else {
@@ -2988,7 +2988,7 @@ mod tests {
     #[test]
     fn test_etc_preset_dir_permission_denied_triggers_degraded() {
         // /etc/systemd/system-preset exists but read_dir returns PermissionDenied.
-        // Admin-priority presets may be hidden — must degrade.
+        // Admin-priority presets may be hidden: must degrade.
         let exec = MockExecutor::new()
             .with_command(
                 "systemctl list-unit-files --no-pager",
@@ -3039,7 +3039,7 @@ mod tests {
 
     #[test]
     fn test_etc_preset_dir_not_found_not_degraded() {
-        // /etc/systemd/system-preset doesn't exist (NotFound) — this is
+        // /etc/systemd/system-preset doesn't exist (NotFound): this is
         // normal on systems without admin presets. NOT degraded.
         let exec = MockExecutor::new()
             .with_command(
@@ -3209,7 +3209,7 @@ mod tests {
     #[test]
     fn test_dbus_alias_not_captured_no_operator_evidence() {
         // D-Bus aliases in a different state than their preset are NOT
-        // captured — the operator-intent model excludes them structurally
+        // captured: the operator-intent model excludes them structurally
         // because they are not real services.
         let exec = MockExecutor::new()
             .with_command(
@@ -3256,7 +3256,7 @@ mod tests {
                     .any(|sc| sc.unit().name().as_str() == "httpd.service"),
                 "httpd.service must be in state_changes"
             );
-            // D-Bus aliases must NOT appear — no operator evidence
+            // D-Bus aliases must NOT appear: no operator evidence
             assert!(
                 !svc.state_changes
                     .iter()
@@ -3307,14 +3307,14 @@ mod tests {
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Units(ref svc) = result.section {
-            // sshd matches preset — should not be in state_changes
+            // sshd matches preset: should not be in state_changes
             assert!(
                 !svc.state_changes
                     .iter()
                     .any(|sc| sc.unit().name().as_str() == "sshd.service"),
                 "sshd.service matches preset, must not be in state_changes"
             );
-            // cups is masked — operator intent, must be captured
+            // cups is masked: operator intent, must be captured
             let cups = svc
                 .state_changes
                 .iter()
@@ -3399,7 +3399,7 @@ mod tests {
     #[test]
     fn test_sssd_untouched_services_not_captured() {
         // SSSD services that the operator never touched: their preset is
-        // "disable" and current state is "disabled" — no divergence, no
+        // "disable" and current state is "disabled": no divergence, no
         // operator evidence. Must NOT appear in state_changes.
         let exec = MockExecutor::new()
             .with_command(
@@ -3504,7 +3504,7 @@ mod tests {
     #[test]
     fn test_preset_divergence_without_operator_action_not_captured() {
         // A service whose state differs from preset but where the difference
-        // is just "package installation vs. image presets" — no evidence
+        // is just "package installation vs. image presets": no evidence
         // the operator ran systemctl. With no preset match, it's excluded.
         let exec = MockExecutor::new()
             .with_command(
@@ -3521,7 +3521,7 @@ mod tests {
             )
             .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
             .with_file(
-                // Note: no preset rule for some-obscure.service — only
+                // Note: no preset rule for some-obscure.service, only
                 // the wildcard disable catches it
                 "/usr/lib/systemd/system-preset/90-default.preset",
                 "enable sshd.service\ndisable *\n",
@@ -3542,13 +3542,13 @@ mod tests {
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Units(ref svc) = result.section {
             // The wildcard "disable *" matches some-obscure.service with
-            // default_state="disabled", and current state is also "disabled"
-            // — no divergence. If they were different, the whitelist model
+            // default_state="disabled", and current state is also "disabled",
+            // so there is no divergence. If they were different, the whitelist model
             // captures it because the preset is definitive. This test verifies
             // the matching path.
             //
             // In this case: preset says "disabled" (via wildcard), state is
-            // "disabled" — match, not captured. Good.
+            // "disabled": match, not captured. Good.
             assert!(
                 !svc.state_changes
                     .iter()
@@ -3735,7 +3735,7 @@ mod tests {
             assert_eq!(
                 dropin.shadow_rationale,
                 Some(
-                    "Full unit shadow — base image updates to this unit will be silently ignored"
+                    "Full unit shadow: base image updates to this unit will be silently ignored"
                         .to_string()
                 )
             );
@@ -3931,7 +3931,7 @@ mod tests {
 
         let result = inspector.inspect(&ctx, &NullProgress).unwrap();
         if let SectionData::Units(ref svc) = result.section {
-            // sshd matches preset — must NOT be in state_changes
+            // sshd matches preset: must NOT be in state_changes
             assert!(
                 !svc.state_changes
                     .iter()

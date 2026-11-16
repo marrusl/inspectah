@@ -239,7 +239,7 @@ const DROP_IN: &str = "/etc/systemd/system/httpd.service.d/limits.conf";
 /// A full unit shadow. `units.drop_ins` owns this too, which is why
 /// the `ConfigShadow` variant is named `Services` and not `ServiceDropIn`.
 const FULL_SHADOW: &str = "/etc/systemd/system/custom.service";
-/// A config file no other section owns — the negative control that keeps
+/// A config file no other section owns: the negative control that keeps
 /// the assertions below from passing because config rows never decide.
 const PLAIN_CONFIG: &str = "/etc/httpd/conf/httpd.conf";
 
@@ -461,7 +461,7 @@ fn the_view_response_names_the_owner_of_a_shadowed_config_row() {
 /// exactly one of the two toggles is a decision, and the export agrees
 /// with it. Before schema 24 both were decisions, and the pair
 /// (config included, drop-in excluded) staged the file into neither tree
-/// while reporting it as included — an accepted include that the export
+/// while reporting it as included: an accepted include that the export
 /// contradicted.
 #[test]
 fn one_accepted_decision_governs_an_overlapping_path() {

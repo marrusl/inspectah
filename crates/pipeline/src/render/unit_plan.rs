@@ -88,7 +88,7 @@ fn manual_follow_up_reason(pkg: &PackageEntry) -> Option<ManualFollowUpReason> {
 /// Generate the TODO comment line for a package that cannot be installed via
 /// `dnf install`. Returns `None` for packages that are directly installable.
 ///
-/// Output matches the original containerfile renderer exactly — changing
+/// Output matches the original containerfile renderer exactly: changing
 /// wording here changes the Containerfile output.
 pub(crate) fn manual_follow_up_line(pkg: &PackageEntry) -> Option<String> {
     match manual_follow_up_reason(pkg) {
@@ -110,7 +110,7 @@ pub(crate) fn manual_follow_up_line(pkg: &PackageEntry) -> Option<String> {
     }
 }
 
-/// Returns `true` when a package can be installed via `dnf install` — i.e.,
+/// Returns `true` when a package can be installed via `dnf install`: i.e.,
 /// it has a known repository source and is not a local-install or no-repo
 /// package.
 pub fn is_package_installable(pkg: &PackageEntry) -> bool {
@@ -2356,14 +2356,14 @@ fn lexically_under(path: &str, at: &Destination) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// classify_service_presence — the tiered suppression model
+// classify_service_presence: the tiered suppression model
 // ---------------------------------------------------------------------------
 
 /// Determine whether a unit should be omitted or emitted, and if emitted,
 /// whether it needs advisory annotations.
 ///
 /// Tier logic (evaluated in order):
-/// 1. `owning_package: None` → always Emit (conservative — unknown owner)
+/// 1. `owning_package: None` → always Emit (conservative: unknown owner)
 /// 2. Package in `packages_added` with every entry `include: false`, not
 ///    in the baseline, and not pulled in by an included package
 ///    ([`pulled_in_by_included`]) → Omit with `OmissionReason::NotCarried`
@@ -2392,7 +2392,7 @@ fn classify_service_presence(
 ) -> PresenceDecision {
     let pkg_name = match unit.owning_package() {
         Some(name) => name,
-        // Tier 1: unknown owner — always emit conservatively
+        // Tier 1: unknown owner: always emit conservatively
         None => {
             return PresenceDecision::Emit {
                 advisory_reasons: None,
@@ -2400,7 +2400,7 @@ fn classify_service_presence(
         }
     };
 
-    // Check all entries with this package name — duplicates may differ in
+    // Check all entries with this package name: duplicates may differ in
     // include/installability state.  Best-case wins: any included+installable
     // entry means the package is present.
     let matching_packages: Vec<&PackageEntry> = rpm
@@ -2444,7 +2444,7 @@ fn classify_service_presence(
 
     // Check if the package is in the effective target set (baseline or included-added)
     if target_packages.contains(pkg_name) {
-        // Tier 5: baseline package — emit clean
+        // Tier 5: baseline package: emit clean
         return PresenceDecision::Emit {
             advisory_reasons: None,
         };
@@ -2460,7 +2460,7 @@ fn classify_service_presence(
             )),
         }
     } else {
-        // Tier 7: baseline available and package not in it — proven absent
+        // Tier 7: baseline available and package not in it: proven absent
         PresenceDecision::Omit(OmissionReason::NotInTargetImage {
             package: pkg_name.to_owned(),
         })
