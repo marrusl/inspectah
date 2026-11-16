@@ -2177,7 +2177,9 @@ So systemd ignores the assignment, with or without an escape in the
 instance, and the timer falls back to its same-named service. Started by
 hand, `tiu@a-b.service` ran, so the unit exists and no timer reaches it.
 The scan renders `enable` for both `ti@` instances, which matches the
-host, where they are enabled and never fire.
+host, where they are enabled and never fire. The build after this run
+ignores such an assignment, as systemd does, so the recorded trigger is
+the same-named service (unit-tested, not re-run on the guests).
 
 ### Measured, 2026-11-16: an image-builder disk, read before boot
 

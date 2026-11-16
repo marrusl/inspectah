@@ -95,7 +95,7 @@ only when the subscription is preserved), and the pipeline runs it through
   - `install.rs`: the effective `[Install]` section `enable` acts on, from the unit file and its own and template drop-ins (`read_install`, `read_vendor_install`)
   - `links.rs`: the links under both unit directories, the install state they give a unit, hand-made link findings and undetermined install records, and the comparison with the package's `[Install]` (see `unit-install-state.md`)
   - `also.rs`: the units `Also=` reaches from a unit and what the links say about each
-  - `specifiers.rs`: `expand_unit_specifiers`, for the `[Install]` reader and a timer's `Unit=`
+  - `specifiers.rs`: `expand_unit_specifiers`, with one `SpecifierSet` each for the `[Install]` reader, the instance reader and a timer's `Unit=`, and `trigger_unit_ignored`, the `Unit=` values systemd ignores
   - `instance.rs`: what an enabled template instance needs (`instance_needs`): `required_config` and `data_paths` from the paths its effective unit names with `%i` or `%I`, and the fixed tables `INSTANCE_CONFIG_TABLE` and `INSTANCE_DATA_TABLE` (see `unit-install-state.md`)
 - `containers.rs`, `network.rs`, `storage.rs`, `users.rs`, `selinux.rs`, `kernelboot.rs`, `nonrpm.rs`, `scheduled.rs`, `subscription.rs`
 - `modernization.rs`: not an `Inspector`, detection rules for modernization advisories (SysVinit, xinetd, anacrontab). Note: ifcfg is treated as network inventory, not a modernization advisory.

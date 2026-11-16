@@ -1,6 +1,6 @@
 use super::units::install::{DropInRoot, DropInSource, drop_in_dirs, selected_drop_ins};
 use super::units::links::read_host_links;
-use super::units::specifiers::{SpecifierSet, expand_unit_specifiers};
+use super::units::specifiers::{SpecifierSet, expand_unit_specifiers, trigger_unit_ignored};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
@@ -963,11 +963,15 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
 /// ([`selected_drop_ins`]): file-name order across every directory, and of
 /// the files of one name the first in the instance's own directory before
 /// the template's, `/etc` before the vendor directory within each. The
-/// first `Unit=` in that order is the trigger: systemd's
+/// first `Unit=` in that order that systemd accepts is the trigger: systemd's
 /// `config_parse_trigger_unit` (`src/core/load-fragment.c`, 252 and 257)
 /// ignores every later one ("Multiple units to trigger specified"), and
 /// ignores an empty one ("Unit type not valid"), which therefore resets
-/// nothing. With none, the trigger is `<name>.service`. A value with a specifier the reader does not expand,
+/// nothing. A value systemd ignores for its specifiers
+/// ([`trigger_unit_ignored`]: `%I`, a directory specifier) counts as
+/// absent too. With none, the trigger is `<name>.service`. A value with a
+/// specifier systemd expands and the reader does not
+/// ([`SpecifierSet::TriggerUnit`]),
 /// or that is not a unit name, is [`TimerTrigger::Unresolved`], as is the
 /// trigger of a timer whose name is not a unit name, and of a timer whose
 /// drop-in directory cannot be listed in full or whose drop-in cannot be
@@ -1022,10 +1026,12 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
         }
         assignments.extend(values);
     }
-    let assigned = assignments.into_iter().find(|value| !value.is_empty());
+    let assigned = assignments
+        .into_iter()
+        .find(|value| !value.is_empty() && !trigger_unit_ignored(value));
     let unit = match assigned {
         None => Some(format!("{name}{SERVICE_SUFFIX}")),
-        Some(value) => expand_unit_specifiers(&value, name, SpecifierSet::Runtime),
+        Some(value) => expand_unit_specifiers(&value, name, SpecifierSet::TriggerUnit),
     };
     let trigger = unit
         .and_then(|unit| UnitName::try_from(unit).ok())
@@ -1578,11 +1584,14 @@ mod tests {
     }
 
     /// T37, the collector half: every `Unit=` is read from `[Timer]` by
-    /// logical line, in order, and expanded for the timer's own name: `%i`, `%I`, `%p` and `%N`,
-    /// for a concrete instance timer and for a plain one. Any other
-    /// specifier, or a result that is not a unit name, is `Unresolved`: a
-    /// directory specifier the runtime set expands (`%t`, `%E`) gives a
-    /// path, never a unit name.
+    /// logical line, in order, and expanded for the timer's own name as
+    /// systemd's `unit_name_printf` expands it: `%i`, `%p` and `%N`, for a
+    /// concrete instance timer and for a plain one. A value holding a
+    /// specifier outside that table, `%I` or a directory specifier among
+    /// them, is ignored, as systemd ignores it ("Invalid slot"), so the
+    /// trigger is the same-named service. A specifier systemd expands and
+    /// the scan does not (`%H`, `%n`, `%j`), or a result that is not a unit
+    /// name, is `Unresolved`.
     #[test]
     fn a_timers_unit_assignment_is_read_and_expanded() {
         assert_eq!(
@@ -1591,35 +1600,87 @@ mod tests {
             ),
             ["a.service", "c.service"]
         );
-        let resolved = |value: &str, name: &str| {
-            expand_unit_specifiers(value, name, SpecifierSet::Runtime)
-                .and_then(|unit| UnitName::try_from(unit).ok())
-                .map(|unit| unit.as_str().to_owned())
+        let trigger = |value: &str, name: &str| {
+            timer_trigger(
+                &MockExecutor::new(),
+                name,
+                &format!("[Timer]\nUnit={value}\n"),
+            )
+            .0
         };
+        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
         for (value, name, expected) in [
-            ("worker@%i.service", "worker@a", Some("worker@a.service")),
+            ("worker@%i.service", "worker@a", unit("worker@a.service")),
             (
                 "%p-run@%i.service",
                 "worker@a",
-                Some("worker-run@a.service"),
+                unit("worker-run@a.service"),
             ),
-            ("%N.service", "worker@a", Some("worker@a.service")),
-            ("%N.service", "report", Some("report.service")),
-            ("%p.service", "report", Some("report.service")),
-            ("x@%I.service", "worker@db", Some("x@db.service")),
-            ("x@%I.service", "worker@a-b", None),
-            ("report-%H.service", "report", None),
-            ("report%", "report", None),
-            // A directory specifier expands to a path, never a unit name.
-            ("%t.service", "report", None),
-            ("x@%E.service", "worker@a", None),
+            ("%N.service", "worker@a", unit("worker@a.service")),
+            ("%N.service", "report", unit("report.service")),
+            ("%p.service", "report", unit("report.service")),
+            ("100%%.service", "report", TimerTrigger::Unresolved),
+            // Outside systemd's table: ignored, so the same-named service.
+            ("x@%I.service", "worker@db", unit("worker@db.service")),
+            ("x@%I.service", "worker@a-b", unit("worker@a-b.service")),
+            ("x-%I.service", "report", unit("report.service")),
+            ("%t.service", "report", unit("report.service")),
+            ("x@%E.service", "worker@a", unit("worker@a.service")),
+            ("x@%h.service", "worker@a", unit("worker@a.service")),
+            ("report-%H-%I.service", "report", unit("report.service")),
+            // In systemd's table and not expanded here: unknown.
+            ("report-%H.service", "report", TimerTrigger::Unresolved),
+            ("%n.service", "report", TimerTrigger::Unresolved),
+            ("%j.service", "report", TimerTrigger::Unresolved),
+            ("report%", "report", TimerTrigger::Unresolved),
+        ] {
+            assert_eq!(trigger(value, name), expected, "{value} for {name}");
+        }
+    }
+
+    /// Fix for the 2026-11-16 measurement: an instance timer whose
+    /// template's `Unit=` holds `%I` triggers its same-named service,
+    /// escaped instance or not, since systemd ignores the assignment
+    /// ("Failed to resolve unit specifiers ..., ignoring: Invalid slot").
+    /// Control: `%i` still expands. The first `Unit=` systemd accepts is
+    /// the trigger: a valid one before the ignored one stands, and a valid
+    /// one after it is the first systemd accepts.
+    #[test]
+    fn a_unit_assignment_systemd_ignores_leaves_the_same_named_service() {
+        let unit = |name: &str| TimerTrigger::Unit(name.to_owned().try_into().unwrap());
+        for (timer, name, trigger) in [
+            ("Unit=tiu@%I.service\n", "ti@a\\x2db", "ti@a\\x2db.service"),
+            ("Unit=tiu@%I.service\n", "ti@plain", "ti@plain.service"),
+            ("Unit=tju@%i.service\n", "tj@a\\x2db", "tju@a\\x2db.service"),
+            (
+                "Unit=early@%i.service\nUnit=tiu@%I.service\n",
+                "ti@plain",
+                "early@plain.service",
+            ),
+            (
+                "Unit=tiu@%I.service\nUnit=late@%i.service\n",
+                "ti@plain",
+                "late@plain.service",
+            ),
         ] {
             assert_eq!(
-                resolved(value, name).as_deref(),
-                expected,
-                "{value} for {name}"
+                timer_trigger(&MockExecutor::new(), name, &format!("[Timer]\n{timer}")),
+                (unit(trigger), Vec::new()),
+                "{timer:?} for {name}"
             );
         }
+        // Through the inspector, from the template's file.
+        let timers = timers_on(&worker_host("Unit=tiu@%I.service\n"));
+        assert_eq!(worker_a(&timers).trigger, unit("worker@a.service"));
+        // An `/etc` drop-in that holds only an ignored `Unit=` is still
+        // recorded: it assigns `Unit=`, and the list errs toward omitting.
+        const DROP_IN: &str = "/etc/systemd/system/worker@.timer.d/10-unit.conf";
+        let exec = worker_host("")
+            .with_dir("/etc/systemd/system/worker@.timer.d", vec!["10-unit.conf"])
+            .with_file(DROP_IN, "[Timer]\nUnit=tiu@%I.service\n");
+        let timers = timers_on(&exec);
+        assert_eq!(worker_a(&timers).trigger, unit("worker@a.service"));
+        assert_eq!(worker_a(&timers).trigger_drop_ins, [DROP_IN]);
     }
 
     /// T37, the collector half through the inspector: a drop-in under

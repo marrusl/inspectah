@@ -384,7 +384,16 @@ showed, and the build failed with no warning anywhere.
   `systemd_reads_drop_in` (a hidden `.override.conf` is no evidence) and
   selected with the `[Install]` reader's `selected_drop_ins`, so `Unit=`
   and `[Install]` cannot disagree on load order; for an instance timer that includes the
-  template's `<prefix>@.timer.d`. An instance timer has no timer file, so
+  template's `<prefix>@.timer.d`. **The first `Unit=` systemd accepts
+  is the trigger, not the last** (`config_parse_trigger_unit`, 252 and
+  257, logs "Multiple units to trigger specified" for every later one),
+  and an assignment systemd ignores counts as absent: an empty one, and
+  one holding a specifier outside `unit_name_printf`'s table, such as
+  `%I` or a directory specifier ("Invalid slot", measured 2026-11-16),
+  which `trigger_unit_ignored` in `specifiers.rs` tests. The value is
+  expanded with `SpecifierSet::TriggerUnit` (`%i`, `%p`, `%N`, `%%`); a
+  specifier systemd does resolve and the scan does not (`%H`, `%n`, `%j`)
+  leaves the trigger `Unresolved`. An instance timer has no timer file, so
   `scan_instance_timers` describes each instance linked under `/etc`
   (the units inspector's `read_host_links`, the links instances are found
   by) from its template's file, once per root the template sits under.

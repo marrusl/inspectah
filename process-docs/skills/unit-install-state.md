@@ -160,10 +160,10 @@ measured. **Still needs a real-host run on RHEL 9 and RHEL 10:**
 - **`Undetermined`** for any `UpheldBy=`, a
   specifier other than `%i`, `%p`, `%N` and `%%`, or a value that is not a
   `UnitName`. `%I` is undetermined here: `systemctl enable` does not expand
-  it (systemd's install expansion table, 252 and 257), while the scheduled
-  inspector expands it in a timer's `Unit=`. `SpecifierSet` in
-  `specifiers.rs` holds the two sets; never pass `Runtime` to the
-  `[Install]` reader. The first reason in load order stands, even if a later
+  it (systemd's install expansion table, 252 and 257), while the instance
+  reader expands it. `SpecifierSet` in `specifiers.rs` holds the three
+  sets; never pass `Runtime` to the `[Install]` reader or for a timer's
+  `Unit=`, which has its own (below). The first reason in load order stands, even if a later
   reset clears the value that caused it. `assigns_also` is true for any
   `Also=` line, an empty one included, which sends the unit to the
   advisory side rather than a `disable`.
@@ -476,10 +476,8 @@ the fixed tables. Non-obvious points:
   (`--status %t/openvpn-server/status-%i.log`) was uninterpretable and its
   enable never carried (measured, 2026-11-16); its `/run` path is now no
   requirement and the fixed table decides. `%T` and `%V` follow PID 1's
-  `$TMPDIR`, which the scan does not read. In a timer's `Unit=` a
-  directory specifier expands to a path, never a unit name, so the
-  trigger stays `Unresolved`. A test that needs a specifier the reader
-  does not expand uses `%h`.
+  `$TMPDIR`, which the scan does not read. A test that needs a specifier
+  the reader does not expand uses `%h`.
 - A path counts only when the value itself holds `%i` or `%I`. An
   `EnvironmentFile=` with the `-` prefix and a negated condition (`!`) are
   left out. A triggering condition (`|`) is recorded as required although
