@@ -127,6 +127,25 @@ export function formatTriageBucket(bucket: string): string {
   return bucket.charAt(0).toUpperCase() + bucket.slice(1);
 }
 
+/** Locked-row reasons served as slugs, by the words shown for them (§ 7 string 24). */
+const LOCKED_REASON_LABELS: Record<string, string> = {
+  "service-image-mode-incompatible": "Incompatible with image mode",
+};
+
+/** A locked row with no reason. */
+const LOCKED_NO_REASON = "LOCKED";
+
+/**
+ * A locked row's badge text (§ 9.3): a slug mapped to its words, no
+ * reason "LOCKED", any other reason as given.
+ */
+export function lockedReasonLabel(reason: string | null | undefined): string {
+  if (reason === null || reason === undefined) return LOCKED_NO_REASON;
+  return Object.prototype.hasOwnProperty.call(LOCKED_REASON_LABELS, reason)
+    ? LOCKED_REASON_LABELS[reason]
+    : reason;
+}
+
 /** Format a TriageReason for display. */
 export function formatTriageReason(reason: TriageReason): string {
   if (typeof reason === "object" && "custom" in reason) {

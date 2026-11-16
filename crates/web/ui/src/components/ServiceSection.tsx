@@ -18,6 +18,7 @@ import type { PendingGuard } from "../hooks/usePendingGuard";
 import {
   attentionLabelColor,
   formatTriageReason,
+  lockedReasonLabel,
   triageBucketToAttention,
   extractTriageBucket,
 } from "./attentionUtils";
@@ -937,7 +938,7 @@ function UnitBranchView({
               disabled={isPending || svcLocked}
               aria-label={
                 svcLocked
-                  ? `${svc.unit} (locked: ${svc.attention_reason ?? "cannot toggle"})`
+                  ? `${svc.unit} (locked: ${svc.attention_reason ? lockedReasonLabel(svc.attention_reason) : "cannot toggle"})`
                   : `Toggle ${svc.unit}`
               }
               aria-describedby={describedBy(
@@ -1010,7 +1011,7 @@ function UnitBranchView({
               data-testid={`locked-badge-service-${svc.unit}`}
             >
               <Label color="grey" isCompact>
-                {svc.attention_reason ?? "LOCKED"}
+                {lockedReasonLabel(svc.attention_reason)}
               </Label>
             </div>
           )}
