@@ -719,18 +719,81 @@ export function revealPlan(groups: UnitGroupModel[], key: RowKey, input: RevealI
   };
 }
 
-/** Which empty state the section shows (§ 6.9 rows 4 and 5). */
-export type EmptyStateKind = "search" | "filter";
+/** § 6.9 rows 4 and 5: what shows under the bar when no row is shown. */
+export type EmptyNotice = "search" | "filter";
+
+/** § 6.9 rows 1 and 2: the sentence for a host with no row but, at most, the default target. */
+export type QuietHost = "with_target" | "without_target";
+
+export interface EmptyStates {
+  notice: EmptyNotice | null;
+  quietHost: QuietHost | null;
+}
+
+/** No unit row, drop-in or reported row: only the default target, if any, is left. */
+function noRowButTarget(keyed: KeyedFields): boolean {
+  return (
+    keyed.unitStates.length === 0 &&
+    keyed.dropins.length === 0 &&
+    keyed.mountFindings.length === 0 &&
+    keyed.manualLinks.length === 0 &&
+    keyed.undeterminedInstalls.length === 0
+  );
+}
 
 /**
- * The empty state for what is shown: section search's when a query shows
- * no row, which takes precedence over the filter's (string 14), shown when
- * a value other than "All" shows no row. `null` while a row is shown.
+ * The section's empty states (§ 6.9), decided in one place. Row 1 or 2:
+ * the quiet-host sentence, from the view alone, so it still shows when a
+ * value hides the target. Row 3 is `groupUnits` leaving a kind with no row
+ * out. Rows 4 and 5, when nothing is shown: section search's empty state
+ * when a query is active, which takes precedence over the filter's (row
+ * 4), shown when a value other than "All" shows no row.
  */
-export function emptyStateFor(filter: FilterValue, query: string, shown: ShownGroup[]): EmptyStateKind | null {
-  if (shown.length > 0) return null;
-  if (queryActive(query)) return "search";
-  return filter === "all" ? null : "filter";
+export function emptyStateFor(
+  keyed: KeyedFields,
+  filter: FilterValue,
+  query: string,
+  shown: ShownGroup[],
+): EmptyStates {
+  let notice: EmptyNotice | null = null;
+  if (shown.length === 0) {
+    if (queryActive(query)) notice = "search";
+    else if (filter !== "all") notice = "filter";
+  }
+  let quietHost: QuietHost | null = null;
+  if (noRowButTarget(keyed)) quietHost = keyed.defaultTarget ? "with_target" : "without_target";
+  return { notice, quietHost };
+}
+
+/** One value of the outcome filter bar as drawn (§ 6.4). */
+export interface FilterBarItem {
+  value: FilterValue;
+  label: string;
+  count: number;
+  selected: boolean;
+  /** A value with count 0 is disabled, except the selected one. */
+  disabled: boolean;
+}
+
+export interface FilterBarPresentation {
+  /** The values in the bar's order. */
+  items: FilterBarItem[];
+  /** The hint line under the bar, shown while a row needs follow-up. */
+  hint: boolean;
+}
+
+/** What the outcome filter bar draws for these counts and this value (§ 6.4). */
+export function filterBarPresentation(counts: OutcomeCounts, selected: FilterValue): FilterBarPresentation {
+  return {
+    items: FILTER_VALUES.map((value) => ({
+      value,
+      label: FILTER_LABELS[value],
+      count: counts[value],
+      selected: value === selected,
+      disabled: counts[value] === 0 && value !== selected,
+    })),
+    hint: counts.needs_follow_up > 0,
+  };
 }
 
 /**

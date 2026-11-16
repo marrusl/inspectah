@@ -15,6 +15,7 @@ import {
   branchHeadOf,
   emptyStateFor,
   filterBarDrawn,
+  filterBarPresentation,
   firstShownRow,
   globalSearchText,
   groupUnits,
@@ -545,24 +546,111 @@ describe("revealPlan: the reveal's steps in order (§ 6.11)", () => {
   });
 });
 
-describe("emptyStateFor: § 6.9 rows 4 and 5", () => {
+describe("emptyStateFor: § 6.9 rows 1 to 5", () => {
   const none: ShownGroup[] = [];
   const some = showGroups(ksGroups, state());
+  const stock10 = keyFields(loadUnitFields("stock10"));
+  const noTarget = keyFields({ ...loadUnitFields("stock10"), default_target: undefined });
+  /** stock10 plus one row of the given field: the host is no longer quiet. */
+  const withOne = (field: keyof Omit<typeof kitchenSink, "default_target">) =>
+    keyFields({ ...loadUnitFields("stock10"), [field]: [kitchenSink[field][0] ?? planted[field][0]] });
 
-  it("is the search state when a query shows no row, under any filter", () => {
-    expect(emptyStateFor("all", "zzz", none)).toBe("search");
-    expect(emptyStateFor("needs_follow_up", "zzz", none)).toBe("search");
+  it("row 1: the target and no other row gives the with-target sentence", () => {
+    expect(emptyStateFor(stock10, "all", "", showGroups(groupUnits(stock10), state()))).toEqual({
+      notice: null,
+      quietHost: "with_target",
+    });
   });
 
-  it("is the filter state when a value shows no row and there is no query", () => {
-    expect(emptyStateFor("excluded", "", none)).toBe("filter");
-    expect(emptyStateFor("excluded", "   ", none)).toBe("filter");
+  it("row 2: no row at all gives the no-target sentence", () => {
+    expect(emptyStateFor(noTarget, "all", "", none)).toEqual({ notice: null, quietHost: "without_target" });
   });
 
-  it("is none when a row is shown, or under All with no query", () => {
-    expect(emptyStateFor("needs_follow_up", "cups", some)).toBeNull();
-    expect(emptyStateFor("excluded", "", some)).toBeNull();
-    expect(emptyStateFor("all", "", none)).toBeNull();
+  it.each([
+    "unit_states",
+    "unit_dropins",
+    "mount_findings",
+    "manual_links",
+    "undetermined_installs",
+  ] as const)("rows 1 and 2 do not apply with a %s row", (field) => {
+    const keyed = withOne(field);
+    expect(emptyStateFor(keyed, "all", "", showGroups(groupUnits(keyed), state())).quietHost).toBeNull();
+  });
+
+  it("row 3: a kind with no row draws no group", () => {
+    expect(groupUnits(stock10).map((g) => g.id)).toEqual(["default_target"]);
+  });
+
+  it("row 4: a value that shows no row, with no query, gives the filter state", () => {
+    expect(emptyStateFor(ksKeyed, "excluded", "", none)).toEqual({ notice: "filter", quietHost: null });
+    expect(emptyStateFor(ksKeyed, "excluded", "   ", none).notice).toBe("filter");
+  });
+
+  it("row 4 with row 1: a value that hides the target keeps the sentence", () => {
+    expect(emptyStateFor(stock10, "excluded", "", none)).toEqual({ notice: "filter", quietHost: "with_target" });
+  });
+
+  it("row 5: a query that shows no row gives the search state, over the filter's, under any value", () => {
+    expect(emptyStateFor(ksKeyed, "all", "zzz", none).notice).toBe("search");
+    expect(emptyStateFor(ksKeyed, "needs_follow_up", "zzz", none).notice).toBe("search");
+    expect(emptyStateFor(stock10, "excluded", "zzz", none)).toEqual({ notice: "search", quietHost: "with_target" });
+  });
+
+  it("no notice when a row is shown, or under All with no query", () => {
+    expect(emptyStateFor(ksKeyed, "needs_follow_up", "cups", some).notice).toBeNull();
+    expect(emptyStateFor(ksKeyed, "excluded", "", some).notice).toBeNull();
+    expect(emptyStateFor(ksKeyed, "all", "", none).notice).toBeNull();
+  });
+});
+
+describe("filterBarPresentation (§ 6.4 values, counts, disabled values and the hint)", () => {
+  const counts = (nf: number, carried: number, excluded: number) => ({
+    all: nf + carried + excluded,
+    needs_follow_up: nf,
+    carried,
+    excluded,
+  });
+
+  it("gives each value in the bar's order with its label and count", () => {
+    const bar = filterBarPresentation(counts(9, 14, 0), "all");
+    expect(bar.items.map((i) => [i.value, i.label, i.count])).toEqual([
+      ["all", "All", 23],
+      ["needs_follow_up", "Needs follow-up", 9],
+      ["carried", "Carried", 14],
+      ["excluded", "Excluded", 0],
+    ]);
+  });
+
+  it("marks the selected value and only it", () => {
+    const bar = filterBarPresentation(counts(9, 14, 0), "carried");
+    expect(bar.items.map((i) => i.selected)).toEqual([false, false, true, false]);
+  });
+
+  it("disables a value with count 0, unless it is the selected one", () => {
+    expect(filterBarPresentation(counts(9, 14, 0), "all").items.map((i) => i.disabled)).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(filterBarPresentation(counts(9, 14, 0), "excluded").items.map((i) => i.disabled)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(filterBarPresentation(counts(0, 0, 1), "all").items.map((i) => i.disabled)).toEqual([
+      false,
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it("shows the hint while a row needs follow-up, and only then", () => {
+    expect(filterBarPresentation(counts(1, 0, 0), "all").hint).toBe(true);
+    expect(filterBarPresentation(counts(0, 5, 1), "all").hint).toBe(false);
+    expect(filterBarPresentation(counts(0, 5, 1), "excluded").hint).toBe(false);
   });
 });
 

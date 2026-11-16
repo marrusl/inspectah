@@ -1,5 +1,5 @@
 import { Badge, ToggleGroup, ToggleGroupItem } from "@patternfly/react-core";
-import { FILTER_LABELS, FILTER_VALUES, type FilterValue, type OutcomeCounts } from "./unitOutcome";
+import { filterBarPresentation, type FilterValue, type OutcomeCounts } from "./unitOutcome";
 
 export interface UnitOutcomeFilterProps {
   counts: OutcomeCounts;
@@ -22,6 +22,7 @@ const FOLLOW_UP_HINT =
  * the DOM from the first render so the first change is announced.
  */
 export function UnitOutcomeFilter({ counts, value, onChange, announcement }: UnitOutcomeFilterProps) {
+  const bar = filterBarPresentation(counts, value);
   return (
     <div className="inspectah-unit-filter" style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}>
       <div
@@ -34,24 +35,24 @@ export function UnitOutcomeFilter({ counts, value, onChange, announcement }: Uni
       >
         <span className="inspectah-unit-filter__label">{SHOW_LABEL}</span>
         <ToggleGroup aria-label={SHOW_LABEL} isCompact>
-          {FILTER_VALUES.map((v) => (
+          {bar.items.map((item) => (
             <ToggleGroupItem
-              key={v}
+              key={item.value}
               text={
                 <>
-                  {FILTER_LABELS[v]} <Badge isRead>{counts[v]}</Badge>
+                  {item.label} <Badge isRead>{item.count}</Badge>
                 </>
               }
-              isSelected={v === value}
-              isDisabled={counts[v] === 0 && v !== value}
+              isSelected={item.selected}
+              isDisabled={item.disabled}
               onChange={() => {
-                if (v !== value) onChange(v);
+                if (!item.selected) onChange(item.value);
               }}
             />
           ))}
         </ToggleGroup>
       </div>
-      {counts.needs_follow_up > 0 && (
+      {bar.hint && (
         <p
           className="inspectah-unit-filter__hint"
           style={{

@@ -1365,21 +1365,14 @@ export function ServiceSection({
     [sendInclude],
   );
 
-  const noOtherRow =
-    services.length === 0 &&
-    dropins.length === 0 &&
-    mountFindings.length === 0 &&
-    manualLinks.length === 0 &&
-    undeterminedInstalls.length === 0;
-
   // Today's tab stop: the target, else the first shown unit row.
   const targetShown = shown.some((g) => g.target);
   const tabStop = targetShown
     ? undefined
     : shown.find((g) => g.branches.length > 0)?.branches[0].head.occurrenceKey;
 
-  // § 6.9 rows 4 and 5: the search's empty state takes precedence.
-  const emptyState = emptyStateFor(filter, filterText, shown);
+  // § 6.9, decided by emptyStateFor.
+  const emptyState = emptyStateFor(keyed, filter, filterText, shown);
 
   return (
     <div
@@ -1397,7 +1390,7 @@ export function ServiceSection({
         />
       )}
 
-      {emptyState === "search" && (
+      {emptyState.notice === "search" && (
         <EmptyState titleText={SEARCH_EMPTY_TITLE} headingLevel="h3">
           <EmptyStateBody>
             <Button variant="link" onClick={() => onClearQuery?.()}>
@@ -1407,7 +1400,7 @@ export function ServiceSection({
         </EmptyState>
       )}
 
-      {emptyState === "filter" && (
+      {emptyState.notice === "filter" && (
         <p className="inspectah-unit-filter__empty" style={{ padding: "var(--pf-t--global--spacer--md)" }}>
           {FILTER_EMPTY}{" "}
           <Button variant="link" isInline onClick={() => changeFilter("all")}>
@@ -1504,9 +1497,9 @@ export function ServiceSection({
         </UnitGroup>
       ))}
 
-      {noOtherRow && (
+      {emptyState.quietHost !== null && (
         <p style={{ padding: "var(--pf-t--global--spacer--md)", opacity: 0.6 }}>
-          {defaultTarget ? EMPTY_WITH_TARGET : EMPTY_SECTION}
+          {emptyState.quietHost === "with_target" ? EMPTY_WITH_TARGET : EMPTY_SECTION}
         </p>
       )}
     </div>
