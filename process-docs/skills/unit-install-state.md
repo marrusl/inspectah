@@ -268,7 +268,10 @@ name (`Resolved::File`): that link's cause is `template`, and its text and
 its `starts` field name `<template prefix>@<parent prefix>.<type>`.
 Every other parent (an instance or template, an alias, whose id is the
 unit at its end, a mask, no unit file, a refusal) gives `instance_filled`,
-whose text claims nothing about the effect. `unexamined_links` gives a
+whose text claims nothing about the effect. An alias of a template (a
+name under `/etc/systemd/system` linking to the template's file, whose
+`parent` is the alias's own name) gives `template_alias`, which claims
+only that the scan does not read it. `unexamined_links` gives a
 template `TemplateFilled`, and `UnreportedLinks::for_link` reads each link
 again. Never write that such a link has no effect: the host runs a unit
 the image does not.

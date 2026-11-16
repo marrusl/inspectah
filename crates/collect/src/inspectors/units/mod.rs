@@ -1089,8 +1089,14 @@ enum UnreportedLinks {
     /// not read such a link, and the warning says nothing of its effect.
     /// [`unexamined_links`] gives every such template this cause, and
     /// [`Self::for_link`] makes a link [`Self::Template`] where the
-    /// instance is known.
+    /// instance is known, and an alias [`Self::TemplateAlias`].
     TemplateFilled,
+    /// The unit is a template, not masked, and the link is an alias of it:
+    /// a name directly under `/etc/systemd/system` that links to the
+    /// template's file, with no parent whose instance systemd fills in. The
+    /// scan does not read such a link, and the warning says nothing of its
+    /// effect. Only [`Self::for_link`] gives this cause.
+    TemplateAlias,
     /// A file at `path`, on the search path outside the two unit
     /// directories the scan reads, changes the unit (§ 7.1).
     Refused { path: String },
@@ -1110,9 +1116,10 @@ impl UnreportedLinks {
             Self::Masked => (1, "masked"),
             Self::Template { .. } => (2, "template"),
             Self::TemplateFilled => (3, "instance_filled"),
-            Self::Refused { .. } => (4, "refused"),
-            Self::Alias { .. } => (5, "alias"),
-            Self::Dangling => (6, "dangling"),
+            Self::TemplateAlias => (4, "template_alias"),
+            Self::Refused { .. } => (5, "refused"),
+            Self::Alias { .. } => (6, "alias"),
+            Self::Dangling => (7, "dangling"),
         }
     }
 
@@ -1131,6 +1138,10 @@ impl UnreportedLinks {
             Self::TemplateFilled => {
                 "its unit is a template, and the scan does not read links that systemd fills in \
                  with an instance name"
+            }
+            Self::TemplateAlias => {
+                "its unit is a template and the link is an alias of it, which the scan does not \
+                 read"
             }
             Self::Refused { .. } => {
                 "a file on the systemd search path outside the two unit directories this scan \
@@ -1171,17 +1182,25 @@ impl UnreportedLinks {
             Self::NotRead { listed: None }
             | Self::Masked
             | Self::TemplateFilled
+            | Self::TemplateAlias
             | Self::Dangling => None,
         }
     }
 
-    /// The cause for one link to `unit` under `parent`: a template's link
+    /// The cause for one `link` to `unit`: a template's alias is
+    /// [`Self::TemplateAlias`], whose `parent` is the alias's own name and
+    /// no parent systemd fills an instance in from; a template's link
     /// under a plain parent that loads from a unit file of its own name is
     /// [`Self::Template`], naming the instance systemd starts
     /// ([`started_instance`]). Every other cause is the unit's.
-    fn for_link(&self, exec: &dyn Executor, unit: &UnitName, parent: &UnitName) -> Cow<'_, Self> {
+    fn for_link(&self, exec: &dyn Executor, unit: &UnitName, link: &links::Link) -> Cow<'_, Self> {
         match self {
-            Self::TemplateFilled => match started_instance(exec, unit, parent) {
+            Self::TemplateFilled
+                if link.relation == inspectah_core::types::units::LinkRelation::Alias =>
+            {
+                Cow::Owned(Self::TemplateAlias)
+            }
+            Self::TemplateFilled => match started_instance(exec, unit, &link.parent) {
                 Some(starts) => Cow::Owned(Self::Template { starts }),
                 None => Cow::Borrowed(self),
             },
@@ -1238,7 +1257,7 @@ fn unreported_link_warnings(
     let mut by_cause: BTreeMap<(u8, &str, &str), Listed> = BTreeMap::new();
     for (unit, why) in unreported {
         for (link, path) in host_links.admin_paths(unit) {
-            let why = why.for_link(exec, unit, &link.parent);
+            let why = why.for_link(exec, unit, link);
             let (order, cause) = why.cause();
             let (texts, fields) = by_cause.entry((order, cause, why.reason())).or_default();
             let mut field = serde_json::json!({ "path": path, "unit": unit.as_str() });

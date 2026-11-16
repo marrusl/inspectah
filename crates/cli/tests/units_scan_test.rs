@@ -14216,6 +14216,43 @@ fn units_unreported_link_warnings_cover_every_branch() {
         filled.warnings
     );
 
+    // An alias of the template, plain or itself a template: no parent
+    // whose instance systemd fills in, so the warning has its own cause and
+    // claims nothing about what systemd does with it.
+    let aliased = scan(
+        host()
+            .unit("bar@.service", "indirect")
+            .vendor_unit("bar@.service", NO_INSTALL, None)
+            .link(&etc("baz.service"), &vendor("bar@.service"))
+            .link(&etc("qux@.service"), &vendor("bar@.service")),
+    );
+    let (message, links) = link_warning_of(&aliased, "template_alias");
+    assert_eq!(
+        message,
+        format!(
+            "2 links are not reported or carried: for each, its unit is a template and the link \
+             is an alias of it, which the scan does not read. The links: {} (bar@.service); {} \
+             (bar@.service)",
+            etc("baz.service"),
+            etc("qux@.service")
+        )
+    );
+    assert_eq!(
+        links,
+        serde_json::json!([
+            {"path": etc("baz.service"), "unit": "bar@.service"},
+            {"path": etc("qux@.service"), "unit": "bar@.service"},
+        ])
+    );
+    assert!(
+        aliased
+            .warnings
+            .iter()
+            .all(|w| w.extra.get("cause") != Some(&serde_json::json!("instance_filled"))),
+        "{:?}",
+        aliased.warnings
+    );
+
     // A mask for a name the listing does not print.
     let masked = scan(host().mask("zz.service").link(
         &etc("multi-user.target.wants/zz.service"),
