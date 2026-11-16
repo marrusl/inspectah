@@ -104,6 +104,9 @@ pub struct UnitHost {
     links: BTreeMap<String, String>,
     link_errors: BTreeMap<String, std::io::ErrorKind>,
     dirs: BTreeMap<String, BTreeSet<String>>,
+    /// Directories whose listing fails part way, each with the entries
+    /// the failed iteration leaves out.
+    partial_listings: BTreeMap<String, BTreeSet<String>>,
     /// `(name, state)` rows of `systemctl list-unit-files`.
     units: Vec<(String, String)>,
     /// Preset rules, one per line, first match wins.
@@ -241,6 +244,17 @@ impl UnitHost {
         self
     }
 
+    /// The listing of the directory `dir` fails part way, as a real
+    /// directory iteration can, after leaving out `hidden`: `read_dir`
+    /// returns the other entries and `read_dir_strict` fails.
+    pub fn partial_listing(mut self, dir: &str, hidden: &str) -> Self {
+        self.partial_listings
+            .entry(dir.into())
+            .or_default()
+            .insert(hidden.into());
+        self
+    }
+
     /// The executor the inspectors run over.
     pub fn build(mut self) -> MockExecutor {
         self.add_enable_links();
@@ -312,7 +326,18 @@ impl UnitHost {
             mock = mock.with_command(&format!("{RPM_QF} {path}"), answer);
         }
         for (dir, entries) in &this.dirs {
-            mock = mock.with_dir(dir, entries.iter().map(String::as_str).collect());
+            let hidden = this.partial_listings.get(dir);
+            mock = mock.with_dir(
+                dir,
+                entries
+                    .iter()
+                    .filter(|e| hidden.is_none_or(|h| !h.contains(*e)))
+                    .map(String::as_str)
+                    .collect(),
+            );
+        }
+        for dir in this.partial_listings.keys() {
+            mock = mock.with_dir_iteration_error(dir, std::io::ErrorKind::Other);
         }
         for (path, content) in &this.files {
             mock = mock.with_file(path, content);

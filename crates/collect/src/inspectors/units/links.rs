@@ -149,7 +149,10 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
         read.unreadable = true;
         failures.push(failure);
     };
-    let entries = match exec.read_dir(Path::new(root)) {
+    // Every listing here is strict: a link a failed iteration leaves out
+    // would read its unit `Disabled` and carry a `disable` the host never
+    // had, so a partial listing is a failed read.
+    let entries = match exec.read_dir_strict(Path::new(root)) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return read,
         Err(_) if root == ETC_UNIT_DIR => {
@@ -170,7 +173,7 @@ fn read_links(exec: &dyn Executor, root: &str, failures: &mut Vec<String>) -> Ro
                 .map(|parent| (parent.to_owned(), *relation))
         });
         if let Some((parent, relation)) = dependency {
-            let names = match exec.read_dir(Path::new(&path)) {
+            let names = match exec.read_dir_strict(Path::new(&path)) {
                 Ok(names) => names,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => {

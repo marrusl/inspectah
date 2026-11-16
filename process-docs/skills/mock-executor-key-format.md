@@ -79,9 +79,12 @@ drop an entry the directory iterator fails on and return the rest,
 which inspectors that tolerate a missing file rely on. A caller whose
 answer is wrong when one entry is missing (the sysctl reader: the
 missing file could set or cancel any key) uses `read_dir_strict`, which
-fails instead. `with_dir_iteration_error()` makes a mock directory list
-its entries and then fail: `read_dir` hides it, `read_dir_strict`
-returns it. A `with_dir_error()` test does not cover this case: it
+fails instead; so does every listing the units inspector decides install
+state, links or drop-ins from, and the timer trigger reader.
+`with_dir_iteration_error()` makes a mock directory list its entries and
+then fail: `read_dir` hides it, `read_dir_strict` returns it. The scan
+harness's `UnitHost::partial_listing(dir, hidden)` leaves `hidden` out of
+the listing as well, as a real failed iteration does. A `with_dir_error()` test does not cover this case: it
 fails the open, which both methods already report.
 
 **8. The RPM ownership query key.** The RPM inspector lists owned paths

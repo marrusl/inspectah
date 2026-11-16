@@ -1290,7 +1290,7 @@ fn etc_storage_findings(
     warnings: &mut Vec<Warning>,
     read_failures: &mut Vec<String>,
 ) -> Vec<MountUnitFinding> {
-    let Ok(entries) = exec.read_dir(Path::new(ETC_UNIT_DIR)) else {
+    let Ok(entries) = exec.read_dir_strict(Path::new(ETC_UNIT_DIR)) else {
         return Vec::new();
     };
     let mut fragments = Vec::new();
@@ -2070,7 +2070,10 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
     let mut hints = Vec::new();
     let mut read_failures = Vec::new();
 
-    let entries = match exec.read_dir(dropin_base) {
+    // Strict listings: a partial one would leave a drop-in out of the
+    // export without a word, and the link reader leaves a failed listing
+    // of this directory to this pass to report.
+    let entries = match exec.read_dir_strict(dropin_base) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Directory doesn't exist — no drop-ins to collect.
@@ -2094,7 +2097,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
         }
         let dir_path = dropin_base.join(entry);
 
-        let conf_files = match exec.read_dir(&dir_path) {
+        let conf_files = match exec.read_dir_strict(&dir_path) {
             Ok(c) => c,
             // A regular file whose name ends in `.d` is no drop-in
             // directory; the config walk records it.

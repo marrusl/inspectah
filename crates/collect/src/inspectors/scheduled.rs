@@ -946,7 +946,9 @@ fn timer_unit_assignments(content: &str) -> Vec<String> {
 /// last `Unit=` wins and an empty one resets it. With none, the trigger is
 /// `<name>.service`. A value with a specifier the reader does not expand,
 /// or that is not a unit name, is [`TimerTrigger::Unresolved`], as is the
-/// trigger of a timer whose name is not a unit name.
+/// trigger of a timer whose name is not a unit name, and of a timer whose
+/// drop-in directory cannot be listed in full or whose drop-in cannot be
+/// read: the unit it starts is not known.
 fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTrigger, Vec<String>) {
     let Ok(unit) = UnitName::try_from(format!("{name}{TIMER_SUFFIX}")) else {
         return (TimerTrigger::Unresolved, Vec::new());
@@ -958,8 +960,12 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
     for (root, base) in TIMER_DROP_IN_ROOTS {
         for dir in drop_in_dirs(&unit) {
             let dir_path = format!("{base}/{dir}");
-            let Ok(entries) = exec.read_dir(Path::new(&dir_path)) else {
-                continue;
+            // A listing that fails, or fails part way, may hide the
+            // drop-in that sets `Unit=`: the trigger is then unknown.
+            let entries = match exec.read_dir_strict(Path::new(&dir_path)) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return (TimerTrigger::Unresolved, Vec::new()),
             };
             // A hidden name is skipped, as systemd skips it: the units
             // inspector's listing uses the same rule.
@@ -984,7 +990,9 @@ fn timer_trigger(exec: &dyn Executor, name: &str, timer_text: &str) -> (TimerTri
     }
     let mut evidence = Vec::new();
     for path in selected_drop_ins(&unit, &sources) {
-        let content = exec.read_file(Path::new(path)).unwrap_or_default();
+        let Ok(content) = exec.read_file(Path::new(path)) else {
+            return (TimerTrigger::Unresolved, Vec::new());
+        };
         let values = timer_unit_assignments(&content);
         if values.is_empty() {
             continue;

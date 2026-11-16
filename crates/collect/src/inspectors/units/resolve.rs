@@ -273,9 +273,11 @@ fn search_path_change(
 
 /// The `.conf` file names in the directory `path` that systemd reads
 /// ([`systemd_reads_drop_in`]: a hidden name is skipped); none when it
-/// does not exist.
+/// does not exist. The listing is strict: a drop-in a failed iteration
+/// leaves out could hold the `[Install]` section, so a partial listing is a
+/// [`ResolveError::Read`].
 pub(super) fn conf_files(exec: &dyn Executor, path: &str) -> Result<Vec<String>, ResolveError> {
-    match exec.read_dir(Path::new(path)) {
+    match exec.read_dir_strict(Path::new(path)) {
         Ok(entries) => Ok(entries
             .into_iter()
             .filter(|entry| systemd_reads_drop_in(entry))

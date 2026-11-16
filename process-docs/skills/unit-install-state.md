@@ -63,7 +63,15 @@ under `/etc/systemd/system`, and the links packages ship under
 - A failed read under `/etc` sets `admin_unreadable`. The scan then
   degrades, and no unit that is not masked gets an install state, since a
   missing link would read as `Disabled` and carry a command the host never
-  had.
+  had. **Every listing that decides install state is strict**
+  (`read_dir_strict`): the unit roots and dependency directories in
+  `read_links`, the drop-in directories in `resolve::conf_files`, the
+  drop-in rows' listings in `collect_drop_ins`, the storage pass's root,
+  the runtime drop-in reader and the timer trigger reader. `read_dir`
+  drops an entry its iteration fails on and returns the rest, so a lost
+  link or `[Install]` drop-in would pass silently. A test makes a partial
+  listing with `UnitHost::partial_listing` (an iteration error after
+  leaving entries out) or `MockExecutor::with_dir_iteration_error`.
 
 **A unit file or drop-in that cannot be read as text decides nothing
 from the listing.** `install_evidence` makes the section

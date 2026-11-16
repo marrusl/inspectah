@@ -6557,6 +6557,31 @@ fn t37_an_instance_timers_trigger_is_recorded_from_its_template() {
     );
 }
 
+/// T37, a partial listing: when the listing of `report.timer.d` fails part
+/// way, the drop-in that sets `Unit=` may be the one left out, so the
+/// trigger is `Unresolved` and the enable omitted on both routes. Healthy
+/// first: the drop-in read, the trigger is the unit it names.
+#[test]
+fn t37_a_partly_listed_timer_drop_in_directory_leaves_the_trigger_unknown() {
+    const DIR: &str = "/etc/systemd/system/report.timer.d";
+    let host = || t37_host("").file(&format!("{DIR}/unit.conf"), "[Timer]\nUnit=other.service\n");
+    assert_eq!(
+        report_timer(&scan(host())).trigger,
+        trigger_unit("other.service")
+    );
+    let snap = scan(host().partial_listing(DIR, "unit.conf"));
+    assert_eq!(
+        report_timer(&snap).trigger,
+        inspectah_core::types::scheduled::TimerTrigger::Unresolved
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, "report.timer"),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// T37, hidden drop-ins: systemd skips a drop-in whose name starts with
 /// `.` (`systemd_reads_drop_in`), so a vendor `.override.conf` that sets
 /// `Unit=` to a unit the export stages is not trigger evidence. For a plain
@@ -8216,6 +8241,93 @@ fn an_alias_chain_installs_its_unit_through_both_exports() {
             !acts(&containerfile, "disable", "real.service"),
             "{route}:\n{containerfile}"
         );
+    }
+}
+
+/// A directory listing under `/etc/systemd/system` that fails part way
+/// (`read_dir_strict`) leaves the links or drop-ins incomplete, so no
+/// command is derived from it: the unit root missing its `.wants`
+/// directory, the dependency directory missing the unit's link, and the
+/// unit's own `.d` missing its install drop-in. Healthy first: each host
+/// read whole gives the unit its state and no `disable`. Each partial
+/// listing degrades the scan naming the directory, and the unit gets no
+/// state change and no `systemctl` line on either route; the first two
+/// would otherwise read an enabled unit as disabled and carry a `disable`.
+#[test]
+fn a_partial_directory_listing_derives_no_command() {
+    const APP: &str = "app.service";
+    const WANTS: &str = "/etc/systemd/system/multi-user.target.wants";
+    const DROP_IN_DIR: &str = "/etc/systemd/system/app.service.d";
+    let vendor = "[Service]\nExecStart=/usr/bin/app\n\n[Install]\nWantedBy=multi-user.target\n";
+    let linked = || {
+        UnitHost::new()
+            .unit(APP, "enabled")
+            .preset("enable *")
+            .base_package("apppkg")
+            .vendor_unit(APP, vendor, Some("apppkg"))
+    };
+    let with_drop_in = || {
+        UnitHost::new()
+            .unit(APP, "enabled")
+            .preset("disable *")
+            .base_package("apppkg")
+            .vendor_unit(APP, vendor, Some("apppkg"))
+            .file(
+                &format!("{DROP_IN_DIR}/10-wants.conf"),
+                "[Install]\nWantedBy=graphical.target\n",
+            )
+    };
+    let degraded = |snap: &InspectionSnapshot| -> Vec<String> {
+        snap.warnings
+            .iter()
+            .filter(|w| w.inspector == "Units" && w.message.starts_with("degraded: "))
+            .map(|w| w.message.clone())
+            .collect()
+    };
+
+    let healthy = scan(linked());
+    assert_eq!(
+        inventory_entry(&healthy, APP).map(|e| e.state),
+        Some(UnitState::Enabled)
+    );
+    assert!(degraded(&healthy).is_empty(), "{:?}", healthy.warnings);
+    let healthy_drop_in = scan(with_drop_in());
+    assert_eq!(
+        change(&healthy_drop_in, APP).install_drop_ins,
+        [format!("{DROP_IN_DIR}/10-wants.conf")]
+    );
+    assert!(degraded(&healthy_drop_in).is_empty());
+
+    for (label, host, dir) in [
+        (
+            "unit root",
+            linked().partial_listing("/etc/systemd/system", "multi-user.target.wants"),
+            "/etc/systemd/system",
+        ),
+        (
+            "dependency directory",
+            linked().partial_listing(WANTS, APP),
+            WANTS,
+        ),
+        (
+            "install drop-in directory",
+            with_drop_in().partial_listing(DROP_IN_DIR, "10-wants.conf"),
+            DROP_IN_DIR,
+        ),
+    ] {
+        let snap = scan(host);
+        let failures = degraded(&snap);
+        assert!(
+            failures.iter().any(|f| f.contains(&format!("{dir}: "))),
+            "{label}: the scan degrades naming {dir}: {failures:?}"
+        );
+        assert_eq!(changes_named(&snap, APP), 0, "{label}");
+        for (route, containerfile) in both_routes(&snap) {
+            assert!(
+                in_no_systemctl_instruction(&containerfile, APP),
+                "{label}, {route}:\n{containerfile}"
+            );
+        }
     }
 }
 
