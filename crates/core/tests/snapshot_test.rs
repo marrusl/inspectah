@@ -458,6 +458,33 @@ fn holds_install_section_is_one_lexical_test() {
     }
 }
 
+/// Each logical line carries the physical line it starts on, counting
+/// comments, blank lines and each line end `read_line` reads (`\r\n` is
+/// one), so a continuation reports its first line.
+#[test]
+fn a_logical_line_knows_the_line_it_starts_on() {
+    use inspectah_core::types::units::numbered_logical_lines;
+    let numbered = |text: &str| -> Vec<(usize, String)> { numbered_logical_lines(text) };
+    assert_eq!(
+        numbered("[Service]\n# note\n\nExecStart=/bin/a \\\n  b\nNice=5\n"),
+        [
+            (1, "[Service]".to_owned()),
+            (3, String::new()),
+            (4, "ExecStart=/bin/a    b".to_owned()),
+            (6, "Nice=5".to_owned()),
+        ]
+    );
+    assert_eq!(
+        numbered("[Service]\r\nNice=5\rUser=a\0Group=b\n"),
+        [
+            (1, "[Service]".to_owned()),
+            (2, "Nice=5".to_owned()),
+            (3, "User=a".to_owned()),
+            (4, "Group=b".to_owned()),
+        ]
+    );
+}
+
 /// T2, `state_changes`: a template and a unit with no file load masked
 /// and fail in any other state, naming the rule.
 #[test]

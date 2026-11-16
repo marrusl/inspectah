@@ -47,6 +47,16 @@ and recognises `python venv`, `pip dist-info`, `npm lockfile` and
 JSON is the *only* copy of the manifest in the export, so a writer-side
 scrub reaches none of them.
 
+**A warning is never scrubbed.** `redact()` scrubs file contents and the
+fields it knows; `snapshot.warnings` serializes as written, and the README
+and refine's Services section print each `message`. So a warning names
+where a host value is (the unit, the key, the file and line), never the
+value: the units collector's unknown-needs warning once copied a whole
+`ExecStart=` line, token and all, into `message` and `extra.value`. A
+test for a new warning puts a sentinel credential in the host value and
+asserts it is absent from every file of both exports and from refine's
+view and sections.
+
 ## Search forward from the key, never from the start of the line
 
 This was the single defect behind eight separate credential leaks

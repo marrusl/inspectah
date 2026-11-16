@@ -23,8 +23,8 @@ use super::resolve::unit_search_path;
 use super::specifiers::{SpecifierSet, expand_unit_specifiers};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::units::{
-    UNIT_FILE_WHITESPACE, UnitName, is_instance_config_path, is_instance_data_path, logical_lines,
-    systemd_reads_drop_in,
+    UNIT_FILE_WHITESPACE, UnitName, is_instance_config_path, is_instance_data_path,
+    numbered_logical_lines, systemd_reads_drop_in,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
@@ -306,19 +306,25 @@ pub(crate) struct InstanceNeeds {
 /// path it may read would go unchecked by rule 6.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NeedsUnknown {
-    /// The value `value` of the setting `key` names a path for the
-    /// instance and cannot be read as systemd reads it: an unbalanced
-    /// quote, an escape systemd refuses, a specifier inspectah does not
-    /// expand, or a configuration path holding a control character.
-    Uninterpretable { key: String, value: String },
+    /// The value of the setting `key`, on line `line` of the unit file or
+    /// drop-in at `path`, names a path for the instance and cannot be read
+    /// as systemd reads it: an unbalanced quote, an escape systemd refuses,
+    /// a specifier inspectah does not expand, or a configuration path
+    /// holding a control character. The value itself is not kept: it can
+    /// hold a credential, and a warning is never redacted.
+    Uninterpretable {
+        key: String,
+        path: String,
+        line: usize,
+    },
     /// A runtime drop-in directory or drop-in at `path` could not be read
     /// in full, or a drop-in there is not text: one of its settings may
     /// name a path.
     Unreadable { path: String, error: String },
 }
 
-/// What the instance `name` needs, read from `fragment`, the text of its
-/// effective unit file, and the runtime drop-ins systemd applies to it
+/// What the instance `name` needs, read from `fragment`, the path and text
+/// of its effective unit file, and the runtime drop-ins systemd applies to it
 /// ([`runtime_drop_ins`]), in load order, and the fixed tables for its
 /// template. A data path is kept only when `exec` finds something there. A
 /// unit that is not an instance needs nothing.
@@ -334,35 +340,39 @@ pub(crate) enum NeedsUnknown {
 pub(crate) fn instance_needs(
     exec: &dyn Executor,
     name: &UnitName,
-    fragment: Option<&str>,
+    fragment: Option<(&str, &str)>,
 ) -> Result<InstanceNeeds, NeedsUnknown> {
     let Some(instance) = name.instance() else {
         return Ok(InstanceNeeds::default());
     };
     let drop_ins = runtime_drop_ins(exec, name)?;
     let template = instance.template();
-    let (stem, _) = name
-        .as_str()
-        .rsplit_once('.')
-        .expect("a unit name ends in its type suffix");
-    let expand = |value: &str| {
-        expand_unit_specifiers(value, stem, SpecifierSet::Runtime).map(|path| simplify_path(&path))
-    };
-    let keeps_data = |path: &str| is_instance_data_path(path) && exec.file_exists(Path::new(path));
-
-    let (_, suffix) = name
+    let (stem, suffix) = name
         .as_str()
         .rsplit_once('.')
         .expect("a unit name ends in its type suffix");
     let raw_expand = |value: &str| expand_unit_specifiers(value, stem, SpecifierSet::Runtime);
-    let effective = effective_assignments(fragment, &drop_ins.chosen, suffix, &raw_expand);
+    let expand = |value: &str| raw_expand(value).map(|path| simplify_path(&path));
+    let keeps_data = |path: &str| is_instance_data_path(path) && exec.file_exists(Path::new(path));
+
+    let effective = effective_assignments(
+        fragment.map(|(_, text)| text),
+        &drop_ins.chosen,
+        suffix,
+        &raw_expand,
+    );
     let mut required_config = BTreeSet::new();
     let mut data = BTreeSet::new();
     for assignment in &effective.kept {
         let named = named_paths(&assignment.key, &assignment.value, &expand).map_err(|_| {
+            let path = match assignment.source {
+                Some(index) => drop_ins.chosen[index].0.as_str(),
+                None => fragment.map_or("", |(path, _)| path),
+            };
             NeedsUnknown::Uninterpretable {
                 key: assignment.key.clone(),
-                value: assignment.value.clone(),
+                path: path.to_owned(),
+                line: assignment.line,
             }
         })?;
         required_config.extend(named.config);
@@ -623,11 +633,12 @@ fn table_rows<'t>(
 }
 
 /// The assignments of one unit file text outside `[Install]`, by logical
-/// line, key and value trimmed, each with the section it is in.
+/// line, key and value trimmed, each with the section it is in and the
+/// line it starts on. Each source is `None`, for the caller to set.
 fn assignments(text: &str) -> Vec<Assignment> {
     let mut found = Vec::new();
     let mut section: Option<String> = None;
-    for line in logical_lines(text) {
+    for (number, line) in numbered_logical_lines(text) {
         let line = line.trim_matches(UNIT_FILE_WHITESPACE);
         if line.starts_with('[') && line.ends_with(']') {
             section = Some(line[1..line.len() - 1].to_owned());
@@ -638,6 +649,8 @@ fn assignments(text: &str) -> Vec<Assignment> {
         }
         if let Some((key, value)) = line.split_once('=') {
             found.push(Assignment {
+                source: None,
+                line: number,
                 section: section.clone(),
                 key: key.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
                 value: value.trim_matches(UNIT_FILE_WHITESPACE).to_owned(),
@@ -650,6 +663,11 @@ fn assignments(text: &str) -> Vec<Assignment> {
 /// One assignment outside `[Install]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Assignment {
+    /// The index of the drop-in it is in, in the list
+    /// [`effective_assignments`] was given; `None` for the unit file.
+    source: Option<usize>,
+    /// The line of its file it starts on, counted from 1.
+    line: usize,
     /// The section it is in; `None` before the first section header.
     section: Option<String>,
     key: String,
@@ -693,7 +711,8 @@ fn effective_assignments(
     );
     let mut effective = Effective::default();
     for (source, text) in texts {
-        for assignment in assignments(text) {
+        for mut assignment in assignments(text) {
+            assignment.source = source;
             let syntax = Syntax::of(&assignment.key);
             let replaces = syntax == Syntax::SinglePath;
             if (assignment.value.is_empty() || replaces) && applies(&assignment, suffix, expand) {
@@ -1449,11 +1468,12 @@ mod tests {
         let needs = instance_needs(
             &exec,
             &name,
-            Some(
+            Some((
+                "/usr/lib/systemd/system/x@.service",
                 "[Unit]\nConditionPathExists=/etc/x//%i/\nConditionPathExists=/etc/./z/%i\n\
                ConditionPathExists=/etc/w/../%i.conf\n\
                [Service]\nReadWritePaths=/var/lib/x/%i/\nStateDirectory=./y/%i/\n",
-            ),
+            )),
         )
         .expect("interpretable needs");
         assert_eq!(

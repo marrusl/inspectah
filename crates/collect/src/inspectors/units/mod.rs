@@ -861,7 +861,10 @@ fn build_state_changes(
                     let needs = match instance::instance_needs(
                         exec,
                         change.unit().name(),
-                        evidence.fragment_text.as_deref(),
+                        evidence
+                            .fragment
+                            .as_ref()
+                            .map(|(path, text)| (path.as_str(), text.as_str())),
                     ) {
                         Ok(needs) => needs,
                         // What it reads is unknown, so rule 6 could not
@@ -1100,10 +1103,11 @@ struct InstallEvidence {
     hiding_drop_ins: Vec<String>,
     /// File names of the vendor drop-ins that apply, sorted.
     vendor_drop_ins: Vec<String>,
-    /// The unit file's text, for an instance whose unit file is text: its
-    /// needs are read from it and from its runtime drop-ins (§ 7.5,
-    /// `instance::instance_needs`). `None` for any other unit.
-    fragment_text: Option<String>,
+    /// The unit file's path and text, for an instance whose unit file is
+    /// text: its needs are read from it and from its runtime drop-ins
+    /// (§ 7.5, `instance::instance_needs`), and a warning names the path.
+    /// `None` for any other unit.
+    fragment: Option<(String, String)>,
 }
 
 impl InstallEvidence {
@@ -1228,7 +1232,9 @@ fn install_evidence(
         .collect();
     // Only an instance's needs are read from its unit file here, with its
     // runtime drop-ins, which `instance_needs` reads itself (§ 7.5).
-    let instance_fragment_text = name.instance().and(fragment_text.clone());
+    let instance_fragment = name
+        .instance()
+        .and(fragment_path.clone().zip(fragment_text.clone()));
     // The vendor-side read (§ 7.2): for a packaged unit file with an
     // install file under `/etc`, a shadow or an install drop-in.
     let vendor_text = match fragment {
@@ -1268,7 +1274,7 @@ fn install_evidence(
         install_drop_ins,
         hiding_drop_ins: hiding_drop_ins.into_iter().collect(),
         vendor_drop_ins: vendor_names.into_iter().collect(),
-        fragment_text: instance_fragment_text,
+        fragment: instance_fragment,
     })
 }
 
@@ -1381,20 +1387,22 @@ fn unreadable_install_warning(warn: impl FnOnce(&str) -> Warning, paths: &[Strin
 }
 
 /// The warning for an enabled instance whose needs are unknown (§ 7.5),
-/// built by `warn`: it names the value or the file, and says the enable is
-/// not carried. The value or path is among its fields.
+/// built by `warn`: it names the setting and the file it is in, with its
+/// line, or the file that cannot be read, and says the enable is not
+/// carried. The key, path and line are among its fields. It never holds a
+/// setting's value: a command line can carry a credential, and the
+/// redaction pass does not read warnings.
 fn needs_unknown_warning(warn: impl FnOnce(&str) -> Warning, unknown: &NeedsUnknown) -> Warning {
     match unknown {
-        NeedsUnknown::Uninterpretable { key, value } => {
+        NeedsUnknown::Uninterpretable { key, path, line } => {
             let mut warning = warn(&format!(
-                "its {key}= value {value} names a path for the instance that inspectah cannot \
-                 read as systemd does, so what the instance reads is unknown and its enable is \
-                 not carried"
+                "its {key}= setting in {path} (line {line}) names a path for the instance that \
+                 inspectah cannot read as systemd does, so what the instance reads is unknown \
+                 and its enable is not carried"
             ));
             warning.extra.insert("key".into(), serde_json::json!(key));
-            warning
-                .extra
-                .insert("value".into(), serde_json::json!(value));
+            warning.extra.insert("path".into(), serde_json::json!(path));
+            warning.extra.insert("line".into(), serde_json::json!(line));
             warning
         }
         NeedsUnknown::Unreadable { path, error } => {

@@ -10364,8 +10364,8 @@ fn t25_c_a_member_whose_configuration_argument_is_quoted() {
 /// instance and that systemd's parser refuses (an unbalanced quote) makes
 /// what the instance reads unknown. The instance has no state change and
 /// no refine row, no `systemctl` line names it on either route, and the
-/// snapshot's warning names the unit and the value. Control: the quote
-/// closed, the instance is carried.
+/// snapshot's warning names the unit, the setting and the file, never the
+/// value. Control: the quote closed, the instance is carried.
 #[test]
 fn an_uninterpretable_instance_argument_declines_the_enable_through_the_scan() {
     const UNIT: &str = "t@site.service";
@@ -10390,8 +10390,11 @@ fn an_uninterpretable_instance_argument_declines_the_enable_through_the_scan() {
         snap.warnings.iter().any(|w| {
             let message = &w.message;
             message.contains(UNIT)
-                && message.contains("ExecStart= value /usr/bin/t --config=\"/etc/t/%i.conf")
+                && message.contains(&format!(
+                    "its ExecStart= setting in {T_TEMPLATE_PATH} (line 2)"
+                ))
                 && message.contains("its enable is not carried")
+                && !message.contains("--config")
         }),
         "{:?}",
         snap.warnings
@@ -10402,6 +10405,105 @@ fn an_uninterpretable_instance_argument_declines_the_enable_through_the_scan() {
         &[("/etc/t/site.conf", "PORT=1\n")],
     ));
     assert_instance_carried(&control, UNIT, "the quote closed");
+}
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("the export directory reads") {
+        let path = entry.expect("an export entry").path();
+        if path.is_dir() {
+            files.extend(files_under(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// The unknown-needs warning names the unit, the setting and the file it
+/// is in, with its line, and never the value, which can hold a credential
+/// the redaction pass never sees in a warning. A command line holding a
+/// token and a path inspectah cannot expand (`%E`) declines the enable,
+/// and the token is in no exported artifact: not in the snapshot or its
+/// warnings, not in any file either route writes (the snapshot JSON, the
+/// Containerfile, the scan's README, refine's audit report and the rest),
+/// and not in refine's view or
+/// its Services section, where the warnings are listed.
+#[test]
+fn an_uninterpretable_value_is_reported_without_its_value() {
+    const UNIT: &str = "t@site.service";
+    const SENTINEL: &str = "inspectah-sentinel-credential-5b1e";
+    let service = format!("ExecStart=/usr/bin/t --token={SENTINEL} --config=%E/t/%i.conf");
+    let snap = scan(t_reads_host(&service, &[]));
+    assert_eq!(changes_named(&snap, UNIT), 0);
+    let warning = snap
+        .warnings
+        .iter()
+        .find(|w| w.message.contains(UNIT) && w.message.contains("ExecStart="))
+        .unwrap_or_else(|| panic!("a warning for {UNIT}: {:?}", snap.warnings));
+    assert_eq!(
+        warning.message,
+        format!(
+            "unit {UNIT} has state 'enabled' - its ExecStart= setting in {T_TEMPLATE_PATH} \
+             (line 2) names a path for the instance that inspectah cannot read as systemd \
+             does, so what the instance reads is unknown and its enable is not carried"
+        )
+    );
+    assert_eq!(
+        warning.extra.get("key"),
+        Some(&serde_json::json!("ExecStart"))
+    );
+    assert_eq!(
+        warning.extra.get("path"),
+        Some(&serde_json::json!(T_TEMPLATE_PATH))
+    );
+    assert_eq!(warning.extra.get("line"), Some(&serde_json::json!(2)));
+
+    let snapshot = serde_json::to_string(&snap).expect("the snapshot serializes");
+    assert!(
+        !snapshot.contains(SENTINEL),
+        "the snapshot holds the credential"
+    );
+    for (route, tree) in both_exports(&snap) {
+        let files = files_under(tree.path());
+        assert!(
+            files
+                .iter()
+                .any(|f| f.ends_with("inspection-snapshot.json"))
+                && files.iter().any(|f| f.ends_with("Containerfile"))
+                && (route != "scan" || files.iter().any(|f| f.ends_with("README.md"))),
+            "{route}: the export holds the snapshot and Containerfile, and the scan's its \
+             README: {files:?}"
+        );
+        for file in files {
+            let bytes = std::fs::read(&file).expect("an export file reads");
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(SENTINEL),
+                "{route}: {} holds the credential",
+                file.display()
+            );
+        }
+    }
+    let session = session(&snap);
+    let view = serde_json::to_string(&inspectah_web::adapter::build_web_view(&session))
+        .expect("the view serializes");
+    assert!(
+        !view.contains(SENTINEL),
+        "refine's view holds the credential"
+    );
+    let sections = inspectah_web::adapter::build_web_sections(
+        &inspectah_refine::projection::project_reference(&session.snapshot_projected()),
+    );
+    let sections = serde_json::to_string(&sections).expect("the sections serialize");
+    assert!(
+        sections.contains(&format!("its ExecStart= setting in {T_TEMPLATE_PATH}")),
+        "refine lists the warning"
+    );
+    assert!(
+        !sections.contains(SENTINEL),
+        "refine's sections hold the credential"
+    );
 }
 
 /// T27: an instance linked only under `/run` is not found: no state

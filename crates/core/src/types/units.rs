@@ -1203,24 +1203,35 @@ fn physical_lines(content: &str) -> Vec<&str> {
 /// too, so it neither ends nor continues one. A continuation still open at
 /// the end of the file is a line of its own.
 pub fn logical_lines(content: &str) -> Vec<String> {
+    numbered_logical_lines(content)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// [`logical_lines`], each with the number of the physical line it starts
+/// on, counted from 1 over every physical line systemd's `read_line` ends
+/// ([`physical_lines`]), comments included: the line a reader of the file
+/// finds the setting on.
+pub fn numbered_logical_lines(content: &str) -> Vec<(usize, String)> {
     let mut lines = Vec::new();
-    let mut pending: Option<String> = None;
-    for line in physical_lines(content) {
+    let mut pending: Option<(usize, String)> = None;
+    for (index, line) in physical_lines(content).into_iter().enumerate() {
         if line
             .trim_start_matches(UNIT_FILE_WHITESPACE)
             .starts_with(UNIT_FILE_COMMENT_STARTS)
         {
             continue;
         }
-        let mut joined = pending.take().unwrap_or_default();
+        let (number, mut joined) = pending.take().unwrap_or((index + 1, String::new()));
         joined.push_str(line);
         let trailing_backslashes = line.len() - line.trim_end_matches('\\').len();
         if trailing_backslashes % 2 == 1 {
             joined.pop();
             joined.push(' ');
-            pending = Some(joined);
+            pending = Some((number, joined));
         } else {
-            lines.push(joined);
+            lines.push((number, joined));
         }
     }
     lines.extend(pending);

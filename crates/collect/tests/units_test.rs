@@ -5763,9 +5763,10 @@ fn a_quoted_or_punctuated_command_argument_records_the_whole_path() {
 /// § 7.5: a value that names a path for the instance and cannot be
 /// interpreted (an unbalanced quote, an escape systemd refuses, a
 /// specifier inspectah does not expand) declines the enable: the instance
-/// has no state change, and a warning names the unit and the value. A
-/// value that holds no `%i` or `%I` declines nothing. Control: the same
-/// template with the value written well is a state change.
+/// has no state change, and a warning names the unit, the setting and the
+/// unit file with its line, never the value. A value that holds no `%i` or
+/// `%I` declines nothing. Control: the same template with the value written
+/// well is a state change.
 #[test]
 fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
     for value in [
@@ -5784,8 +5785,11 @@ fn an_instance_path_that_cannot_be_interpreted_declines_the_enable() {
         let (key, rest) = value.split_once('=').expect("a key");
         assert!(
             warnings.iter().any(|w| w.contains("worker@site.service")
-                && w.contains(&format!("{key}= value {rest}"))
-                && w.contains("its enable is not carried")),
+                && w.contains(&format!(
+                    "its {key}= setting in {VENDOR}/worker@.service (line 2)"
+                ))
+                && w.contains("its enable is not carried")
+                && !w.contains(rest)),
             "{value}: {warnings:?}"
         );
     }

@@ -363,7 +363,12 @@ the fixed tables. Non-obvious points:
   operand holding a specifier `expand_unit_specifiers` does not know, and
   a configuration path the form check refuses are `NeedsUnknown`: the
   instance gets no state change and a warning (`needs_unknown_warning`)
-  names the unit and the value. A setting whose syntax is not modeled
+  names the unit, the setting's key and the file and line it is on
+  (`numbered_logical_lines` in core, `key`, `path` and `line` among its
+  fields). **Never the value**: a command line can carry a credential
+  (`--token=...` beside a `%E` path), and the redaction pass scrubs file
+  contents, not warnings, so the value would reach the snapshot JSON, the
+  README and refine's Services section in the clear. A setting whose syntax is not modeled
   (`Description=` and the rest) is read leniently and never declines.
   The plan cannot decline it by name without a snapshot field, so the
   row is left out (schema 28 has none).
