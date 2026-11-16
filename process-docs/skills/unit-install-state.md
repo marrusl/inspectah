@@ -23,7 +23,7 @@ All under `crates/collect/src/inspectors/units/`:
 | `install.rs` | The `[Install]` reader: `read_install`, `read_vendor_install`, `drop_in_dirs`, `InstallRead`, `InstallSection` |
 | `links.rs` | The links and what they mean: `read_host_links` (`HostLinks`), `expected_links`, `install_state`, `link_findings`, `compare_install`, `apply_install_difference`, `HOST_DEVICE_TEMPLATES` |
 | `also.rs` | The `Also=` walk: `also_name`, `also_members`, `is_off` |
-| `specifiers.rs` | `expand_unit_specifiers` and its `SpecifierSet`: `Install` for the reader, `Runtime` for the instance reader and the scheduled inspector's timer trigger; `SYSTEM_DIRECTORY_SPECIFIERS` |
+| `specifiers.rs` | `expand_unit_specifiers` and its `SpecifierSet`: `Install` for the reader, `Runtime` for the instance reader's settings, `TriggerUnit` for a timer's `Unit=`; `SYSTEM_DIRECTORY_SPECIFIERS`; `trigger_unit_ignored` |
 | `resolve.rs` | The file a name loads, and the search-path test (`UNREAD_SEARCH_PATH`) |
 | `mod.rs` | The name gate (`gate`), `linked_instances`, `install_evidence`, `install_difference`, `build_state_changes`, `default_target` |
 
