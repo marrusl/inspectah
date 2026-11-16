@@ -1,8 +1,8 @@
 /**
  * The units section drawn through its groups (spec § 6.2, § 6.3, § 6.5,
  * § 6.7, § 6.8, § 6.9, § 6.11, § 6.12, § 6.14), under "All" with no
- * filter bar. U3, U4, U5 (All), U10, U21, U23 (rows), U31 (heading),
- * U35 (a).
+ * filter bar unless a test selects a value. U3, U4, U5 (All), U10, U21,
+ * U23 (rows), U31 (heading), U35 (a) to (c).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, cleanup } from "@testing-library/react";
@@ -346,6 +346,80 @@ describe("ServiceSection true duplicates (U35 a)", () => {
     expect(headerCount("Reported, not carried")).toBe(
       String(rows(groupGrid("Reported, not carried")).length),
     );
+  });
+});
+
+describe("ServiceSection true duplicates under search and filter (U35 b, c)", () => {
+  const DUP_LINK_KEY = JSON.stringify(["manual_link", "wants", "multi-user.target", "dup-link-demo.service"]);
+  const DUP_LINK_OTHER_KEY = JSON.stringify([
+    "manual_link",
+    "wants",
+    "multi-user.target",
+    "dup-link-demo-other.service",
+  ]);
+  const DUP_STATE_KEY = JSON.stringify(["unit_state", "dup-state-demo.service"]);
+  const DUP_DROPIN_KEY = JSON.stringify([
+    "dropin",
+    "/etc/systemd/system/dup-state-demo.service.d/override.conf",
+  ]);
+
+  function section(fields: UnitFields, filterText: string, onResultCount: (n: number) => void) {
+    return (
+      <ServiceSection
+        services={fields.unit_states}
+        dropins={fields.unit_dropins}
+        mountFindings={fields.mount_findings}
+        manualLinks={fields.manual_links}
+        undeterminedInstalls={fields.undetermined_installs}
+        defaultTarget={fields.default_target}
+        filterText={filterText}
+        onResultCount={onResultCount}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        pendingGuard={stubGuard}
+      />
+    );
+  }
+
+  /** U35 (a)'s rows: one per record, drop-ins under the first occurrence. */
+  function expectU35aRows() {
+    expect(rowsWithKey(DUP_LINK_KEY)).toHaveLength(2);
+    expect(rowsWithKey(DUP_LINK_OTHER_KEY)).toHaveLength(1);
+    expect(rowsWithKey(DUP_STATE_KEY)).toHaveLength(2);
+    expect(rowsWithKey(DUP_DROPIN_KEY)).toHaveLength(2);
+  }
+
+  it("keeps the row count, the Reported count and the result count equal as a query narrows and is restored", () => {
+    const planted = loadUnitFields("planted");
+    const onResultCount = vi.fn();
+    const { rerender } = render(section(planted, "", onResultCount));
+    for (const [query, n] of [
+      ["dup-link-demo", 3],
+      ["dup-link-demo.service", 2],
+      ["dup-link-demo", 3],
+    ] as const) {
+      rerender(section(planted, query, onResultCount));
+      const shown = rows(screen.getByTestId("service-section"));
+      expect(shown).toHaveLength(n);
+      expect(headerCount("Reported, not carried")).toBe(String(n));
+      expect(onResultCount).toHaveBeenLastCalledWith(n);
+    }
+    rerender(section(planted, "", onResultCount));
+    expectU35aRows();
+  });
+
+  it("shows both unit occurrences and their two drop-ins under Carried, and All restores U35 (a)", async () => {
+    render(section(loadUnitFields("planted"), "", vi.fn()));
+    const bar = screen.getByRole("group", { name: "Show" });
+    await userEvent.click(within(bar).getByRole("button", { name: /^Carried \d+$/ }));
+    expect(rowsWithKey(DUP_STATE_KEY)).toHaveLength(2);
+    expect(rowsWithKey(DUP_DROPIN_KEY)).toHaveLength(2);
+    const services = groupGrid("Services");
+    expect(headerCount("Services")).toBe(
+      String(services.querySelectorAll('[data-testid^="service-item-"]').length),
+    );
+    await userEvent.click(within(bar).getByRole("button", { name: /^All \d+$/ }));
+    expectU35aRows();
   });
 });
 

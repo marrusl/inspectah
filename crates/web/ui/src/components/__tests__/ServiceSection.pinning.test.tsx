@@ -1,8 +1,8 @@
 /**
  * A toggle never hides what the operator acted on (spec § 6.4 pinning,
- * § 6.13 Focus after a toggle). U8 (a), (b), (d), (e) for a filter change
- * and the bar ceasing to be drawn; two branches with one row key; a pinned
- * record leaving the view; a failed op.
+ * § 6.13 Focus after a toggle). U8 (a) to (e): a filter change, a query
+ * change, a reveal and the bar ceasing to be drawn; two branches with one
+ * row key; a pinned record leaving the view; a failed op.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useState } from "react";
@@ -44,10 +44,27 @@ function fieldsOf(view: ViewResponse): UnitFields {
   };
 }
 
-/** The section's owner: it shows each view the section hands up. */
+/** Sets the section query, as typing in the search box does. */
+let setQuery: (query: string) => void = () => {
+  throw new Error("Harness not rendered");
+};
+
+/** Sends a reveal to the section, as App does for an item id; `undefined` ends it, as App does after its lookup. */
+let reveal: (itemId: string | undefined) => void = () => {
+  throw new Error("Harness not rendered");
+};
+
+/**
+ * The section's owner: it shows each view the section hands up, and owns
+ * the query text and the reveal as MainContent and App do.
+ */
 function Harness({ initial, onMutationError }: { initial: UnitFields; onMutationError: (e: Error) => void }) {
   const [fields, setFields] = useState(initial);
+  const [query, setQueryState] = useState("");
+  const [revealItemId, setRevealItemId] = useState<string | undefined>();
   pushView = setFields;
+  setQuery = setQueryState;
+  reveal = setRevealItemId;
   return (
     <ServiceSection
       services={fields.unit_states}
@@ -56,6 +73,9 @@ function Harness({ initial, onMutationError }: { initial: UnitFields; onMutation
       manualLinks={fields.manual_links}
       undeterminedInstalls={fields.undetermined_installs}
       defaultTarget={fields.default_target}
+      filterText={query}
+      onClearQuery={() => setQueryState("")}
+      revealItemId={revealItemId}
       onViewUpdate={(view) => setFields(fieldsOf(view))}
       onMutationError={onMutationError}
     />
@@ -286,6 +306,116 @@ describe("U8 (e): what clears pins", () => {
         .getAllByRole("button")
         .find((b) => b.getAttribute("aria-pressed") === "true")!.textContent,
     ).toMatch(/^All /);
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A word of cups.service's declined.text and of no other field of its row,
+ * so once its declined clears the row no longer matches. The carried
+ * sockets match it too.
+ */
+const DECLINED_WORD = "socket";
+
+function selected(): string {
+  const pressed = within(bar())
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-pressed") === "true");
+  expect(pressed).toHaveLength(1);
+  return (pressed[0].textContent ?? "").replace(/ \d+$/, "");
+}
+
+/** Under this filter and DECLINED_WORD, toggles cups.service; the view excludes it. */
+async function toggleCupsUnderQuery(filter: string) {
+  renderUnits(loadUnitFields("kitchen-sink"));
+  if (filter !== "All") await select(filter);
+  act(() => setQuery(DECLINED_WORD));
+  expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+  respondWith(cupsExcluded());
+  await userEvent.click(screen.getByRole("checkbox", { name: "Toggle cups.service" }));
+  await waitFor(() =>
+    expect(screen.getByRole("checkbox", { name: "Toggle cups.service" })).not.toBeChecked(),
+  );
+}
+
+describe("U8 (c): toggling a row under a section query keeps it shown", () => {
+  it("keeps cups.service, which no longer matches the query, shown", async () => {
+    await toggleCupsUnderQuery("All");
+    // Unpinned, the row would be hidden: the query no longer matches it.
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+    expect(screen.queryByTestId("service-item-httpd.service")).not.toBeInTheDocument();
+  });
+});
+
+describe("U8 (e): what clears pins, with a section query", () => {
+  it("a query change drops every pin", async () => {
+    await toggleCupsUnderQuery("Needs follow-up");
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+    act(() => setQuery("socke"));
+    expect(screen.queryByTestId("service-item-cups.service")).not.toBeInTheDocument();
+  });
+
+  it("a reveal that clears the query drops every pin", async () => {
+    await toggleCupsUnderQuery("Needs follow-up");
+    // tmp.mount needs follow-up and does not match the query: step 1 alone.
+    act(() => reveal("tmp.mount"));
+    expect(screen.getByTestId("service-item-tmp.mount")).toBeInTheDocument();
+    expect(selected()).toBe("Needs follow-up");
+    // Excluded and unpinned, cups.service leaves "Needs follow-up".
+    expect(screen.queryByTestId("service-item-cups.service")).not.toBeInTheDocument();
+  });
+
+  it("a reveal clears the query once: a query typed after it stays through later renders", async () => {
+    renderUnits(loadUnitFields("kitchen-sink"));
+    act(() => setQuery("httpd"));
+    act(() => reveal("tmp.mount"));
+    expect(screen.getByTestId("service-item-tmp.mount")).toBeInTheDocument();
+    act(() => reveal(undefined));
+    act(() => setQuery("httpd"));
+    // A new view re-renders the section; the query typed after the reveal stays.
+    act(() => pushView(loadUnitFields("kitchen-sink")));
+    expect(screen.queryByTestId("service-item-tmp.mount")).not.toBeInTheDocument();
+    expect(screen.getByTestId("service-item-httpd.service")).toBeInTheDocument();
+  });
+
+  it("a reveal that sets the filter to All and keeps the query drops every pin", async () => {
+    await toggleCupsUnderQuery("Needs follow-up");
+    // cups.socket matches the query and is carried: step 2 alone.
+    expect(screen.queryByTestId("service-item-cups.socket")).not.toBeInTheDocument();
+    act(() => reveal("cups.socket"));
+    expect(screen.getByTestId("service-item-cups.socket")).toBeInTheDocument();
+    expect(selected()).toBe("All");
+    // Under All the query alone decides, and cups.service no longer matches it.
+    expect(screen.queryByTestId("service-item-cups.service")).not.toBeInTheDocument();
+  });
+
+  it("the bar ceasing to be drawn keeps the pin, with a query", async () => {
+    await toggleCupsUnderQuery("Needs follow-up");
+    const quiet = loadUnitFields("kitchen-sink");
+    for (const row of quiet.unit_states) delete row.declined;
+    quiet.manual_links = [];
+    quiet.undetermined_installs = [];
+    act(() => pushView(quiet));
+    expect(screen.queryByRole("group", { name: "Show" })).toBeNull();
+    // Only its pin shows cups.service: the query no longer matches it.
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+    // The bar returns on All, the pin still held.
+    act(() => pushView(cupsExcluded()));
+    expect(selected()).toBe("All");
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+  });
+});
+
+describe("U8: when a toggle pins", () => {
+  it("pins before the op returns, so an Undo-like view meanwhile does not hide the row", async () => {
+    renderUnits(loadUnitFields("kitchen-sink"));
+    await select("Needs follow-up");
+    const finish = respondLater(cupsExcluded());
+    screen.getByTestId("service-item-cups.service").focus();
+    await userEvent.keyboard(" ");
+    act(() => pushView(withUnit(loadUnitFields("kitchen-sink"), "cups.service", (r) => delete r.declined)));
+    expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
+    await finish();
     expect(screen.getByTestId("service-item-cups.service")).toBeInTheDocument();
   });
 });

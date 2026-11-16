@@ -1,7 +1,7 @@
 /**
- * Reaching a row of the units section (spec § 6.11): the reveal's steps 2
- * and 3, the lookup by row key, U26's global search case (reveal half),
- * U25's bare-name and "Go to owner" clauses.
+ * Reaching a row of the units section (spec § 6.11): the reveal's steps 1
+ * to 3, the lookup by row key, U26's global search case (reveal half) and
+ * its Also= query cases, U25's bare-name and "Go to owner" clauses.
  *
  * Mounts `App` with `fetch` as the only thing replaced. A navigation is
  * the call `App` hands `ServiceSection` as `onNavigateToItem`, which is
@@ -346,5 +346,35 @@ describe("U26: an Also= link into retained state (§ 6.11)", () => {
     await userEvent.click(cupsSocketLink());
     await expectFocused("service-item-cups.socket");
     expect(groupHeader("Sockets")).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+/** Opens section search with `/` and types a query into it. */
+async function search(query: string): Promise<HTMLInputElement> {
+  await userEvent.keyboard("/");
+  const box = (await screen.findByRole("textbox", { name: "Filter section items" })) as HTMLInputElement;
+  await userEvent.type(box, query);
+  return box;
+}
+
+describe("U26: an Also= link into a section query (§ 6.11 step 1)", () => {
+  it("clears a query that hides the member, keeping the search box open", async () => {
+    await openUnits(kitchenSink);
+    const box = await search("cups.service");
+    expect(isShown(screen.queryByTestId("service-item-cups.service"))).toBe(true);
+    expect(screen.queryByTestId("service-item-cups.socket")).not.toBeInTheDocument();
+    await userEvent.click(cupsSocketLink());
+    await expectFocused("service-item-cups.socket");
+    expect(box).toBeInTheDocument();
+    expect(box.value).toBe("");
+  });
+
+  it("keeps a query the member matches", async () => {
+    await openUnits(kitchenSink);
+    const box = await search("cups");
+    expect(isShown(screen.queryByTestId("service-item-cups.socket"))).toBe(true);
+    await userEvent.click(cupsSocketLink());
+    await expectFocused("service-item-cups.socket");
+    expect(box.value).toBe("cups");
   });
 });

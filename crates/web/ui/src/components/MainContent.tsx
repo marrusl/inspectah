@@ -238,6 +238,15 @@ export function MainContent({
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // The units section's result count and its first-row focus (§ 6.12):
+  // the section computes both, since only it knows its pins and groups.
+  const [unitsResultCount, setUnitsResultCount] = useState(0);
+  const focusFirstUnitRow = useRef<(() => void) | null>(null);
+  const registerFocusFirstUnitRow = useCallback((focus: (() => void) | null) => {
+    focusFirstUnitRow.current = focus;
+  }, []);
+  const clearFilterText = useCallback(() => setFilterText(""), []);
+
   // Reset filter when section changes or search closes
   const handleSearchClose = useCallback(() => {
     setFilterText("");
@@ -549,6 +558,12 @@ export function MainContent({
   );
 
   const handleArrowDown = useCallback(() => {
+    // The units section registers its own first shown row while mounted.
+    if (focusFirstUnitRow.current) {
+      focusFirstUnitRow.current();
+      return;
+    }
+
     // Focus the first focusable item in the active section.
     // Tries decision items first, then group headers, then any element with tabindex=-1.
     const firstDecisionItem = document.querySelector(
@@ -775,6 +790,15 @@ export function MainContent({
         <Content>
           <h2>{SECTION_LABELS.units}</h2>
         </Content>
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={unitsResultCount}
+          />
+        )}
         <ServiceSection
           services={services}
           dropins={dropins}
@@ -787,6 +811,10 @@ export function MainContent({
           }
           revealItemId={revealItemId}
           onNavigateToItem={onNavigateToItem}
+          filterText={filterText}
+          onResultCount={setUnitsResultCount}
+          onClearQuery={clearFilterText}
+          registerFocusFirstRow={registerFocusFirstUnitRow}
           configPaths={configPaths}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}

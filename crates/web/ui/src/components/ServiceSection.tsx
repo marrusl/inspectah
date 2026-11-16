@@ -1,5 +1,5 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Button, Label } from "@patternfly/react-core";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Button, EmptyState, EmptyStateBody, Label } from "@patternfly/react-core";
 import type {
   DeclinedView,
   ServiceDecisionDto,
@@ -29,19 +29,21 @@ import {
   UNDETERMINED_CAUSE_LABEL,
   branchHeadOf,
   causeLabel,
+  emptyStateFor,
   filterBarDrawn,
+  firstShownRow,
   followUpFlagText,
   groupUnits,
-  hiddenByFilter,
   keyFields,
   liveRegionText,
-  locateRow,
   outcomeCounts,
   pinsInView,
   reasonWords,
+  revealPlan,
   rowKeyForItemId,
   showGroups,
   shownOutcomeRowCount,
+  shownRowCount,
   type FilterValue,
   type GroupId,
   type OccurrenceKey,
@@ -76,6 +78,21 @@ export interface ServiceSectionProps {
   revealItemId?: string;
   /** Navigates to an item, as `App`'s `handleNavigateFromSearch` does. */
   onNavigateToItem?: (sectionId: string, itemId: string) => void;
+  /** The section query (§ 6.12), owned by `MainContent`; empty for none. */
+  filterText?: string;
+  /** Receives `shownRowCount` for the search box's result count (§ 6.12). */
+  onResultCount?: (n: number) => void;
+  /**
+   * Clears the section query: reveal step 1 (§ 6.11) and the search empty
+   * state's "Clear filter" button. The owner of the text clears it.
+   */
+  onClearQuery?: () => void;
+  /**
+   * Receives the function that focuses the first shown row, which
+   * `MainContent`'s `handleArrowDown` calls from the search box (§ 6.12),
+   * and `null` on unmount.
+   */
+  registerFocusFirstRow?: (focusFirstRow: (() => void) | null) => void;
   /**
    * The paths `config_files` holds: a `required_config` path among them
    * links to its config row (§ 6.6 item 7).
@@ -157,7 +174,11 @@ const SUBTLE_TEXT_COLOR = "var(--pf-t--global--text--color--subtle)";
 const FILTER_EMPTY = "No units match this filter.";
 const SHOW_ALL_LABEL = "Show all";
 
-/** No section query yet (§ 6.12 arrives with section search). */
+/** § 6.9 row 5: section search with no match, as in the other sections. */
+const SEARCH_EMPTY_TITLE = "No items match your search";
+const CLEAR_QUERY_LABEL = "Clear filter";
+
+/** No section query. */
 const NO_QUERY = "";
 
 /** No config row to link to. */
@@ -454,6 +475,7 @@ interface MountFindingRowProps {
   unitKey: RowKey;
   ordinal: number;
   onNavigateToConfig?: (path: string) => void;
+  rowRef: RowRef;
 }
 
 /**
@@ -462,11 +484,12 @@ interface MountFindingRowProps {
  * the export decides nothing here. The unit file is decided on its config
  * row, which `unit_file_path` names.
  */
-function MountFindingRow({ finding: f, unitKey, ordinal, onNavigateToConfig }: MountFindingRowProps) {
+function MountFindingRow({ finding: f, unitKey, ordinal, onNavigateToConfig, rowRef }: MountFindingRowProps) {
   const advisoriesId = ownId(`mount-finding-advisories-${f.unit}`, ordinal, useId());
   const path = f.unit_file_path;
   return (
     <div
+      ref={rowRef}
       role="row"
       aria-label={f.unit}
       aria-describedby={describedBy(f.advisories.length > 0 && advisoriesId)}
@@ -636,13 +659,14 @@ function AdvisoryLines({
  * its relation, its parent and the export's lines, as given. No toggle
  * and no keyboard action: the export decides nothing here.
  */
-function ManualLinkRow({ link, unitKey }: { link: ManualLinkView; unitKey: RowKey }) {
+function ManualLinkRow({ link, unitKey, rowRef }: { link: ManualLinkView; unitKey: RowKey; rowRef: RowRef }) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
   const notAppliedId = `${baseId}-not-applied`;
   const notApplied = link.not_applied ?? [];
   return (
     <div
+      ref={rowRef}
       role="row"
       aria-label={link.unit}
       aria-describedby={describedBy(
@@ -693,9 +717,11 @@ function ManualLinkRow({ link, unitKey }: { link: ManualLinkView; unitKey: RowKe
 function UndeterminedInstallRow({
   record: r,
   unitKey,
+  rowRef,
 }: {
   record: UndeterminedInstallView;
   unitKey: RowKey;
+  rowRef: RowRef;
 }) {
   const baseId = useId();
   const advisoriesId = `${baseId}-advisories`;
@@ -703,6 +729,7 @@ function UndeterminedInstallRow({
   const notApplied = r.not_applied ?? [];
   return (
     <div
+      ref={rowRef}
       role="row"
       aria-label={r.unit}
       aria-describedby={describedBy(
@@ -1079,9 +1106,11 @@ function UnitBranchView({
 function ReportedRowView({
   row,
   onNavigateToConfig,
+  rowRef,
 }: {
   row: ReportedRow;
   onNavigateToConfig?: (path: string) => void;
+  rowRef: RowRef;
 }) {
   const { record } = row;
   switch (record.kind) {
@@ -1092,12 +1121,13 @@ function ReportedRowView({
           unitKey={row.rowKey}
           ordinal={row.ordinal}
           onNavigateToConfig={onNavigateToConfig}
+          rowRef={rowRef}
         />
       );
     case "manual_link":
-      return <ManualLinkRow link={record.data} unitKey={row.rowKey} />;
+      return <ManualLinkRow link={record.data} unitKey={row.rowKey} rowRef={rowRef} />;
     case "undetermined_install":
-      return <UndeterminedInstallRow record={record.data} unitKey={row.rowKey} />;
+      return <UndeterminedInstallRow record={record.data} unitKey={row.rowKey} rowRef={rowRef} />;
   }
 }
 
@@ -1111,6 +1141,10 @@ export function ServiceSection({
   onNavigateToConfig,
   revealItemId,
   onNavigateToItem,
+  filterText = NO_QUERY,
+  onResultCount,
+  onClearQuery,
+  registerFocusFirstRow,
   configPaths = NO_CONFIG_PATHS,
   onViewUpdate,
   onMutationError,
@@ -1161,26 +1195,40 @@ export function ServiceSection({
     setPinsCheckedFor(keyed);
     setPins((prev) => pinsInView(prev, keyed));
   }
-  /** Clears every pin: a filter change here; a query change or a reveal later (§ 6.11). */
+  /** Clears every pin: a filter change, a query change or a reveal that changes either (§ 6.4). */
   const clearPins = useCallback(() => setPins(NO_PINS), []);
 
+  // A query change clears every pin (§ 6.4), adjusted during render so no
+  // frame shows the new query with the old pins.
+  const [queryCheckedFor, setQueryCheckedFor] = useState(filterText);
+  if (queryCheckedFor !== filterText) {
+    setQueryCheckedFor(filterText);
+    setPins(NO_PINS);
+  }
+
   const shown = useMemo(
-    () => showGroups(groups, { filter, query: NO_QUERY, pins }),
-    [groups, filter, pins],
+    () => showGroups(groups, { filter, query: filterText, pins }),
+    [groups, filter, filterText, pins],
   );
+
+  // The search box's result count (§ 6.12).
+  useEffect(() => {
+    onResultCount?.(shownRowCount(shown));
+  }, [shown, onResultCount]);
 
   const changeFilter = useCallback(
     (value: FilterValue) => {
       setFilter(value);
       clearPins();
-      const next = showGroups(groups, { filter: value, query: NO_QUERY, pins: NO_PINS });
+      const next = showGroups(groups, { filter: value, query: filterText, pins: NO_PINS });
       setAnnouncement(liveRegionText(value, shownOutcomeRowCount(next)));
     },
-    [groups, clearPins],
+    [groups, filterText, clearPins],
   );
 
-  // Toggleable rows by occurrence key, so focus returns to the occurrence
-  // the operator toggled (§ 6.13), never to a twin with its row key.
+  // Rows by occurrence key, so focus returns to the occurrence the operator
+  // toggled (§ 6.13), never to a twin with its row key, and ArrowDown from
+  // the search box reaches any kind of row.
   const rowElements = useRef(new Map<OccurrenceKey, HTMLDivElement>());
   const rowRef = useCallback(
     (key: OccurrenceKey): RowRef =>
@@ -1211,30 +1259,53 @@ export function ServiceSection({
 
   // The reveal (§ 6.11): undo whatever hides the destination, adjusted
   // during render so the row is shown before App's reveal effect looks it
-  // up. Step 1, a section query that hides it, is MainContent's and runs
-  // before this. Rechecked when the view changes, so a reveal sent before
-  // the view loaded still lands.
+  // up. revealPlan decides all three steps. Rechecked when the view
+  // changes, so a reveal sent before the view loaded still lands.
   const [revealChecked, setRevealChecked] = useState<{
     itemId: string | undefined;
     groups: UnitGroupModel[];
   }>({ itemId: undefined, groups });
+  // Step 1 clears MainContent's query text, which may not be set while this
+  // section renders, so it is handed over in a layout effect: still before
+  // App's reveal looks the row up. Handled once, then reset.
+  const [queryClearRequest, setQueryClearRequest] = useState<object | null>(null);
   if (revealChecked.itemId !== revealItemId || revealChecked.groups !== groups) {
     setRevealChecked({ itemId: revealItemId, groups });
     const key = revealItemId === undefined ? null : rowKeyForItemId(revealItemId);
-    const loc = key === null ? null : locateRow(groups, key);
-    if (loc) {
-      // Step 2: the outcome filter.
-      if (hiddenByFilter(groups, loc, { filter, query: NO_QUERY, pins })) {
+    const plan =
+      key === null ? null : revealPlan(groups, key, { filter, query: filterText, pins, collapsed });
+    if (plan) {
+      if (plan.clearQuery) setQueryClearRequest({});
+      if (plan.filterToAll) {
         setFilter("all");
-        const all = showGroups(groups, { filter: "all", query: NO_QUERY, pins });
+        const all = showGroups(groups, {
+          filter: "all",
+          query: plan.clearQuery ? NO_QUERY : filterText,
+          pins: NO_PINS,
+        });
         setAnnouncement(liveRegionText("all", shownOutcomeRowCount(all)));
       }
-      // Step 3: collapse.
-      if (collapsed[loc.groupId]) {
-        setCollapsed((prev) => ({ ...prev, [loc.groupId]: false }));
-      }
+      if (plan.clearPins) clearPins();
+      const openGroup = plan.openGroup;
+      if (openGroup !== null) setCollapsed((prev) => ({ ...prev, [openGroup]: false }));
     }
   }
+  useLayoutEffect(() => {
+    if (!queryClearRequest) return;
+    setQueryClearRequest(null);
+    onClearQuery?.();
+  }, [queryClearRequest, onClearQuery]);
+
+  // ArrowDown from the search box (§ 6.12): the first shown row, of any kind.
+  const focusFirstRow = useCallback(() => {
+    const key = firstShownRow(shown, collapsed);
+    if (key !== null) rowElements.current.get(key)?.focus();
+  }, [shown, collapsed]);
+  useLayoutEffect(() => {
+    if (!registerFocusFirstRow) return;
+    registerFocusFirstRow(focusFirstRow);
+    return () => registerFocusFirstRow(null);
+  }, [registerFocusFirstRow, focusFirstRow]);
 
   // Every toggle the operator makes pins the branch that holds the row
   // (§ 6.4), before the op leaves, so a failed op leaves it shown too.
@@ -1308,9 +1379,8 @@ export function ServiceSection({
     ? undefined
     : shown.find((g) => g.branches.length > 0)?.branches[0].head.occurrenceKey;
 
-  // § 6.9: a value that shows no row. Section search's own empty state
-  // (row 5) will take precedence over this one.
-  const filterEmpty = filter !== "all" && shown.length === 0;
+  // § 6.9 rows 4 and 5: the search's empty state takes precedence.
+  const emptyState = emptyStateFor(filter, filterText, shown);
 
   return (
     <div
@@ -1328,7 +1398,17 @@ export function ServiceSection({
         />
       )}
 
-      {filterEmpty && (
+      {emptyState === "search" && (
+        <EmptyState titleText={SEARCH_EMPTY_TITLE} headingLevel="h3">
+          <EmptyStateBody>
+            <Button variant="link" onClick={() => onClearQuery?.()}>
+              {CLEAR_QUERY_LABEL}
+            </Button>
+          </EmptyStateBody>
+        </EmptyState>
+      )}
+
+      {emptyState === "filter" && (
         <p className="inspectah-unit-filter__empty" style={{ padding: "var(--pf-t--global--spacer--md)" }}>
           {FILTER_EMPTY}{" "}
           <Button variant="link" isInline onClick={() => changeFilter("all")}>
@@ -1419,6 +1499,7 @@ export function ServiceSection({
                 key={row.occurrenceKey}
                 row={row}
                 onNavigateToConfig={onNavigateToConfig}
+                rowRef={rowRef(row.occurrenceKey)}
               />
             ))}
         </UnitGroup>
