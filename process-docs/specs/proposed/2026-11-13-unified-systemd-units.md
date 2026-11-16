@@ -2045,8 +2045,11 @@ What changes in scheduled:
 - The local-timer enable in `scheduled_tasks_section_lines`
   (`containerfile.rs:1382-1386`) is removed. Generated units keep theirs,
   as a request to `plan_units` rendered by the shared helper (§ 10.2).
-- `config_tree_units` (`service_intent.rs:308`) keeps only its
-  generated-unit half.
+- `config_tree_units` (`service_intent.rs:308`) is removed, not kept in
+  part. A generated unit's files are staged with the other unit files
+  (`configtree.rs:736`, name collisions checked at `:787`), and the
+  scheduled section picks the included units whose enables it requests
+  (`containerfile.rs:1388`).
 - `ItemId::SystemdTimer` is removed from refine, with the bulk operation that
   emits it, the validation arm that accepts it, and the aggregate handler
   that lists each timer as an item with an include flag

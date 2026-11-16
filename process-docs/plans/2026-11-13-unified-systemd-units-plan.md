@@ -428,9 +428,9 @@ Before Task 3.1: merge `main` into the branch and run the gate.
 
 ### Task 3.1: Timers become a description; the second writer goes (Rust lane, M)
 
-**Spec:** § 8 (table, single-control rule, `SystemdTimer` reduced to `name`, `on_calendar`, `exec_start`, `description`, `source`, `path`, `aggregate`; the local-timer loop and enable removed; `config_tree_units` keeps its generated half); § 6.7 rows for `SystemdTimer`; T19.
+**Spec:** § 8 (table, single-control rule, `SystemdTimer` reduced to `name`, `on_calendar`, `exec_start`, `description`, `source`, `path`, `aggregate`; the local-timer loop and enable removed; `config_tree_units` removed, its generated units staged with the other unit files); § 6.7 rows for `SystemdTimer`; T19.
 
-**Files:** Modify `crates/core/src/types/scheduled.rs`, `crates/collect/src/inspectors/scheduled.rs:772-826`, `crates/pipeline/src/render/configtree.rs:440-449` (removed), `crates/pipeline/src/render/containerfile.rs:1328-1332`, `:1382-1386` (removed), `crates/pipeline/src/render/unit_plan.rs` (`config_tree_units`, today `service_intent.rs:308-329`), the redaction scheduled pass and field guard. Test: `crates/cli/tests/units_scan_test.rs`, `crates/collect/tests/scheduled_test.rs`.
+**Files:** Modify `crates/core/src/types/scheduled.rs`, `crates/collect/src/inspectors/scheduled.rs:772-826`, `crates/pipeline/src/render/configtree.rs:440-449` (removed), `crates/pipeline/src/render/containerfile.rs:1328-1332`, `:1382-1386` (removed), `crates/pipeline/src/render/unit_plan.rs` (`config_tree_units`, today `service_intent.rs:308-329`, removed), the redaction scheduled pass and field guard. Test: `crates/cli/tests/units_scan_test.rs`, `crates/collect/tests/scheduled_test.rs`.
 
 - [ ] **Step 1: Failing test first,** T19 through the real inspectors: a local `.timer` and paired `.service`, timer `disabled`: no enable names the timer; excluding the timer's config row removes the timer file and leaves the service file; excluding the service row too leaves neither; no other writer restores either. Positive control: the timer `enabled` gives its enable from the unit state section.
 - [ ] **Step 2-4:** run, implement, gate. **Step 5: Commit** `fix(scheduled): give a local timer one control for its file and one for its state`.
