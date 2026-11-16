@@ -13,7 +13,9 @@ import type {
 } from "../../api/types";
 import {
   branchHeadOf,
+  emptyStateFor,
   filterBarDrawn,
+  firstShownRow,
   globalSearchText,
   groupUnits,
   hiddenByFilter,
@@ -22,6 +24,7 @@ import {
   liveRegionText,
   locateRow,
   pinsInView,
+  revealPlan,
   rowKey,
   sectionSearchText,
   showGroups,
@@ -467,6 +470,134 @@ describe("§ 6.11 locating a row and what hides it", () => {
       expect(hiddenByFilter(ksGroups, link, state({ filter: "needs_follow_up" }))).toBe(false);
       expect(hiddenByFilter(ksGroups, link, state({ filter: "carried" }))).toBe(true);
     });
+  });
+});
+
+describe("revealPlan: the reveal's steps in order (§ 6.11)", () => {
+  const OPEN: Record<GroupId, boolean> = {
+    default_target: false,
+    services: false,
+    sockets: false,
+    timers: false,
+    paths: false,
+    other_units: false,
+    reported: false,
+  };
+  const CUPS_SOCKET = JSON.stringify(["unit_state", "cups.socket"]);
+  const TMP_MOUNT = JSON.stringify(["unit_state", "tmp.mount"]);
+  const reveal = (key: string, over: Partial<ShowState> = {}, collapsed = OPEN) =>
+    revealPlan(ksGroups, key, { ...state(over), collapsed });
+
+  it("changes nothing when nothing hides the row", () => {
+    expect(reveal(CUPS_SOCKET)).toEqual({
+      clearQuery: false,
+      filterToAll: false,
+      openGroup: null,
+      clearPins: false,
+    });
+  });
+
+  it("clears the query alone when only the query hides the row, keeping the filter", () => {
+    // tmp.mount needs follow-up, so the filter shows it; "httpd" does not match it.
+    expect(reveal(TMP_MOUNT, { filter: "needs_follow_up", query: "httpd" })).toEqual({
+      clearQuery: true,
+      filterToAll: false,
+      openGroup: null,
+      clearPins: true,
+    });
+  });
+
+  it("sets the filter alone when only the filter hides the row, keeping the query", () => {
+    expect(reveal(CUPS_SOCKET, { filter: "needs_follow_up", query: "socket" })).toEqual({
+      clearQuery: false,
+      filterToAll: true,
+      openGroup: null,
+      clearPins: true,
+    });
+  });
+
+  it("does both when both hide the row", () => {
+    expect(reveal(CUPS_SOCKET, { filter: "needs_follow_up", query: "httpd" })).toEqual({
+      clearQuery: true,
+      filterToAll: true,
+      openGroup: null,
+      clearPins: true,
+    });
+  });
+
+  it("keeps the query, the filter and the pins for a pinned row", () => {
+    const pins = new Set([headKey(ksGroups, "cups.socket")]);
+    expect(reveal(CUPS_SOCKET, { filter: "needs_follow_up", query: "httpd", pins })).toEqual({
+      clearQuery: false,
+      filterToAll: false,
+      openGroup: null,
+      clearPins: false,
+    });
+  });
+
+  it("opens the row's group only when it is collapsed", () => {
+    expect(reveal(CUPS_SOCKET, {}, { ...OPEN, sockets: true, timers: true })?.openGroup).toBe("sockets");
+    expect(reveal(CUPS_SOCKET, {}, { ...OPEN, timers: true })?.openGroup).toBeNull();
+  });
+
+  it("plans nothing for a key no row has", () => {
+    expect(reveal(JSON.stringify(["unit_state", "nope.service"]))).toBeNull();
+  });
+});
+
+describe("emptyStateFor: § 6.9 rows 4 and 5", () => {
+  const none: ShownGroup[] = [];
+  const some = showGroups(ksGroups, state());
+
+  it("is the search state when a query shows no row, under any filter", () => {
+    expect(emptyStateFor("all", "zzz", none)).toBe("search");
+    expect(emptyStateFor("needs_follow_up", "zzz", none)).toBe("search");
+  });
+
+  it("is the filter state when a value shows no row and there is no query", () => {
+    expect(emptyStateFor("excluded", "", none)).toBe("filter");
+    expect(emptyStateFor("excluded", "   ", none)).toBe("filter");
+  });
+
+  it("is none when a row is shown, or under All with no query", () => {
+    expect(emptyStateFor("needs_follow_up", "cups", some)).toBeNull();
+    expect(emptyStateFor("excluded", "", some)).toBeNull();
+    expect(emptyStateFor("all", "", none)).toBeNull();
+  });
+});
+
+describe("firstShownRow: the first shown row in section order (§ 6.12, § 6.13)", () => {
+  const OPEN: Record<GroupId, boolean> = {
+    default_target: false,
+    services: false,
+    sockets: false,
+    timers: false,
+    paths: false,
+    other_units: false,
+    reported: false,
+  };
+
+  it("is the target under All", () => {
+    expect(firstShownRow(showGroups(ksGroups, state()), OPEN)).toBe(ksKeyed.defaultTarget!.occurrenceKey);
+  });
+
+  it("skips a collapsed group", () => {
+    const shown = showGroups(ksGroups, state());
+    expect(firstShownRow(shown, { ...OPEN, default_target: true })).toBe(headKey(ksGroups, "bluetooth.service"));
+  });
+
+  it("reaches an orphan drop-in and a reported row", () => {
+    const orphan = sshdOrphan();
+    expect(firstShownRow(showGroups(ksGroups, state({ query: "sshd" })), OPEN)).toBe(orphan.occurrenceKey);
+    const upheld = showGroups(ksGroups, state({ query: "restart loop" }));
+    expect(upheld.map((g) => g.id)).toEqual(["reported"]);
+    expect(firstShownRow(upheld, OPEN)).toBe(upheld[0].reported[0].rows[0].occurrenceKey);
+  });
+
+  it("is null when no row is shown, or every shown group is collapsed", () => {
+    expect(firstShownRow([], OPEN)).toBeNull();
+    const shown = showGroups(ksGroups, state({ query: "restart loop" }));
+    expect(firstShownRow(shown, { ...OPEN, reported: true })).toBeNull();
   });
 });
 

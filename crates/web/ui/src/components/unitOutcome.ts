@@ -543,8 +543,12 @@ function visibilityBranches(group: UnitGroupModel): VisibilityBranch[] {
 }
 
 /** A blank query searches nothing, as in the other sections. */
+function queryActive(query: string): boolean {
+  return query.trim() !== "";
+}
+
 function failsQuery(branch: VisibilityBranch, query: string): boolean {
-  if (query.trim() === "") return false;
+  if (!queryActive(query)) return false;
   return !branch.text.includes(query.toLowerCase());
 }
 
@@ -688,6 +692,77 @@ export function hiddenByFilter(groups: UnitGroupModel[], loc: RowLocation, state
   const branch = branchAt(groups, loc);
   if (!branch || state.pins.has(branch.head)) return false;
   return failsFilter(branch, state.filter);
+}
+
+export interface RevealInput extends ShowState {
+  collapsed: Readonly<Record<GroupId, boolean>>;
+}
+
+/** What a reveal changes, decided in one place (§ 6.11 The reveal). */
+export interface RevealPlan {
+  /** Step 1: the query hides the row's branch; the owner of the text clears it. */
+  clearQuery: boolean;
+  /** Step 2: the filter hides it, once step 1 is applied; the filter becomes "All". */
+  filterToAll: boolean;
+  /** Step 3: the row's group, when it is collapsed. */
+  openGroup: GroupId | null;
+  /** Step 1 or step 2 changes the query or the filter, which clears every pin (§ 6.4). */
+  clearPins: boolean;
+}
+
+/**
+ * The reveal of the row a row key names: steps 1 to 3 evaluated in order,
+ * each against the state the step before leaves. `null` when no row
+ * carries the key.
+ */
+export function revealPlan(groups: UnitGroupModel[], key: RowKey, input: RevealInput): RevealPlan | null {
+  const loc = locateRow(groups, key);
+  if (!loc) return null;
+  let state: ShowState = input;
+  const clearQuery = hiddenByQuery(groups, loc, state);
+  if (clearQuery) state = { ...state, query: "", pins: new Set() };
+  const filterToAll = hiddenByFilter(groups, loc, state);
+  return {
+    clearQuery,
+    filterToAll,
+    openGroup: input.collapsed[loc.groupId] ? loc.groupId : null,
+    clearPins: clearQuery || filterToAll,
+  };
+}
+
+/** Which empty state the section shows (§ 6.9 rows 4 and 5). */
+export type EmptyStateKind = "search" | "filter";
+
+/**
+ * The empty state for what is shown: section search's when a query shows
+ * no row, which takes precedence over the filter's (string 14), shown when
+ * a value other than "All" shows no row. `null` while a row is shown.
+ */
+export function emptyStateFor(filter: FilterValue, query: string, shown: ShownGroup[]): EmptyStateKind | null {
+  if (shown.length > 0) return null;
+  if (queryActive(query)) return "search";
+  return filter === "all" ? null : "filter";
+}
+
+/**
+ * The first shown row in section order, skipping collapsed groups: the
+ * target, then unit rows, orphan drop-ins and reported rows (§ 6.12,
+ * § 6.13). `null` when no row is shown.
+ */
+export function firstShownRow(
+  shown: ShownGroup[],
+  collapsed: Readonly<Record<GroupId, boolean>>,
+): OccurrenceKey | null {
+  for (const group of shown) {
+    if (collapsed[group.id]) continue;
+    const first =
+      group.target ??
+      group.branches[0]?.head ??
+      group.orphans[0]?.dropins[0] ??
+      group.reported[0]?.rows[0];
+    if (first) return first.occurrenceKey;
+  }
+  return null;
 }
 
 /** § 7 strings 19 to 22, by filter value: [one row, n rows]. */
