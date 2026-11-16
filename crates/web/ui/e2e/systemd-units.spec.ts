@@ -2,7 +2,14 @@ import { test, expect, type Page } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
-import { applyMockApi, clearMocks } from "./helpers/mock-api";
+import { applyMockApi, clearMocks, mockSequence } from "./helpers/mock-api";
+import {
+  FILTER_LABELS,
+  FILTER_VALUES,
+  keyFields,
+  outcomeCounts,
+  type UnitFields,
+} from "../src/components/unitOutcome";
 
 // The Systemd units section in a real browser (spec § 10.3, P1 to P8).
 //
@@ -19,6 +26,13 @@ const VIEW_BODIES = {
   stock10: path.join(SINGLE_HOST, "view-units-stock10.json"),
 } as const;
 const SECTIONS_BODY = path.join(SINGLE_HOST, "sections-units-kitchen-sink.json");
+const AFTER_EXCLUDE_TMP_MOUNT = path.join(
+  HERE,
+  "fixtures",
+  "sequences",
+  "units-exclude-tmp-mount",
+  "01-after-exclude.json",
+);
 const GROUPS_BODY = path.join(
   HERE,
   "..",
@@ -28,6 +42,13 @@ const GROUPS_BODY = path.join(
   "system-tuning",
   "files-no-tuned.groups.json",
 );
+
+/** Bound on Tab and `j` presses while walking to a target, so a miss fails instead of looping. */
+const MAX_KEY_PRESSES = 60;
+
+function readView(view: keyof typeof VIEW_BODIES): UnitFields {
+  return JSON.parse(fs.readFileSync(VIEW_BODIES[view], "utf-8")) as UnitFields;
+}
 
 /** Uncaught page errors of the running test, asserted empty after it. */
 let pageErrors: string[] = [];
@@ -142,6 +163,78 @@ test.describe("Systemd units section", () => {
     await expect(shownCountedRows(page)).toHaveCount(23);
     expect(await groupHeaders(page)).toHaveLength(6);
     await expect(live).toHaveText("Showing all 24 rows.");
+  });
+
+  test("P3: keyboard only, a toggled row stays in place with focus", async ({ page }) => {
+    await setupUnits(page);
+    await mockSequence(
+      page,
+      "/api/view",
+      [VIEW_BODIES["kitchen-sink"], AFTER_EXCLUDE_TMP_MOUNT],
+      { triggerOn: "/api/op" },
+    );
+    await page.goto("/");
+    const focusedTestId = () =>
+      page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? null);
+
+    // Open the section from its sidebar entry with Enter. Entering a section
+    // focuses its first row (App's section-entry focus), which sits below
+    // the bar, so the bar is reached with Shift+Tab.
+    const entry = sidebarEntry(page, /^Systemd units /);
+    await entry.focus();
+    await page.keyboard.press("Enter");
+    const section = page.getByTestId("service-section");
+    await expect(page.getByTestId("default-target")).toBeFocused();
+
+    const followUp = filterButtons(page).filter({ hasText: "Needs follow-up" });
+    const isFollowUpFocused = () => followUp.evaluate((el) => el === document.activeElement);
+    for (let i = 0; i < MAX_KEY_PRESSES && !(await isFollowUpFocused()); i++) {
+      await page.keyboard.press("Shift+Tab");
+    }
+    await expect(followUp).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(followUp).toHaveAttribute("aria-pressed", "true");
+
+    // Tab past the remaining bar buttons and the group headers into the rows.
+    const isRowFocused = () =>
+      page.evaluate(() => document.activeElement?.getAttribute("role") === "row");
+    for (let i = 0; i < MAX_KEY_PRESSES && !(await isRowFocused()); i++) {
+      await page.keyboard.press("Tab");
+    }
+    expect(await isRowFocused()).toBe(true);
+
+    const tmpMount = page.getByTestId("service-item-tmp.mount");
+    for (let i = 0; i < MAX_KEY_PRESSES && (await focusedTestId()) !== "service-item-tmp.mount"; i++) {
+      await page.keyboard.press("j");
+    }
+    await expect(tmpMount).toBeFocused();
+
+    const shownRowIds = () =>
+      section
+        .locator('[role="row"]:visible')
+        .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+    const before = await shownRowIds();
+    const at = before.indexOf("service-item-tmp.mount");
+    const neighbours = [before[at - 1], before[at + 1]];
+
+    const opSent = page.waitForRequest((r) => r.url().endsWith("/api/op") && r.method() === "POST");
+    await page.keyboard.press("x");
+    await opSent;
+
+    // The post-exclude body's counts, by the same rules the bar uses.
+    const afterBody = JSON.parse(fs.readFileSync(AFTER_EXCLUDE_TMP_MOUNT, "utf-8")) as UnitFields;
+    const counts = outcomeCounts(keyFields(afterBody));
+    await expect
+      .poll(() => filterTexts(page))
+      .toEqual(FILTER_VALUES.map((value) => `${FILTER_LABELS[value]} ${counts[value]}`));
+    expect(counts).not.toEqual(outcomeCounts(keyFields(readView("kitchen-sink"))));
+
+    await expect(tmpMount).toBeFocused();
+    await expect(tmpMount.getByRole("checkbox")).not.toBeChecked();
+    const after = await shownRowIds();
+    const atAfter = after.indexOf("service-item-tmp.mount");
+    expect(atAfter).toBe(at);
+    expect([after[atAfter - 1], after[atAfter + 1]]).toEqual(neighbours);
   });
 
   test("P4: a global search result for a unit lands on its row", async ({ page }) => {
