@@ -6301,6 +6301,73 @@ fn t37_a_self_trigger_is_skipped_through_the_export() {
     assert!(acts(&cf, "enable", "report.timer"), "{cf}");
 }
 
+/// T37, a self-trigger through an alias: a vendor `report.timer` with the
+/// vendor alias link `alias.timer`, and `/etc` drop-ins `10-alias.conf`
+/// (`Unit=alias.timer`, which systemd rejects as the timer's own name)
+/// and `20-unit.conf` (`Unit=worker.service`). The trigger is
+/// `worker.service` and `20-unit.conf` is its evidence: excluding that
+/// drop-in, or `worker.service`, omits the timer's enable; with both
+/// included it is carried.
+#[test]
+fn t37_a_self_trigger_by_alias_is_skipped_through_the_export() {
+    const ALIAS_DROP_IN: &str = "/etc/systemd/system/report.timer.d/10-alias.conf";
+    const UNIT_DROP_IN: &str = "/etc/systemd/system/report.timer.d/20-unit.conf";
+    let snap = scan(
+        UnitHost::new()
+            .base_package("glibc")
+            .unit("report.timer", "enabled")
+            .unit("worker.service", "static")
+            .preset("disable *")
+            .vendor_unit(
+                "report.timer",
+                "[Unit]\nDescription=Nightly report\n[Timer]\nOnCalendar=daily\n\
+                 [Install]\nWantedBy=timers.target\n",
+                Some("glibc"),
+            )
+            .link(
+                "/usr/lib/systemd/system/alias.timer",
+                "/usr/lib/systemd/system/report.timer",
+            )
+            .etc_unit(
+                "worker.service",
+                "[Service]\nType=oneshot\nExecStart=/usr/local/bin/worker\n",
+            )
+            .file(ALIAS_DROP_IN, "[Timer]\nUnit=alias.timer\n")
+            .file(UNIT_DROP_IN, "[Timer]\nUnit=worker.service\n"),
+    );
+    let timer = snap
+        .scheduled_tasks
+        .as_ref()
+        .and_then(|st| st.systemd_timers.iter().find(|t| t.name == "report"))
+        .expect("presence: report.timer's description");
+    assert_eq!(timer.trigger, trigger_unit("worker.service"));
+    assert_eq!(timer.trigger_drop_ins, [UNIT_DROP_IN]);
+
+    let carried = containerfile_in(&exported_after(&snap, &[]));
+    assert!(acts(&carried, "enable", "report.timer"), "{carried}");
+    let drop_in = ItemId::DropIn {
+        path: UNIT_DROP_IN.into(),
+    };
+    let cf = containerfile_in(&exported_after(&snap, &[(drop_in, false)]));
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert!(
+        omitted(&cf, "report.timer").is_some_and(|line| line.contains(&format!(
+            "the drop-in {UNIT_DROP_IN} that sets its Unit= is not in the export"
+        ))),
+        "{cf}"
+    );
+    let cf = containerfile_in(&exported_after(
+        &snap,
+        &[(config_item(&etc_path("worker.service")), false)],
+    ));
+    assert!(in_no_systemctl_instruction(&cf, "report.timer"), "{cf}");
+    assert_eq!(
+        omitted(&cf, "report.timer"),
+        Some(trigger_not_staged("worker.service").as_str()),
+        "{cf}"
+    );
+}
+
 /// T37, an ignored assignment is absent: an `/etc` drop-in whose only
 /// `Unit=` holds `%I`, which systemd ignores, is no trigger evidence, so
 /// excluding it carries the timer's enable exactly as excluding the same
