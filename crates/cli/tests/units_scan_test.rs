@@ -7896,11 +7896,10 @@ fn a_partial_unit_reports_a_link_its_section_does_not_name_as_hand_made() {
                  source host (the unit's [Install] section does not name part-alias.service). \
                  Not carried."
                     .to_owned(),
-                "#   No systemctl verb but enable makes an alias link. To carry it, make the \
-                 link in the Containerfile after the configuration COPY, or add \
-                 Alias=part-alias.service in a drop-in for part.service and run systemctl \
-                 enable on part.service after that COPY, which also makes every other link its \
-                 [Install] section and Also= name: check those first."
+                "#   To carry it, make the link in the Containerfile after the configuration \
+                 COPY, or add Alias=part-alias.service in a drop-in for part.service and run \
+                 systemctl enable on part.service after that COPY, which also makes every other \
+                 link its [Install] section and Also= name: check those first."
                     .to_owned(),
             ],
         ),
@@ -8069,11 +8068,10 @@ fn t23_link_advisory_table() {
                  the source host (the unit's [Install] section does not name \
                  backup-alias.service). Not carried."
                     .to_owned(),
-                "#   No systemctl verb but enable makes an alias link. To carry it, make the \
-                 link in the Containerfile after the configuration COPY, or add \
-                 Alias=backup-alias.service in a drop-in for backup.service and run systemctl \
-                 enable on backup.service after that COPY, which also makes every other link \
-                 its [Install] section and Also= name: check those first."
+                "#   To carry it, make the link in the Containerfile after the configuration \
+                 COPY, or add Alias=backup-alias.service in a drop-in for backup.service and \
+                 run systemctl enable on backup.service after that COPY, which also makes every \
+                 other link its [Install] section and Also= name: check those first."
                     .to_owned(),
             ],
         ),
@@ -9197,10 +9195,10 @@ fn t32_a_host_only_alias_is_advised_without_adding_alias() {
              carried."
         ),
         format!(
-            "#   The export copies those files, and no systemctl verb but enable makes an alias \
-             link. To carry it, make the link in the Containerfile after the configuration COPY, \
-             or run systemctl enable on {DIFF_UNIT} after that COPY, which also makes every \
-             other link its [Install] section and Also= name: check those first."
+            "#   The export copies those files. To carry it, make the link in the Containerfile \
+             after the configuration COPY, or run systemctl enable on {DIFF_UNIT} after that \
+             COPY, which also makes every other link its [Install] section and Also= name: check \
+             those first."
         ),
     ];
     let refine = session(&snap);

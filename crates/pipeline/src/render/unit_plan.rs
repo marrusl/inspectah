@@ -1384,9 +1384,8 @@ const LINK_HOST_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system name 
      link. Not carried.";
 
 /// The start of a `HostInstallOnly` alias's second line: the files that
-/// name the alias are copied, and only `enable` makes an alias link.
-const ALIAS_FILES_COPIED: &str =
-    "The export copies those files, and no systemctl verb but enable makes an alias link.";
+/// name the alias are copied.
+const ALIAS_FILES_COPIED: &str = "The export copies those files.";
 
 /// § 10.9's `VendorInstallOnly` text after the link and before the unit.
 const LINK_VENDOR_INSTALL_ONLY: &str = "is not on the source host:";
@@ -1420,8 +1419,7 @@ const LINK_STAGED_FILE_REST: &str = "which replaces this link in the image, so n
 ///   relation: the `add-wants` or `add-requires` command, quoted after
 ///   `--`, for a `.wants` or `.requires` link; for an `.upholds` link, what
 ///   the link does and how to add it, since no verb makes one; for an
-///   alias, how to add it, since no verb but `enable` makes one. A
-///   `HostDevice` link gets no command.
+///   alias, how to carry it. A `HostDevice` link gets no command.
 /// - For `VendorInstallOnly`, the line that removes the link the image
 ///   has, its path quoted, after a test that the path is a link. When
 ///   `staged` writes a file at that path, the copied file replaces the
@@ -1519,10 +1517,10 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
              makes every other link its [Install] section and Also= name: check those first."
         ),
         LinkName::Alias { .. } => format!(
-            "#   No systemctl verb but enable makes an alias link. To carry it, make the link \
-             in the Containerfile after the configuration COPY, or add Alias={parent} in a \
-             drop-in for {unit} and run systemctl enable on {unit} after that COPY, which also \
-             makes every other link its [Install] section and Also= name: check those first."
+            "#   To carry it, make the link in the Containerfile after the configuration COPY, \
+             or add Alias={parent} in a drop-in for {unit} and run systemctl enable on {unit} \
+             after that COPY, which also makes every other link its [Install] section and \
+             Also= name: check those first."
         ),
     };
     vec![first, second]
