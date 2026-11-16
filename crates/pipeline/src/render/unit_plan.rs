@@ -1253,6 +1253,11 @@ const UNDETERMINED_CHECK: &str = "can differ from the source host's, including l
      package install made before these files are copied. Check them with systemctl is-enabled \
      in the image.";
 
+/// [`UNDETERMINED_CHECK`] for a record with no install file, where no file
+/// is copied (Mark Russell, 2026-11-15).
+const UNDETERMINED_CHECK_NO_FILE: &str = "can differ from the source host's, including links \
+     its package install made. Check them with systemctl is-enabled in the image.";
+
 /// § 10.9's sentence for an undetermined record with no install file.
 const UNDETERMINED_ASSIGNS_ALSO: &str = "It assigns Also=, so the units it names are enabled \
      or disabled with it in the image, and inspectah could not list them to check.";
@@ -1350,6 +1355,11 @@ const LINK_HOST_INSTALL_ONLY: &str = "is on the source host because";
 const LINK_HOST_INSTALL_ONLY_REST: &str = "files under /etc/systemd/system name it, and the \
      package's unit does not. The image was linked from the package's unit, so it lacks this \
      link. Not carried.";
+
+/// The start of a `HostInstallOnly` alias's second line: the files that
+/// name the alias are copied, and only `enable` makes an alias link.
+const ALIAS_FILES_COPIED: &str =
+    "The export copies those files, and no systemctl verb but enable makes an alias link.";
 
 /// § 10.9's `VendorInstallOnly` text after the link and before the unit.
 const LINK_VENDOR_INSTALL_ONLY: &str = "is not on the source host:";
@@ -1473,6 +1483,14 @@ pub fn manual_link_lines(link: &ManualLink, staged: &StagedWrites<'_>) -> Vec<St
              RHEL 9 target does not honor it. To add it, put Upholds={unit} in a drop-in for \
              {parent}."
         ),
+        // The `/etc` files that name the alias are copied, so the advice
+        // never asks for an `Alias=` the export already carries (Mark
+        // Russell, 2026-11-15).
+        LinkName::Alias { .. } if link.cause == ManualLinkCause::HostInstallOnly => format!(
+            "#   {ALIAS_FILES_COPIED} To carry it, make the link in the Containerfile after the \
+             configuration COPY, or run systemctl enable on {unit} after that COPY, which also \
+             makes every other link its [Install] section and Also= name: check those first."
+        ),
         LinkName::Alias { .. } => format!(
             "#   No systemctl verb but enable makes an alias link. To carry it, make the link \
              in the Containerfile after the configuration COPY, or add Alias={parent} in a \
@@ -1542,22 +1560,22 @@ pub fn undetermined_install_lines(record: &UndeterminedInstall) -> Vec<String> {
          relied on ({})",
         install_unknown_words(record.reason)
     );
-    let first = if record.install_files.is_empty() {
+    let (first, check) = if record.install_files.is_empty() {
         let also = match record.reason {
             InstallUnknown::Unreadable => UNDETERMINED_MAY_ASSIGN_ALSO,
             _ => UNDETERMINED_ASSIGNS_ALSO,
         };
-        format!("{opening}. {also}")
+        (format!("{opening}. {also}"), UNDETERMINED_CHECK_NO_FILE)
     } else {
-        format!(
-            "{opening}, and these files under /etc/systemd/system change it: {}.",
-            record.install_files.join(", ")
+        (
+            format!(
+                "{opening}, and these files under /etc/systemd/system change it: {}.",
+                record.install_files.join(", ")
+            ),
+            UNDETERMINED_CHECK,
         )
     };
-    vec![
-        first,
-        format!("#   The image's links for {unit} {UNDETERMINED_CHECK}"),
-    ]
+    vec![first, format!("#   The image's links for {unit} {check}")]
 }
 
 // ---------------------------------------------------------------------------

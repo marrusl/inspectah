@@ -7481,6 +7481,16 @@ fn undetermined_second_line(unit: &str) -> String {
     )
 }
 
+/// The second line of § 10.9's unit-level block for `unit` when the record
+/// has no install file: no files are copied, so it says nothing about a
+/// copy (Mark Russell, 2026-11-15).
+fn undetermined_no_file_second_line(unit: &str) -> String {
+    format!(
+        "#   The image's links for {unit} can differ from the source host's, including links \
+         its package install made. Check them with systemctl is-enabled in the image."
+    )
+}
+
 /// The block in `containerfile` that starts with the line `first`: that
 /// line and the `#   ` lines after it.
 fn block_from(containerfile: &str, first: &str) -> Vec<String> {
@@ -8573,7 +8583,7 @@ fn an_unreadable_unit_file_is_an_undetermined_record_through_both_exports() {
          Also=, so units it names may be enabled or disabled with it in the image, and \
          inspectah could not read it to check."
             .to_owned(),
-        undetermined_second_line("need.service"),
+        undetermined_no_file_second_line("need.service"),
     ];
     let refine = session(&snap);
     let rows = &refine.decisions().undetermined_installs;
@@ -8759,7 +8769,7 @@ fn t40_an_upheld_vendor_unit_with_a_link_or_also() {
          Also=, so the units it names are enabled or disabled with it in the image, and \
          inspectah could not list them to check."
             .to_owned(),
-        undetermined_second_line("need.service"),
+        undetermined_no_file_second_line("need.service"),
     ];
     for (route, containerfile) in both_routes(&also) {
         assert_eq!(
@@ -9158,6 +9168,70 @@ fn t31_added_links_are_enabled_after_the_copy() {
                 "{case} {route}:\n{containerfile}"
             );
         }
+    }
+}
+
+/// T32 for an alias: a shadow whose `[Install]` names `Alias=` in place of
+/// the package's `WantedBy=multi-user.target`, with the alias link on the
+/// host. The alias's `HostInstallOnly` block does not tell the operator to
+/// add an `Alias=` the copied shadow already holds: its second line says the
+/// export copies those files and gives the two ways to make the link in the
+/// image (Mark Russell, 2026-11-15). The same block on both routes and in
+/// refine's row, and no `systemctl` instruction names the unit.
+#[test]
+fn t32_a_host_only_alias_is_advised_without_adding_alias() {
+    const ALIAS: &str = "app-alias.service";
+    let snap = scan(
+        diff_host(DIFF_UNIT, WANTS_MULTI_USER, "enabled")
+            .etc_unit(
+                DIFF_UNIT,
+                "[Service]\nExecStart=/bin/true\n\n[Install]\nAlias=app-alias.service\n",
+            )
+            .link(&format!("/etc/systemd/system/{ALIAS}"), DIFF_SHADOW),
+    );
+    let expected = [
+        format!(
+            "# Advisory: {ALIAS}, a link to {DIFF_UNIT}, is on the source host because \
+             {DIFF_UNIT}'s files under /etc/systemd/system name it, and the package's unit does \
+             not. The image was linked from the package's unit, so it lacks this link. Not \
+             carried."
+        ),
+        format!(
+            "#   The export copies those files, and no systemctl verb but enable makes an alias \
+             link. To carry it, make the link in the Containerfile after the configuration COPY, \
+             or run systemctl enable on {DIFF_UNIT} after that COPY, which also makes every \
+             other link its [Install] section and Also= name: check those first."
+        ),
+    ];
+    let refine = session(&snap);
+    let row = refine
+        .decisions()
+        .manual_links
+        .iter()
+        .find(|r| r.parent.as_str() == ALIAS)
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "the alias's refine row: {:?}",
+                refine.decisions().manual_links
+            )
+        });
+    assert_eq!(row.cause, ManualLinkCause::HostInstallOnly);
+    assert_eq!(row.advisories, expected, "the refine row");
+    for (route, containerfile) in both_routes(&snap) {
+        assert_eq!(
+            block_from(&containerfile, &expected[0]),
+            expected,
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            !containerfile.contains("add Alias="),
+            "{route}:\n{containerfile}"
+        );
+        assert!(
+            in_no_systemctl_instruction(&containerfile, DIFF_UNIT),
+            "{route}:\n{containerfile}"
+        );
     }
 }
 
@@ -12261,6 +12335,59 @@ fn t39_an_owner_whose_member_is_off_is_an_advisory() {
                 && advisory_for(&containerfile, "m.service").is_empty(),
             "inert {route}:\n{containerfile}"
         );
+    }
+}
+
+/// T39's owner note (§ 7.4), on one host and on a fleet aggregate of two
+/// hosts, in the scanned snapshot, the scan and refine exports' snapshots
+/// and refine's row: one sentence that names no host, so it fits a merged
+/// row as well as a single host's (Mark Russell, 2026-11-15).
+#[test]
+fn t39_the_member_off_note_fits_a_host_and_a_fleet() {
+    const NOTE: &str = "A unit it enables through Also= is not enabled alongside it.";
+    let socket = "[Socket]\nListenStream=/run/m.sock\n\n[Install]\nWantedBy=sockets.target\n";
+    let host = |hostname: &str| {
+        reload(&scan(
+            rule7_host(
+                &["enable m.service"],
+                &[("m.service", "enabled"), ("m.socket", "disabled")],
+                &[
+                    ("m.service", &wanted_with("Also=m.socket\n")),
+                    ("m.socket", socket),
+                ],
+            )
+            .file("/etc/hostname", &format!("{hostname}\n")),
+        ))
+    };
+    let single = host("host-a");
+    let (merged, _) =
+        merge_snapshots(vec![host("host-a"), host("host-b")], None, None).expect("merge");
+    let merged = reload(&merged);
+    assert!(merged.aggregate_meta.is_some(), "an aggregate");
+    for (label, snap) in [("single host", &single), ("fleet", &merged)] {
+        assert_eq!(
+            change(snap, "m.service").attention_reason.as_deref(),
+            Some(NOTE),
+            "{label}"
+        );
+        assert_eq!(
+            unit_row(snap, "m.service").attention_reason.as_deref(),
+            Some(NOTE),
+            "{label}: the refine row"
+        );
+        for (route, export) in [
+            ("scan", render_export(snap)),
+            ("refine", export_session(&session(snap))),
+        ] {
+            let json = std::fs::read_to_string(export.path().join("inspection-snapshot.json"))
+                .expect("the export holds the snapshot");
+            let exported = InspectionSnapshot::load(&json).expect("the exported snapshot loads");
+            assert_eq!(
+                change(&exported, "m.service").attention_reason.as_deref(),
+                Some(NOTE),
+                "{label} {route}"
+            );
+        }
     }
 }
 

@@ -5040,7 +5040,7 @@ fn t30_other_presets_and_controls() {
 // ---------------------------------------------------------------------
 
 /// The attention note of an owner at its preset whose member is off.
-const MEMBER_OFF_NOTE: &str = "A unit it enables through Also= is not enabled on the source host.";
+const MEMBER_OFF_NOTE: &str = "A unit it enables through Also= is not enabled alongside it.";
 
 /// A unit file wanted by `multi-user.target` whose `[Install]` also holds
 /// `extra` (`Also=...`, `DefaultInstance=...`).

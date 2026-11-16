@@ -934,9 +934,10 @@ const ADDS_LINKS_REASON: &str = "Its /etc files add links the package's unit doe
 
 /// The attention note of an owner at its preset that is a row because a
 /// unit its `Also=` reaches is `Unlinked` or `Other` (§ 7.4 of the units
-/// spec, "An owner at its preset whose member is off").
-const MEMBER_OFF_REASON: &str =
-    "A unit it enables through Also= is not enabled on the source host.";
+/// spec, "An owner at its preset whose member is off"). It names no host,
+/// so it reads true on a fleet aggregate's merged row too (Mark Russell,
+/// 2026-11-15).
+const MEMBER_OFF_REASON: &str = "A unit it enables through Also= is not enabled alongside it.";
 
 /// A unit kept for a state change or as an enabled storage unit, with what
 /// [`build_state_changes`] read for it.
