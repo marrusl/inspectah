@@ -5,13 +5,13 @@
 | Field | Value |
 |---|---|
 | Date | 2026-11-16 |
-| Status | Approved (Mark Russell, 2026-11-16). Scope and eight design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. No question is open (§ 13). |
+| Status | Approved (Mark Russell, 2026-11-16). Amended 2026-11-16 after the mid-way implementation gate (§ 2 items 9 to 13). Scope and thirteen design choices are decided (§ 2). The rest is the spec author's design; each such call is listed in § 14. No question is open (§ 13). |
 | Plan | `process-docs/plans/2026-11-16-systemd-units-refine-section-plan.md` |
 | Scope | Single-host refine only: the "Systemd units" section (today "Services"), and five defects in the refine UI around it. Grouping and presentation. No field added to the view response, no snapshot or schema change, no change to what the Containerfile renders. |
 | Parent | Phase 6 of `process-docs/specs/implemented/2026-11-13-unified-systemd-units.md`, which recommends a section design in § 11.2 and leaves it to a frontend design pass. This spec is that pass's result. |
 | Basis | A design pass with mockups on a real kitchen-sink scan: the view response of a driftify kitchen-sink scan of RHEL 10.2 served by inspectah `e6591669`, unedited, and two stock hosts (RHEL 10.2 and RHEL 9.8) built from the stock-host records in `process-docs/skills/real-host-validation-runs.md`. The pass rendered three options in headless Chromium. It did not check keyboard use, screen readers or widths under 1440 px; § 6.13 states those requirements instead. |
 | Backlog items | Closes `inspectah-global-search-services-results-navigate-nowhere`. Touches, does not close: `inspectah-omitted-service-search-text-leaves-out-the-reason`, `inspectah-no-fixture-has-a-non-empty-services-drop-ins`, `inspectah-refine-sections-reorg` (§ 3.2). |
-| Verified | Every "today" statement and file reference read at `e6591669`. Line numbers are a convenience; the symbol name is the identifier. |
+| Verified | Every "today" statement and file reference read at `e6591669`. Every statement of what the feature branch builds read on `feat/systemd-units-refine-section` at `8fe3f24f`. Line numbers are a convenience; the symbol name is the identifier. |
 
 **No code, test, fixture, documentation or CHANGELOG entry was written to
 produce this file.**
@@ -79,6 +79,21 @@ Other things get in the way:
 8. **The Containerfile panel footer fix (§ 9.5) applies in single-host
    mode only.** The fleet view's footer stays as it is. (Mark Russell,
    2026-11-16)
+9. **A kind group whose shown rows are only orphan drop-ins has no count
+   badge** (§ 6.3). (Mark Russell, 2026-11-16)
+10. **Section search matches the words a row shows**: a link's relation
+    phrase, an undetermined install's reason words, and a mount
+    finding's kind and mount point, so section search finds what global
+    search finds (§ 6.12). (Mark Russell, 2026-11-16)
+11. **After a filter change the live region announces every row now
+    shown, orphan drop-ins included**, so under "All" it can read one
+    more than the bar's All count (§ 6.4). (Mark Russell, 2026-11-16)
+12. **The section's state lives in a hook file, `useUnitsSectionState.ts`,
+    apart from `ServiceSection.tsx`'s rendering** (§ 8). Behaviour is
+    unchanged. (Mark Russell, 2026-11-16)
+13. **The owner badge on a configuration row that a unit drop-in shadows
+    reads "Controlled in Systemd units"** in single-host mode (string
+    26). (Mark Russell, 2026-11-16)
 
 ## 3. Goals, non-goals, anti-goals
 
@@ -301,8 +316,8 @@ list never depends on it.
   drop-ins nest under the first of them only (§ 6.12).
 - Orphan drop-ins (§ 6.8) sit at the end of the group of their `kind`.
 - Every group is open by default and collapsible from its header.
-  Collapse state lives in the section component and resets when the
-  operator leaves the section. A collapsed group keeps its rows in the
+  Collapse state lives in the section's state hook (§ 8) and resets
+  when the operator leaves the section. A collapsed group keeps its rows in the
   DOM under `hidden`; a reveal opens it (§ 6.11).
 
 ### 6.3 Group header
@@ -314,9 +329,12 @@ naming the group's grid. It shows, in order:
    `TriageBucketGroup` uses).
 2. The group title (§ 7).
 3. A count badge (PatternFly `Badge`, read): the number of rows the group
-   shows under the current filter and search. Drop-ins are not counted;
-   in "Reported, not carried" each reported row counts once. The Default
-   target group has no count.
+   shows under the current filter and search. Drop-ins are not counted,
+   orphan drop-ins included; in "Reported, not carried" each reported
+   row counts once. The badge is drawn when that number is above 0. A
+   group is drawn with the number at 0 only when it is a kind group
+   whose shown rows are all orphan drop-ins (§ 6.8), and such a group
+   has no badge (§ 2 item 9). The Default target group has no count.
 4. **The follow-up flag**, in kind groups 2 to 6 only, and only while the
    filter is "All": when N of the group's unit rows have the outcome
    Needs follow-up and N > 0, a compact orange outline `Label` reading
@@ -325,8 +343,12 @@ naming the group's grid. It shows, in order:
    Default target group shows the outcome on the row itself (§ 6.5), and
    "Reported, not carried" is all follow-up, so neither has a flag.
 
-The flag's text is part of the button's accessible name, so a screen
-reader hears "Services 11, 5 need follow-up".
+The button's accessible name is the title, then the count after a space
+when the badge is drawn, then a comma and the flag's text when the flag
+is drawn: a screen reader hears "Services 11, 5 need follow-up". A group
+with no badge is named by its title alone ("Services"), or by its title,
+a comma and the flag ("Services, 5 need follow-up", when a section query
+leaves only an orphan drop-in shown under "All").
 
 ### 6.4 The outcome filter
 
@@ -388,10 +410,20 @@ Needs follow-up: the Containerfile writes a comment for the row and no command.
   in the section; it is not stored in `localStorage` or the URL. If the
   bar stops being drawn while a value is selected, the filter returns to
   "All".
-- **Announcement.** Changing the value updates a polite live region with
-  the number of rows now shown (§ 7, strings 19 to 22). The region is in
-  the DOM, empty, from the bar's first render, so the first change is
-  announced.
+- **Announcement.** Changing the value, by the operator or by a reveal
+  that sets it to "All" (§ 6.11), updates a polite live region with the
+  number of rows now shown (§ 7, strings 19 to 22), every shown row
+  counted, orphan drop-ins included (§ 2 item 11). The number is
+  `resultCount`'s (§ 6.12): unit rows, the default target, orphan
+  drop-ins and reported rows shown under the new value and the current
+  section query, nested drop-ins not counted; a filter change clears
+  every pin first, so no pin adds to it. It is not the bar's count for
+  the value, which counts only rows with an outcome and ignores the
+  query: on the kitchen-sink view, choosing "All" announces "Showing all
+  24 rows." while the bar reads "All 23", since `sshd.service`'s orphan
+  full shadow is shown and has no outcome; under a section query the
+  number is the rows shown under that query. The region is in the DOM,
+  empty, from the bar's first render, so the first change is announced.
 
 ### 6.5 The default target
 
@@ -479,6 +511,13 @@ Added: each row of this section carries its row key in `data-unit-key`
 reads the key in place of the test id. The two rows of a true duplicate
 (§ 6.12) carry the same test id and the same row key; only their
 occurrence keys differ.
+
+**DOM ids.** A row's first record with its row key (ordinal 0, § 6.11)
+keeps today's DOM ids for the row's elements and notes. A later
+occurrence of a true duplicate gives each such id a suffix of its own,
+generated per row (React `useId`), appended to today's id, so no two
+elements of the section share an id. Each occurrence's
+`aria-describedby` names its own notes, never its twin's.
 
 ### 6.7 Reported, not carried
 
@@ -684,8 +723,12 @@ a JSON string, never a boundary. A unit named
 `undetermined-install-demo.service` has the key
 `["unit_state","undetermined-install-demo.service"]`, and an undetermined
 install for `demo.service` has `["undetermined_install","demo.service"]`.
-An id that starts with `[` and does not parse to a key of the kinds above
-names no row.
+An id that starts with `[` names a row only when it parses to an array
+of strings whose first is one of the kinds above, with that kind's
+number of identity parts, and is byte for byte what `JSON.stringify`
+writes for that array (no added whitespace, no other escaping).
+Anything else, the same array spelled another way included, names no
+row and is treated as not found.
 
 **The reveal.** When `revealItemId` names a row of this section, the
 destination is made visible before `App.tsx`'s reveal effect looks it
@@ -696,15 +739,16 @@ up, in this order:
    pinned), `MainContent` clears the query text, as a global search
    navigation does; the search box stays open. A query that leaves the
    destination shown is kept.
-2. **Outcome filter.** When the filter hides the destination,
-   `ServiceSection` sets it to "All".
-3. **Collapse.** When the destination's group is collapsed,
-   `ServiceSection` opens it.
+2. **Outcome filter.** When the filter hides the destination, the
+   section sets it to "All".
+3. **Collapse.** When the destination's group is collapsed, the section
+   opens it.
 
-Steps 1 and 2 clear pins (§ 6.4). `App.tsx`'s reveal effect then finds
-the row and focuses it as today. `App.tsx` needs no code for unit
-groups: `ServiceSection` owns collapse state and has opened the group
-before the lookup. A reveal that finds no row after these steps is a
+`unitOutcome.ts` decides the three steps in one function; the section's
+state hook (§ 8) applies them. Steps 1 and 2 clear pins (§ 6.4).
+`App.tsx`'s reveal effect then finds the row and focuses it as today.
+`App.tsx` needs no code for unit groups: the section owns collapse state
+and has opened the group before the lookup. A reveal that finds no row after these steps is a
 defect, and U26 proves it does not happen.
 
 **Reveal lookup.** When the navigation's section is `units`, `App.tsx`'s
@@ -727,7 +771,8 @@ name.
 when `sectionSearchOpen`, as it does for packages, configs, language
 packages and unmanaged files, and passes the filter text to
 `ServiceSection`. A row matches when the lowercased query is a substring
-of any of:
+of its search text. A row's search text holds the fields that identify
+it and the words the row shows (§ 2 item 10), lowercased:
 
 - a unit row: `unit`, `kind`, `owning_package` or fragment word,
   `current_state`, `default_state`, `instance_of`, `declined.text`,
@@ -735,8 +780,19 @@ of any of:
   shows the parent with all its drop-ins);
 - the default target: its `target`;
 - an orphan drop-in: `path` and `unit`;
-- a reported row: `unit`, `parent`, `relation`, the advisory lines and
-  `install_files`.
+- a manual link: `unit`, `parent`, `relation` (the wire word), its
+  relation phrase (string 17, such as "required by") and its advisory
+  lines;
+- an undetermined install: `unit`, its reason words as the row shows
+  them (the wire word with `_` as a space, such as `upheld by`),
+  `install_files` and its advisory lines;
+- a mount finding: `unit`, `kind`, `mount_point` and its advisory lines.
+
+Global search indexes the same text for each row (table below, whose
+only differences are a unit row's drop-in paths and the default
+target's words `default target`), so section search finds a row by
+every field and shown word global search indexes for it.
+`unitOutcome.ts` builds both texts from one field list per row kind.
 
 Search and the outcome filter both apply; a pinned branch is shown
 whatever either says (§ 6.4). `resultCount` is the number of shown rows
@@ -753,12 +809,12 @@ the `units` reference section. Every units entry is a
 
 | Entry | Kind in `itemId` | Search text |
 |---|---|---|
-| Each `unit_states` row | `unit_state` | as section search, minus drop-in paths |
+| Each `unit_states` row | `unit_state` | the unit row's section search text without its drop-ins' paths (each drop-in is its own entry) |
 | The default target | `default_target` | `target`, `default target` |
-| Each `unit_dropins` entry | `dropin` | `path`, `unit` |
-| Each manual link | `manual_link` | `unit`, `parent`, `relation`, advisories |
-| Each undetermined install | `undetermined_install` | `unit`, reason, `install_files`, advisories |
-| Each mount finding | `mount_finding` | `unit`, `kind`, `mount_point`, advisories |
+| Each `unit_dropins` entry | `dropin` | `path`, `unit`, as an orphan drop-in's |
+| Each manual link | `manual_link` | as section search |
+| Each undetermined install | `undetermined_install` | as section search |
+| Each mount finding | `mount_finding` | as section search |
 
 **Search text travels on the entry.** `GlobalSearchResult` gains an
 optional `searchText`, lowercased, which only units entries set, and the
@@ -827,6 +883,9 @@ identities:
   op's guard key, as above. The per-row state this spec adds, the tab
   stop and the pins, is keyed by occurrence key, so a duplicate cannot
   share it.
+- **DOM ids.** The second occurrence's ids carry a suffix of their own
+  and its `aria-describedby` names its own notes (§ 6.6, DOM ids), so a
+  duplicate never shares an id with its twin.
 
 In single-host mode `GlobalSearch` stops indexing the reference section
 whose `id` is `units`; every other reference section is indexed as today.
@@ -884,17 +943,22 @@ Requirements, each proved by a test in § 10:
   toggle them. Each group's rows are a `role="grid"` whose
   `aria-labelledby` names the header's title element, so the grid's
   name is the group title alone, with every `role="row"` row inside a
-  `role="rowgroup"` within that grid. `TriageBucketGroup`, whose button
-  pattern the header follows, has no `aria-controls`; `UnitGroup` adds
-  it.
+  `role="rowgroup"` within that grid. Rows carry no `aria-rowindex`.
+  `TriageBucketGroup`, whose button pattern the header follows, has no
+  `aria-controls`; `UnitGroup` adds it.
+- **The section** is a container with `role="region"` named "Systemd
+  units" (string 1, `aria-label`), holding the filter bar, the empty
+  states and the groups, with the test id `service-section`.
 - **The filter** is a `ToggleGroup` with `aria-label` "Show": each item a
   button with `aria-pressed`, count inside its text.
 - **Announcements.** A live region with `aria-live="polite"`, present
-  and empty from the bar's first render, states the number of rows shown
-  when the filter changes (§ 7). The outcome label is text, never colour
-  alone; the follow-up flag is text.
+  and empty from the bar's first render, states the number of rows
+  shown, orphan drop-ins included, when the filter changes (§ 6.4
+  Announcement, § 7). The outcome label is text, never colour alone; the
+  follow-up flag is text.
 - **Labels.** Each checkbox keeps `Toggle <name>` or its locked form
-  (§ 9.3); a row's notes stay linked through `aria-describedby` as today.
+  (§ 9.3); a row's notes stay linked through `aria-describedby` as today,
+  each occurrence of a true duplicate to its own notes (§ 6.6, DOM ids).
 - **Narrow widths.** At 768 px the bar wraps below the heading, the hint
   wraps, a row's badges wrap under its name, and the section causes no
   horizontal scroll.
@@ -921,6 +985,12 @@ Requirements, each proved by a test in § 10:
   `GlobalSearch.tsx` `SECTION_LABELS.units` stays "Services", the fleet
   view's label; single-host units results take "Systemd units" through
   the mode boundary of § 6.15.
+- The owner badge on a configuration row that a unit drop-in shadows
+  (`resolveShadowOwner` in `shadowOwner.ts`, test id
+  `shadow-owner-badge`) reads "Controlled in Systemd units" (string 26),
+  in place of "Controlled in Service Drop-ins" (§ 2 item 13). The
+  badge's explanation sentence and its "Go to owner" button are
+  unchanged.
 - The section id `units`, the group slug `services-scheduling`, the
   batch toggle and its menu text are unchanged.
 - The section heading is "Systemd units", with no shadow-override count:
@@ -954,8 +1024,12 @@ mechanism: `AppShell`'s existing `isAggregateMode` prop, which
 
 Everything else this spec changes is rendered by `SingleHostApp` only
 (`MainContent`, `ServiceSection`, `Sidebar`, `App.tsx`'s reveal), or is
-the `SectionMeta` label of § 6.14, which only `SingleHostApp` reads. U34
-holds the fleet view unchanged.
+the `SectionMeta` label of § 6.14, which only `SingleHostApp` reads. The
+owner badge of string 26 is among them: `buildShadowOwners` has one
+caller, `MainContent`, which hands the owners to `DecisionList` and
+`DecisionItem`; the fleet view builds no shadow owner and draws no such
+badge, so string 26 is single-host by where it is rendered and needs no
+mode boundary. U34 holds the fleet view unchanged.
 
 ## 7. Strings
 
@@ -989,13 +1063,14 @@ configuration:", "Keeps data in:", "Not in the export:", "Instance of",
 | 16 | `preset: {default_state}` | State against preset (was `(preset: {default_state})`) |
 | 17 | `wanted by` / `required by` / `upheld by` / `has alias` / `named in Also= by` | A link's relation, by `relation` |
 | 18 | `Link its [Install] does not make` (`static_unit`), `Link made by hand` (`not_in_install`), `Only some of its links` (`partial_install`), `Tied to a host device` (`host_device`), `Only the /etc files name it` (`host_install_only`), `Only the package unit names it` (`vendor_install_only`), `[Install] cannot be relied on` (`undetermined`, and every undetermined-install row) | A link's cause label |
-| 19 | `Showing all {n} rows.` | Live region, filter All (`row` when n = 1) |
+| 19 | `Showing all {n} rows.` | Live region, filter All (`row` when n = 1). In strings 19 to 22, n is the number of rows shown, orphan drop-ins included (§ 6.4 Announcement), so under All it can exceed the bar's All count |
 | 20 | `Showing {n} rows that need follow-up.` (`1 row that needs follow-up` when n = 1) | Live region |
 | 21 | `Showing {n} carried rows.` (`1 carried row`) | Live region |
 | 22 | `Showing {n} excluded rows.` (`1 excluded row`) | Live region |
 | 23 | `Unit excluded` | Drop-in badge while its parent is excluded (was `Service excluded`) |
 | 24 | `Incompatible with image mode` | Badge and checkbox label of a locked row whose `attention_reason` is `service-image-mode-incompatible` (§ 9.3) |
 | 25 | `Preview reflects every include and exclude decision you make in refine.` | Containerfile panel footer in single-host mode (§ 9.5, § 6.15) |
+| 26 | `Controlled in Systemd units` | Owner badge on a configuration row a unit drop-in shadows, single-host mode (§ 6.14, § 6.15); was `Controlled in Service Drop-ins` |
 
 Strings 17 and 18 are short names for a wire word, like the triage labels
 in `attentionUtils.ts`; the sentence that explains each case stays the
@@ -1005,27 +1080,42 @@ served advisory line under the row.
 
 **New**
 
-- `components/unitOutcome.ts`: pure functions, no React. A row's outcome
-  (§ 6.1); the filter counts (§ 6.4); grouping into the seven groups with
-  sort order and orphan placement (§ 6.2, § 6.8); filter and search
-  matching (§ 6.4, § 6.12); reported rows grouped per unit (§ 6.6 item
+- `components/unitOutcome.ts`: pure functions, no React, holding every
+  rule the section applies. A row's outcome (§ 6.1); the filter counts
+  (§ 6.4); grouping into the seven groups with sort order and orphan
+  placement (§ 6.2, § 6.8); filter and search matching and both search
+  texts (§ 6.4, § 6.12); reported rows grouped per unit (§ 6.6 item
   11); the relation and cause label maps (§ 7); building a row's key
   and parsing an item id into one, and assigning every record its
-  occurrence key (§ 6.11). Tested directly.
+  occurrence key (§ 6.11); whether the bar is drawn, which filter
+  values are disabled and whether the hint shows (§ 6.4); which empty
+  state applies, the quiet-host sentences and the filter's and search's
+  empty states (§ 6.9); the live region's text and its count (§ 6.4);
+  the reveal's three steps (§ 6.11); the shown row order, the roving
+  tab stop and row movement (§ 6.13). Tested directly.
+- `hooks/useUnitsSectionState.ts`: the section's state, apart from its
+  rendering (§ 2 item 12): the filter value, the live region text, the
+  pins, collapse state, the reveal's steps as applied, the roving tab
+  stop and focus after a toggle. It holds React state and calls
+  `unitOutcome.ts` for every rule; it decides none itself.
+  `ServiceSection` calls it and renders what it returns. Behaviour is
+  the same as with the state inside `ServiceSection`, so its tests are
+  the section's tests.
 - `components/UnitGroup.tsx`: a collapsible group, header (title, count,
   flag) and labelled grid. Follows `TriageBucketGroup`'s button pattern;
   `TriageBucketGroup` itself is not reused, since its labels and colours
   are fixed to attention levels.
 - `components/UnitOutcomeFilter.tsx`: the `ToggleGroup` bar, hint and
-  live region.
+  live region, drawn as `unitOutcome.ts` decides them.
 
 **Changed**
 
-- `components/ServiceSection.tsx`: renders through the groups; the row
-  changes of § 6.6; filter state, pinned branches, collapse state and
-  its part of the reveal (§ 6.11 steps 2 and 3); `Also=` links through
-  `onNavigateToItem`; roving focus and keys (§ 6.13); the empty states
-  (§ 6.9); the section search text; the locked label (§ 9.3);
+- `components/ServiceSection.tsx`: renders through the groups, with its
+  state from `useUnitsSectionState.ts`; the row changes of § 6.6;
+  `Also=` links through `onNavigateToItem`; the row elements for roving
+  focus and keys (§ 6.13); the empty states as `unitOutcome.ts` decides
+  them (§ 6.9); the section region (§ 6.13); the locked label (§ 9.3);
+  a true duplicate's own DOM ids (§ 6.6);
   `data-unit-key` on every row, and resolving `revealItemId` to a row
   through `unitOutcome.ts` (§ 6.11); every row's React `key`, and the
   key of the element wrapping a unit row's branch, is its occurrence key
@@ -1051,7 +1141,9 @@ served advisory line under the row.
   section the reveal resolves the item id to a row key and finds the
   element by `data-unit-key` instead of the prefixes (§ 6.11).
 - `components/shadowOwner.ts`: "Go to owner" sends the drop-in's row key
-  (§ 6.11); `shadowOwner.test.ts` expects that key as the target.
+  (§ 6.11), and the owner badge reads string 26 (§ 6.14);
+  `shadowOwner.test.ts` expects that key as the target and that label,
+  and `MainContent.shadowed-configs.test.tsx` expects the label.
 - `components/Sidebar.tsx`: the Scheduled Tasks count (§ 9.4).
 - `components/ContainerfilePanel.tsx`: the single-host footer (§ 9.5,
   § 6.15).
@@ -1225,7 +1317,8 @@ text, a known limit (§ 3.2).
     unit fields replaced by `stock10.units.json`'s, for P6.
   - `single-host/sections-units-kitchen-sink.json`: the
     `GET /api/snapshot/sections` body with only the `units` and
-    `scheduled_tasks` sections kept. The `units` reference section stays
+    `scheduled_tasks` sections kept, less any row that names an account
+    or a host (below). The `units` reference section stays
     so the tests prove global search skips it. The `scheduled_tasks`
     section must hold a timer row with `unit_row: true`; if the scan has
     none, P5's setup fails rather than passing on nothing.
@@ -1247,6 +1340,13 @@ text, a known limit (§ 3.2).
   `/api/snapshot/sections` (as `system-tuning.spec.ts` passes them), then
   the groups route. Check the recorded bodies for secrets and
   host-specific names before committing, as for the Vitest fixtures.
+  **A recorded body leaves out any row that names an account or a host
+  of the scanned machine**, and no asserted count may depend on a row
+  left out. The kitchen-sink recording loses one row this way: an `at`
+  job in the `scheduled_tasks` section, which names an account. No count
+  reads it: the six unit fields are verbatim, so U2's and P1's numbers
+  are unchanged, and the Scheduled Tasks badge (U29) counts
+  generated-timer rows, which an `at` job is not.
   Register each new file in `e2e/fixtures/manifest.json` (category
   `body`, schema `ViewResponse` or `ContextSections`), and add one
   `#[test]` per file to `crates/web/tests/fixture_structure_test.rs`,
@@ -1281,25 +1381,26 @@ text, a known limit (§ 3.2).
 | U15 | `Also=` member links: `cups.socket` is a link to its row, `cups.path` is plain code; clicking reveals and focuses `service-item-cups.socket`. |
 | U16 | `required_config` link to the config row when `config_files` holds the path, plain code otherwise; `data_paths` plain. |
 | U17 | Instance: `Instance of wg-quick@.service` on the row's first line. |
-| U18 | No package: `(local)` on `driftify-also-main.service`; `(shadowed)` and `(absent)` from `planted`. |
+| U18 | No package: `(local)` on `driftify-also-main.service`; `(shadowed)` and `(absent)` on two `planted` rows the test edits, each given `owning_package: null` and that `fragment` (`planted` holds only `local` and `vendor` fragments). |
 | U19 | Kind chip only in Other units. |
 | U20 | Reported rows grouped per unit: `driftify-upheld.service`'s link and undetermined-install rows adjacent; relation phrases and cause labels from § 7 for every `relation` and cause value, including `has alias` and `Only the package unit names it`. |
 | U21 | Orphan drop-ins: `sshd.service`'s full shadow in Services under "Other drop-in overrides"; an orphan with no `kind` in Other units. |
 | U22 | "Unit excluded" on a drop-in whose parent is excluded. |
 | U23 | Empty states: `stock10` shows string 12 and no filter bar; `stock10` with the target excluded shows the bar with All 1 and Excluded 1, and with the target declined, the bar with All 1, Needs follow-up 1 and the hint, string 12 in both; an empty view shows string 13 and never "No service state changes detected."; a filter left empty shows string 14 and "Show all" resets it. |
-| U24 | Section search: `/` opens it in units; matching on `declined.text`, drop-in path (parent shown with its drop-ins), reported advisory text; result count; no-match `EmptyState`; ArrowDown focuses the first shown row; search and filter combine. |
-| U25 | Global search, single-host: a `unit_states` row, a drop-in, the default target, a manual link, an undetermined install and a mount finding are each indexed under their row key (§ 6.11) and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. Prefixed name: the unit row for `undetermined-install-demo.service` and the undetermined install for `demo.service` give two results with different item ids and different search text, the first focusing `service-item-undetermined-install-demo.service` and the second the undetermined-install row of `demo.service`; a bare-name navigation to `undetermined-install-demo.service` focuses the unit row. Several links for one unit: `planted`'s three manual links give three results; of those three, a search for `graphical` lists only the link under `graphical.target` and `requires` only the `requires` link, and each result focuses its own link row. True duplicates: a search for `dup-link-demo.service` gives two results with one item id, and selecting either focuses the first of its two link rows in section order; the same holds for `dup-state-demo.service`'s two unit rows. "Go to owner" on a shadowed config focuses its drop-in. |
+| U24 | Section search: `/` opens it in units; matching on `declined.text`, drop-in path (parent shown with its drop-ins), reported advisory text; with `planted`, matching on the words a reported row shows (§ 6.12): `required by` shows the `requires` link and no `wants` link, `foreign name` (the reason `foreign_name` as the row shows it) shows `demo.service`'s undetermined-install row, and the administrator's mount finding is found by its `mount_point` (`/data/demo`), and its search text holds its `kind`; each search text is the one global search indexes for that row (§ 6.12 table); result count; no-match `EmptyState`; ArrowDown focuses the first shown row; search and filter combine. |
+| U25 | Global search, single-host: a `unit_states` row, a drop-in, the default target, a manual link, an undetermined install and a mount finding are each indexed under their row key (§ 6.11) and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. Prefixed name: the unit row for `undetermined-install-demo.service` and the undetermined install for `demo.service` give two results with different item ids and different search text, the first focusing `service-item-undetermined-install-demo.service` and the second the undetermined-install row of `demo.service`; a bare-name navigation to `undetermined-install-demo.service` focuses the unit row. Several links for one unit: `planted`'s three manual links give three results; of those three, a search for `graphical` lists only the link under `graphical.target`, and `requires` and `required by` each list only the `requires` link, and each result focuses its own link row. True duplicates: a search for `dup-link-demo.service` gives two results with one item id, and selecting either focuses the first of its two link rows in section order; the same holds for `dup-state-demo.service`'s two unit rows. "Go to owner" on a shadowed config focuses its drop-in. |
 | U26 | Reveal into retained state, mounting `App` with the units section open (§ 6.11). Each case starts with the destination hidden and ends with it shown and focused: an `Also=` link whose member is hidden by the filter (filter set to All), in a collapsed group (group opened), and failing the section query (query cleared, search box still open); a query the member matches is kept; a global search result selected from within the section, with a filter selected and the destination's group collapsed. |
 | U27 | Scheduled Tasks, reset on remount: in the units section, select a filter and collapse Timers; go to Scheduled Tasks, which unmounts the section; follow the timer row's link (`unit_row: true`). The section mounts with filter All and every group open, and the unit row is focused (extends `ScheduledTimer.unitLink.test.tsx`). |
 | U28 | Defect 9.3: with `planted`, the locked row's badge and checkbox label read "Incompatible with image mode"; the slug appears nowhere in the DOM; a null reason shows "LOCKED". |
 | U29 | Defect 9.4: the Scheduled Tasks badge counts toggleable generated-timer rows, excludes a row blocked by `cron_job_excluded`, reads `...` while loading, and reads 0 only when there are none. |
 | U30 | Defect 9.5: in single-host mode the panel footer reads string 25. |
-| U31 | Heading and labels: the heading is "Systemd units" with no shadow count; in single-host mode `GlobalSearch` labels units results "Systemd units". |
+| U31 | Heading and labels: the heading is "Systemd units" with no shadow count; in single-host mode `GlobalSearch` labels units results "Systemd units"; a configuration row a unit drop-in shadows shows the owner badge "Controlled in Systemd units" (string 26), `resolveShadowOwner` returns that label, and "Controlled in Service Drop-ins" appears nowhere. |
 | U32 | Keyboard and grid structure. Movement: `j`/`k`/arrows move across groups and skip collapsed ones; `g`/`G`; Space and `x` toggle. Structure: each header's `aria-controls` equals its grid's `id`; each grid's `aria-labelledby` names an element whose text is the group title; every `role="row"` element has a `role="rowgroup"` ancestor inside its `role="grid"`. Roving tab stop: exactly one row in the section has `tabIndex` 0 and it is shown (no `[hidden]` ancestor); this holds after collapsing the group that holds it, after a filter change and after a section query hides it, each time on the first shown row. Headers toggle on Enter and Space with `aria-expanded` updated. |
-| U33 | Live region: an element with `aria-live="polite"` is in the DOM, empty, before the first filter change; after each change its text is strings 19 to 22, singular and plural. |
+| U33 | Live region: an element with `aria-live="polite"` is in the DOM, empty, before the first filter change; after each change its text is strings 19 to 22 for the number of rows shown (§ 6.4 Announcement), singular and plural. On kitchen-sink, returning to "All" reads "Showing all 24 rows." while the bar reads "All 23"; "Needs follow-up" reads "Showing 9 rows that need follow-up."; with a section query, the number is the rows shown under the query; a reveal that sets the filter to "All" announces the same way. |
 | U34 | Fleet view unchanged (§ 6.15), mounting `AggregateApp` with a fleet view holding a `units` section (extends `AggregateApp.integration.test.tsx`): a global search for one of its items lists a result labelled "Services", selecting it navigates as today, and no "Systemd units" text appears; the Containerfile panel footer reads today's text (§ 2 item 8). |
 | U35 | True duplicates render one row per record across narrowing (§ 6.11, § 6.12), with `planted`. Each step counts the section's shown `role="row"` elements, not its records, and checks the Reported group header count and `resultCount` against that row count. (a) Unfiltered: exactly two rows carry `dup-link-demo.service`'s link key and one carries `dup-link-demo-other.service`'s; exactly two unit rows carry `["unit_state","dup-state-demo.service"]`, and exactly two drop-in rows carry its drop-in's key, both inside the first unit row's branch and none in the second's; the filter's All and Needs follow-up counts each count both link records and All counts both unit records. (b) Section query `dup-link-demo`: 3 link rows; then `dup-link-demo.service`: 2; then `dup-link-demo` again: 3; then cleared: the rows of (a). (c) Filter "Carried": both `dup-state-demo.service` unit rows and their two drop-in rows shown, Services header count equal to its shown unit rows; filter "All": the rows of (a). A build keyed by row key fails (b): React reconciles the repeated key wrongly and leaves 3 rows at the second step and 5 at the third. |
 | U36 | Keyboard over true duplicates (§ 6.13), with `planted`. From `dup-link-demo-other.service`'s link row, `j` focuses the first `dup-link-demo.service` link row, `j` again the second (a different element with the same `data-unit-key`), `k` the first; from the first `dup-state-demo.service` unit row, `j` goes through its two drop-in rows to the second unit row. After every move exactly one row in the section has `tabIndex` 0, it is the focused element, and it is shown. Toggling the second `dup-state-demo.service` occurrence with `x` (mocked `applyOp` returns the `planted` view as it was) leaves focus and the tab stop on the second occurrence, not the first. |
+| U37 | Group header of an orphan-only kind group (§ 6.3). (a) A view built in the test from kitchen-sink's default target and `sshd.service`'s orphan full shadow alone: the Services header has no count badge, its button's accessible name is "Services", and the orphan row is shown under it. (b) Kitchen-sink under "All" with a section query that only the orphan's path matches (asserted first): Services shows the orphan alone, has no count badge, and its button's accessible name is "Services, 5 need follow-up"; clearing the query brings back the badge "11". |
 
 No Rust test asserts the `units` section label at `e6591669`; add one
 assertion for "Systemd units" beside the existing `SectionMeta` tests in
@@ -1328,7 +1429,7 @@ and sections bodies and the recorded groups body.
 | Id | Proves |
 |---|---|
 | P1 | The section renders the groups of U3 in order, the bar with counts 23, 9, 14, 0, and the sidebar reads "Systemd units" with count 24. |
-| P2 | Clicking "Needs follow-up" leaves 9 rows across Services, Other units and Reported; clicking "All" restores 23. |
+| P2 | Clicking "Needs follow-up" leaves 9 rows across Services, Other units and Reported; clicking "All" restores every row: 24 shown, the orphan drop-in included, beside the bar's "All 23" (§ 6.4 Announcement). |
 | P3 | Keyboard only, with `/api/view` sequenced to the recorded post-exclude body (§ 10.1): Tab reaches the bar, select "Needs follow-up" with Space, Tab into the rows, `j` to `tmp.mount`, toggle with `x`; after the op, the row stays in place and keeps focus, and the counts are the post-exclude body's. |
 | P4 | Global search for `wg0`, selecting its Systemd units result, lands on and focuses `service-item-wg-quick@wg0.service`; no result for the units section is labelled "Services". |
 | P5 | Scheduled Tasks to unit row: from the sidebar's Scheduled Tasks entry, the link on the recorded timer row with `unit_row: true` reveals and focuses its unit row. |
@@ -1372,8 +1473,10 @@ changes visibly and four of the fixes are user-visible bugs. Under
 
 - CSS: spacing, the subtle-text token for the preset, the flag's place in
   the header, and how the bar wraps, within § 6.13.
-- How `ServiceSection` is split internally, as long as `unitOutcome.ts`
-  holds the pure logic and is tested on its own.
+- How `ServiceSection`'s rendering is split further, as long as
+  `unitOutcome.ts` holds every rule, including the bar's disabled values
+  and hint and the empty states, and is tested on its own, and the
+  section's state stays in `useUnitsSectionState.ts` (§ 8).
 - How the pinned set is stored (a `Set` of the occurrence keys of the
   rows heading the pinned branches, cleared by the events of § 6.4, is
   enough). It never holds row keys (§ 6.11).
@@ -1481,6 +1584,20 @@ review.
     first occurrence. Occurrence keys go on every kind, not only those
     that can repeat, so no code path depends on knowing which can
     (§ 6.11, § 6.12).
+24. A true duplicate's later occurrence gives its DOM ids a generated
+    suffix while the first keeps today's ids, so existing ids and the
+    tests that read them do not change (§ 6.6).
+25. An item id in the `[` form names a row only in the exact bytes
+    `JSON.stringify` writes; any other spelling of the same array is
+    not found, so one key has one spelling (§ 6.11).
+26. A link's search text keeps the wire word beside its relation
+    phrase, so a search for `requires` still finds it (§ 6.12).
+27. Rows carry no `aria-rowindex`, and the section's container is a
+    region named "Systemd units" (§ 6.13).
+28. Recorded bodies leave out rows that name an account or a host, and
+    no asserted count may depend on such a row (§ 10.1).
+29. The state hook lives in `hooks/`, beside the UI's other hooks
+    (§ 8).
 
 ## 15. Related
 
