@@ -307,7 +307,11 @@ The file half's `InstallEvidenceChanged` text speaks of `[Install]`, so
 that is not staged is `DefaultTargetFileNotStaged`, a staged `Local` or
 `Shadowed` file holding fleet variants is `DefaultTargetFileVariants`, and
 a file staged at another path that would load in the recorded one's place
-(a `Vendor` target's name) is `DefaultTargetFileStaged`.
+(a `Vendor` target's name) is `DefaultTargetFileStaged`. Their texts say
+only that the image cannot set the recorded file, never which file it
+would set instead: the package half is not checked for a `Shadowed`
+target, so its package may be excluded too, and then `set-default` would
+find no file and fail.
 
 Runtime package updaters (`RUNTIME_UPDATERS` in `core/baseline.rs`) are
 excluded by default at collect and in the fleet merge, and can be

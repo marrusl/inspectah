@@ -13465,8 +13465,8 @@ fn t26_a_local_default_target_follows_its_config_row() {
 /// T26: a replaced target, `default.target` linked to a full shadow of
 /// `graphical.target` under `/etc`: carried while the shadow's drop-in row
 /// is included, and with it excluded omitted with its own reason, which
-/// names the shadow and says what the image would set instead, not the
-/// `[Install]` text `set-default` never reads (Mark Russell, 2026-11-15).
+/// names the shadow and says the image cannot set it, not the `[Install]`
+/// text `set-default` never reads (Mark Russell, 2026-11-15).
 /// The same line on the scan export (the row excluded in the snapshot) and
 /// the refine export, and the same text in refine's view.
 #[test]
@@ -13496,8 +13496,8 @@ fn t26_a_shadowed_default_target_whose_shadow_is_excluded_names_it() {
     }
 
     let text = format!(
-        "graphical.target (the source host's replacement file for it, {SHADOW}, is not in the \
-         export, so the image would set the package's file as the default target instead)"
+        "graphical.target (the replacement file recorded for it, {SHADOW}, is not in the \
+         export, so the image cannot set that file as the default target)"
     );
     let line = format!("# Omitted: {text}");
     let refine = session_after(&snap, &[(drop_in_item(SHADOW), false)]);
@@ -13539,6 +13539,95 @@ fn t26_a_shadowed_default_target_whose_shadow_is_excluded_names_it() {
     }
 }
 
+/// T26: a `Shadowed` default target whose package is not in the base
+/// image, with its replacement excluded. The text says only that the
+/// recorded file is missing, never that the package's file would be set:
+/// with the package excluded too, the image has no file for the target and
+/// `set-default` fails. The same line with the package in the export (the
+/// control) and excluded, on the scan export, the refine export and in
+/// refine's view.
+#[test]
+fn t26_a_shadowed_default_target_with_shadow_and_package_excluded_claims_no_file() {
+    const SHADOW: &str = "/etc/systemd/system/app.target";
+    const PACKAGE: &str = "apptargets";
+    let snap = scan(
+        target_host(Some(SHADOW))
+            .package(PACKAGE)
+            .vendor_unit("app.target", "[Unit]\nDescription=App\n", Some(PACKAGE))
+            .etc_unit("app.target", "[Unit]\nDescription=App, edited\n"),
+    );
+    assert!(
+        matches!(
+            snap.units
+                .as_ref()
+                .and_then(|u| u.default_target.as_ref())
+                .map(|t| t.target.fragment()),
+            Some(UnitFragment::Shadowed { owning_package: Some(p), .. }) if p == PACKAGE
+        ),
+        "a Shadowed default target owned by {PACKAGE}"
+    );
+
+    let text = format!(
+        "app.target (the replacement file recorded for it, {SHADOW}, is not in the export, so \
+         the image cannot set that file as the default target)"
+    );
+    let line = format!("# Omitted: {text}");
+    for (case, package_kept) in [("package kept", true), ("package excluded", false)] {
+        let mut ops = vec![(drop_in_item(SHADOW), false)];
+        if !package_kept {
+            ops.push((package_item(PACKAGE), false));
+        }
+        let refine = session_after(&snap, &ops);
+        assert_eq!(
+            default_target_declined(&refine),
+            Some(inspectah_refine::projection::DeclinedView {
+                renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+                reason: "DefaultTargetFileNotStaged".into(),
+                text: text.clone(),
+            }),
+            "{case}"
+        );
+        let mut excluded_snap = snap.clone();
+        let units = excluded_snap.units.as_mut().expect("a units section");
+        units
+            .drop_ins
+            .iter_mut()
+            .find(|d| d.path == SHADOW)
+            .expect("the shadow's drop-in row")
+            .disposition = FindingKind::excluded();
+        if !package_kept {
+            excluded_snap
+                .rpm
+                .as_mut()
+                .expect("an rpm section")
+                .packages_added
+                .iter_mut()
+                .find(|p| p.name == PACKAGE)
+                .expect("the target's package")
+                .disposition = FindingKind::excluded();
+        }
+        for (route, containerfile) in [
+            ("scan", containerfile_in(&render_export(&excluded_snap))),
+            ("refine", containerfile_in(&export_session(&refine))),
+        ] {
+            assert_eq!(
+                containerfile.contains(PACKAGE),
+                package_kept,
+                "{case}, {route}: the package is in the export only when kept:\n{containerfile}"
+            );
+            assert!(
+                !containerfile.contains("set-default"),
+                "{case}, {route}:\n{containerfile}"
+            );
+            assert_eq!(
+                omitted(&containerfile, "app.target"),
+                Some(line.as_str()),
+                "{case}, {route}:\n{containerfile}"
+            );
+        }
+    }
+}
+
 /// `snap` with the first drop-in row at `path` included, as the scan
 /// export of an aggregate reads an operator's include.
 fn with_first_drop_in_included(snap: &InspectionSnapshot, path: &str) -> InspectionSnapshot {
@@ -13570,8 +13659,8 @@ fn default_target_declined(
 /// The aggregate keeps `host-a`'s `Vendor` target and sets it while the
 /// replacement is not in the export. With the replacement included, the
 /// image would load that file for the name, so the target is omitted with
-/// a reason that names the file and says what the image would set, not
-/// the `[Install]` text `set-default` never reads. The same line on the
+/// a reason that names the file and says the image cannot set the recorded
+/// one, not the `[Install]` text `set-default` never reads. The same line on the
 /// scan export and the refine export, and the same text in refine's view.
 #[test]
 fn t26_a_vendor_default_target_with_a_file_staged_at_its_name_names_it() {
@@ -13609,7 +13698,7 @@ fn t26_a_vendor_default_target_with_a_file_staged_at_its_name_names_it() {
 
     let text = format!(
         "graphical.target (the export carries a unit file at {SHADOW}, which is not the file \
-         recorded for it, so the image would set that file as the default target instead)"
+         recorded for it, so the image cannot set the recorded file as the default target)"
     );
     let line = format!("# Omitted: {text}");
     let refine = session_after(&merged, &[(drop_in_item(SHADOW), true)]);
@@ -13644,7 +13733,7 @@ fn t26_a_vendor_default_target_with_a_file_staged_at_its_name_names_it() {
 
 /// T26 on a fleet aggregate: both hosts set a full replacement of
 /// `graphical.target` under `/etc`, with different content. With a
-/// replacement included, the image would set one host's file for every
+/// replacement included, the export carries one host's file for every
 /// host, so the target is omitted with a reason that says so, not the
 /// `[Install]` text `set-default` never reads. The same line on the scan
 /// export and the refine export, and the same text in refine's view.
@@ -13677,8 +13766,9 @@ fn t26_a_shadowed_default_target_with_two_variants_says_so() {
     assert!(recorded.disposition.is_included(), "both hosts set it");
 
     let text = format!(
-        "graphical.target (the source hosts' files for it at {SHADOW} differ, so the image \
-         would set one host's file as the default target on every host)"
+        "graphical.target (the source hosts' files for it at {SHADOW} differ and the export \
+         carries only one of them, so the image cannot set each host's file as the default \
+         target)"
     );
     let line = format!("# Omitted: {text}");
     let refine = session_after(&merged, &[(drop_in_item(SHADOW), true)]);

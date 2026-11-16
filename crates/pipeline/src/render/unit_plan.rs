@@ -235,23 +235,25 @@ pub enum OmissionReason {
     /// row recorded (§ 10.2 rule 5). `path` is that file's image path.
     InstallEvidenceChanged { path: String },
     /// A `Shadowed` default target's replacement file under `/etc` is not
-    /// in the export, so `set-default` in the image would link the
-    /// package's file (§ 10.5, rule 5). Its own reason because
+    /// in the export, so `set-default` in the image cannot link the
+    /// recorded file (§ 10.5, rule 5). The text claims no other file: the
+    /// package half is never checked for a `Shadowed` target, and with the
+    /// package absent too, `set-default` fails. Its own reason because
     /// [`Self::InstallEvidenceChanged`]'s text is about `[Install]`, which
     /// `set-default` never reads (Mark Russell, 2026-11-15). `path` is the
     /// replacement's image path.
     DefaultTargetFileNotStaged { path: String },
     /// The export stages a unit file at `path` under `/etc` that is not the
-    /// file the default target was recorded with, so `set-default` in the
-    /// image would link that file (§ 10.5, rule 5): a `Vendor` target with
-    /// a file at its name, or an instance target with one at its own name.
-    /// Its own reason for the same cause as
-    /// [`Self::DefaultTargetFileNotStaged`].
+    /// file the default target was recorded with and loads in its place,
+    /// so `set-default` in the image cannot link the recorded file (§ 10.5,
+    /// rule 5): a `Vendor` target with a file at its name, or an instance
+    /// target with one at its own name. Its own reason for the same cause
+    /// as [`Self::DefaultTargetFileNotStaged`].
     DefaultTargetFileStaged { path: String },
     /// On a fleet aggregate, the default target's `Local` or `Shadowed`
-    /// file at `path` holds more than one content variant, so
-    /// `set-default` in the image would link one host's file for every
-    /// host (§ 10.5, rule 5). Its own reason for the same cause as
+    /// file at `path` holds more than one content variant and the export
+    /// carries one, so `set-default` in the image cannot link each host's
+    /// recorded file (§ 10.5, rule 5). Its own reason for the same cause as
     /// [`Self::DefaultTargetFileNotStaged`].
     DefaultTargetFileVariants { path: String },
     /// A runtime drop-in the row recorded because its reset, replacement or
@@ -375,16 +377,16 @@ impl OmissionReason {
                  source host ({path})"
             ),
             Self::DefaultTargetFileNotStaged { path } => format!(
-                "the source host's replacement file for it, {path}, is not in the export, so the \
-                 image would set the package's file as the default target instead"
+                "the replacement file recorded for it, {path}, is not in the export, so the \
+                 image cannot set that file as the default target"
             ),
             Self::DefaultTargetFileStaged { path } => format!(
                 "the export carries a unit file at {path}, which is not the file recorded for \
-                 it, so the image would set that file as the default target instead"
+                 it, so the image cannot set the recorded file as the default target"
             ),
             Self::DefaultTargetFileVariants { path } => format!(
-                "the source hosts' files for it at {path} differ, so the image would set one \
-                 host's file as the default target on every host"
+                "the source hosts' files for it at {path} differ and the export carries only \
+                 one of them, so the image cannot set each host's file as the default target"
             ),
             Self::InstanceNeedsEvidenceChanged { path } => format!(
                 "the drop-in {path} clears or replaces a path the instance reads and is not in \
