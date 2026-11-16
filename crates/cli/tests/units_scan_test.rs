@@ -10670,6 +10670,145 @@ fn t39_a_disabled_instance_is_found_from_the_presets() {
     assert_eq!(changes_named(&snap, "t@one.service"), 0, "own file");
 }
 
+/// T39's derivation safeguards (§ 7.5), each with a control that reverses
+/// one condition, through the real inspectors. Presence is asserted before
+/// absence.
+///
+/// - A masked template under `enable t@.service one` derives no instance:
+///   the template's mask is a row and `t@one` has no entry. Unmasked,
+///   `t@one` is a derived `disable` on both routes. (The list form: under
+///   a bare rule the masked template has no `DefaultInstance=` to read.)
+/// - An instance linked under a dependency directory whose parent is not a
+///   unit name is not derived: the link is reported and `t@one` has no
+///   entry. Without the link, it is derived.
+/// - An enabled owner with no row and no `enable` preset (no rule matches
+///   it) derives the instance its `Also=` names: an inventory entry,
+///   `Disabled` under the `disable` its template's bare rule gives an
+///   instance that is not its `DefaultInstance=`, so no row and no line.
+///   Disabled, or with an undetermined section, it derives none.
+/// - A transitive `Also=` chain (`bundle` names `b`, `b` names `t@two`)
+///   derives the instance at its end. With the chain cut, none.
+#[test]
+fn t39_the_derivation_safeguards_have_controls() {
+    const ONE: &str = "t@one.service";
+    const TWO: &str = "t@two.service";
+
+    // A masked template.
+    let masked = scan(
+        UnitHost::new()
+            .unit(T_TEMPLATE, "masked")
+            .preset("enable t@.service one")
+            .vendor_unit(T_TEMPLATE, &t_template(None), None)
+            .mask(T_TEMPLATE),
+    );
+    assert_eq!(
+        change(&masked, T_TEMPLATE).current_state(),
+        UnitState::Masked,
+        "presence: the template's mask"
+    );
+    assert!(inventory_entry(&masked, ONE).is_none(), "masked template");
+    assert_eq!(changes_named(&masked, ONE), 0, "masked template");
+    let unmasked = scan(template_host(&["enable t@.service one"], None, &[]));
+    assert_derived_disable(&unmasked, ONE, T_TEMPLATE, "unmasked");
+
+    // A link under a parent that is not a unit name.
+    const UNPARSED: &str = "/etc/systemd/system/not a unit.wants/t@one.service";
+    let linked = scan(
+        template_host(&["enable t@.service"], Some("one"), &[]).link(UNPARSED, T_TEMPLATE_PATH),
+    );
+    assert!(
+        linked
+            .warnings
+            .iter()
+            .any(|w| w.extra.get("path") == Some(&serde_json::json!(UNPARSED))),
+        "presence: the link is reported: {:?}",
+        linked.warnings
+    );
+    assert!(inventory_entry(&linked, ONE).is_none(), "unparsed parent");
+    assert_eq!(changes_named(&linked, ONE), 0, "unparsed parent");
+    for (route, containerfile) in both_routes(&linked) {
+        assert!(
+            in_no_systemctl_instruction(&containerfile, ONE),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    // An enabled owner with no row and no `enable` preset.
+    let owner = |state: &str, install: &str| {
+        UnitHost::new()
+            .unit("bundle.service", state)
+            .unit(T_TEMPLATE, "indirect")
+            .preset("enable t@.service")
+            .vendor_unit(
+                "bundle.service",
+                &format!("[Service]\nExecStart=/bin/true\n\n[Install]\n{install}"),
+                None,
+            )
+            .vendor_unit(T_TEMPLATE, &t_template(None), None)
+    };
+    let wanted = "WantedBy=multi-user.target\nAlso=t@one.service\n";
+    let enabled = scan(owner("enabled", wanted));
+    assert_eq!(
+        inventory_entry(&enabled, "bundle.service").map(|e| (e.state, e.preset)),
+        Some((UnitState::Enabled, None)),
+        "presence: the owner is enabled with no preset"
+    );
+    assert_eq!(changes_named(&enabled, "bundle.service"), 0, "no owner row");
+    let derived_entry = |snap: &InspectionSnapshot, unit: &str| {
+        inventory_entry(snap, unit).map(|e| (e.state, e.preset))
+    };
+    assert_eq!(
+        derived_entry(&enabled, ONE),
+        Some((UnitState::Disabled, Some(PresetDefault::Disable))),
+        "enabled owner"
+    );
+    assert_eq!(changes_named(&enabled, ONE), 0, "enabled owner");
+    let disabled = scan(owner("disabled", wanted));
+    assert_eq!(
+        inventory_entry(&disabled, "bundle.service").map(|e| e.state),
+        Some(UnitState::Disabled),
+        "presence: the owner is disabled"
+    );
+    assert!(inventory_entry(&disabled, ONE).is_none(), "disabled owner");
+    let undetermined = scan(owner(
+        "enabled",
+        "WantedBy=multi-user.target\nUpheldBy=x.service\nAlso=t@one.service\n",
+    ));
+    assert!(
+        undetermined
+            .units
+            .as_ref()
+            .expect("a units section")
+            .undetermined_installs
+            .iter()
+            .any(|r| r.unit.as_str() == "bundle.service"),
+        "presence: the owner's section is undetermined"
+    );
+    assert!(
+        inventory_entry(&undetermined, ONE).is_none(),
+        "undetermined owner"
+    );
+    assert_eq!(changes_named(&undetermined, ONE), 0, "undetermined owner");
+
+    // A transitive `Also=` chain.
+    let chain = |b_install: &str| {
+        owner("enabled", "WantedBy=multi-user.target\nAlso=b.service\n").vendor_unit(
+            "b.service",
+            &format!("[Service]\nExecStart=/bin/true\n\n[Install]\n{b_install}"),
+            None,
+        )
+    };
+    let through = scan(chain("Also=t@two.service\n"));
+    assert_eq!(
+        derived_entry(&through, TWO),
+        Some((UnitState::Disabled, Some(PresetDefault::Disable))),
+        "transitive chain"
+    );
+    let cut = scan(chain(""));
+    assert!(inventory_entry(&cut, TWO).is_none(), "the chain cut");
+    assert_eq!(changes_named(&cut, TWO), 0, "the chain cut");
+}
+
 /// T39's getty case with no link (§ 7.5), on RHEL 9.8's preset files and on
 /// RHEL 10.2's: `getty@tty1` is found from `enable getty@.service` and its
 /// `DefaultInstance=tty1`, a `Disabled` state change.
