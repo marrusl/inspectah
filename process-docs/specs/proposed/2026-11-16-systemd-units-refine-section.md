@@ -285,7 +285,8 @@ list never depends on it.
 - Within a kind group, unit rows sort ascending by `unit`, compared as
   plain strings (code-point order), so the order is deterministic and a
   template's instances (`getty@tty2.service`, `getty@tty3.service`) sit
-  side by side.
+  side by side. Rows with the same `unit` (a true duplicate, § 6.12)
+  keep their response order.
 - **Templates and instances are siblings, never parent and child.** A
   template has a row only when `unit_states` holds one: a masked template
   (`getty@.service`), which the parent spec's § 11.1 includes. That row
@@ -295,7 +296,8 @@ list never depends on it.
   not its template has one; the instance names its template through
   `Instance of` (§ 6.6 item 8).
 - Drop-ins stay nested under their parent row, in server order, full
-  shadows included, as today.
+  shadows included, as today. When two unit rows share a `unit`, the
+  drop-ins nest under the first of them only (§ 6.12).
 - Orphan drop-ins (§ 6.8) sit at the end of the group of their `kind`.
 - Every group is open by default and collapsible from its header.
   Collapse state lives in the section component and resets when the
@@ -358,15 +360,18 @@ Needs follow-up: the Containerfile writes a comment for the row and no command.
   target row, or one orphan drop-in. When the operator toggles a row,
   the branch that holds it is pinned: the row's own branch for a unit
   row, the default target or an orphan drop-in, and the parent's branch
-  for a nested drop-in. A pinned branch stays shown, in its place, with
-  all its rows, whatever the outcome filter and the section search would
-  now say, and its group is drawn even when nothing else in it is
-  shown. Focus stays on the toggled row. Pins accumulate while the
+  for a nested drop-in. A pin is held by the occurrence key (§ 6.11) of
+  the row that heads the branch, so of two branches with one row key
+  only the toggled one is pinned. A pinned branch stays shown, in its
+  place, with all its rows, whatever the outcome filter and the section
+  search would now say, and its group is drawn even when nothing else in
+  it is shown. Focus stays on the toggled row, the occurrence the
+  operator toggled. Pins accumulate while the
   operator works. All pins are cleared when the operator changes the
   filter value or the section query, when a reveal changes either
   (§ 6.11), and when the section unmounts; the filter returning to "All"
   because the bar stopped being drawn clears none, since that follows a
-  toggle. A pin whose branch is no longer in the view response is
+  toggle. A pin whose occurrence key is not in the new view response is
   dropped. A pinned row's outcome label, its group's count and the
   filter counts update from each view response as for any row. Only the
   operator's toggles pin: a row whose outcome changes because of another
@@ -449,8 +454,9 @@ default target, drop-ins or reported rows.
     kinds. Rows in a kind-named group drop it.
 11. **Reported rows kept together per unit.** In "Reported, not carried",
     rows are grouped by `unit`, units sorted by name; within a unit, its
-    mount finding first, then its links in server order, then its
-    undetermined install. So `driftify-upheld.service`'s link row and its
+    mount finding first, then its links, then its undetermined install,
+    each kind in server order (a true duplicate, § 6.12, is two rows of
+    one kind). So `driftify-upheld.service`'s link row and its
     undetermined-install row sit side by side.
 12. **A link's relation and cause get words** (§ 7). The relation is
     shown as a phrase before the parent: `wants` → "wanted by",
@@ -469,7 +475,9 @@ or `x` on a focused row, the test ids `service-item-<unit>`,
 `default-target`, the `declined` note's classes, and every served string.
 Added: each row of this section carries its row key in `data-unit-key`
 (§ 6.11), on the element that carries its row test id, and the reveal
-reads the key in place of the test id.
+reads the key in place of the test id. The two rows of a true duplicate
+(§ 6.12) carry the same test id and the same row key; only their
+occurrence keys differ.
 
 ### 6.7 Reported, not carried
 
@@ -601,9 +609,14 @@ counter:
   drop-in's row key (below), not its bare `path`.
 
 **Row keys.** Every row of this section has a row key: its kind and its
-complete identity, JSON-encoded as an array of strings, kind first. One
+complete identity, JSON-encoded as an array of strings, kind first. The
+key is `JSON.stringify` of that array with no further arguments (no
+replacer, no indent), so every producer yields the same bytes. One
 pure function in `unitOutcome.ts` builds it from a row, and one parses
-it back; nothing else spells a key.
+it back; nothing else spells a key. The row key is the row's logical
+identity: two records can share one (a true duplicate, § 6.12), so it
+names the row for search and navigation but is not what renders a row
+(occurrence keys, below).
 
 | Row kind | Row key | Identity, from source |
 |---|---|---|
@@ -615,14 +628,44 @@ it back; nothing else spells a key.
 | Mount finding | `["mount_finding", unit]` | `unit`, the row's React key today |
 
 `relation` is the wire word (`wants`, `requires`, `upholds`, `alias`,
-`also`). Each row carries its key in a `data-unit-key` attribute.
+`also`). Each row carries its row key in a `data-unit-key` attribute.
+
+**Occurrence keys.** Every record the section renders also has an
+occurrence key, unique within one view response: its row key, then `#`,
+then the record's zero-based ordinal among the records of its own
+source list (`unit_states`, `unit_dropins`, `manual_links`,
+`undetermined_installs`, `mount_findings`) that have the same row key,
+counted in response order. A record with no duplicate is `#0`; the
+default target is always `["default_target"]#0`. `unitOutcome.ts`
+assigns occurrence keys once per view response, from the six unit
+fields as served, before grouping, the outcome filter or the section
+search sees any record, so changing the filter, the query or a group's
+collapse state never changes a record's occurrence key. Every kind gets
+one, duplicated or not, so no code asks whether a record has a twin.
+The projection makes one view per record in snapshot order, so a record
+keeps its occurrence key from one view response to the next unless a
+record with the same row key before it in its list is added or removed.
+Two occurrence keys are equal only when row key and ordinal are both
+equal: a row key ends with `]` and an ordinal holds only digits, so the
+last `#` is always the boundary. Nothing parses an occurrence key.
+
+Each identity has its own uses, and none borrows the other's:
+
+| Identity | Used for |
+|---|---|
+| Row key | `data-unit-key`; a global search entry's `itemId`; "Go to owner"; the reveal lookup, which resolves to the first row in section order carrying the key |
+| Occurrence key | The React `key` of each row and of the element that wraps a unit row's branch; the roving tab stop (§ 6.13); pins (§ 6.4); focus after a toggle; any per-row UI state the section keeps |
+| The op's `ItemId` | The toggle's op and its guard key (`serviceKey`, `dropinKey`), unchanged |
+
+An occurrence key never appears in a search entry, an item id, a URL,
+`data-unit-key` or a test id.
 
 **Which row an item id names.** An item id that reaches this section is
 one of two forms, told apart by its first character:
 
 | Item id | Sent by | Row |
 |---|---|---|
-| Starts with `[`: a row key | Global search (every units entry, § 6.12); "Go to owner" (`["dropin", path]`) | The row whose own key equals it, compared as a string |
+| Starts with `[`: a row key | Global search (every units entry, § 6.12); "Go to owner" (`["dropin", path]`) | The first row, in section order, whose own key equals it, compared as a string |
 | Anything else: a bare unit name | The Scheduled Tasks link and `Also=` links only | Read as `["unit_state", <name>]`: the `unit_states` row with that `unit`, never a reported row of the same name. Both links link only when such a row exists (`unit_row`; § 6.6 item 5). |
 
 The two forms cannot be confused. A bare id is a unit name, and
@@ -665,8 +708,9 @@ defect, and U26 proves it does not happen.
 
 **Reveal lookup.** When the navigation's section is `units`, `App.tsx`'s
 reveal effect turns the item id into a row key as the table above says
-(a bare name becomes `["unit_state", <name>]`) and finds the element
-whose `data-unit-key` equals that key, compared as a string, as
+(a bare name becomes `["unit_state", <name>]`) and finds the first
+element, in document order, whose `data-unit-key` equals that key,
+compared as a string, as
 `elementByTestId` compares test ids; it never builds a CSS selector from
 the key (`process-docs/skills/web-disposition-contract.md`). It does not
 try `REVEAL_TESTID_PREFIXES` for `units`. Every other section resolves
@@ -737,16 +781,51 @@ unit with a different `relation` or `parent` are both valid, since the
 collector emits one record per link (`link_findings` and
 `apply_install_difference` in
 `crates/collect/src/inspectors/units/links.rs`), and all of them are
-rendered, indexed and found, each focusing its own row. A true duplicate is two
-rows of one kind with the same complete identity. The response can carry
-one: `UnitSection` is a plain serde struct whose lists have no
-uniqueness check, and the projection makes one view per record
-(`link_finding_views` and `mount_finding_views` in
-`crates/refine/src/projection/decisions.rs`) and merges none, so a
-snapshot that holds a duplicate passes it to the browser. The section
-adds no handling for it: each record is rendered and indexed as any
-other, and since both entries share one key, both results reveal the
-first row in section order that carries it.
+rendered, indexed and found, each focusing its own row.
+
+**True duplicates.** A true duplicate is two records of one kind with
+the same complete identity, so the same row key. The response can carry
+one in every list kind: `unit_states`, `unit_dropins`, `manual_links`,
+`undetermined_installs` and `mount_findings`. `UnitSection` is a plain
+serde struct whose lists have no uniqueness check, `classify_services`
+(`crates/refine/src/classify.rs`) maps `state_changes` and `drop_ins`
+one to one, and the projection makes one view per record
+(`unit_state_views`, `drop_in_views`, `link_finding_views` and
+`mount_finding_views` in `crates/refine/src/projection/decisions.rs`)
+and merges none, so a snapshot that holds a duplicate passes it to the
+browser. The default target cannot repeat: it is an `Option`.
+
+The section keeps every record. Each is rendered once, as its own row
+under its own occurrence key (§ 6.11), counted once in the filter counts
+(§ 6.4), the group header count (§ 6.3) and `resultCount`, and indexed
+as its own global search entry with its own search text. Rendering by
+occurrence key is what holds the row count to the record count: React
+reconciles repeated sibling keys wrongly, and with the row key as the
+React key a list holding a duplicate gains rows each time a filter or
+query narrows it and is restored. The rest follows from the two
+identities:
+
+- **Search.** Both entries carry the same row key as `itemId`, so
+  selecting either reveals and focuses the first row in section order
+  that carries it; the operator reaches the second from there with `j`.
+  This is accepted.
+- **A duplicated unit row.** Both occurrences are unit rows with an
+  outcome, sorted next to each other in response order (§ 6.2). The
+  unit's drop-ins nest under the first occurrence only, so each drop-in
+  record renders once; the second occurrence's branch has no drop-ins.
+  Both checkboxes send the same op (`ItemId::Unit` names the unit alone)
+  under one guard key, `serviceKey(unit)`, so a toggle in flight disables
+  both, which is right for one op. Which record the session changes is
+  the server's (`ItemId::Unit` and `ItemId::DropIn` in
+  `crates/refine/src/session.rs` change the first matching record), and
+  this spec does not change it.
+- **A duplicated drop-in.** Two drop-in rows under the parent, each
+  under its own occurrence key, sharing `dropinKey(path)` as above.
+- **Per-row state.** `ServiceSection` keeps no per-row state keyed by
+  identity today: no expanded state, and its pending set is keyed by the
+  op's guard key, as above. The per-row state this spec adds, the tab
+  stop and the pins, is keyed by occurrence key, so a duplicate cannot
+  share it.
 
 In single-host mode `GlobalSearch` stops indexing the reference section
 whose `id` is `units`; every other reference section is indexed as today.
@@ -783,18 +862,22 @@ Requirements, each proved by a test in § 10:
   the row holding it stops being shown (its group collapses, or the
   filter or the section search hides it), the tab stop moves to the
   first shown row in section order; when no row is shown, no row holds
-  it. The filter bar's buttons, each group header and each link in a row
-  are ordinary tab stops; the checkboxes stay focusable.
+  it. The section holds the tab stop by occurrence key (§ 6.11), never by
+  row key, so of two rows with one row key exactly one can hold it. The
+  filter bar's buttons, each group header and each link in a row are
+  ordinary tab stops; the checkboxes stay focusable.
 - **Row movement.** On a focused row, `ArrowDown`/`j` and `ArrowUp`/`k`
   move to the next and previous shown row across groups, skipping
   collapsed groups; `g` and `G` go to the first and last. Rows here are
-  unit rows, drop-ins, the default target and reported rows. This
+  unit rows, drop-ins, the default target and reported rows, one per
+  record: the two occurrences of a true duplicate are two stops. This
   matches `DecisionList`'s keys (`DecisionList.tsx:545-556`), which the
   units section lacks today.
 - **Toggle.** Space or `x` on a focused unit, drop-in or target row
   toggles it, as today. Reported rows have no action.
-- **Focus after a toggle** stays on the toggled row, which does not move
-  and is not hidden (pinning, § 6.4).
+- **Focus after a toggle** stays on the toggled row, the occurrence the
+  operator toggled, which does not move and is not hidden (pinning,
+  § 6.4).
 - **Group headers** are `<button>`s with `aria-expanded` and
   `aria-controls` naming the `id` of the group's grid; Enter and Space
   toggle them. Each group's rows are a `role="grid"` whose
@@ -926,7 +1009,8 @@ served advisory line under the row.
   sort order and orphan placement (§ 6.2, § 6.8); filter and search
   matching (§ 6.4, § 6.12); reported rows grouped per unit (§ 6.6 item
   11); the relation and cause label maps (§ 7); building a row's key
-  and parsing an item id into one (§ 6.11). Tested directly.
+  and parsing an item id into one, and assigning every record its
+  occurrence key (§ 6.11). Tested directly.
 - `components/UnitGroup.tsx`: a collapsible group, header (title, count,
   flag) and labelled grid. Follows `TriageBucketGroup`'s button pattern;
   `TriageBucketGroup` itself is not reused, since its labels and colours
@@ -942,9 +1026,13 @@ served advisory line under the row.
   `onNavigateToItem`; roving focus and keys (§ 6.13); the empty states
   (§ 6.9); the section search text; the locked label (§ 9.3);
   `data-unit-key` on every row, and resolving `revealItemId` to a row
-  through `unitOutcome.ts` (§ 6.11). The file and component names, the
-  `service-section` test id and every row test id stay, so existing
-  tests keep working.
+  through `unitOutcome.ts` (§ 6.11); every row's React `key`, and the
+  key of the element wrapping a unit row's branch, is its occurrence key
+  in place of today's identity keys (`svc.unit`, `di.path`, `f.unit`,
+  `linkIdentity(link)`, `["undetermined", unit]`), and a duplicated unit
+  row's drop-ins nest under its first occurrence (§ 6.12). The file and
+  component names, the `service-section` test id and every row test id
+  stay, so existing tests keep working.
 - `components/MainContent.tsx`: heading and label (§ 6.14); renders
   `SectionSearch` for `units` and passes the text, `revealItemId`,
   `onNavigateToItem` and `config_files` paths to the section; clears the
@@ -1103,6 +1191,15 @@ text, a known limit (§ 3.2).
     one unit: two with relation `wants` under different parents
     (`multi-user.target`, `graphical.target`), and one with relation
     `requires` under `multi-user.target`.
+    For true duplicates (§ 6.12) it has a manual link for
+    `dup-link-demo.service` with relation `wants` under
+    `multi-user.target` twice, the two records identical, beside one
+    `wants` link under `multi-user.target` for
+    `dup-link-demo-other.service`, which sorts before it; and a carried
+    `unit_states` row for `dup-state-demo.service` twice, with its one
+    drop-in, `/etc/systemd/system/dup-state-demo.service.d/override.conf`,
+    twice in `unit_dropins`. No other row holds either name, so a section
+    query on it selects these rows alone.
     Strings copied from source, never invented.
   - `stock10.units.json` (target only) and `stock9.units.json` (target and
     `NetworkManager-wait-online.service`). U23's excluded and declined
@@ -1190,7 +1287,7 @@ text, a known limit (§ 3.2).
 | U22 | "Unit excluded" on a drop-in whose parent is excluded. |
 | U23 | Empty states: `stock10` shows string 12 and no filter bar; `stock10` with the target excluded shows the bar with All 1 and Excluded 1, and with the target declined, the bar with All 1, Needs follow-up 1 and the hint, string 12 in both; an empty view shows string 13 and never "No service state changes detected."; a filter left empty shows string 14 and "Show all" resets it. |
 | U24 | Section search: `/` opens it in units; matching on `declined.text`, drop-in path (parent shown with its drop-ins), reported advisory text; result count; no-match `EmptyState`; ArrowDown focuses the first shown row; search and filter combine. |
-| U25 | Global search, single-host: a `unit_states` row, a drop-in, the default target, a manual link, an undetermined install and a mount finding are each indexed under their row key (§ 6.11) and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. Prefixed name: the unit row for `undetermined-install-demo.service` and the undetermined install for `demo.service` give two results with different item ids and different search text, the first focusing `service-item-undetermined-install-demo.service` and the second the undetermined-install row of `demo.service`; a bare-name navigation to `undetermined-install-demo.service` focuses the unit row. Several links for one unit: `planted`'s three manual links give three results; of those three, a search for `graphical` lists only the link under `graphical.target` and `requires` only the `requires` link, and each result focuses its own link row. "Go to owner" on a shadowed config focuses its drop-in. |
+| U25 | Global search, single-host: a `unit_states` row, a drop-in, the default target, a manual link, an undetermined install and a mount finding are each indexed under their row key (§ 6.11) and reach their row; no entry from the `units` reference section is indexed; an omitted unit is found by a word of its reason. With `planted`'s unit name shared by four row kinds: four results, each with its own search text (a word only in the undetermined install's reason finds that result and not the unit row's), and each result focuses its own row; a bare-name navigation to that unit focuses `service-item-<unit>`. Prefixed name: the unit row for `undetermined-install-demo.service` and the undetermined install for `demo.service` give two results with different item ids and different search text, the first focusing `service-item-undetermined-install-demo.service` and the second the undetermined-install row of `demo.service`; a bare-name navigation to `undetermined-install-demo.service` focuses the unit row. Several links for one unit: `planted`'s three manual links give three results; of those three, a search for `graphical` lists only the link under `graphical.target` and `requires` only the `requires` link, and each result focuses its own link row. True duplicates: a search for `dup-link-demo.service` gives two results with one item id, and selecting either focuses the first of its two link rows in section order; the same holds for `dup-state-demo.service`'s two unit rows. "Go to owner" on a shadowed config focuses its drop-in. |
 | U26 | Reveal into retained state, mounting `App` with the units section open (§ 6.11). Each case starts with the destination hidden and ends with it shown and focused: an `Also=` link whose member is hidden by the filter (filter set to All), in a collapsed group (group opened), and failing the section query (query cleared, search box still open); a query the member matches is kept; a global search result selected from within the section, with a filter selected and the destination's group collapsed. |
 | U27 | Scheduled Tasks, reset on remount: in the units section, select a filter and collapse Timers; go to Scheduled Tasks, which unmounts the section; follow the timer row's link (`unit_row: true`). The section mounts with filter All and every group open, and the unit row is focused (extends `ScheduledTimer.unitLink.test.tsx`). |
 | U28 | Defect 9.3: with `planted`, the locked row's badge and checkbox label read "Incompatible with image mode"; the slug appears nowhere in the DOM; a null reason shows "LOCKED". |
@@ -1200,6 +1297,8 @@ text, a known limit (§ 3.2).
 | U32 | Keyboard and grid structure. Movement: `j`/`k`/arrows move across groups and skip collapsed ones; `g`/`G`; Space and `x` toggle. Structure: each header's `aria-controls` equals its grid's `id`; each grid's `aria-labelledby` names an element whose text is the group title; every `role="row"` element has a `role="rowgroup"` ancestor inside its `role="grid"`. Roving tab stop: exactly one row in the section has `tabIndex` 0 and it is shown (no `[hidden]` ancestor); this holds after collapsing the group that holds it, after a filter change and after a section query hides it, each time on the first shown row. Headers toggle on Enter and Space with `aria-expanded` updated. |
 | U33 | Live region: an element with `aria-live="polite"` is in the DOM, empty, before the first filter change; after each change its text is strings 19 to 22, singular and plural. |
 | U34 | Fleet view unchanged (§ 6.15), mounting `AggregateApp` with a fleet view holding a `units` section (extends `AggregateApp.integration.test.tsx`): a global search for one of its items lists a result labelled "Services", selecting it navigates as today, and no "Systemd units" text appears; the Containerfile panel footer reads today's text (§ 2 item 8). |
+| U35 | True duplicates render one row per record across narrowing (§ 6.11, § 6.12), with `planted`. Each step counts the section's shown `role="row"` elements, not its records, and checks the Reported group header count and `resultCount` against that row count. (a) Unfiltered: exactly two rows carry `dup-link-demo.service`'s link key and one carries `dup-link-demo-other.service`'s; exactly two unit rows carry `["unit_state","dup-state-demo.service"]`, and exactly two drop-in rows carry its drop-in's key, both inside the first unit row's branch and none in the second's; the filter's All and Needs follow-up counts each count both link records and All counts both unit records. (b) Section query `dup-link-demo`: 3 link rows; then `dup-link-demo.service`: 2; then `dup-link-demo` again: 3; then cleared: the rows of (a). (c) Filter "Carried": both `dup-state-demo.service` unit rows and their two drop-in rows shown, Services header count equal to its shown unit rows; filter "All": the rows of (a). A build keyed by row key fails (b): React reconciles the repeated key wrongly and leaves 3 rows at the second step and 5 at the third. |
+| U36 | Keyboard over true duplicates (§ 6.13), with `planted`. From `dup-link-demo-other.service`'s link row, `j` focuses the first `dup-link-demo.service` link row, `j` again the second (a different element with the same `data-unit-key`), `k` the first; from the first `dup-state-demo.service` unit row, `j` goes through its two drop-in rows to the second unit row. After every move exactly one row in the section has `tabIndex` 0, it is the focused element, and it is shown. Toggling the second `dup-state-demo.service` occurrence with `x` (mocked `applyOp` returns the `planted` view as it was) leaves focus and the tab stop on the second occurrence, not the first. |
 
 No Rust test asserts the `units` section label at `e6591669`; add one
 assertion for "Systemd units" beside the existing `SectionMeta` tests in
@@ -1274,8 +1373,13 @@ changes visibly and four of the fixes are user-visible bugs. Under
   the header, and how the bar wraps, within § 6.13.
 - How `ServiceSection` is split internally, as long as `unitOutcome.ts`
   holds the pure logic and is tested on its own.
-- How the pinned set is stored (a `Set` of branch keys, cleared by the
-  events of § 6.4, is enough).
+- How the pinned set is stored (a `Set` of the occurrence keys of the
+  rows heading the pinned branches, cleared by the events of § 6.4, is
+  enough). It never holds row keys (§ 6.11).
+- How occurrence keys travel from `unitOutcome.ts` to the rows (a field
+  on each grouped row, or a map from record to key), as long as they are
+  assigned once per view response before grouping, filter and search
+  (§ 6.11).
 - The exact form of the `data-unit-key` lookup in `App.tsx`, as long as
   it compares strings and builds no selector from the key (§ 6.11).
 - How the reveal steps of § 6.11 are sequenced against `App.tsx`'s
@@ -1364,9 +1468,18 @@ review.
     `searchTextMap`, so no map key can be shared (§ 6.12).
 23. A manual link's identity is `relation`, `parent` and `unit`, as
     `linkIdentity` has it, without `cause`. A true duplicate (one kind,
-    one complete identity, twice) gets no handling: each record is
-    rendered and indexed, and both results reveal the first such row
-    (§ 6.12).
+    one complete identity, twice) is kept, not merged or dropped in the
+    browser, since the records can differ outside the identity and both
+    are the server's. A row has two identities: its row key, for search,
+    navigation and `data-unit-key`, and an occurrence key (the row key,
+    `#`, and the record's ordinal among records with that row key in its
+    source list), assigned once per view response before filter and
+    search, for the React key, the tab stop, pins and focus. Each record
+    renders once and counts once; both search results reveal the first
+    row with the key; a duplicated unit row's drop-ins nest under its
+    first occurrence. Occurrence keys go on every kind, not only those
+    that can repeat, so no code path depends on knowing which can
+    (§ 6.11, § 6.12).
 
 ## 15. Related
 
