@@ -234,6 +234,13 @@ pub enum OmissionReason {
     /// The file that supplies `[Install]` in the image is not the one the
     /// row recorded (§ 10.2 rule 5). `path` is that file's image path.
     InstallEvidenceChanged { path: String },
+    /// A `Shadowed` default target's replacement file under `/etc` is not
+    /// in the export, so `set-default` in the image would link the
+    /// package's file (§ 10.5, rule 5). Its own reason because
+    /// [`Self::InstallEvidenceChanged`]'s text is about `[Install]`, which
+    /// `set-default` never reads (Mark Russell, 2026-11-15). `path` is the
+    /// replacement's image path.
+    DefaultTargetFileNotStaged { path: String },
     /// A runtime drop-in the row recorded because its reset, replacement or
     /// hiding of a drop-in of its name changed the paths an instance reads
     /// is not in the export as the source host had it, so the image's
@@ -354,6 +361,10 @@ impl OmissionReason {
                 "the [Install] section in the image would not be the one recorded on the \
                  source host ({path})"
             ),
+            Self::DefaultTargetFileNotStaged { path } => format!(
+                "the source host's replacement file for it, {path}, is not in the export, so the \
+                 image would set the package's file as the default target instead"
+            ),
             Self::InstanceNeedsEvidenceChanged { path } => format!(
                 "the drop-in {path} clears or replaces a path the instance reads and is not in \
                  the export as the source host had it, so the instance in the image may read a \
@@ -440,6 +451,7 @@ impl OmissionReason {
             Self::NotCarried { .. } => "NotCarried",
             Self::UnitFileNotStaged => "UnitFileNotStaged",
             Self::InstallEvidenceChanged { .. } => "InstallEvidenceChanged",
+            Self::DefaultTargetFileNotStaged { .. } => "DefaultTargetFileNotStaged",
             Self::InstanceNeedsEvidenceChanged { .. } => "InstanceNeedsEvidenceChanged",
             Self::StorageFileStaged { .. } => "StorageFileStaged",
             Self::TargetNeedsUnit => "TargetNeedsUnit",
@@ -462,6 +474,7 @@ impl OmissionReason {
             | Self::NotCarried { package } => Some(package),
             Self::UnitFileNotStaged
             | Self::InstallEvidenceChanged { .. }
+            | Self::DefaultTargetFileNotStaged { .. }
             | Self::InstanceNeedsEvidenceChanged { .. }
             | Self::StorageFileStaged { .. }
             | Self::TargetNeedsUnit
@@ -2912,7 +2925,10 @@ pub fn plan_units(snap: &InspectionSnapshot, staged: &StagedWrites<'_>) -> UnitP
 /// package half (the presence tiers). `set-default` reads no `[Install]`,
 /// so rule 5's drop-in half has nothing to compare, and no other rule
 /// applies to it. A target that passes is `default_target`; one that fails
-/// is `default_target_declined` with the reason.
+/// is `default_target_declined` with the reason. A `Shadowed` target whose
+/// replacement is not staged is declined as
+/// [`OmissionReason::DefaultTargetFileNotStaged`] before the file half
+/// runs, since that half's reason for a row speaks of `[Install]`.
 fn plan_default_target(
     snap: &InspectionSnapshot,
     staged: &StagedWrites<'_>,
@@ -2929,6 +2945,14 @@ fn plan_default_target(
     };
     let name = default.target.name().clone();
     let unit = CarriedUnit::from(default.target.clone());
+    if let UnitFragment::Shadowed { file, .. } = default.target.fragment() {
+        let path = etc_unit_path(file);
+        if !is_staged(staged, &path) {
+            plan.default_target_declined =
+                Some((name, OmissionReason::DefaultTargetFileNotStaged { path }));
+            return;
+        }
+    }
     if let Err(reason) = rule_5_file(snap, &unit, staged) {
         plan.default_target_declined = Some((name, reason));
         return;

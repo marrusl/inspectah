@@ -13335,6 +13335,83 @@ fn t26_a_local_default_target_follows_its_config_row() {
     );
 }
 
+/// T26: a replaced target, `default.target` linked to a full shadow of
+/// `graphical.target` under `/etc`: carried while the shadow's drop-in row
+/// is included, and with it excluded omitted with its own reason, which
+/// names the shadow and says what the image would set instead, not the
+/// `[Install]` text `set-default` never reads (Mark Russell, 2026-11-15).
+/// The same line on the scan export (the row excluded in the snapshot) and
+/// the refine export, and the same text in refine's view.
+#[test]
+fn t26_a_shadowed_default_target_whose_shadow_is_excluded_names_it() {
+    const SHADOW: &str = "/etc/systemd/system/graphical.target";
+    let snap = scan(target_host(Some(SHADOW)).etc_unit(
+        "graphical.target",
+        "[Unit]\nDescription=Graphical, edited\n",
+    ));
+    assert!(
+        matches!(
+            snap.units
+                .as_ref()
+                .and_then(|u| u.default_target.as_ref())
+                .map(|t| t.target.fragment()),
+            Some(UnitFragment::Shadowed { .. })
+        ),
+        "a Shadowed default target"
+    );
+    for (route, containerfile) in both_routes(&snap) {
+        assert!(
+            containerfile
+                .lines()
+                .any(|l| l == set_default_line("graphical.target")),
+            "{route}:\n{containerfile}"
+        );
+    }
+
+    let text = format!(
+        "graphical.target (the source host's replacement file for it, {SHADOW}, is not in the \
+         export, so the image would set the package's file as the default target instead)"
+    );
+    let line = format!("# Omitted: {text}");
+    let refine = session_after(&snap, &[(drop_in_item(SHADOW), false)]);
+    assert_eq!(
+        refine
+            .decisions()
+            .default_target
+            .clone()
+            .and_then(|v| v.declined),
+        Some(inspectah_refine::projection::DeclinedView {
+            renders: inspectah_refine::projection::DeclinedRenders::Omitted,
+            reason: "DefaultTargetFileNotStaged".into(),
+            text: text.clone(),
+        })
+    );
+    let mut excluded_snap = snap.clone();
+    excluded_snap
+        .units
+        .as_mut()
+        .expect("a units section")
+        .drop_ins
+        .iter_mut()
+        .find(|d| d.path == SHADOW)
+        .expect("the shadow's drop-in row")
+        .disposition = FindingKind::excluded();
+    for (route, containerfile) in [
+        ("scan", containerfile_in(&render_export(&excluded_snap))),
+        ("refine", containerfile_in(&export_session(&refine))),
+    ] {
+        assert!(
+            !containerfile.contains("set-default"),
+            "{route}:\n{containerfile}"
+        );
+        assert_eq!(
+            omitted(&containerfile, "graphical.target"),
+            Some(line.as_str()),
+            "{route}:\n{containerfile}"
+        );
+    }
+}
+
 /// § 7.6: a `default.target` link to anything but a target gives a
 /// structured warning naming the link and no record.
 #[test]
