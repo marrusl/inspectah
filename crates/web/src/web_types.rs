@@ -245,6 +245,12 @@ pub struct ServiceDecisionDto {
     /// when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub install_drop_ins: Vec<String>,
+    /// The paths under `/etc` a template instance's enable needs in the
+    /// export. Always present, empty for a unit that is not an instance.
+    pub required_config: Vec<String>,
+    /// The paths under `/var` that hold a template instance's data, which
+    /// the image does not carry. Always present, empty when none.
+    pub data_paths: Vec<String>,
 }
 
 /// A classified service drop-in override, projected for the view response.

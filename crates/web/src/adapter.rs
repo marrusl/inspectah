@@ -148,6 +148,8 @@ pub fn build_web_view(session: &RefineSession) -> ViewResponse {
             current_state: s.current_state.to_string(),
             also: s.also.clone(),
             install_drop_ins: s.install_drop_ins.clone(),
+            required_config: s.required_config.clone(),
+            data_paths: s.data_paths.clone(),
         })
         .collect();
 

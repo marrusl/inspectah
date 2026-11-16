@@ -428,6 +428,36 @@ function NotAppliedPaths({
   );
 }
 
+/**
+ * Paths a template instance names, under a label: the configuration its
+ * enable needs, or the data the image does not carry.
+ */
+function InstancePaths({
+  id,
+  label,
+  pathTestId,
+  paths,
+}: {
+  id: string;
+  label: string;
+  pathTestId: string;
+  paths: string[];
+}) {
+  return (
+    <div id={id} data-testid={id} className="inspectah-unit-paths">
+      <span className="inspectah-unit-paths__label">{label}</span>
+      {/* The spaces are not drawn in the flex row; they keep the paths
+          apart in the text a screen reader reads from aria-describedby. */}
+      {paths.map((p) => (
+        <span key={p}>
+          {" "}
+          <code data-testid={pathTestId}>{p}</code>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** The server's advisory lines for a row, as given, one per line. */
 function AdvisoryLines({
   id,
@@ -740,6 +770,12 @@ export function ServiceSection({
             ? null
             : (svc.attention_reason ?? null);
         const declinedId = `declined-service-${svc.unit}`;
+        // What an instance needs (§ 11.1): its template, the configuration
+        // its enable needs and the data the image does not carry. Any
+        // advisory about them is already in attention_reason.
+        const instanceOfId = `instance-of-${svc.unit}`;
+        const requiredConfigId = `required-config-${svc.unit}`;
+        const dataPathsId = `data-paths-${svc.unit}`;
 
         return (
           <div key={svc.unit} data-testid={`service-group-${svc.unit}`}>
@@ -780,6 +816,9 @@ export function ServiceSection({
                       svcLocked && `locked-reason-service-${svc.unit}`,
                       attention && attentionId,
                       svc.declined && declinedId,
+                      svc.instance_of && instanceOfId,
+                      svc.required_config.length > 0 && requiredConfigId,
+                      svc.data_paths.length > 0 && dataPathsId,
                     )}
                     style={{ minWidth: 20, minHeight: 20 }}
                   />
@@ -860,6 +899,32 @@ export function ServiceSection({
                     </span>
                   ))}
                 </div>
+              )}
+              {svc.instance_of && (
+                <div
+                  id={instanceOfId}
+                  data-testid={instanceOfId}
+                  className="inspectah-unit-paths"
+                >
+                  <span className="inspectah-unit-paths__label">Instance of</span>{" "}
+                  <code>{svc.instance_of}</code>
+                </div>
+              )}
+              {svc.required_config.length > 0 && (
+                <InstancePaths
+                  id={requiredConfigId}
+                  label="Needs configuration:"
+                  pathTestId="required-config-path"
+                  paths={svc.required_config}
+                />
+              )}
+              {svc.data_paths.length > 0 && (
+                <InstancePaths
+                  id={dataPathsId}
+                  label="Keeps data in:"
+                  pathTestId="data-path"
+                  paths={svc.data_paths}
+                />
               )}
             </div>
 

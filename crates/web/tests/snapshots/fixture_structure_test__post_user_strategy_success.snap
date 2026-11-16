@@ -343,11 +343,13 @@ expression: value
   "unit_states": [
     {
       "current_state": "enabled",
+      "data_paths": [],
       "fragment": "vendor",
       "include": true,
       "kind": "service",
       "locked": false,
       "owning_package": "httpd",
+      "required_config": [],
       "triage": {
         "annotations": [],
         "primary_reason": "service_non_default",
@@ -360,11 +362,13 @@ expression: value
     },
     {
       "current_state": "enabled",
+      "data_paths": [],
       "fragment": "local",
       "include": false,
       "kind": "service",
       "locked": false,
       "owning_package": null,
+      "required_config": [],
       "triage": {
         "annotations": [
           {

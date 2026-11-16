@@ -130,6 +130,8 @@ const MOCK_VIEW_DATA: ViewResponse = {
       include: true,
       locked: false,
       current_state: "enabled",
+      required_config: [],
+      data_paths: [],
     },
   ],
   unit_dropins: [],
@@ -452,6 +454,8 @@ describe("Sidebar", () => {
             include: true,
             locked: false,
             current_state: "enabled",
+            required_config: [],
+            data_paths: [],
           },
         ],
         unit_dropins: [

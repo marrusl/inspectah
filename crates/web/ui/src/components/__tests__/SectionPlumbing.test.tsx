@@ -378,6 +378,8 @@ describe("MainContent: unit section", () => {
       locked: false,
       current_state: "disabled",
       default_state: "enable",
+      required_config: [],
+      data_paths: [],
     },
   ];
 

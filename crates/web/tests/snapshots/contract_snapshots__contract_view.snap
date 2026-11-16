@@ -200,11 +200,13 @@ expression: json
   "unit_states": [
     {
       "current_state": "enabled",
+      "data_paths": [],
       "default_state": "disable",
       "fragment": "vendor",
       "include": false,
       "kind": "service",
       "locked": false,
+      "required_config": [],
       "triage": {
         "primary_reason": "service_unknown_origin",
         "triage": {

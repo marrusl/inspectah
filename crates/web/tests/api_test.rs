@@ -5912,3 +5912,56 @@ async fn a_unit_row_serves_its_also_members_and_install_drop_ins() {
     );
     assert!(row.get("also").is_none(), "{row}");
 }
+
+/// The 389 Directory Server template, cut to what § 7.5 reads: the
+/// instance's configuration is `/etc/dirsrv/slapd-%i` and its data
+/// `/var/lib/dirsrv/slapd-%i`.
+const DIRSRV_TEMPLATE: &str = "[Unit]\nDescription=389 Directory Server %i.\n\n[Service]\n\
+     Type=notify\nExecStart=/usr/sbin/ns-slapd -D /etc/dirsrv/slapd-%i -i /run/dirsrv/slapd-%i.pid\n\n\
+     [Install]\nWantedBy=multi-user.target\n";
+
+/// § 11.1 through the production handlers: an instance row carries its
+/// template in `instance_of`, its configuration in `required_config` and
+/// its data in `data_paths`; a plain unit row carries both lists empty
+/// and no `instance_of`.
+#[tokio::test]
+async fn an_instance_row_serves_its_template_configuration_and_data() {
+    const INSTANCE: &str = "dirsrv@example.service";
+    const TEMPLATE: &str = "dirsrv@.service";
+    const PACKAGE: &str = "389-ds-base";
+    let host = unit_hosts::UnitHost::new()
+        .base_package("glibc")
+        .package(PACKAGE)
+        .unit(TEMPLATE, "indirect")
+        .preset("disable *")
+        .vendor_unit(TEMPLATE, DIRSRV_TEMPLATE, Some(PACKAGE))
+        .link(
+            &format!("/etc/systemd/system/multi-user.target.wants/{INSTANCE}"),
+            &format!("/usr/lib/systemd/system/{TEMPLATE}"),
+        )
+        .file("/etc/dirsrv/slapd-example/dse.ldif", "dn: cn=config\n")
+        .dir("/var/lib/dirsrv/slapd-example");
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", INSTANCE);
+    assert_eq!(row["instance_of"], TEMPLATE, "{row}");
+    assert_eq!(
+        row["required_config"],
+        serde_json::json!(["/etc/dirsrv/slapd-example"]),
+        "{row}"
+    );
+    assert_eq!(
+        row["data_paths"],
+        serde_json::json!(["/var/lib/dirsrv/slapd-example"]),
+        "{row}"
+    );
+
+    let host = link_host()
+        .unit("app.service", "enabled")
+        .preset("disable *")
+        .vendor_unit("app.service", WANTED_SERVICE, Some(LINK_PACKAGE));
+    let (_, json) = get_json(&scanned_app(host), "/api/view").await;
+    let row = row_by(&json["unit_states"], "unit", "app.service");
+    assert!(row.get("instance_of").is_none(), "{row}");
+    assert_eq!(row["required_config"], serde_json::json!([]), "{row}");
+    assert_eq!(row["data_paths"], serde_json::json!([]), "{row}");
+}

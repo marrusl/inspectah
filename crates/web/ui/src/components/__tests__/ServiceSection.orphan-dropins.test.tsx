@@ -37,6 +37,8 @@ function makeService(
     include: true,
     locked: false,
     current_state: "enabled",
+    required_config: [],
+    data_paths: [],
     ...overrides,
   };
 }

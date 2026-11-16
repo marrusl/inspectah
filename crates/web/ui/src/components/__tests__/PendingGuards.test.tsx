@@ -152,6 +152,8 @@ const SERVICE: ServiceDecisionDto = {
   include: true,
   locked: false,
   current_state: "enabled",
+  required_config: [],
+  data_paths: [],
 };
 
 const DROPIN: DropInDecisionDto = {

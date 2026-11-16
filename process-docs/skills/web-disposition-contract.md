@@ -135,13 +135,20 @@ wrong:
   the host records none. `DefaultTargetView.declined` is `null`, not
   absent, when the target is carried. A unit row's `also` and
   `install_drop_ins` are absent when empty.
-- **A unit row's `required_config` and `data_paths`.** The projection's
-  `UnitStateView` carries both as plain lists (empty, never absent), from
-  the state change. Unit rows reach `/api/view` through
+- **A unit row's `instance_of`, `required_config` and `data_paths`.**
+  `instance_of` (the template) is absent on a unit that is not an
+  instance. `required_config` and `data_paths` are always present, as
+  plain lists, empty for a plain unit, so the TypeScript type has them as
+  required `string[]` and every hand-made unit row, in a Vitest factory or
+  an e2e fixture, carries both. Unit rows reach `/api/view` through
   `ServiceDecisionDto` in `crates/web/src/adapter.rs`, which copies fields
-  one by one, so a projection field reaches the browser only once the DTO
-  names it. A carried instance's § 10.8 data sentence needs no new field:
-  it is already in `attention_reason`.
+  one by one from the projection's `UnitStateView`, so a new projection
+  field reaches the browser only once the DTO names it. The units list
+  shows the three under the row (`instance-of-<unit>`,
+  `required-config-<unit>`, `data-paths-<unit>`) and ties them to the
+  row's toggle. A carried instance's § 10.8 data sentence needs no field
+  of its own: it is already in `attention_reason`, and the row does not
+  repeat it.
 - **Link rows and undetermined records have no toggle.** They carry no
   `include`; their state follows the unit's install files, and
   `not_applied` lists the files the export leaves out, absent while the

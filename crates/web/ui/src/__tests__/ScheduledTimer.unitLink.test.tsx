@@ -34,6 +34,8 @@ const UNIT_ROW: ServiceDecisionDto = {
   include: true,
   locked: false,
   current_state: "enabled",
+  required_config: [],
+  data_paths: [],
 };
 
 const ESCAPED_UNIT_ROW: ServiceDecisionDto = {

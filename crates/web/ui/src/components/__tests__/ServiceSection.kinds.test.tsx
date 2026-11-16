@@ -37,6 +37,8 @@ function makeUnit(overrides: Partial<ServiceDecisionDto> = {}): ServiceDecisionD
     include: true,
     locked: false,
     current_state: "enabled",
+    required_config: [],
+    data_paths: [],
     ...overrides,
   };
 }
@@ -294,6 +296,80 @@ describe("ServiceSection: every unit kind", () => {
 
 // `aria-describedby` is a list of ids separated by whitespace, so an id
 // built from a path holding a space or a tab names ids that do not exist.
+describe("ServiceSection: what an instance needs", () => {
+  const INSTANCE = "dirsrv@example.service";
+  const CONFIG = ["/etc/dirsrv/slapd-example", "/etc/sysconfig/dirsrv-example"];
+  const DATA = ["/var/lib/dirsrv/slapd-example"];
+
+  it("shows an instance's template, configuration paths and data paths, tied to its toggle", () => {
+    render(
+      <ServiceSection
+        {...baseProps}
+        services={[
+          makeUnit({
+            unit: INSTANCE,
+            instance_of: "dirsrv@.service",
+            required_config: CONFIG,
+            data_paths: DATA,
+          }),
+        ]}
+      />,
+    );
+    const template = screen.getByTestId(`instance-of-${INSTANCE}`);
+    expect(template.textContent).toBe("Instance of dirsrv@.service");
+    expect(within(template).getByText("dirsrv@.service").tagName).toBe("CODE");
+
+    const config = screen.getByTestId(`required-config-${INSTANCE}`);
+    expect(within(config).getByText("Needs configuration:")).toBeInTheDocument();
+    expect(
+      within(config)
+        .getAllByTestId("required-config-path")
+        .map((el) => el.textContent),
+    ).toEqual(CONFIG);
+
+    const data = screen.getByTestId(`data-paths-${INSTANCE}`);
+    expect(within(data).getByText("Keeps data in:")).toBeInTheDocument();
+    expect(
+      within(data)
+        .getAllByTestId("data-path")
+        .map((el) => el.textContent),
+    ).toEqual(DATA);
+
+    const notes = describedBy(
+      screen.getByRole("checkbox", { name: `Toggle ${INSTANCE}` }),
+    );
+    expect(notes).toEqual([
+      "Instance of dirsrv@.service",
+      `Needs configuration: ${CONFIG.join(" ")}`,
+      `Keeps data in: ${DATA[0]}`,
+    ]);
+  });
+
+  it("shows an instance's template alone when it names no paths", () => {
+    render(
+      <ServiceSection
+        {...baseProps}
+        services={[makeUnit({ unit: "getty@tty2.service", instance_of: "getty@.service" })]}
+      />,
+    );
+    expect(screen.getByTestId("instance-of-getty@tty2.service").textContent).toBe(
+      "Instance of getty@.service",
+    );
+    expect(screen.queryByTestId("required-config-getty@tty2.service")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("data-paths-getty@tty2.service")).not.toBeInTheDocument();
+  });
+
+  it("shows none of them on a plain unit row", () => {
+    render(<ServiceSection {...baseProps} services={[makeUnit()]} />);
+    expect(screen.queryByTestId("instance-of-httpd.service")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("required-config-httpd.service")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("data-paths-httpd.service")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Toggle httpd.service" }),
+    ).not.toHaveAttribute("aria-describedby");
+  });
+});
+
 describe("ServiceSection: a drop-in's notes at a path with whitespace", () => {
   /** Matches a test id holding a tab or a newline as written. */
   const EXACT = { normalizer: getDefaultNormalizer({ trim: false, collapseWhitespace: false }) };
